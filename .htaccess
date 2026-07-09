@@ -1,0 +1,107 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /dispensary_system/
+    
+    # ================================================================
+    # REDIRECTS
+    # ================================================================
+    
+    # Redirect root to website home
+    RewriteRule ^$ index.php [L]
+    
+    # Redirect dispensary_system to root (fix duplicate path issue)
+    RewriteRule ^dispensary_system/?$ / [L,R=302]
+    RewriteRule ^dispensary_system/(.*)$ /$1 [L,R=302]
+    
+    # ================================================================
+    # API ROUTING
+    # ================================================================
+    
+    RewriteRule ^api/v1/auth$ backend/api/v1/auth.php [L]
+    RewriteRule ^api/v1/dashboard$ backend/api/v1/dashboard.php [L]
+    RewriteRule ^api/v1/patients$ backend/api/v1/patients.php [L]
+    RewriteRule ^api/v1/patients/([0-9]+)$ backend/api/v1/patients.php?id=$1 [L]
+    RewriteRule ^api/v1/doctors$ backend/api/v1/doctors.php [L]
+    RewriteRule ^api/v1/visits$ backend/api/v1/visits.php [L]
+    RewriteRule ^api/v1/prescriptions$ backend/api/v1/prescriptions.php [L]
+    RewriteRule ^api/v1/lab-tests$ backend/api/v1/lab_tests.php [L]
+    RewriteRule ^api/v1/pharmacy$ backend/api/v1/pharmacy.php [L]
+    RewriteRule ^api/v1/branches$ backend/api/v1/branches.php [L]
+    RewriteRule ^api/v1/users$ backend/api/v1/users.php [L]
+    RewriteRule ^api/v1/reports$ backend/api/v1/reports.php [L]
+    RewriteRule ^api/v1/notifications$ backend/api/v1/notifications.php [L]
+    RewriteRule ^api/v1/appointments$ backend/api/v1/appointments.php [L]
+    RewriteRule ^api/v1/referrals$ backend/api/v1/referrals.php [L]
+    RewriteRule ^api/v1/settings$ backend/api/v1/settings.php [L]
+    
+    # ================================================================
+    # WEBSITE PAGES (Public)
+    # ================================================================
+    
+    RewriteRule ^home$ index.php [L]
+    RewriteRule ^about$ about.php [L]
+    RewriteRule ^services$ services.php [L]
+    RewriteRule ^doctors$ doctors.php [L]
+    RewriteRule ^laboratory$ laboratory.php [L]
+    RewriteRule ^pharmacy$ pharmacy.php [L]
+    RewriteRule ^appointment$ appointment.php [L]
+    RewriteRule ^contact$ contact.php [L]
+    
+    # ================================================================
+    # STAFF LOGIN
+    # ================================================================
+    
+    RewriteRule ^staff-login$ staff_login.php [L]
+    RewriteRule ^staff/login$ staff_login.php [L]
+    RewriteRule ^login$ staff_login.php [L]
+    
+    # ================================================================
+    # STAFF DASHBOARDS
+    # ================================================================
+    
+    RewriteRule ^admin-dashboard$ frontend/pages/admin/dashboard.php [L]
+    RewriteRule ^reception-dashboard$ frontend/pages/reception/dashboard.php [L]
+    RewriteRule ^doctor-dashboard$ frontend/pages/doctor/dashboard.php [L]
+    RewriteRule ^laboratory-dashboard$ frontend/pages/laboratory/dashboard.php [L]
+    RewriteRule ^pharmacy-dashboard$ frontend/pages/pharmacy/dashboard.php [L]
+    RewriteRule ^cashier-dashboard$ frontend/pages/cashier/dashboard.php [L]
+    
+    # ================================================================
+    # LEGACY ROUTES (Backward compatibility)
+    # ================================================================
+    
+    RewriteRule ^admin$ frontend/pages/admin/dashboard.php [L]
+    RewriteRule ^reception$ frontend/pages/reception/dashboard.php [L]
+    RewriteRule ^doctor$ frontend/pages/doctor/dashboard.php [L]
+    RewriteRule ^laboratory$ frontend/pages/laboratory/dashboard.php [L]
+    RewriteRule ^pharmacy$ frontend/pages/pharmacy/dashboard.php [L]
+    RewriteRule ^cashier$ frontend/pages/cashier/dashboard.php [L]
+    
+    # ================================================================
+    # SECURITY
+    # ================================================================
+    
+    # Prevent directory listing
+    Options -Indexes
+    
+    # Protect sensitive files
+    <FilesMatch "\.(env|json|config\.php|database\.php|\.htaccess|\.htpasswd)$">
+        Order allow,deny
+        Deny from all
+    </FilesMatch>
+    
+    # Protect backend directory
+    RewriteRule ^backend/ - [F,L]
+    
+    # Protect config files
+    RewriteRule ^(.*)\.(env|json|config\.php|database\.php)$ - [F,L]
+    
+    # ================================================================
+    # ERROR PAGES (Optional)
+    # ================================================================
+    
+    # ErrorDocument 404 /404.php
+    # ErrorDocument 403 /403.php
+    # ErrorDocument 500 /500.php
+    
+</IfModule>
