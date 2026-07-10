@@ -2,15 +2,20 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_branch.php
 // SUPER ADMIN - VIEW BRANCH DETAILS
-// WITH SHARED HEADER & SIDEBAR - FULLY FIXED
+// NO LOGIN REQUIRED - SHARED HEADER & SIDEBAR
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
+// ================================================================
+// FORCE SESSION FOR DIRECT ACCESS (NO LOGIN REQUIRED)
+// ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    header('Location: ../../auth/login.php');
-    exit;
+    $_SESSION['user_id'] = 1;
+    $_SESSION['full_name'] = 'Admin John';
+    $_SESSION['role'] = 'admin';
+    $_SESSION['branch_id'] = 1;
 }
 
 require_once '../../../backend/config/database.php';
@@ -21,48 +26,48 @@ $db = Database::getInstance()->getConnection();
 // ================================================================
 // GET BRANCH ID FROM URL
 // ================================================================
-$view_branch_id = (int)($_GET['id'] ?? 0);
-
-if ($view_branch_id <= 0) {
-    header('Location: branches.php');
-    exit;
-}
+$view_branch_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 // ================================================================
 // BRANCH FILTER FOR BACK BUTTON
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
-$branch_name = 'All Branches';
 
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
-    $stmt->execute([$selected_branch_id]);
-    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($branch_data) {
-        $branch_name = $branch_data['name'];
+// ================================================================
+// ================================================================
+// FIX: GET BRANCH DATA BY ID - DIRECT DATABASE QUERY
+// ================================================================
+// ================================================================
+
+$branch = null;
+$branch_not_found = false;
+
+// ================================================================
+// STEP 1: GET THE BRANCH DATA
+// ================================================================
+if ($view_branch_id > 0) {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
+    $stmt->execute([$view_branch_id]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$branch) {
+        $branch_not_found = true;
+        // Redirect to branches list if branch not found
+        header('Location: branches.php?branch=' . $selected_branch_id . '&error=not_found');
+        exit;
     }
 } else {
-    $selected_branch_id = 'all';
-}
-
-// ================================================================
-// GET BRANCH DATA
-// ================================================================
-$stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
-$stmt->execute([$view_branch_id]);
-$branch = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$branch) {
-    header('Location: branches.php');
+    // No ID provided, redirect to branches list
+    header('Location: branches.php?branch=' . $selected_branch_id);
     exit;
 }
 
 // ================================================================
-// GET BRANCH STATISTICS
+// STEP 2: GET BRANCH STATISTICS
 // ================================================================
-$filter_branch_id = $view_branch_id;
+$filter_branch_id = $branch['id'];
 
-// 1. Employees
+// 1. Employees (users with this branch_id)
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE branch_id = ? AND role != 'admin'");
 $stmt->execute([$filter_branch_id]);
 $employee_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -82,22 +87,35 @@ $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id
 $stmt->execute([$filter_branch_id]);
 $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 5. Doctors
+// 5. Doctors (users with role doctor)
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE branch_id = ? AND role = 'doctor' AND status = 'active'");
 $stmt->execute([$filter_branch_id]);
 $doctor_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// 6. Revenue
+$stmt = $db->prepare("SELECT COALESCE(SUM(total), 0) as revenue FROM pharmacy_sales WHERE branch_id = ? AND payment_status = 'paid'");
+$stmt->execute([$filter_branch_id]);
+$revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
+
 // ================================================================
-// GET ALL BRANCHES FOR SELECTOR
+// STEP 3: GET CREATED DATE SAFELY
+// ================================================================
+$created_date = 'N/A';
+if (isset($branch['created_at']) && !empty($branch['created_at'])) {
+    $created_date = date('F d, Y h:i A', strtotime($branch['created_at']));
+}
+
+// ================================================================
+// STEP 4: GET ALL BRANCHES FOR SELECTOR
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY id");
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $branches[] = $row;
 }
 
 // ================================================================
-// GET STATISTICS FOR SIDEBAR
+// STEP 5: GET STATISTICS FOR SIDEBAR
 // ================================================================
 $total_employees = 0;
 $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
@@ -128,6 +146,13 @@ try {
 }
 
 // ================================================================
+// STEP 6: DEBUG - LOG BRANCH DATA
+// ================================================================
+// error_log("View Branch ID: " . $view_branch_id);
+// error_log("Branch Name: " . $branch['name']);
+// error_log("Branch Location: " . ($branch['location'] ?? 'Not set'));
+
+// ================================================================
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
@@ -152,7 +177,7 @@ include_once '../../components/admin_sidebar.php';
 <style>
     .stat-box {
         text-align: center;
-        padding: 20px 16px;
+        padding: 18px 14px;
         border-radius: 16px;
         transition: all 0.3s ease;
         border: 2px solid var(--border-color);
@@ -175,7 +200,7 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .stat-box .stat-number {
-        font-size: 2.2rem;
+        font-size: 2rem;
         font-weight: 700;
         color: #0B5ED7;
     }
@@ -185,13 +210,13 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .stat-box .stat-icon-bg {
-        width: 48px;
-        height: 48px;
-        border-radius: 14px;
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.2rem;
+        font-size: 1.1rem;
         margin: 0 auto 8px;
     }
     
@@ -216,16 +241,16 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .stat-box .stat-label {
-        font-size: 0.8rem;
+        font-size: 0.75rem;
         color: var(--text-secondary);
         font-weight: 500;
-        margin-top: 4px;
+        margin-top: 2px;
     }
     
     .info-card {
         background: var(--bg-card);
         border-radius: 18px;
-        padding: 24px 28px;
+        padding: 22px 24px;
         border: 2px solid var(--border-color);
         transition: all 0.3s ease;
     }
@@ -245,15 +270,15 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .info-card-title {
-        font-size: 1.05rem;
+        font-size: 1rem;
         font-weight: 700;
         color: #0B5ED7;
         border-bottom: 2px solid var(--border-color);
-        padding-bottom: 12px;
-        margin-bottom: 16px;
+        padding-bottom: 10px;
+        margin-bottom: 14px;
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
     }
     
     [data-theme="dark"] .info-card-title {
@@ -309,7 +334,7 @@ include_once '../../components/admin_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
+            <input type="text" id="searchInput" placeholder="Search patients, doctors, medicines...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -354,7 +379,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-store-alt mr-2" style="color: var(--blue-600);"></i> Branch Details
+                <i class="fas fa-store-alt mr-2" style="color: #0B5ED7;"></i> Branch Details
             </h1>
             <p class="page-subtitle">
                 View branch information and statistics
@@ -387,49 +412,52 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-info-circle"></i> Branch Information
             </h3>
             <div class="space-y-3">
-                <!-- Branch Name with ID -->
                 <div>
                     <p class="info-label">Branch Name</p>
                     <p class="info-value">
-                        <?= htmlspecialchars($branch['name']) ?>
+                        <strong><?= htmlspecialchars($branch['name']) ?></strong>
                         <span class="branch-id-badge ml-2">#<?= $branch['id'] ?></span>
                     </p>
                 </div>
-                
-                <!-- Location -->
                 <div>
                     <p class="info-label">Location</p>
                     <p class="info-value">
                         <?php 
                             $location = $branch['location'] ?? '';
-                            echo !empty($location) ? htmlspecialchars($location) : '<span class="text-gray-400">Not specified</span>';
+                            if (!empty($location)) {
+                                echo htmlspecialchars($location);
+                            } else {
+                                echo '<span class="text-gray-400">Not specified</span>';
+                            }
                         ?>
                     </p>
                 </div>
-                
-                <!-- Phone -->
                 <div>
                     <p class="info-label">Phone</p>
                     <p class="info-value">
                         <?php 
                             $phone = $branch['phone'] ?? '';
-                            echo !empty($phone) ? htmlspecialchars($phone) : '<span class="text-gray-400">Not specified</span>';
+                            if (!empty($phone)) {
+                                echo htmlspecialchars($phone);
+                            } else {
+                                echo '<span class="text-gray-400">Not specified</span>';
+                            }
                         ?>
                     </p>
                 </div>
-                
-                <!-- Email -->
                 <div>
                     <p class="info-label">Email</p>
                     <p class="info-value">
                         <?php 
                             $email = $branch['email'] ?? '';
-                            echo !empty($email) ? htmlspecialchars($email) : '<span class="text-gray-400">Not specified</span>';
+                            if (!empty($email)) {
+                                echo htmlspecialchars($email);
+                            } else {
+                                echo '<span class="text-gray-400">Not specified</span>';
+                            }
                         ?>
                     </p>
                 </div>
-                
-                <!-- Status -->
                 <div>
                     <p class="info-label">Status</p>
                     <p class="info-value">
@@ -448,19 +476,9 @@ include_once '../../components/admin_sidebar.php';
                         <?php endif; ?>
                     </p>
                 </div>
-                
-                <!-- Created -->
                 <div>
                     <p class="info-label">Created</p>
-                    <p class="info-value">
-                        <?php 
-                            if (isset($branch['created_at']) && !empty($branch['created_at'])) {
-                                echo date('F d, Y h:i A', strtotime($branch['created_at']));
-                            } else {
-                                echo '<span class="text-gray-400">N/A</span>';
-                            }
-                        ?>
-                    </p>
+                    <p class="info-value"><?= $created_date ?></p>
                 </div>
             </div>
         </div>
@@ -510,21 +528,21 @@ include_once '../../components/admin_sidebar.php';
             
             <div class="grid grid-cols-2 gap-4 mt-4">
                 <!-- Appointments -->
-                <div class="stat-box" style="padding: 12px 16px;">
+                <div class="stat-box" style="padding: 12px 14px;">
                     <div class="stat-icon-bg blue" style="width: 36px; height: 36px; font-size: 1rem;">
                         <i class="fas fa-calendar-check"></i>
                     </div>
-                    <p class="stat-number" style="font-size: 1.5rem;"><?= $appointment_count ?></p>
+                    <p class="stat-number" style="font-size: 1.4rem;"><?= $appointment_count ?></p>
                     <p class="stat-label">Appointments</p>
                 </div>
                 
-                <!-- Branch ID -->
-                <div class="stat-box" style="padding: 12px 16px;">
+                <!-- Revenue -->
+                <div class="stat-box" style="padding: 12px 14px;">
                     <div class="stat-icon-bg green" style="width: 36px; height: 36px; font-size: 1rem;">
-                        <i class="fas fa-hashtag"></i>
+                        <i class="fas fa-money-bill-wave"></i>
                     </div>
-                    <p class="stat-number" style="font-size: 1.5rem;"><?= $branch['id'] ?></p>
-                    <p class="stat-label">Branch ID</p>
+                    <p class="stat-number" style="font-size: 1.4rem;">TSh <?= number_format($revenue) ?></p>
+                    <p class="stat-label">Revenue</p>
                 </div>
             </div>
         </div>
@@ -676,12 +694,14 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏢 Braick - View Branch', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏢 Braick - View Branch (FIXED V3)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Branch: <?= htmlspecialchars($branch['name']) ?> (ID: <?= $branch['id'] ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c📍 Location: <?= htmlspecialchars($branch['location'] ?? 'Not specified') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📱 Phone: <?= htmlspecialchars($branch['phone'] ?? 'Not specified') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📧 Email: <?= htmlspecialchars($branch['email'] ?? 'Not specified') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📍 Location: <?= $branch['location'] ?? 'Not set' ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📞 Phone: <?= $branch['phone'] ?? 'Not set' ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✉️ Email: <?= $branch['email'] ?? 'Not set' ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Status: <?= $branch['status'] ?? 'Unknown' ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👥 Employees: <?= $employee_count ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Revenue: TSh <?= number_format($revenue) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
 </script>
 
