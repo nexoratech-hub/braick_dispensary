@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/edit_branch.php
 // SUPER ADMIN - EDIT BRANCH
 // BRAICK DISPENSARY
+// WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
 session_start();
@@ -18,6 +19,7 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 $branch_id = (int)($_GET['id'] ?? 0);
+$selected_branch_id = $_GET['branch'] ?? 'all';
 
 if ($branch_id <= 0) {
     header('Location: branches.php');
@@ -34,205 +36,711 @@ if (!$branch) {
     exit;
 }
 
+// ================================================================
+// GET STATISTICS FOR SIDEBAR
+// ================================================================
+$total_employees = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$total_doctors = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+$total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$total_branches = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$pending_lab_tests = 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending'");
+    $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $pending_lab_tests = 0;
+}
+
+$pending_prescriptions = 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status = 'pending'");
+    $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $pending_prescriptions = 0;
+}
+
+// ================================================================
+// GET BRANCHES FOR SELECTOR
+// ================================================================
+$branches_list = [];
+$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+$branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// HANDLE FORM SUBMISSION
+// ================================================================
 $message = '';
 $message_type = '';
+$form_data = [
+    'name' => $branch['name'],
+    'location' => $branch['location'] ?? '',
+    'phone' => $branch['phone'] ?? '',
+    'email' => $branch['email'] ?? '',
+    'status' => $branch['status'] ?? 'active'
+];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name = trim($_POST['name'] ?? '');
-    $location = trim($_POST['location'] ?? '');
-    $phone = trim($_POST['phone'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $status = $_POST['status'] ?? 'active';
+    $form_data['name'] = trim($_POST['name'] ?? '');
+    $form_data['location'] = trim($_POST['location'] ?? '');
+    $form_data['phone'] = trim($_POST['phone'] ?? '');
+    $form_data['email'] = trim($_POST['email'] ?? '');
+    $form_data['status'] = $_POST['status'] ?? 'active';
     
-    $stmt = $db->prepare("UPDATE branches SET name = ?, location = ?, phone = ?, email = ?, status = ? WHERE id = ?");
-    
-    if ($stmt->execute([$name, $location, $phone, $email, $status, $branch_id])) {
-        $message = "Branch updated successfully!";
-        $message_type = 'success';
-        // Refresh branch data
-        $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
-        $stmt->execute([$branch_id]);
-        $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-    } else {
-        $message = "Failed to update branch!";
+    if (empty($form_data['name'])) {
+        $message = "Branch name is required!";
         $message_type = 'error';
+    } else {
+        // Check if another branch has the same name
+        $stmt = $db->prepare("SELECT id FROM branches WHERE name = ? AND id != ?");
+        $stmt->execute([$form_data['name'], $branch_id]);
+        if ($stmt->fetch()) {
+            $message = "Another branch with this name already exists!";
+            $message_type = 'error';
+        } else {
+            $stmt = $db->prepare("UPDATE branches SET name = ?, location = ?, phone = ?, email = ?, status = ? WHERE id = ?");
+            
+            if ($stmt->execute([$form_data['name'], $form_data['location'], $form_data['phone'], $form_data['email'], $form_data['status'], $branch_id])) {
+                $message = "Branch updated successfully!";
+                $message_type = 'success';
+                // Refresh branch data
+                $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
+                $stmt->execute([$branch_id]);
+                $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+                $form_data = [
+                    'name' => $branch['name'],
+                    'location' => $branch['location'] ?? '',
+                    'phone' => $branch['phone'] ?? '',
+                    'email' => $branch['email'] ?? '',
+                    'status' => $branch['status'] ?? 'active'
+                ];
+                echo '<script>setTimeout(function(){ window.location.href = "branches.php?branch=' . $selected_branch_id . '&updated=1"; }, 1500);</script>';
+            } else {
+                $message = "Failed to update branch!";
+                $message_type = 'error';
+            }
+        }
     }
 }
 
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Edit Branch - Braick Dispensary</title>
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <style>
-        :root { --blue-600: #0B5ED7; --blue-700: #0B4EA8; --green-600: #059669; --gray-50: #F8FAFC; --gray-200: #E2E8F0; --gray-400: #94A3B8; --gray-500: #64748B; --gray-700: #334155; --gray-800: #1E293B; --white: #FFFFFF; }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', 'Segoe UI', sans-serif; background: var(--gray-50); color: var(--gray-800); }
-        .sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: 270px; background: var(--blue-700); color: white; z-index: 50; overflow-y: auto; transition: transform 0.3s ease; }
-        .sidebar-brand { padding: 22px 20px 16px; border-bottom: 2px solid #0B3D8A; }
-        .sidebar-brand .logo { width: 48px; height: 48px; border-radius: 12px; object-fit: cover; background: white; padding: 4px; }
-        .sidebar-brand .brand-text { color: white; font-weight: 700; font-size: 1rem; }
-        .sidebar-brand .brand-sub { color: #9EC5FE; font-size: 0.7rem; }
-        .sidebar-nav { padding: 14px 10px; }
-        .sidebar-nav .nav-label { font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.1em; color: #6EA8FE; padding: 0 12px; margin: 12px 0 6px; font-weight: 700; }
-        .sidebar-link { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-radius: 10px; color: #D2E3FC; text-decoration: none; transition: all 0.3s; font-size: 0.85rem; font-weight: 500; margin: 2px 0; }
-        .sidebar-link:hover { background: #0B3D8A; color: white; }
-        .sidebar-link.active { background: var(--green-600); color: white; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.4); }
-        .sidebar-link i { width: 20px; text-align: center; font-size: 1rem; }
-        .top-nav { position: fixed; top: 0; left: 270px; right: 0; height: 68px; background: white; z-index: 40; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 2px solid #D2E3FC; }
-        .top-nav .avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; border: 2px solid var(--gray-200); cursor: pointer; transition: all 0.3s; }
-        .top-nav .avatar:hover { border-color: var(--blue-600); }
-        .top-nav .icon-btn { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--gray-500); transition: all 0.3s; background: transparent; border: none; cursor: pointer; position: relative; }
-        .top-nav .icon-btn:hover { background: #E8F0FE; color: var(--blue-600); }
-        .notif-dot { position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; background: var(--green-600); border-radius: 50%; border: 2px solid white; }
-        .top-nav .datetime { font-size: 0.78rem; color: var(--gray-500); font-weight: 500; }
-        .main-content { margin-left: 270px; margin-top: 68px; padding: 24px 28px; min-height: calc(100vh - 68px); }
-        .card { background: white; border-radius: 16px; padding: 24px; border: 2px solid var(--gray-200); transition: all 0.3s; }
-        .card:hover { border-color: var(--blue-600); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08); }
-        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 20px; border-radius: 10px; font-weight: 600; font-size: 0.85rem; transition: all 0.3s; cursor: pointer; border: none; text-decoration: none; }
-        .btn-blue { background: var(--blue-600); color: white; }
-        .btn-blue:hover { background: var(--blue-700); transform: translateY(-2px); }
-        .btn-outline { background: transparent; color: var(--gray-600); border: 2px solid var(--gray-200); }
-        .btn-outline:hover { background: #E8F0FE; border-color: var(--blue-600); color: var(--blue-600); }
-        .btn-sm { padding: 4px 12px; font-size: 0.75rem; border-radius: 6px; }
-        .form-label { font-size: 0.8rem; font-weight: 600; color: var(--gray-700); margin-bottom: 4px; display: block; }
-        .form-control { width: 100%; padding: 10px 14px; border: 2px solid var(--gray-200); border-radius: 10px; font-size: 0.9rem; transition: all 0.3s; outline: none; background: white; color: var(--gray-700); }
-        .form-control:focus { border-color: var(--blue-600); box-shadow: 0 0 0 3px #D2E3FC; }
-        .page-header { border-bottom: 3px solid var(--blue-600); padding-bottom: 12px; }
-        .page-header .page-title { color: var(--blue-700); font-size: 1.8rem; font-weight: 700; }
-        .page-header .page-subtitle { color: var(--gray-500); font-size: 0.9rem; }
-        .footer { padding: 14px 0; border-top: 2px solid var(--gray-200); margin-top: 20px; text-align: center; font-size: 0.7rem; color: var(--gray-500); }
-        .footer .footer-brand { color: var(--blue-600); font-weight: 600; }
-        @media (max-width: 1024px) { .sidebar { transform: translateX(-100%); } .sidebar.open { transform: translateX(0); } .top-nav { left: 0; } .main-content { margin-left: 0; padding: 16px; } }
-        @media (max-width: 640px) { .main-content { padding: 10px; } }
-    </style>
-</head>
-<body>
+// ================================================================
+// FIX: Get created date safely
+// ================================================================
+$created_date = 'N/A';
+if (isset($branch['created_at']) && !empty($branch['created_at'])) {
+    $created_date = date('F d, Y', strtotime($branch['created_at']));
+}
 
-<!-- SIDEBAR -->
-<aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-        <div class="flex items-center gap-3">
-            <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
-            <div>
-                <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub">Super Admin</p>
-            </div>
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE SHARED HEADER
+// ================================================================
+include_once '../../components/admin_header.php';
+
+// ================================================================
+// INCLUDE SHARED SIDEBAR
+// ================================================================
+$selected_branch_id = $selected_branch_id ?? 'all';
+$total_employees = $total_employees ?? 0;
+$total_doctors = $total_doctors ?? 0;
+$total_branches = $total_branches ?? 0;
+$pending_lab_tests = $pending_lab_tests ?? 0;
+$pending_prescriptions = $pending_prescriptions ?? 0;
+include_once '../../components/admin_sidebar.php';
+?>
+
+<style>
+    /* ================================================================
+       ADDITIONAL FORM STYLES - BEAUTIFUL LIKE DASHBOARD
+       ================================================================ */
+    
+    /* Form Card */
+    .form-card {
+        background: var(--bg-card);
+        border-radius: 20px;
+        padding: 28px 32px;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    
+    .form-card:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 8px 30px rgba(11, 94, 215, 0.08);
+    }
+    
+    /* Form Header */
+    .form-header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding-bottom: 20px;
+        margin-bottom: 24px;
+        border-bottom: 2px solid var(--border-color);
+    }
+    
+    .form-header-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.6rem;
+        flex-shrink: 0;
+        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+        color: white;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .form-header h3 {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin: 0;
+    }
+    
+    .form-header p {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        margin: 0;
+    }
+    
+    /* Form Labels */
+    .form-label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 6px;
+        display: block;
+    }
+    
+    .form-label i {
+        width: 20px;
+        text-align: center;
+        font-size: 0.85rem;
+    }
+    
+    .form-label .required {
+        color: #EF4444;
+        margin-left: 2px;
+    }
+    
+    /* Form Controls */
+    .form-control {
+        width: 100%;
+        padding: 10px 16px;
+        border: 2px solid var(--border-color);
+        border-radius: 12px;
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+        outline: none;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+    }
+    
+    .form-control:focus {
+        border-color: #0B5ED7;
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+    }
+    
+    .form-control::placeholder {
+        color: var(--text-secondary);
+        opacity: 0.5;
+    }
+    
+    .form-control:disabled {
+        background: var(--bg-body);
+        color: var(--text-secondary);
+        cursor: not-allowed;
+    }
+    
+    /* Form Row with Icon */
+    .form-row-icon {
+        position: relative;
+    }
+    
+    .form-row-icon .form-control {
+        padding-left: 44px;
+    }
+    
+    .form-row-icon .input-icon {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-secondary);
+        font-size: 1rem;
+        pointer-events: none;
+        transition: color 0.3s ease;
+    }
+    
+    .form-row-icon .form-control:focus + .input-icon,
+    .form-row-icon .form-control:focus ~ .input-icon {
+        color: #0B5ED7;
+    }
+    
+    /* Buttons */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 10px 24px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        min-height: 44px;
+        min-width: 120px;
+    }
+    
+    .btn-primary {
+        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+        color: white;
+        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-primary:hover {
+        background: linear-gradient(135deg, #0A4CA8, #1557B0);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4);
+    }
+    
+    .btn-primary:active {
+        transform: translateY(0px);
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-primary);
+        border: 2px solid var(--border-color);
+    }
+    
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+        transform: translateY(-2px);
+    }
+    
+    .btn-sm {
+        padding: 6px 16px;
+        font-size: 0.8rem;
+        min-height: 36px;
+        min-width: 90px;
+    }
+    
+    /* Button Group */
+    .form-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding-top: 24px;
+        margin-top: 24px;
+        border-top: 2px solid var(--border-color);
+    }
+    
+    /* Responsive */
+    @media (max-width: 640px) {
+        .form-card {
+            padding: 18px 16px;
+        }
+        .form-header {
+            flex-direction: column;
+            text-align: center;
+        }
+        .form-header-icon {
+            width: 48px;
+            height: 48px;
+            font-size: 1.2rem;
+        }
+        .btn {
+            padding: 8px 16px;
+            font-size: 0.8rem;
+            min-height: 38px;
+            min-width: 100%;
+        }
+        .form-actions {
+            flex-direction: column;
+        }
+        .form-actions .btn {
+            width: 100%;
+            justify-content: center;
+        }
+    }
+</style>
+
+<!-- ================================================================ -->
+<!-- TOP NAVIGATION -->
+<!-- ================================================================ -->
+<nav class="top-nav">
+    <div class="flex items-center gap-4 flex-1">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search branches...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
         </div>
     </div>
-    <nav class="sidebar-nav">
-        <div class="nav-label">Main Menu</div>
-        <a href="dashboard.php" class="sidebar-link"><i class="fas fa-home"></i> Dashboard</a>
-        <a href="employees.php" class="sidebar-link"><i class="fas fa-users"></i> Employees</a>
-        <a href="branches.php" class="sidebar-link active"><i class="fas fa-store-alt"></i> Branches</a>
-        <a href="departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
-        <a href="reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
-        <div class="nav-label">System</div>
-        <a href="settings.php" class="sidebar-link"><i class="fas fa-cog"></i> Settings</a>
-        <a href="backups.php" class="sidebar-link"><i class="fas fa-database"></i> Backups</a>
-        <a href="system_logs.php" class="sidebar-link"><i class="fas fa-history"></i> System Logs</a>
-        <div class="nav-label">Account</div>
-        <a href="profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> Profile</a>
-        <a href="../../../logout.php" class="sidebar-link" style="margin-top:8px;border-top:2px solid #0B3D8A;padding-top:12px;"><i class="fas fa-sign-out-alt"></i> Logout</a>
-    </nav>
-</aside>
-
-<!-- TOP NAV -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4">
-        <button id="sidebarToggle" class="lg:hidden icon-btn"><i class="fas fa-bars text-lg"></i></button>
-    </div>
+    
     <div class="flex items-center gap-3">
+        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+            <?php foreach ($branches_list as $branch): ?>
+                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
+                    🏥 <?= htmlspecialchars($branch['name']) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        
         <span class="datetime" id="currentDateTime"></span>
-        <button class="icon-btn"><i class="fas fa-bell text-lg"></i><span class="notif-dot"></span></button>
-        <a href="profile.php"><img src="<?= $logo_url ?>" alt="Profile" class="avatar" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2238%22 height=%2238%22%3E%3Crect width=%2238%22 height=%2238%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2219%22 y=%2225%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'"></a>
+        
+        <!-- Dark Mode Toggle -->
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
+        
+        <button class="icon-btn">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot"></span>
+        </button>
+        
+        <a href="profile.php">
+            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+        </a>
     </div>
 </nav>
 
+<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
+<!-- ================================================================ -->
 <main class="main-content">
+
+    <!-- Page Header -->
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
-            <h1 class="page-title"><i class="fas fa-edit mr-2" style="color: var(--blue-600);"></i> Edit Branch</h1>
-            <p class="page-subtitle">Update branch information</p>
+            <h1 class="page-title">
+                <i class="fas fa-edit mr-2" style="color: var(--blue-600);"></i> Edit Branch
+            </h1>
+            <p class="page-subtitle">
+                Update branch information
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch['name']) ?>
+                </span>
+            </p>
         </div>
         <div>
-            <a href="branches.php" class="btn btn-outline btn-sm"><i class="fas fa-arrow-left"></i> Back to Branches</a>
+            <a href="branches.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+                <i class="fas fa-arrow-left"></i> Back
+            </a>
         </div>
     </div>
 
+    <!-- Message -->
     <?php if ($message): ?>
         <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i> <?= $message ?>
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
+            <?= $message ?>
         </div>
     <?php endif; ?>
 
-    <div class="card">
+    <!-- ================================================================ -->
+    <!-- FORM -->
+    <!-- ================================================================ -->
+    <div class="form-card">
+        <!-- Form Header -->
+        <div class="form-header">
+            <div class="form-header-icon">
+                <i class="fas fa-store-alt"></i>
+            </div>
+            <div>
+                <h3>Edit Branch Information</h3>
+                <p>Update the details of this branch</p>
+            </div>
+        </div>
+        
         <form method="POST" action="">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                <!-- Branch Name -->
                 <div>
-                    <label class="form-label">Branch Name <span class="text-red-500">*</span></label>
-                    <input type="text" name="name" class="form-control" value="<?= htmlspecialchars($branch['name']) ?>" required>
+                    <label class="form-label">
+                        <i class="fas fa-tag text-blue-600"></i> Branch Name
+                        <span class="required">*</span>
+                    </label>
+                    <div class="form-row-icon">
+                        <input type="text" name="name" class="form-control" 
+                               placeholder="e.g. Braick Dispensary - Dodoma" 
+                               value="<?= htmlspecialchars($form_data['name']) ?>" required>
+                        <span class="input-icon"><i class="fas fa-store"></i></span>
+                    </div>
                 </div>
+                
+                <!-- Location -->
                 <div>
-                    <label class="form-label">Location</label>
-                    <input type="text" name="location" class="form-control" value="<?= htmlspecialchars($branch['location'] ?? '') ?>">
+                    <label class="form-label">
+                        <i class="fas fa-location-dot text-green-600"></i> Location
+                    </label>
+                    <div class="form-row-icon">
+                        <input type="text" name="location" class="form-control" 
+                               placeholder="e.g. Chang'ombe, Dodoma"
+                               value="<?= htmlspecialchars($form_data['location']) ?>">
+                        <span class="input-icon"><i class="fas fa-map-pin"></i></span>
+                    </div>
                 </div>
+                
+                <!-- Phone -->
                 <div>
-                    <label class="form-label">Phone</label>
-                    <input type="text" name="phone" class="form-control" value="<?= htmlspecialchars($branch['phone'] ?? '') ?>">
+                    <label class="form-label">
+                        <i class="fas fa-phone text-blue-600"></i> Phone
+                    </label>
+                    <div class="form-row-icon">
+                        <input type="text" name="phone" class="form-control" 
+                               placeholder="e.g. +255 759 154 160"
+                               value="<?= htmlspecialchars($form_data['phone']) ?>">
+                        <span class="input-icon"><i class="fas fa-phone"></i></span>
+                    </div>
                 </div>
+                
+                <!-- Email -->
                 <div>
-                    <label class="form-label">Email</label>
-                    <input type="email" name="email" class="form-control" value="<?= htmlspecialchars($branch['email'] ?? '') ?>">
+                    <label class="form-label">
+                        <i class="fas fa-envelope text-green-600"></i> Email
+                    </label>
+                    <div class="form-row-icon">
+                        <input type="email" name="email" class="form-control" 
+                               placeholder="e.g. dodoma@dispensary.com"
+                               value="<?= htmlspecialchars($form_data['email']) ?>">
+                        <span class="input-icon"><i class="fas fa-envelope"></i></span>
+                    </div>
                 </div>
+                
+                <!-- Status -->
                 <div>
-                    <label class="form-label">Status</label>
-                    <select name="status" class="form-control">
-                        <option value="active" <?= $branch['status'] === 'active' ? 'selected' : '' ?>>Active</option>
-                        <option value="inactive" <?= $branch['status'] === 'inactive' ? 'selected' : '' ?>>Inactive</option>
-                    </select>
+                    <label class="form-label">
+                        <i class="fas fa-circle text-blue-600"></i> Status
+                    </label>
+                    <div class="form-row-icon">
+                        <select name="status" class="form-control">
+                            <option value="active" <?= $form_data['status'] === 'active' ? 'selected' : '' ?>>
+                                ✅ Active
+                            </option>
+                            <option value="inactive" <?= $form_data['status'] === 'inactive' ? 'selected' : '' ?>>
+                                ⛔ Inactive
+                            </option>
+                        </select>
+                        <span class="input-icon"><i class="fas fa-toggle-on"></i></span>
+                    </div>
                 </div>
+                
+                <!-- Created Date -->
+                <div>
+                    <label class="form-label">
+                        <i class="fas fa-calendar text-gray-500"></i> Created Date
+                    </label>
+                    <div class="form-row-icon">
+                        <input type="text" class="form-control" 
+                               value="<?= $created_date ?>" disabled>
+                        <span class="input-icon"><i class="fas fa-calendar-day"></i></span>
+                    </div>
+                </div>
+                
             </div>
-            <div class="flex gap-3 mt-6 pt-4 border-t">
-                <button type="submit" class="btn btn-blue"><i class="fas fa-save"></i> Update Branch</button>
-                <a href="branches.php" class="btn btn-outline"><i class="fas fa-times"></i> Cancel</a>
+            
+            <!-- Form Actions -->
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Update Branch
+                </button>
+                <a href="branches.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+                <button type="reset" class="btn btn-outline">
+                    <i class="fas fa-undo"></i> Reset
+                </button>
             </div>
         </form>
     </div>
 
+    <!-- Footer -->
     <footer class="footer">
-        <p><span class="footer-brand">Braick Dispensary</span> Management System &copy; <?= date('Y') ?> All rights reserved</p>
+        <p>
+            <span class="footer-brand">Braick Dispensary</span> Management System
+            <span class="text-gray-300 mx-2">|</span>
+            Edit Branch
+            <span class="text-gray-300 mx-2">|</span>
+            &copy; <?= date('Y') ?> All rights reserved
+        </p>
     </footer>
+
 </main>
 
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <div>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
-    const sidebar = document.getElementById('sidebar');
-    const sidebarToggle = document.getElementById('sidebarToggle');
-    sidebarToggle?.addEventListener('click', () => { sidebar.classList.toggle('open'); });
-    document.addEventListener('click', (e) => {
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    var darkModeToggle = document.getElementById('darkModeToggle');
+    var darkIcon = document.getElementById('darkIcon');
+    var darkText = document.getElementById('darkText');
+    var htmlElement = document.documentElement;
+    
+    var savedDarkMode = localStorage.getItem('darkMode');
+    if (savedDarkMode === 'true') {
+        htmlElement.setAttribute('data-theme', 'dark');
+        darkIcon.className = 'fas fa-sun';
+        darkText.textContent = 'Light';
+    }
+    
+    darkModeToggle?.addEventListener('click', function() {
+        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+        if (isDark) {
+            htmlElement.removeAttribute('data-theme');
+            darkIcon.className = 'fas fa-moon';
+            darkText.textContent = 'Dark';
+            localStorage.setItem('darkMode', 'false');
+        } else {
+            htmlElement.setAttribute('data-theme', 'dark');
+            darkIcon.className = 'fas fa-sun';
+            darkText.textContent = 'Light';
+            localStorage.setItem('darkMode', 'true');
+        }
+    });
+
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
+    var sidebar = document.getElementById('sidebar');
+    var sidebarToggle = document.getElementById('sidebarToggle');
+    
+    sidebarToggle?.addEventListener('click', function() {
+        sidebar.classList.toggle('open');
+    });
+    
+    document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
             if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
     });
+
+    // ================================================================
+    // BRANCH SWITCHER
+    // ================================================================
+    function switchBranch(branchId) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('branch', branchId);
+        window.location.href = url.toString();
+    }
+
+    // ================================================================
+    // TOAST
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3500);
+    }
+
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
-        const now = new Date();
+        var now = new Date();
         document.getElementById('currentDateTime').textContent = 
-            now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) + 
+            now.toLocaleDateString('en-US', { 
+                weekday: 'short', 
+                month: 'short', 
+                day: 'numeric', 
+                year: 'numeric' 
+            }) + 
             ' • ' + 
-            now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+            now.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit', 
+                hour12: true 
+            });
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
+
+    console.log('%c🏢 Braick - Edit Branch', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Branch: <?= htmlspecialchars($branch['name']) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📅 Created: <?= $created_date ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🔗 Shared Header & Sidebar: ACTIVE', 'font-size:13px; color:#64748B;');
+    console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
 </script>
+
 </body>
 </html>

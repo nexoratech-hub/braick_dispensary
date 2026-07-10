@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/branches.php
 // SUPER ADMIN - BRANCH MANAGEMENT
 // BRAICK DISPENSARY
+// WITH SHARED HEADER, SIDEBAR & BRANCH FILTER
 // ================================================================
 
 session_start();
@@ -18,9 +19,22 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// BRANCH SELECTION FOR SIDEBAR
+// BRANCH SELECTION FOR FILTER
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
+$branch_name = 'All Branches';
+
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $branch_id = (int)$selected_branch_id;
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([$branch_id]);
+    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch_data) {
+        $branch_name = $branch_data['name'];
+    }
+} else {
+    $selected_branch_id = 'all';
+}
 
 // ================================================================
 // GET STATISTICS FOR SIDEBAR
@@ -98,11 +112,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // ================================================================
-// GET ALL BRANCHES
+// GET ALL BRANCHES WITH FILTER
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT * FROM branches ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$query = "SELECT * FROM branches";
+if ($selected_branch_id !== 'all') {
+    $query .= " WHERE id = " . (int)$selected_branch_id;
+}
+$query .= " ORDER BY name";
+$branches = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// GET BRANCHES FOR SELECTOR
+// ================================================================
+$branches_list = [];
+$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+$branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // LOGO PATH
@@ -110,457 +135,298 @@ $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
+// INCLUDE SHARED HEADER
+// ================================================================
+include_once '../../components/admin_header.php';
+
+// ================================================================
 // INCLUDE SHARED SIDEBAR
 // ================================================================
-// Variables needed by sidebar
 $selected_branch_id = $selected_branch_id ?? 'all';
 $total_employees = $total_employees ?? 0;
 $total_doctors = $total_doctors ?? 0;
 $total_branches = $total_branches ?? 0;
 $pending_lab_tests = $pending_lab_tests ?? 0;
 $pending_prescriptions = $pending_prescriptions ?? 0;
+include_once '../../components/admin_sidebar.php';
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Branches - Braick Dispensary</title>
+
+<style>
+    /* ================================================================
+       ADDITIONAL TABLE STYLES
+       ================================================================ */
     
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
+    /* Card */
+    .card {
+        background: var(--bg-card);
+        border-radius: 20px;
+        padding: 20px 24px;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s ease;
+    }
     
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    .card:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
+    }
     
-    <style>
-        :root {
-            --blue-600: #0B5ED7;
-            --blue-700: #0B4EA8;
-            --green-600: #059669;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --white: #FFFFFF;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background: var(--gray-50);
-            color: var(--gray-800);
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--gray-100); }
-        ::-webkit-scrollbar-thumb { background: var(--blue-600); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV - WHITE
-           ================================================================ */
-        .top-nav {
-            position: fixed; top: 0; left: 270px; right: 0;
-            height: 68px; background: white; z-index: 40;
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 0 24px; border-bottom: 2px solid #D2E3FC;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex; align-items: center;
-            background: var(--gray-50); border-radius: 10px;
-            border: 2px solid var(--gray-200);
-            transition: all 0.3s;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--blue-600);
-            box-shadow: 0 0 0 3px #D2E3FC;
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none; background: transparent;
-            padding: 8px 14px; width: 280px;
-            font-size: 0.85rem; outline: none;
-            color: var(--gray-700);
-        }
-        
-        .top-nav .search-wrapper input::placeholder { color: var(--gray-400); }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--blue-600); color: white;
-            border: none; padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer; font-size: 0.85rem;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover { background: #0B3D8A; }
-        
-        .top-nav .branch-selector {
-            border: 2px solid var(--gray-200);
-            border-radius: 10px; padding: 6px 12px;
-            background: white; font-size: 0.82rem;
-            font-weight: 500; cursor: pointer; outline: none;
-            min-width: 180px; color: var(--gray-700);
-            transition: all 0.3s;
-        }
-        
-        .top-nav .branch-selector:focus {
-            border-color: var(--blue-600);
-            box-shadow: 0 0 0 3px #D2E3FC;
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem; color: var(--gray-500); font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 38px; height: 38px; border-radius: 50%;
-            object-fit: cover; border: 2px solid var(--gray-200);
-            cursor: pointer; transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover { border-color: var(--blue-600); }
-        
-        .top-nav .icon-btn {
-            width: 38px; height: 38px; border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            color: var(--gray-500); transition: all 0.3s;
-            background: transparent; border: none; cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover { background: #E8F0FE; color: var(--blue-600); }
-        
-        .notif-dot {
-            position: absolute; top: 6px; right: 6px;
-            width: 8px; height: 8px; background: var(--green-600);
-            border-radius: 50%; border: 2px solid white;
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
-        .main-content {
-            margin-left: 270px; margin-top: 68px;
-            padding: 24px 28px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        /* ================================================================
-           CARDS - WHITE BACKGROUND
-           ================================================================ */
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .card-title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    
+    .card-title .title-blue { color: #0B5ED7; }
+    
+    /* Table */
+    .table-wrap { overflow-x: auto; }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+    }
+    
+    .data-table thead th {
+        text-align: left;
+        padding: 10px 14px;
+        font-weight: 700;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: white;
+        background: #0B5ED7;
+        border-bottom: 3px solid #0B3D8A;
+        white-space: nowrap;
+    }
+    
+    .data-table tbody tr:nth-child(even) {
+        background: #E8F0FE;
+    }
+    
+    .data-table tbody tr:nth-child(odd) {
+        background: var(--bg-card);
+    }
+    
+    .data-table tbody tr:hover {
+        background: #D1FAE5;
+    }
+    
+    .data-table td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+    }
+    
+    /* Badges */
+    .badge {
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: white;
+        border: none;
+    }
+    
+    .badge-success { background: #059669; color: white; }
+    .badge-danger { background: #EF4444; color: white; }
+    .badge-info { background: #0B5ED7; color: white; }
+    
+    /* Buttons */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.75rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        white-space: nowrap;
+    }
+    
+    .btn-blue {
+        background: #0B5ED7;
+        color: white;
+    }
+    .btn-blue:hover {
+        background: #0A4CA8;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+    }
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+    }
+    
+    .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
+    
+    .btn-view {
+        background: #0B5ED7;
+        color: white;
+        padding: 4px 10px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+    }
+    .btn-view:hover {
+        background: #0A4CA8;
+        transform: scale(1.05);
+    }
+    
+    .btn-edit {
+        background: #059669;
+        color: white;
+        padding: 4px 10px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+    }
+    .btn-edit:hover {
+        background: #047857;
+        transform: scale(1.05);
+    }
+    
+    .btn-delete {
+        background: #EF4444;
+        color: white;
+        padding: 4px 10px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+    }
+    .btn-delete:hover {
+        background: #DC2626;
+        transform: scale(1.05);
+    }
+    
+    .action-buttons {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex-wrap: nowrap;
+        justify-content: center;
+    }
+    
+    /* Page Header */
+    .page-header {
+        border-bottom: 3px solid #0B5ED7;
+        padding-bottom: 12px;
+    }
+    
+    .page-header .page-title {
+        color: #0B3D8A;
+        font-size: 1.8rem;
+        font-weight: 700;
+    }
+    
+    [data-theme="dark"] .page-header .page-title {
+        color: #6EA8FE;
+    }
+    
+    .page-header .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+    }
+    
+    .page-header .branch-tag {
+        background: #059669;
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    
+    /* Responsive */
+    @media (max-width: 640px) {
         .card {
-            background: white;
-            border-radius: 16px;
-            padding: 18px 20px;
-            border: 2px solid var(--gray-200);
-            transition: all 0.3s;
+            padding: 12px 14px;
         }
-        
-        .card:hover {
-            border-color: var(--blue-600);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
-        }
-        
-        .card-header {
-            display: flex; justify-content: space-between;
-            align-items: center; margin-bottom: 12px;
-            flex-wrap: wrap; gap: 8px;
-        }
-        
-        .card-title {
-            font-size: 0.9rem; font-weight: 600; color: var(--gray-800);
-        }
-        
-        .card-title .title-blue { color: var(--blue-600); }
-        .card-title .title-green { color: var(--green-600); }
-        
-        /* ================================================================
-           TABLE - BLUE HEADER
-           ================================================================ */
-        .table-wrap { overflow-x: auto; }
-        
-        .data-table {
-            width: 100%; border-collapse: collapse;
-            font-size: 0.8rem;
-        }
-        
-        .data-table thead th {
-            text-align: left;
-            padding: 8px 10px;
-            font-weight: 700;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: white;
-            background: var(--blue-600);
-            border-bottom: 3px solid #0B3D8A;
-            white-space: nowrap;
-        }
-        
-        .data-table tbody tr:nth-child(even) {
-            background: #E8F0FE;
-        }
-        
-        .data-table tbody tr:nth-child(odd) {
-            background: white;
-        }
-        
-        .data-table tbody tr:hover {
-            background: #D1FAE5;
-        }
-        
-        .data-table td {
-            padding: 8px 10px;
-            border-bottom: 1px solid var(--gray-200);
-            color: var(--gray-700);
-            vertical-align: middle;
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .badge {
-            padding: 2px 10px; border-radius: 20px;
-            font-size: 0.6rem; font-weight: 600;
-            display: inline-flex; align-items: center; gap: 4px;
-            color: white;
-            border: none;
-        }
-        
-        .badge-success { background: var(--green-600); color: white; }
-        .badge-danger { background: #EF4444; color: white; }
-        .badge-info { background: var(--blue-600); color: white; }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
-            display: inline-flex; align-items: center; gap: 4px;
-            padding: 4px 10px; border-radius: 6px;
-            font-weight: 600; font-size: 0.65rem;
-            transition: all 0.2s; cursor: pointer;
-            border: none; text-decoration: none;
-            white-space: nowrap;
-        }
-        
-        .btn-blue {
-            background: var(--blue-600); color: white;
-        }
-        .btn-blue:hover {
-            background: #0B3D8A;
-            transform: translateY(-1px);
-        }
-        
-        .btn-green {
-            background: var(--green-600); color: white;
-        }
-        .btn-green:hover {
-            background: #047857;
-            transform: translateY(-1px);
-        }
-        
-        .btn-outline {
-            background: transparent; color: var(--gray-600);
-            border: 1.5px solid var(--gray-200);
-        }
-        .btn-outline:hover {
-            background: #E8F0FE;
-            border-color: var(--blue-600);
-            color: var(--blue-600);
-        }
-        
-        .btn-danger {
-            background: #EF4444; color: white;
-        }
-        .btn-danger:hover {
-            background: #DC2626;
-            transform: translateY(-1px);
-        }
-        
-        .btn-sm { padding: 3px 8px; font-size: 0.6rem; border-radius: 4px; }
-        
-        .btn-view { 
-            background: var(--blue-600); 
-            color: white; 
-            padding: 2px 7px; 
-            font-size: 0.6rem; 
-            border-radius: 4px;
-        }
-        .btn-view:hover { 
-            background: #0B3D8A; 
-            transform: scale(1.05);
-        }
-        
-        .btn-edit { 
-            background: var(--green-600); 
-            color: white; 
-            padding: 2px 7px; 
-            font-size: 0.6rem; 
-            border-radius: 4px;
-        }
-        .btn-edit:hover { 
-            background: #047857; 
-            transform: scale(1.05);
-        }
-        
-        .btn-delete { 
-            background: #EF4444; 
-            color: white; 
-            padding: 2px 7px; 
-            font-size: 0.6rem; 
-            border-radius: 4px;
-        }
-        .btn-delete:hover { 
-            background: #DC2626; 
-            transform: scale(1.05);
-        }
-        
-        .action-buttons {
-            display: flex;
-            align-items: center;
-            gap: 3px;
-            flex-wrap: nowrap;
-            justify-content: center;
-        }
-        
-        .action-buttons .btn {
-            padding: 2px 7px;
-            font-size: 0.6rem;
-            border-radius: 4px;
-            font-weight: 600;
-        }
-        
-        .action-buttons .btn i {
+            padding: 4px 8px;
             font-size: 0.65rem;
         }
-        
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
-        .page-header {
-            border-bottom: 3px solid var(--blue-600);
-            padding-bottom: 12px;
+        .data-table {
+            font-size: 0.75rem;
         }
-        
-        .page-header .page-title {
-            color: #0B3D8A;
-            font-size: 1.8rem;
-            font-weight: 700;
+        .data-table th,
+        .data-table td {
+            padding: 6px 8px;
         }
-        
-        .page-header .page-subtitle {
-            color: var(--gray-500);
-            font-size: 0.9rem;
-        }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
-        .toast-custom {
-            position: fixed; bottom: 24px; right: 24px;
-            padding: 12px 18px; border-radius: 12px;
-            z-index: 999; max-width: 360px;
-            transform: translateY(100px); opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex; align-items: center; gap: 10px;
-            color: white;
-        }
-        
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: var(--green-600); }
-        .toast-custom.error { background: #EF4444; }
-        .toast-custom.info { background: var(--blue-600); }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--gray-200);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--gray-500);
-        }
-        
-        .footer .footer-brand {
-            color: var(--blue-600);
-            font-weight: 600;
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper input { width: 160px; }
-        }
-        
-        @media (max-width: 640px) {
-            .top-nav .search-wrapper input { width: 100px; }
-            .top-nav .branch-selector { min-width: 120px; font-size: 0.7rem; }
-            .top-nav .datetime { display: none; }
-            .main-content { padding: 10px; }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(16px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.4s ease forwards;
-            opacity: 0;
-        }
-        
-        .spinner {
-            display: inline-block; width: 14px; height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
-
-<!-- ================================================================ -->
-<!-- SHARED SIDEBAR - SAME FOR ALL PAGES -->
-<!-- ================================================================ -->
-<?php include_once '../../components/admin_sidebar.php'; ?>
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
-    <div class="flex items-center gap-4">
+    <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
         </button>
         
         <div class="search-wrapper">
-            <input type="text" placeholder="Search branches...">
-            <button class="search-btn"><i class="fas fa-search"></i></button>
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search branches...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
         </div>
     </div>
     
     <div class="flex items-center gap-3">
-        <select class="branch-selector">
-            <option>🌐 All Branches</option>
+        <!-- Branch Selector - FILTER -->
+        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+            <?php foreach ($branches_list as $branch): ?>
+                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
+                    🏥 <?= htmlspecialchars($branch['name']) ?>
+                </option>
+            <?php endforeach; ?>
         </select>
         
         <span class="datetime" id="currentDateTime"></span>
+        
+        <!-- Dark Mode Toggle -->
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
@@ -569,7 +435,7 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
         
         <a href="profile.php">
             <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2238%22 height=%2238%22%3E%3Crect width=%2238%22 height=%2238%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2219%22 y=%2225%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -585,7 +451,15 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
             <h1 class="page-title">
                 <i class="fas fa-store-alt mr-2" style="color: var(--blue-600);"></i> Branch Management
             </h1>
-            <p class="page-subtitle">Manage all dispensary branches</p>
+            <p class="page-subtitle">
+                Manage all dispensary branches
+                <span class="branch-tag ml-2">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
+                </span>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-list mr-1"></i> <?= count($branches) ?> branches
+                </span>
+            </p>
         </div>
         <div class="flex gap-2 flex-wrap">
             <a href="add_branch.php" class="btn btn-blue btn-sm">
@@ -611,6 +485,11 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
                 <i class="fas fa-list title-blue mr-2"></i> All Branches
                 <span class="text-sm font-normal text-gray-400">(<?= count($branches) ?> branches)</span>
             </h3>
+            <div class="flex gap-2">
+                <button onclick="exportTable()" class="btn btn-outline btn-sm">
+                    <i class="fas fa-file-export"></i> Export
+                </button>
+            </div>
         </div>
         
         <div class="table-wrap">
@@ -644,14 +523,14 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
                                 <td>
                                     <div class="action-buttons">
                                         <!-- VIEW Button -->
-                                        <a href="view_branch.php?id=<?= $branch['id'] ?>" 
+                                        <a href="view_branch.php?id=<?= $branch['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn btn-view" 
                                            title="View Branch">
                                             <i class="fas fa-eye"></i>
                                         </a>
                                         
                                         <!-- EDIT Button -->
-                                        <a href="edit_branch.php?id=<?= $branch['id'] ?>" 
+                                        <a href="edit_branch.php?id=<?= $branch['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn btn-edit" 
                                            title="Edit Branch">
                                             <i class="fas fa-edit"></i>
@@ -671,7 +550,11 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
                         <tr>
                             <td colspan="7" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-store-alt text-3xl block mb-2"></i>
-                                No branches found. Click "Add Branch" to get started.
+                                <?php if ($selected_branch_id !== 'all'): ?>
+                                    No branches found for the selected branch.
+                                <?php else: ?>
+                                    No branches found. Click "Add Branch" to get started.
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endif; ?>
@@ -679,6 +562,46 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
             </table>
         </div>
     </div>
+
+    <!-- ================================================================ -->
+    <!-- QUICK STATS - Branch Summary -->
+    <!-- ================================================================ -->
+    <?php if (count($branches) > 0): ?>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5">
+        <div class="card text-center">
+            <p class="text-2xl font-bold text-[#0B5ED7]"><?= count($branches) ?></p>
+            <p class="text-sm text-gray-500">Total Branches</p>
+        </div>
+        <div class="card text-center">
+            <p class="text-2xl font-bold text-[#059669]">
+                <?php
+                    $active = 0;
+                    foreach ($branches as $b) {
+                        if ($b['status'] === 'active') $active++;
+                    }
+                    echo $active;
+                ?>
+            </p>
+            <p class="text-sm text-gray-500">Active Branches</p>
+        </div>
+        <div class="card text-center">
+            <p class="text-2xl font-bold text-[#EF4444]">
+                <?php
+                    $inactive = 0;
+                    foreach ($branches as $b) {
+                        if ($b['status'] === 'inactive') $inactive++;
+                    }
+                    echo $inactive;
+                ?>
+            </p>
+            <p class="text-sm text-gray-500">Inactive Branches</p>
+        </div>
+        <div class="card text-center">
+            <p class="text-2xl font-bold text-[#0B5ED7]"><?= $total_employees ?></p>
+            <p class="text-sm text-gray-500">Total Employees</p>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -710,8 +633,42 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    var darkModeToggle = document.getElementById('darkModeToggle');
+    var darkIcon = document.getElementById('darkIcon');
+    var darkText = document.getElementById('darkText');
+    var htmlElement = document.documentElement;
+    
+    var savedDarkMode = localStorage.getItem('darkMode');
+    if (savedDarkMode === 'true') {
+        htmlElement.setAttribute('data-theme', 'dark');
+        darkIcon.className = 'fas fa-sun';
+        darkText.textContent = 'Light';
+    }
+    
+    darkModeToggle?.addEventListener('click', function() {
+        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+        if (isDark) {
+            htmlElement.removeAttribute('data-theme');
+            darkIcon.className = 'fas fa-moon';
+            darkText.textContent = 'Dark';
+            localStorage.setItem('darkMode', 'false');
+        } else {
+            htmlElement.setAttribute('data-theme', 'dark');
+            darkIcon.className = 'fas fa-sun';
+            darkText.textContent = 'Light';
+            localStorage.setItem('darkMode', 'true');
+        }
+    });
+
+    // ================================================================
+    // DOM ELEMENTS
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
+    var branchSelector = document.getElementById('branchSelector');
     var toast = document.getElementById('toast');
 
     // ================================================================
@@ -730,6 +687,15 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
     });
 
     // ================================================================
+    // BRANCH SWITCHER (FILTER)
+    // ================================================================
+    function switchBranch(branchId) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('branch', branchId);
+        window.location.href = url.toString();
+    }
+
+    // ================================================================
     // DELETE BRANCH
     // ================================================================
     function deleteBranch(branchId) {
@@ -743,6 +709,15 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
             document.body.appendChild(form);
             form.submit();
         }
+    }
+
+    // ================================================================
+    // EXPORT
+    // ================================================================
+    function exportTable() {
+        showToast('Export', 'Preparing branch list export...', 'info');
+        var branch = '<?= $selected_branch_id ?>';
+        window.location.href = 'reports.php?export=branches&branch=' + branch;
     }
 
     // ================================================================
@@ -767,6 +742,25 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
     }
 
     // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
+
+    // ================================================================
     // DATE & TIME
     // ================================================================
     function updateDateTime() {
@@ -783,8 +777,9 @@ $pending_prescriptions = $pending_prescriptions ?? 0;
     setInterval(updateDateTime, 1000);
 
     console.log('%c🏢 Braick - Branch Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Total Branches: <?= count($branches) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔗 Using Shared Sidebar', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Shared Header & Sidebar: ACTIVE', 'font-size:13px; color:#059669;');
+    console.log('%c🔍 Branch Filter: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
 </script>
 
 </body>
