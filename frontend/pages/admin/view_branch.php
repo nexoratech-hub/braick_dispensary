@@ -2,14 +2,13 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_branch.php
 // SUPER ADMIN - VIEW BRANCH DETAILS
-// NO LOGIN REQUIRED - SHARED HEADER & SIDEBAR
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION FOR DIRECT ACCESS (NO LOGIN REQUIRED)
+// FORCE SESSION FOR DIRECT ACCESS
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
     $_SESSION['user_id'] = 1;
@@ -24,50 +23,40 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET BRANCH ID FROM URL
+// GET BRANCH ID FROM URL - FIXED: USE CORRECT VARIABLE
 // ================================================================
-$view_branch_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$branch_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
-// ================================================================
-// BRANCH FILTER FOR BACK BUTTON
-// ================================================================
+// Branch filter for back button
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
 // ================================================================
+// GET BRANCH DATA - FIXED: USE $branch_id NOT $view_branch_id
 // ================================================================
-// FIX: GET BRANCH DATA BY ID - DIRECT DATABASE QUERY
-// ================================================================
-// ================================================================
-
 $branch = null;
 $branch_not_found = false;
 
-// ================================================================
-// STEP 1: GET THE BRANCH DATA
-// ================================================================
-if ($view_branch_id > 0) {
+if ($branch_id > 0) {
     $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
-    $stmt->execute([$view_branch_id]);
+    $stmt->execute([$branch_id]);
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$branch) {
         $branch_not_found = true;
-        // Redirect to branches list if branch not found
         header('Location: branches.php?branch=' . $selected_branch_id . '&error=not_found');
         exit;
     }
 } else {
-    // No ID provided, redirect to branches list
     header('Location: branches.php?branch=' . $selected_branch_id);
     exit;
 }
 
 // ================================================================
-// STEP 2: GET BRANCH STATISTICS
+// GET BRANCH STATISTICS - USE $branch['id'] CORRECTLY
 // ================================================================
 $filter_branch_id = $branch['id'];
 
-// 1. Employees (users with this branch_id)
+// 1. Employees
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE branch_id = ? AND role != 'admin'");
 $stmt->execute([$filter_branch_id]);
 $employee_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -87,7 +76,7 @@ $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id
 $stmt->execute([$filter_branch_id]);
 $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 5. Doctors (users with role doctor)
+// 5. Doctors
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE branch_id = ? AND role = 'doctor' AND status = 'active'");
 $stmt->execute([$filter_branch_id]);
 $doctor_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -98,7 +87,7 @@ $stmt->execute([$filter_branch_id]);
 $revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
 
 // ================================================================
-// STEP 3: GET CREATED DATE SAFELY
+// CREATED DATE
 // ================================================================
 $created_date = 'N/A';
 if (isset($branch['created_at']) && !empty($branch['created_at'])) {
@@ -106,7 +95,7 @@ if (isset($branch['created_at']) && !empty($branch['created_at'])) {
 }
 
 // ================================================================
-// STEP 4: GET ALL BRANCHES FOR SELECTOR
+// GET ALL BRANCHES FOR SELECTOR
 // ================================================================
 $branches = [];
 $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY id");
@@ -115,7 +104,7 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
 }
 
 // ================================================================
-// STEP 5: GET STATISTICS FOR SIDEBAR
+// SIDEBAR STATISTICS
 // ================================================================
 $total_employees = 0;
 $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
@@ -146,31 +135,14 @@ try {
 }
 
 // ================================================================
-// STEP 6: DEBUG - LOG BRANCH DATA
-// ================================================================
-// error_log("View Branch ID: " . $view_branch_id);
-// error_log("Branch Name: " . $branch['name']);
-// error_log("Branch Location: " . ($branch['location'] ?? 'Not set'));
-
-// ================================================================
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
-$selected_branch_id = $selected_branch_id ?? 'all';
-$total_employees = $total_employees ?? 0;
-$total_doctors = $total_doctors ?? 0;
-$total_branches = $total_branches ?? 0;
-$pending_lab_tests = $pending_lab_tests ?? 0;
-$pending_prescriptions = $pending_prescriptions ?? 0;
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -344,9 +316,9 @@ include_once '../../components/admin_sidebar.php';
     <div class="flex items-center gap-3">
         <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
+            <?php foreach ($branches as $branch_item): ?>
+                <option value="<?= $branch_item['id'] ?>" <?= $selected_branch_id == $branch_item['id'] ? 'selected' : '' ?>>
+                    🏥 <?= htmlspecialchars($branch_item['name']) ?>
                 </option>
             <?php endforeach; ?>
         </select>
