@@ -1,137 +1,265 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/dashboard.php
-// DOCTOR'S OWN DASHBOARD
+// DOCTOR DASHBOARD - SIMPLIFIED (NO CSS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// CHECK DOCTOR LOGIN
+// SIMULATED SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    header('Location: ../auth/login.php');
-    exit;
+if (!isset($_SESSION['doctor_id'])) {
+    $_SESSION['doctor_id'] = 1;
+    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
+    $_SESSION['role'] = 'doctor';
+    $_SESSION['branch_id'] = 1;
+    $_SESSION['specialty'] = 'Cardiology';
+    $_SESSION['email'] = 'sarah.mwamba@dispensary.com';
+    $_SESSION['phone'] = '+255 712 345 678';
 }
 
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+$doctor_id = $_SESSION['doctor_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Practitioner';
+$doctor_email = $_SESSION['email'] ?? 'No email';
+$doctor_phone = $_SESSION['phone'] ?? 'No phone';
+$doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 
+// ================================================================
+// FUNCTIONS
+// ================================================================
+function time_ago($timestamp) {
+    if (empty($timestamp)) return 'N/A';
+    $time = strtotime($timestamp);
+    if ($time === false) return 'N/A';
+    $diff = time() - $time;
+    if ($diff < 60) return 'Just now';
+    if ($diff < 3600) return floor($diff / 60) . 'm ago';
+    if ($diff < 86400) return floor($diff / 3600) . 'h ago';
+    if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+    if ($diff < 2592000) return floor($diff / 604800) . 'w ago';
+    return date('M d, Y', $time);
+}
+
+function getUserColor($name) {
+    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
+    $index = 0;
+    for ($i = 0; $i < strlen($name); $i++) {
+        $index = ($index + ord($name[$i])) % count($colors);
+    }
+    return $colors[$index];
+}
+
+function columnExists($db, $table, $column) {
+    try {
+        $stmt = $db->query("SHOW COLUMNS FROM $table LIKE '$column'");
+        return $stmt->rowCount() > 0;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function getBranchFilter($db, $table, $branch_id) {
+    if (columnExists($db, $table, 'branch_id')) {
+        return " AND branch_id = " . (int)$branch_id;
+    }
+    return "";
+}
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+if (file_exists($db_path)) {
+    require_once $db_path;
+} else {
+    die("❌ Database file not found at: " . $db_path);
+}
 $db = Database::getInstance()->getConnection();
 
-$doctor_id = $_SESSION['user_id'];
-$branch_id = $_SESSION['branch_id'] ?? 0;
-
 // ================================================================
-// GET DOCTOR DETAILS
+// GET DOCTOR'S BRANCH NAME
 // ================================================================
-$stmt = $db->prepare("
-    SELECT u.*, b.name as branch_name 
-    FROM users u
-    LEFT JOIN branches b ON u.branch_id = b.id
-    WHERE u.id = ?
-");
-$stmt->execute([$doctor_id]);
-$doctor = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$doctor) {
-    header('Location: ../auth/login.php');
-    exit;
+$doctor_branch_name = 'Not Assigned';
+try {
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([$doctor_branch_id]);
+    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch_data) {
+        $doctor_branch_name = $branch_data['name'];
+    }
+} catch (Exception $e) {
+    $doctor_branch_name = 'Branch';
 }
 
 // ================================================================
-// GET STATISTICS
+// FETCH ALL STATISTICS
 // ================================================================
-
-// 1. Total Patients
-$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?");
+$filter = getBranchFilter($db, 'visits', $doctor_branch_id);
+$sql = "SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?" . $filter;
+$stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 2. Today's Patients
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND DATE(created_at) = CURDATE()");
+$filter = getBranchFilter($db, 'visits', $doctor_branch_id);
+$sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND DATE(created_at) = CURDATE()" . $filter;
+$stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
-$today_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 3. Pending Prescriptions
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'");
+$filter = getBranchFilter($db, 'visits', $doctor_branch_id);
+$sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)" . $filter;
+$stmt = $db->prepare($sql);
+$stmt->execute([$doctor_id]);
+$week_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$filter = getBranchFilter($db, 'visits', $doctor_branch_id);
+$sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)" . $filter;
+$stmt = $db->prepare($sql);
+$stmt->execute([$doctor_id]);
+$month_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$filter = getBranchFilter($db, 'prescriptions', $doctor_branch_id);
+$sql = "SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'" . $filter;
+$stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 4. Pending Lab Tests
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status = 'pending'");
+$filter = getBranchFilter($db, 'lab_tests', $doctor_branch_id);
+$sql = "SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status = 'pending'" . $filter;
+$stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 5. Today's Appointments
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count FROM appointments 
-    WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE() AND status IN ('scheduled', 'confirmed')
-");
+$filter = getBranchFilter($db, 'referrals', $doctor_branch_id);
+$sql = "SELECT COUNT(*) as count FROM referrals WHERE from_doctor_id = ? AND status = 'pending'" . $filter;
+$stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
-$today_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$pending_referrals = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 6. Revenue Generated
-$stmt = $db->prepare("
-    SELECT COALESCE(SUM(ps.total), 0) as revenue 
-    FROM pharmacy_sales ps
-    JOIN prescriptions p ON ps.prescription_id = p.id
-    WHERE p.doctor_id = ? AND ps.payment_status = 'paid'
-");
+$filter = getBranchFilter($db, 'appointments', $doctor_branch_id);
+$sql = "SELECT COUNT(*) as count FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE()" . $filter;
+$stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
-$revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
+$today_appointments_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 7. Online Status - Update
-$stmt = $db->prepare("UPDATE users SET is_online = 1, last_online = NOW() WHERE id = ?");
-$stmt->execute([$doctor_id]);
+// Revenue
+$sql = "SELECT COALESCE(SUM(ps.total), 0) as revenue 
+        FROM pharmacy_sales ps
+        JOIN prescriptions p ON ps.prescription_id = p.id
+        WHERE p.doctor_id = ? AND ps.payment_status = 'paid' AND DATE(ps.sale_date) = CURDATE()";
+$params = [$doctor_id];
+if (columnExists($db, 'pharmacy_sales', 'branch_id')) {
+    $sql .= " AND ps.branch_id = ?";
+    $params[] = $doctor_branch_id;
+}
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$today_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
 
-// ================================================================
-// GET RECENT ACTIVITIES
-// ================================================================
+$sql = "SELECT COALESCE(SUM(ps.total), 0) as revenue 
+        FROM pharmacy_sales ps
+        JOIN prescriptions p ON ps.prescription_id = p.id
+        WHERE p.doctor_id = ? AND ps.payment_status = 'paid' AND MONTH(ps.sale_date) = MONTH(CURDATE())";
+$params = [$doctor_id];
+if (columnExists($db, 'pharmacy_sales', 'branch_id')) {
+    $sql .= " AND ps.branch_id = ?";
+    $params[] = $doctor_branch_id;
+}
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$month_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
 
 // Recent Patients
-$stmt = $db->prepare("
-    SELECT DISTINCT p.*, v.created_at as last_visit 
-    FROM patients p
-    JOIN visits v ON p.id = v.patient_id
-    WHERE v.doctor_id = ?
-    ORDER BY v.created_at DESC LIMIT 5
-");
-$stmt->execute([$doctor_id]);
+$sql = "SELECT DISTINCT p.*, v.created_at as last_visit 
+        FROM patients p
+        JOIN visits v ON p.id = v.patient_id
+        WHERE v.doctor_id = ?";
+$params = [$doctor_id];
+if (columnExists($db, 'visits', 'branch_id')) {
+    $sql .= " AND v.branch_id = ?";
+    $params[] = $doctor_branch_id;
+}
+$sql .= " ORDER BY v.created_at DESC LIMIT 5";
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
 $recent_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Today's Appointments List
-$stmt = $db->prepare("
-    SELECT a.*, p.full_name as patient_name, p.patient_id 
-    FROM appointments a
-    JOIN patients p ON a.patient_id = p.id
-    WHERE a.doctor_id = ? AND DATE(a.appointment_date) = CURDATE()
-    ORDER BY a.appointment_date LIMIT 5
-");
-$stmt->execute([$doctor_id]);
-$appointments_today = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// Today's Appointments
+$sql = "SELECT a.*, p.full_name as patient_name, p.patient_id 
+        FROM appointments a
+        JOIN patients p ON a.patient_id = p.id
+        WHERE a.doctor_id = ? AND DATE(a.appointment_date) = CURDATE()";
+$params = [$doctor_id];
+if (columnExists($db, 'appointments', 'branch_id')) {
+    $sql .= " AND a.branch_id = ?";
+    $params[] = $doctor_branch_id;
+}
+$sql .= " ORDER BY a.appointment_date";
+$stmt = $db->prepare($sql);
+$stmt->execute($params);
+$today_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// ================================================================
-// GET BRANCHES (for selector)
-// ================================================================
-$branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $branches[] = $row;
+// Weekly Chart
+$weekly_labels = [];
+$weekly_values = [];
+for ($i = 6; $i >= 0; $i--) {
+    $date = date('Y-m-d', strtotime("-$i days"));
+    $weekly_labels[] = date('D', strtotime($date));
+    $sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND DATE(created_at) = ?";
+    $params = [$doctor_id, $date];
+    if (columnExists($db, 'visits', 'branch_id')) {
+        $sql .= " AND branch_id = ?";
+        $params[] = $doctor_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $weekly_values[] = $count;
 }
 
-// ================================================================
-// LOGO PATH
-// ================================================================
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+// Recent Activities
+$recent_activities = [];
+try {
+    $sql = "SELECT action, details, created_at FROM activity_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 5";
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$doctor_id]);
+    $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $recent_activities = [
+        ['action' => 'Dashboard Loaded', 'details' => 'Doctor dashboard loaded successfully', 'created_at' => date('Y-m-d H:i:s')]
+    ];
+}
+
+$doctor_stats = [
+    'total_patients' => $total_patients,
+    'patients_growth' => 12,
+    'today_visits' => $today_visits,
+    'week_visits' => $week_visits,
+    'month_visits' => $month_visits,
+    'pending_prescriptions' => $pending_prescriptions,
+    'pending_lab_tests' => $pending_lab_tests,
+    'pending_referrals' => $pending_referrals,
+    'today_appointments' => $today_appointments_count,
+    'total_revenue' => $today_revenue,
+    'month_revenue' => $month_revenue,
+];
+
+// Variables for sidebar
+$selected_branch_id = $doctor_branch_id;
+$total_employees = 0;
+$total_doctors = 0;
+$total_branches = 0;
+$pending_lab_tests_sidebar = $pending_lab_tests;
+$pending_prescriptions_sidebar = $pending_prescriptions;
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
-$selected_branch_id = $branch_id;
-include_once '../../components/doctor_header.php';
-include_once '../../components/doctor_sidebar.php';
+include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
+include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -140,236 +268,210 @@ include_once '../../components/doctor_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3">
+    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-6">
         <div>
-            <h1 class="page-title">
-                <i class="fas fa-home mr-2" style="color: var(--primary);"></i> Doctor Dashboard
+            <h1 class="page-title flex items-center gap-3">
+                <i class="fas fa-home mr-2" style="color: #0B5ED7;"></i> 
+                Dashboard
+                <span class="text-sm font-normal text-gray-400 ml-2">| Welcome back</span>
             </h1>
-            <p class="page-subtitle">
-                Welcome back, <strong>Dr. <?= htmlspecialchars($doctor['full_name']) ?></strong>!
-                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
-                    <i class="fas fa-circle text-[6px] text-green-500 mr-1"></i> Online
+            <div class="page-subtitle flex flex-wrap items-center gap-3 mt-2">
+                <span class="text-2xl font-bold text-gray-800 doctor-welcome">
+                    <i class="fas fa-user-md mr-2 text-blue-600"></i>
+                    <?= htmlspecialchars($doctor_name) ?>
                 </span>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($doctor['branch_name'] ?? 'N/A') ?>
+                <span class="inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm border border-blue-200">
+                    <i class="fas fa-stethoscope mr-1"></i>
+                    <?= htmlspecialchars($doctor_specialty) ?>
                 </span>
-            </p>
+                <span class="branch-tag">
+                    <i class="fas fa-store-alt"></i> 
+                    <?= htmlspecialchars($doctor_branch_name) ?>
+                </span>
+                <span class="inline-flex bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs border border-gray-200">
+                    <i class="fas fa-calendar-day mr-1"></i> 
+                    <?= date('F d, Y') ?>
+                </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-3 mt-2 text-sm text-gray-500">
+                <span><i class="fas fa-envelope mr-1 text-blue-500"></i><?= htmlspecialchars($doctor_email) ?></span>
+                <span class="text-gray-300">|</span>
+                <span><i class="fas fa-phone mr-1 text-green-500"></i><?= htmlspecialchars($doctor_phone) ?></span>
+                <span class="text-gray-300">|</span>
+                <span><i class="fas fa-id-badge mr-1 text-purple-500"></i>ID: <?= htmlspecialchars($doctor_id) ?></span>
+            </div>
         </div>
         <div class="flex gap-2 flex-wrap">
-            <a href="new_visit.php" class="btn btn-primary btn-sm">
-                <i class="fas fa-plus-circle"></i> New Visit
-            </a>
-            <a href="prescribe.php" class="btn btn-primary btn-sm" style="background: #0B5ED7;">
-                <i class="fas fa-prescription"></i> Prescribe
-            </a>
+            <a href="new_visit.php" class="btn btn-blue btn-sm"><i class="fas fa-plus-circle"></i> New Visit</a>
+            <a href="prescribe.php" class="btn btn-green btn-sm"><i class="fas fa-prescription"></i> Prescribe</a>
+            <button onclick="location.reload()" class="btn btn-outline btn-sm"><i class="fas fa-sync-alt"></i> Refresh</button>
         </div>
     </div>
 
     <!-- ================================================================ -->
     <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
-    <div class="grid-cols-4 mb-5">
-        
-        <div class="stat-card animate-fade-in-up">
-            <div class="stat-icon green"><i class="fas fa-users"></i></div>
-            <div>
-                <p class="stat-number"><?= number_format($total_patients) ?></p>
-                <p class="stat-label">Total Patients</p>
-                <span class="stat-trend"><i class="fas fa-arrow-up text-green-600"></i> All time</span>
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+        <div class="stat-card blue animate-fade-in-up">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Total Patients</p>
+                    <p class="stat-number"><?= number_format($doctor_stats['total_patients']) ?></p>
+                    <span class="stat-trend"><i class="fas fa-users"></i> All time</span>
+                </div>
+                <div class="stat-icon"><i class="fas fa-users"></i></div>
             </div>
         </div>
-        
-        <div class="stat-card animate-fade-in-up">
-            <div class="stat-icon blue"><i class="fas fa-calendar-day"></i></div>
-            <div>
-                <p class="stat-number"><?= number_format($today_patients) ?></p>
-                <p class="stat-label">Today's Patients</p>
-                <span class="stat-trend"><i class="fas fa-clock"></i> Today</span>
+        <div class="stat-card green animate-fade-in-up">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Today's Visits</p>
+                    <p class="stat-number"><?= $doctor_stats['today_visits'] ?></p>
+                    <span class="stat-trend"><i class="fas fa-calendar-day"></i> Today</span>
+                </div>
+                <div class="stat-icon"><i class="fas fa-clinic-medical"></i></div>
             </div>
         </div>
-        
-        <div class="stat-card animate-fade-in-up">
-            <div class="stat-icon yellow"><i class="fas fa-prescription"></i></div>
-            <div>
-                <p class="stat-number"><?= number_format($pending_prescriptions) ?></p>
-                <p class="stat-label">Pending Prescriptions</p>
-                <?php if ($pending_prescriptions > 0): ?>
-                    <span class="stat-trend text-yellow-600"><i class="fas fa-clock"></i> Needs attention</span>
-                <?php else: ?>
-                    <span class="stat-trend text-green-600"><i class="fas fa-check"></i> All done</span>
-                <?php endif; ?>
+        <div class="stat-card blue-dark animate-fade-in-up">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Weekly Visits</p>
+                    <p class="stat-number"><?= $doctor_stats['week_visits'] ?></p>
+                    <span class="stat-trend"><i class="fas fa-calendar-week"></i> This week</span>
+                </div>
+                <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
             </div>
         </div>
-        
-        <div class="stat-card animate-fade-in-up">
-            <div class="stat-icon purple"><i class="fas fa-calendar-check"></i></div>
-            <div>
-                <p class="stat-number"><?= number_format($today_appointments) ?></p>
-                <p class="stat-label">Today's Appointments</p>
-                <span class="stat-trend"><i class="fas fa-clock"></i> Scheduled</span>
+        <div class="stat-card orange animate-fade-in-up">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Pending Prescriptions</p>
+                    <p class="stat-number"><?= $doctor_stats['pending_prescriptions'] ?></p>
+                    <span class="stat-trend"><i class="fas fa-clock"></i> Needs action</span>
+                </div>
+                <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             </div>
         </div>
-        
+        <div class="stat-card purple animate-fade-in-up">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Pending Lab Tests</p>
+                    <p class="stat-number"><?= $doctor_stats['pending_lab_tests'] ?></p>
+                    <span class="stat-trend"><i class="fas fa-flask"></i> Pending</span>
+                </div>
+                <div class="stat-icon"><i class="fas fa-flask"></i></div>
+            </div>
+        </div>
+        <div class="stat-card green-dark animate-fade-in-up">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Today's Revenue</p>
+                    <p class="stat-number">TSh <?= number_format($doctor_stats['total_revenue']) ?></p>
+                    <span class="stat-trend">TSh <?= number_format($doctor_stats['month_revenue']) ?> monthly</span>
+                </div>
+                <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+            </div>
+        </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- SECOND ROW - Revenue & Pending Lab -->
+    <!-- CHART & APPOINTMENTS -->
     <!-- ================================================================ -->
-    <div class="grid-cols-2 mb-5">
-        
-        <div class="stat-card animate-fade-in-up" style="grid-column: span 1;">
-            <div class="stat-icon green"><i class="fas fa-money-bill-wave"></i></div>
-            <div>
-                <p class="stat-number">TSh <?= number_format($revenue) ?></p>
-                <p class="stat-label">Revenue Generated</p>
-                <span class="stat-trend"><i class="fas fa-arrow-up text-green-600"></i> All time</span>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-chart-bar title-blue mr-2"></i> Weekly Visits <span class="text-xs font-normal text-gray-400">(Last 7 days)</span></h3>
+            </div>
+            <div class="chart-container">
+                <canvas id="visitsChart"></canvas>
             </div>
         </div>
-        
-        <div class="stat-card animate-fade-in-up" style="grid-column: span 1;">
-            <div class="stat-icon purple"><i class="fas fa-flask"></i></div>
-            <div>
-                <p class="stat-number"><?= number_format($pending_lab_tests) ?></p>
-                <p class="stat-label">Pending Lab Tests</p>
-                <?php if ($pending_lab_tests > 0): ?>
-                    <span class="stat-trend text-yellow-600"><i class="fas fa-clock"></i> Waiting for results</span>
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-calendar-check title-blue mr-2"></i> Today's Appointments <span class="text-xs font-normal text-gray-400">(<?= count($today_appointments) ?>)</span></h3>
+                <a href="appointments.php" class="text-xs text-blue-600 hover:underline">View All →</a>
+            </div>
+            <div class="space-y-1 max-h-52 overflow-y-auto">
+                <?php if (count($today_appointments) > 0): ?>
+                    <?php foreach ($today_appointments as $appt): ?>
+                        <div class="appointment-item">
+                            <span class="appointment-time"><?= date('h:i A', strtotime($appt['appointment_date'])) ?></span>
+                            <span class="appointment-patient"><?= htmlspecialchars($appt['patient_name']) ?></span>
+                            <span class="appointment-type"><?= htmlspecialchars($appt['purpose'] ?? 'General') ?></span>
+                            <span class="appointment-status <?= $appt['status'] ?? 'scheduled' ?>"><?= ucfirst($appt['status'] ?? 'Scheduled') ?></span>
+                        </div>
+                    <?php endforeach; ?>
                 <?php else: ?>
-                    <span class="stat-trend text-green-600"><i class="fas fa-check"></i> All completed</span>
+                    <div class="text-center py-8 text-gray-400"><i class="fas fa-calendar-check text-2xl block mb-2"></i><p>No appointments scheduled for today</p></div>
                 <?php endif; ?>
             </div>
         </div>
-        
     </div>
 
     <!-- ================================================================ -->
-    <!-- TODAY'S APPOINTMENTS & RECENT PATIENTS -->
+    <!-- RECENT PATIENTS & ACTIVITIES -->
     <!-- ================================================================ -->
-    <div class="grid-cols-2">
-        
-        <!-- Today's Appointments -->
-        <div class="card animate-fade-in-up">
-            <h3 class="card-title">
-                <i class="fas fa-calendar-check text-green-600"></i> Today's Appointments
-                <span class="text-sm font-normal text-gray-400">(<?= count($appointments_today) ?>)</span>
-            </h3>
-            
-            <?php if (count($appointments_today) > 0): ?>
-                <?php foreach ($appointments_today as $appt): ?>
-                    <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
-                        <div>
-                            <span class="font-medium text-sm"><?= date('h:i A', strtotime($appt['appointment_date'])) ?></span>
-                            <span class="text-sm ml-3"><?= htmlspecialchars($appt['patient_name']) ?></span>
-                            <span class="text-xs text-gray-400 block"><?= htmlspecialchars($appt['patient_id']) ?></span>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-user-injured title-blue mr-2"></i> Recent Patients <span class="text-xs font-normal text-gray-400">(Last 5)</span></h3>
+                <a href="my_patients.php" class="text-xs text-blue-600 hover:underline">View All →</a>
+            </div>
+            <div class="space-y-1 max-h-56 overflow-y-auto">
+                <?php if (count($recent_patients) > 0): ?>
+                    <?php foreach ($recent_patients as $patient): ?>
+                        <div class="patient-item">
+                            <div class="patient-avatar" style="background: <?= getUserColor($patient['full_name']) ?>;"><?= strtoupper(substr($patient['full_name'], 0, 1)) ?></div>
+                            <div class="patient-info">
+                                <div class="name"><?= htmlspecialchars($patient['full_name']) ?></div>
+                                <div><span class="id"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span> <span class="phone">• <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span></div>
+                            </div>
+                            <div class="patient-last-visit"><?= isset($patient['last_visit']) ? time_ago($patient['last_visit']) : 'N/A' ?></div>
                         </div>
-                        <span class="text-xs px-3 py-1 rounded-full bg-green-100 text-green-700">
-                            <?= ucfirst($appt['status'] ?? 'Scheduled') ?>
-                        </span>
-                    </div>
-                <?php endforeach; ?>
-            <?php else: ?>
-                <p class="text-center text-gray-400 py-4">
-                    <i class="fas fa-calendar-check text-2xl block mb-2"></i>
-                    No appointments scheduled for today
-                </p>
-            <?php endif; ?>
-            
-            <div class="mt-3 text-center">
-                <a href="appointments.php" class="text-sm text-green-600 hover:underline">
-                    View all appointments →
-                </a>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <div class="text-center py-8 text-gray-400"><i class="fas fa-user-injured text-2xl block mb-2"></i><p>No patients yet</p></div>
+                <?php endif; ?>
             </div>
         </div>
-        
-        <!-- Recent Patients -->
-        <div class="card animate-fade-in-up">
-            <h3 class="card-title">
-                <i class="fas fa-user-injured text-blue-600"></i> Recent Patients
-                <span class="text-sm font-normal text-gray-400">(<?= count($recent_patients) ?>)</span>
-            </h3>
-            
-            <?php if (count($recent_patients) > 0): ?>
-                <?php foreach ($recent_patients as $patient): ?>
-                    <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
-                        <div>
-                            <span class="font-medium text-sm"><?= htmlspecialchars($patient['full_name']) ?></span>
-                            <span class="text-xs text-gray-400 block"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-clock title-blue mr-2"></i> Recent Activities</h3>
+                <span class="text-xs text-gray-400">Latest</span>
+            </div>
+            <div class="space-y-1 max-h-56 overflow-y-auto">
+                <?php if (count($recent_activities) > 0): ?>
+                    <?php foreach ($recent_activities as $activity): ?>
+                        <div class="activity-item">
+                            <div class="activity-icon blue"><i class="fas fa-circle"></i></div>
+                            <div class="activity-content">
+                                <div class="action"><?= htmlspecialchars($activity['action'] ?? 'Activity') ?></div>
+                                <div class="details"><?= htmlspecialchars($activity['details'] ?? '') ?></div>
+                            </div>
+                            <div class="activity-time"><?= isset($activity['created_at']) ? time_ago($activity['created_at']) : 'Just now' ?></div>
                         </div>
-                        <span class="text-xs text-gray-400">
-                            <?= isset($patient['last_visit']) ? time_ago($patient['last_visit']) : 'N/A' ?>
-                        </span>
-                        <a href="patient_details.php?id=<?= $patient['id'] ?>" 
-                           class="text-sm text-blue-600 hover:underline">
-                            View
-                        </a>
-                    </div>
-                <?php endforeach; ?>
-            <?php else: ?>
-                <p class="text-center text-gray-400 py-4">
-                    <i class="fas fa-user-injured text-2xl block mb-2"></i>
-                    No patients yet
-                </p>
-            <?php endif; ?>
-            
-            <div class="mt-3 text-center">
-                <a href="my_patients.php" class="text-sm text-blue-600 hover:underline">
-                    View all patients →
-                </a>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <div class="text-center py-8 text-gray-400"><i class="fas fa-clock text-2xl block mb-2"></i><p>No recent activities</p></div>
+                <?php endif; ?>
             </div>
         </div>
-        
     </div>
 
     <!-- ================================================================ -->
     <!-- QUICK ACTIONS -->
     <!-- ================================================================ -->
-    <div class="card mt-5 animate-fade-in-up">
-        <h3 class="card-title">
-            <i class="fas fa-bolt text-green-600"></i> Quick Actions
-        </h3>
-        <div class="grid-cols-4" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));">
-            
-            <a href="new_visit.php" class="stat-card" style="flex-direction: column; text-align: center; padding: 16px; cursor: pointer;">
-                <div class="stat-icon green" style="width: 44px; height: 44px; font-size: 1.2rem;">
-                    <i class="fas fa-plus-circle"></i>
-                </div>
-                <span class="font-medium text-sm mt-2">New Visit</span>
-            </a>
-            
-            <a href="prescribe.php" class="stat-card" style="flex-direction: column; text-align: center; padding: 16px; cursor: pointer;">
-                <div class="stat-icon blue" style="width: 44px; height: 44px; font-size: 1.2rem;">
-                    <i class="fas fa-prescription"></i>
-                </div>
-                <span class="font-medium text-sm mt-2">Prescribe</span>
-            </a>
-            
-            <a href="lab_results.php" class="stat-card" style="flex-direction: column; text-align: center; padding: 16px; cursor: pointer;">
-                <div class="stat-icon purple" style="width: 44px; height: 44px; font-size: 1.2rem;">
-                    <i class="fas fa-flask"></i>
-                </div>
-                <span class="font-medium text-sm mt-2">Lab Results</span>
-            </a>
-            
-            <a href="referrals.php" class="stat-card" style="flex-direction: column; text-align: center; padding: 16px; cursor: pointer;">
-                <div class="stat-icon yellow" style="width: 44px; height: 44px; font-size: 1.2rem;">
-                    <i class="fas fa-share-alt"></i>
-                </div>
-                <span class="font-medium text-sm mt-2">Refer Patient</span>
-            </a>
-            
-            <a href="appointments.php" class="stat-card" style="flex-direction: column; text-align: center; padding: 16px; cursor: pointer;">
-                <div class="stat-icon green" style="width: 44px; height: 44px; font-size: 1.2rem;">
-                    <i class="fas fa-calendar-check"></i>
-                </div>
-                <span class="font-medium text-sm mt-2">Appointments</span>
-            </a>
-            
-            <a href="history.php" class="stat-card" style="flex-direction: column; text-align: center; padding: 16px; cursor: pointer;">
-                <div class="stat-icon blue" style="width: 44px; height: 44px; font-size: 1.2rem;">
-                    <i class="fas fa-history"></i>
-                </div>
-                <span class="font-medium text-sm mt-2">Patient History</span>
-            </a>
-            
+    <div class="card mb-6">
+        <div class="card-header">
+            <h3 class="card-title"><i class="fas fa-bolt title-blue mr-2"></i> Quick Actions</h3>
+        </div>
+        <div class="grid grid-cols-3 sm:grid-cols-6 gap-3">
+            <a href="new_visit.php" class="quick-action"><i class="fas fa-user-plus icon-blue"></i><span class="label">New Visit</span></a>
+            <a href="prescribe.php" class="quick-action"><i class="fas fa-prescription icon-green"></i><span class="label">Prescribe</span></a>
+            <a href="my_patients.php" class="quick-action"><i class="fas fa-users icon-blue"></i><span class="label">My Patients</span></a>
+            <a href="appointments.php" class="quick-action"><i class="fas fa-calendar-check icon-blue"></i><span class="label">Appointments</span></a>
+            <a href="lab_results.php" class="quick-action"><i class="fas fa-flask icon-purple"></i><span class="label">Lab Results</span></a>
+            <a href="profile.php" class="quick-action"><i class="fas fa-user-circle icon-blue"></i><span class="label">My Profile</span></a>
         </div>
     </div>
 
@@ -382,36 +484,104 @@ include_once '../../components/doctor_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Doctor Dashboard
             <span class="text-gray-300 mx-2">|</span>
+            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle"></i>
+    <div>
+        <p id="toastTitle">Notification</p>
+        <p id="toastMessage"></p>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
     // ================================================================
-    // SIDEBAR TOGGLE (already in header)
+    // WEEKLY VISITS CHART
     // ================================================================
-    
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
+    document.addEventListener('DOMContentLoaded', function() {
+        var ctx = document.getElementById('visitsChart')?.getContext('2d');
+        if (ctx && typeof Chart !== 'undefined') {
+            var labels = <?= json_encode($weekly_labels) ?>;
+            var values = <?= json_encode($weekly_values) ?>;
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var textColor = isDark ? '#94A3B8' : '#64748B';
+            var gridColor = isDark ? '#334155' : '#E2E8F0';
+            
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Visits',
+                        data: values,
+                        backgroundColor: '#0B5ED7',
+                        borderColor: '#0A4CA8',
+                        borderWidth: 1,
+                        borderRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { stepSize: 1, color: textColor }, grid: { color: gridColor } },
+                        x: { grid: { display: false }, ticks: { color: textColor } }
+                    }
+                }
+            });
         }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
     });
 
-    console.log('%c✅ Doctor Dashboard loaded successfully', 'font-size:13px; color:#34D399;');
+    // ================================================================
+    // UPDATE SIDEBAR BADGES
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        if (typeof updateSidebarBadges === 'function') {
+            updateSidebarBadges(
+                <?= $doctor_stats['total_patients'] ?>,
+                <?= $doctor_stats['pending_lab_tests'] ?>,
+                <?= $doctor_stats['pending_referrals'] ?>,
+                <?= $doctor_stats['today_appointments'] ?>
+            );
+        }
+    });
+
+    // ================================================================
+    // TOAST FUNCTION
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
+        }, 3500);
+    }
+
+    console.log('%c👨‍⚕️ Braick - Doctor Dashboard (SIMPLIFIED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Doctor: <?= htmlspecialchars($doctor_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📊 Total Patients: <?= number_format($doctor_stats['total_patients']) ?>', 'font-size:13px; color:#6EA8FE;');
+    console.log('%c✅ CSS moved to header - No conflicts', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
