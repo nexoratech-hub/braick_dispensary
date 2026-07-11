@@ -1,30 +1,39 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/dashboard.php
-// DOCTOR DASHBOARD - SIMPLIFIED (NO CSS)
+// DOCTOR DASHBOARD - USING REAL DOCTOR DATA
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// SIMULATED SESSION
+// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
 // ================================================================
-if (!isset($_SESSION['doctor_id'])) {
-    $_SESSION['doctor_id'] = 1;
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
+    // Set default doctor session (Dr. Sarah Mwamba - ID: 2)
+    $_SESSION['user_id'] = 2;
     $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
+    $_SESSION['username'] = 'dr.sarah';
+    $_SESSION['email'] = 'sarah@braick.com';
+    $_SESSION['phone'] = '+255 700 000 001';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
     $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['email'] = 'sarah.mwamba@dispensary.com';
-    $_SESSION['phone'] = '+255 712 345 678';
+    $_SESSION['is_online'] = 1;
+    $_SESSION['profile_pic'] = NULL;
+    $_SESSION['status'] = 'active';
 }
 
-$doctor_id = $_SESSION['doctor_id'];
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Doctor';
-$doctor_specialty = $_SESSION['specialty'] ?? 'General Practitioner';
+$doctor_username = $_SESSION['username'] ?? 'doctor';
 $doctor_email = $_SESSION['email'] ?? 'No email';
 $doctor_phone = $_SESSION['phone'] ?? 'No phone';
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Practitioner';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
@@ -95,57 +104,66 @@ try {
 }
 
 // ================================================================
-// FETCH ALL STATISTICS
+// FETCH ALL STATISTICS FOR THIS DOCTOR
 // ================================================================
+
+// 1. TOTAL PATIENTS
 $filter = getBranchFilter($db, 'visits', $doctor_branch_id);
 $sql = "SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?" . $filter;
 $stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// 2. TODAY'S VISITS
 $filter = getBranchFilter($db, 'visits', $doctor_branch_id);
 $sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND DATE(created_at) = CURDATE()" . $filter;
 $stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// 3. WEEKLY VISITS
 $filter = getBranchFilter($db, 'visits', $doctor_branch_id);
 $sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)" . $filter;
 $stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $week_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// 4. MONTHLY VISITS
 $filter = getBranchFilter($db, 'visits', $doctor_branch_id);
 $sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)" . $filter;
 $stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $month_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// 5. PENDING PRESCRIPTIONS
 $filter = getBranchFilter($db, 'prescriptions', $doctor_branch_id);
 $sql = "SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'" . $filter;
 $stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// 6. PENDING LAB TESTS
 $filter = getBranchFilter($db, 'lab_tests', $doctor_branch_id);
 $sql = "SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status = 'pending'" . $filter;
 $stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// 7. PENDING REFERRALS
 $filter = getBranchFilter($db, 'referrals', $doctor_branch_id);
 $sql = "SELECT COUNT(*) as count FROM referrals WHERE from_doctor_id = ? AND status = 'pending'" . $filter;
 $stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $pending_referrals = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// 8. TODAY'S APPOINTMENTS COUNT
 $filter = getBranchFilter($db, 'appointments', $doctor_branch_id);
 $sql = "SELECT COUNT(*) as count FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE()" . $filter;
 $stmt = $db->prepare($sql);
 $stmt->execute([$doctor_id]);
 $today_appointments_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// Revenue
+// 9. TODAY'S REVENUE
 $sql = "SELECT COALESCE(SUM(ps.total), 0) as revenue 
         FROM pharmacy_sales ps
         JOIN prescriptions p ON ps.prescription_id = p.id
@@ -159,6 +177,7 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $today_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
 
+// 10. MONTHLY REVENUE
 $sql = "SELECT COALESCE(SUM(ps.total), 0) as revenue 
         FROM pharmacy_sales ps
         JOIN prescriptions p ON ps.prescription_id = p.id
@@ -172,7 +191,7 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $month_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
 
-// Recent Patients
+// 11. RECENT PATIENTS (Last 5)
 $sql = "SELECT DISTINCT p.*, v.created_at as last_visit 
         FROM patients p
         JOIN visits v ON p.id = v.patient_id
@@ -187,7 +206,7 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $recent_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Today's Appointments
+// 12. TODAY'S APPOINTMENTS LIST
 $sql = "SELECT a.*, p.full_name as patient_name, p.patient_id 
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
@@ -202,7 +221,7 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $today_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Weekly Chart
+// 13. WEEKLY VISITS CHART DATA
 $weekly_labels = [];
 $weekly_values = [];
 for ($i = 6; $i >= 0; $i--) {
@@ -220,7 +239,7 @@ for ($i = 6; $i >= 0; $i--) {
     $weekly_values[] = $count;
 }
 
-// Recent Activities
+// 14. RECENT ACTIVITIES
 $recent_activities = [];
 try {
     $sql = "SELECT action, details, created_at FROM activity_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 5";
@@ -233,6 +252,9 @@ try {
     ];
 }
 
+// ================================================================
+// DOCTOR STATS ARRAY
+// ================================================================
 $doctor_stats = [
     'total_patients' => $total_patients,
     'patients_growth' => 12,
@@ -276,29 +298,36 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="text-sm font-normal text-gray-400 ml-2">| Welcome back</span>
             </h1>
             <div class="page-subtitle flex flex-wrap items-center gap-3 mt-2">
+                <!-- Doctor Name -->
                 <span class="text-2xl font-bold text-gray-800 doctor-welcome">
                     <i class="fas fa-user-md mr-2 text-blue-600"></i>
                     <?= htmlspecialchars($doctor_name) ?>
                 </span>
+                <!-- Doctor Specialty -->
                 <span class="inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm border border-blue-200">
                     <i class="fas fa-stethoscope mr-1"></i>
                     <?= htmlspecialchars($doctor_specialty) ?>
                 </span>
+                <!-- Branch -->
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> 
                     <?= htmlspecialchars($doctor_branch_name) ?>
                 </span>
+                <!-- Date -->
                 <span class="inline-flex bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs border border-gray-200">
                     <i class="fas fa-calendar-day mr-1"></i> 
                     <?= date('F d, Y') ?>
                 </span>
             </div>
+            <!-- Doctor Contact Info -->
             <div class="flex flex-wrap items-center gap-3 mt-2 text-sm text-gray-500">
                 <span><i class="fas fa-envelope mr-1 text-blue-500"></i><?= htmlspecialchars($doctor_email) ?></span>
                 <span class="text-gray-300">|</span>
                 <span><i class="fas fa-phone mr-1 text-green-500"></i><?= htmlspecialchars($doctor_phone) ?></span>
                 <span class="text-gray-300">|</span>
                 <span><i class="fas fa-id-badge mr-1 text-purple-500"></i>ID: <?= htmlspecialchars($doctor_id) ?></span>
+                <span class="text-gray-300">|</span>
+                <span><i class="fas fa-user-tag mr-1 text-orange-500"></i><?= htmlspecialchars($doctor_username) ?></span>
             </div>
         </div>
         <div class="flex gap-2 flex-wrap">
@@ -578,10 +607,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 3500);
     }
 
-    console.log('%c👨‍⚕️ Braick - Doctor Dashboard (SIMPLIFIED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Doctor: <?= htmlspecialchars($doctor_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👨‍⚕️ Braick - Doctor Dashboard', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Doctor: <?= htmlspecialchars($doctor_name) ?> (ID: <?= $doctor_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🏥 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Total Patients: <?= number_format($doctor_stats['total_patients']) ?>', 'font-size:13px; color:#6EA8FE;');
-    console.log('%c✅ CSS moved to header - No conflicts', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Using REAL doctor data from database', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
