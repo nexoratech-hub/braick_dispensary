@@ -1,38 +1,132 @@
+# ================================================================
+# .htaccess - BRAICK DISPENSARY
+# NO AUTO REFRESH - NO RELOAD
+# ================================================================
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteBase /dispensary_system/
+    RewriteBase /
     
     # ================================================================
-    # REDIRECTS
+    # FORCE HTTPS (Optional - Uncomment if using SSL)
+    # ================================================================
+    # RewriteCond %{HTTPS} off
+    # RewriteRule ^(.*)$ https://%{HTTP_HOST}/$1 [L,R=301]
+    
+    # ================================================================
+    # REDIRECTS - NO AUTO REFRESH
     # ================================================================
     
     # Redirect root to website home
     RewriteRule ^$ index.php [L]
     
-    # Redirect dispensary_system to root (fix duplicate path issue)
-    RewriteRule ^dispensary_system/?$ / [L,R=302]
-    RewriteRule ^dispensary_system/(.*)$ /$1 [L,R=302]
-    
     # ================================================================
     # API ROUTING
     # ================================================================
     
+    # Auth
     RewriteRule ^api/v1/auth$ backend/api/v1/auth.php [L]
+    RewriteRule ^api/v1/auth/login$ backend/api/v1/auth.php?action=login [L]
+    RewriteRule ^api/v1/auth/logout$ backend/api/v1/auth.php?action=logout [L]
+    RewriteRule ^api/v1/auth/me$ backend/api/v1/auth.php?action=me [L]
+    
+    # Dashboard
     RewriteRule ^api/v1/dashboard$ backend/api/v1/dashboard.php [L]
+    RewriteRule ^api/v1/dashboard/stats$ backend/api/v1/dashboard.php?action=stats [L]
+    
+    # Patients
     RewriteRule ^api/v1/patients$ backend/api/v1/patients.php [L]
     RewriteRule ^api/v1/patients/([0-9]+)$ backend/api/v1/patients.php?id=$1 [L]
-    RewriteRule ^api/v1/doctors$ backend/api/v1/doctors.php [L]
+    RewriteRule ^api/v1/patients/search$ backend/api/v1/patients.php?action=search [L]
+    
+    # Visits
     RewriteRule ^api/v1/visits$ backend/api/v1/visits.php [L]
+    RewriteRule ^api/v1/visits/([0-9]+)$ backend/api/v1/visits.php?id=$1 [L]
+    
+    # Prescriptions
     RewriteRule ^api/v1/prescriptions$ backend/api/v1/prescriptions.php [L]
+    RewriteRule ^api/v1/prescriptions/([0-9]+)$ backend/api/v1/prescriptions.php?id=$1 [L]
+    
+    # Lab Tests
     RewriteRule ^api/v1/lab-tests$ backend/api/v1/lab_tests.php [L]
+    RewriteRule ^api/v1/lab-tests/([0-9]+)$ backend/api/v1/lab_tests.php?id=$1 [L]
+    
+    # Pharmacy
     RewriteRule ^api/v1/pharmacy$ backend/api/v1/pharmacy.php [L]
+    RewriteRule ^api/v1/pharmacy/inventory$ backend/api/v1/pharmacy.php?action=inventory [L]
+    RewriteRule ^api/v1/pharmacy/sales$ backend/api/v1/pharmacy.php?action=sales [L]
+    
+    # Branches
     RewriteRule ^api/v1/branches$ backend/api/v1/branches.php [L]
+    RewriteRule ^api/v1/branches/([0-9]+)$ backend/api/v1/branches.php?id=$1 [L]
+    
+    # Users
     RewriteRule ^api/v1/users$ backend/api/v1/users.php [L]
+    RewriteRule ^api/v1/users/([0-9]+)$ backend/api/v1/users.php?id=$1 [L]
+    
+    # Reports
     RewriteRule ^api/v1/reports$ backend/api/v1/reports.php [L]
+    RewriteRule ^api/v1/reports/patients$ backend/api/v1/reports.php?action=patients [L]
+    RewriteRule ^api/v1/reports/revenue$ backend/api/v1/reports.php?action=revenue [L]
+    RewriteRule ^api/v1/reports/doctors$ backend/api/v1/reports.php?action=doctors [L]
+    RewriteRule ^api/v1/reports/pharmacy$ backend/api/v1/reports.php?action=pharmacy [L]
+    
+    # Notifications
     RewriteRule ^api/v1/notifications$ backend/api/v1/notifications.php [L]
+    
+    # Appointments
     RewriteRule ^api/v1/appointments$ backend/api/v1/appointments.php [L]
+    
+    # Referrals
     RewriteRule ^api/v1/referrals$ backend/api/v1/referrals.php [L]
+    
+    # Settings
     RewriteRule ^api/v1/settings$ backend/api/v1/settings.php [L]
+    RewriteRule ^api/v1/services$ backend/api/v1/services.php [L]
+    
+    # ================================================================
+    # STAFF LOGIN
+    # ================================================================
+    
+    RewriteRule ^staff-login$ frontend/pages/auth/staff_login.php [L]
+    RewriteRule ^staff/login$ frontend/pages/auth/staff_login.php [L]
+    RewriteRule ^login$ frontend/pages/auth/login.php [L]
+    
+    # ================================================================
+    # STAFF DASHBOARDS
+    # ================================================================
+    
+    # Admin
+    RewriteRule ^admin-dashboard$ frontend/pages/admin/dashboard.php [L]
+    RewriteRule ^admin$ frontend/pages/admin/dashboard.php [L]
+    
+    # Admin Pages
+    RewriteRule ^admin/users$ frontend/pages/admin/users.php [L]
+    RewriteRule ^admin/employees$ frontend/pages/admin/employees.php [L]
+    RewriteRule ^admin/branches$ frontend/pages/admin/branches.php [L]
+    RewriteRule ^admin/departments$ frontend/pages/admin/departments.php [L]
+    RewriteRule ^admin/reports$ frontend/pages/admin/reports.php [L]
+    RewriteRule ^admin/settings$ frontend/pages/admin/settings.php [L]
+    
+    # Reception
+    RewriteRule ^reception-dashboard$ frontend/pages/reception/dashboard.php [L]
+    RewriteRule ^reception$ frontend/pages/reception/dashboard.php [L]
+    
+    # Doctor
+    RewriteRule ^doctor-dashboard$ frontend/pages/doctor/dashboard.php [L]
+    RewriteRule ^doctor$ frontend/pages/doctor/dashboard.php [L]
+    
+    # Laboratory
+    RewriteRule ^laboratory-dashboard$ frontend/pages/laboratory/dashboard.php [L]
+    RewriteRule ^laboratory$ frontend/pages/laboratory/dashboard.php [L]
+    
+    # Pharmacy
+    RewriteRule ^pharmacy-dashboard$ frontend/pages/pharmacy/dashboard.php [L]
+    RewriteRule ^pharmacy$ frontend/pages/pharmacy/dashboard.php [L]
+    
+    # Cashier
+    RewriteRule ^cashier-dashboard$ frontend/pages/cashier/dashboard.php [L]
+    RewriteRule ^cashier$ frontend/pages/cashier/dashboard.php [L]
     
     # ================================================================
     # WEBSITE PAGES (Public)
@@ -48,43 +142,35 @@
     RewriteRule ^contact$ contact.php [L]
     
     # ================================================================
-    # STAFF LOGIN
+    # STATIC FILES - Allow Access
     # ================================================================
     
-    RewriteRule ^staff-login$ staff_login.php [L]
-    RewriteRule ^staff/login$ staff_login.php [L]
-    RewriteRule ^login$ staff_login.php [L]
+    # Allow CSS, JS, Images
+    RewriteCond %{REQUEST_URI} \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|map)$ [NC]
+    RewriteRule ^ - [L]
+    
+    # Allow vendor files
+    RewriteCond %{REQUEST_URI} ^/frontend/assets/vendor/ [NC]
+    RewriteRule ^ - [L]
+    
+    # Allow uploads
+    RewriteCond %{REQUEST_URI} ^/frontend/assets/uploads/ [NC]
+    RewriteRule ^ - [L]
     
     # ================================================================
-    # STAFF DASHBOARDS
-    # ================================================================
-    
-    RewriteRule ^admin-dashboard$ frontend/pages/admin/dashboard.php [L]
-    RewriteRule ^reception-dashboard$ frontend/pages/reception/dashboard.php [L]
-    RewriteRule ^doctor-dashboard$ frontend/pages/doctor/dashboard.php [L]
-    RewriteRule ^laboratory-dashboard$ frontend/pages/laboratory/dashboard.php [L]
-    RewriteRule ^pharmacy-dashboard$ frontend/pages/pharmacy/dashboard.php [L]
-    RewriteRule ^cashier-dashboard$ frontend/pages/cashier/dashboard.php [L]
-    
-    # ================================================================
-    # LEGACY ROUTES (Backward compatibility)
-    # ================================================================
-    
-    RewriteRule ^admin$ frontend/pages/admin/dashboard.php [L]
-    RewriteRule ^reception$ frontend/pages/reception/dashboard.php [L]
-    RewriteRule ^doctor$ frontend/pages/doctor/dashboard.php [L]
-    RewriteRule ^laboratory$ frontend/pages/laboratory/dashboard.php [L]
-    RewriteRule ^pharmacy$ frontend/pages/pharmacy/dashboard.php [L]
-    RewriteRule ^cashier$ frontend/pages/cashier/dashboard.php [L]
-    
-    # ================================================================
-    # SECURITY
+    # SECURITY - Protect Sensitive Files
     # ================================================================
     
     # Prevent directory listing
     Options -Indexes
     
-    # Protect sensitive files
+    # Protect .env file
+    <Files ".env">
+        Order allow,deny
+        Deny from all
+    </Files>
+    
+    # Protect config files
     <FilesMatch "\.(env|json|config\.php|database\.php|\.htaccess|\.htpasswd)$">
         Order allow,deny
         Deny from all
@@ -96,6 +182,56 @@
     # Protect config files
     RewriteRule ^(.*)\.(env|json|config\.php|database\.php)$ - [F,L]
     
+    # Protect .git directory
+    RewriteRule ^\.git/ - [F,L]
+    
+    # ================================================================
+    # CACHING - Improves Performance
+    # ================================================================
+    
+    <IfModule mod_expires.c>
+        ExpiresActive On
+        
+        # Images
+        ExpiresByType image/jpeg "access plus 1 year"
+        ExpiresByType image/png "access plus 1 year"
+        ExpiresByType image/gif "access plus 1 year"
+        ExpiresByType image/svg+xml "access plus 1 year"
+        ExpiresByType image/webp "access plus 1 year"
+        
+        # CSS & JavaScript
+        ExpiresByType text/css "access plus 1 month"
+        ExpiresByType application/javascript "access plus 1 month"
+        ExpiresByType application/x-javascript "access plus 1 month"
+        
+        # Fonts
+        ExpiresByType font/ttf "access plus 1 year"
+        ExpiresByType font/woff "access plus 1 year"
+        ExpiresByType font/woff2 "access plus 1 year"
+        ExpiresByType application/vnd.ms-fontobject "access plus 1 year"
+        
+        # HTML - No caching (always fresh)
+        ExpiresByType text/html "access plus 0 seconds"
+    </IfModule>
+    
+    # ================================================================
+    # GZIP COMPRESSION - Improves Performance
+    # ================================================================
+    
+    <IfModule mod_deflate.c>
+        AddOutputFilterByType DEFLATE text/html
+        AddOutputFilterByType DEFLATE text/css
+        AddOutputFilterByType DEFLATE application/javascript
+        AddOutputFilterByType DEFLATE application/x-javascript
+        AddOutputFilterByType DEFLATE application/json
+        AddOutputFilterByType DEFLATE application/xml
+        AddOutputFilterByType DEFLATE text/xml
+        AddOutputFilterByType DEFLATE text/plain
+        AddOutputFilterByType DEFLATE font/ttf
+        AddOutputFilterByType DEFLATE font/woff
+        AddOutputFilterByType DEFLATE font/woff2
+    </IfModule>
+    
     # ================================================================
     # ERROR PAGES (Optional)
     # ================================================================
@@ -104,4 +240,25 @@
     # ErrorDocument 403 /403.php
     # ErrorDocument 500 /500.php
     
+</IfModule>
+
+# ================================================================
+# ADDITIONAL SECURITY HEADERS
+# ================================================================
+
+<IfModule mod_headers.c>
+    # Prevent MIME type sniffing
+    Header set X-Content-Type-Options "nosniff"
+    
+    # Enable XSS protection
+    Header set X-XSS-Protection "1; mode=block"
+    
+    # Prevent clickjacking
+    Header set X-Frame-Options "DENY"
+    
+    # HSTS (Uncomment if using HTTPS)
+    # Header set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    
+    # Referrer Policy
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
 </IfModule>

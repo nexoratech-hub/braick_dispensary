@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/add_employee.php
-// SUPER ADMIN - ADD EMPLOYEE
+// SUPER ADMIN - ADD EMPLOYEE (FIXED - ROLE NAME NOT ID)
 // BRAICK DISPENSARY
 // WITH SHARED HEADER & SIDEBAR
 // ================================================================
@@ -76,6 +76,18 @@ try {
     $roles = [];
 }
 
+// IF NO ROLES TABLE, CREATE DEFAULT ROLES LIST
+if (empty($roles)) {
+    $roles = [
+        ['id' => 1, 'name' => 'doctor', 'description' => 'Medical Doctor'],
+        ['id' => 2, 'name' => 'pharmacy', 'description' => 'Pharmacy Staff'],
+        ['id' => 3, 'name' => 'reception', 'description' => 'Receptionist'],
+        ['id' => 4, 'name' => 'laboratory', 'description' => 'Lab Technician'],
+        ['id' => 5, 'name' => 'cashier', 'description' => 'Cashier'],
+        ['id' => 6, 'name' => 'admin', 'description' => 'Administrator'],
+    ];
+}
+
 $departments = [];
 try {
     $stmt = $db->query("SELECT id, name, description FROM departments ORDER BY name");
@@ -85,7 +97,7 @@ try {
 }
 
 // ================================================================
-// HANDLE FORM SUBMISSION
+// HANDLE FORM SUBMISSION - FIXED
 // ================================================================
 $message = '';
 $message_type = '';
@@ -114,8 +126,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $form_data['selected_roles'] = $_POST['roles'] ?? [];
     $form_data['selected_departments'] = $_POST['departments'] ?? [];
     
-    // Get primary role (first selected role)
-    $primary_role = !empty($form_data['selected_roles']) ? $form_data['selected_roles'][0] : '';
+    // ================================================================
+    // FIX: Get the role NAME from the first selected role ID
+    // ================================================================
+    $primary_role_name = '';
+    if (!empty($form_data['selected_roles'])) {
+        $first_role_id = $form_data['selected_roles'][0];
+        
+        // Find the role name from roles array
+        $role_found = false;
+        foreach ($roles as $role) {
+            if ($role['id'] == $first_role_id) {
+                $primary_role_name = $role['name'];
+                $role_found = true;
+                break;
+            }
+        }
+        
+        // If role name not found in roles table, use hardcoded mapping
+        if (!$role_found) {
+            $role_name_map = [
+                1 => 'doctor',
+                2 => 'pharmacy',
+                3 => 'reception',
+                4 => 'laboratory',
+                5 => 'cashier',
+                6 => 'admin'
+            ];
+            $primary_role_name = $role_name_map[$first_role_id] ?? 'doctor';
+        }
+    } else {
+        $primary_role_name = 'doctor'; // Default fallback
+    }
     
     // Validation
     if (empty($form_data['full_name'])) {
@@ -156,12 +198,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($errors)) {
         $hashed_password = password_hash($form_data['password'], PASSWORD_DEFAULT);
         
+        // ================================================================
+        // FIX: Insert with the correct role NAME (not ID)
+        // ================================================================
         $stmt = $db->prepare("
             INSERT INTO users (username, password, full_name, email, phone, role, branch_id, status, created_at) 
             VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NOW())
         ");
         
-        if ($stmt->execute([$form_data['username'], $hashed_password, $form_data['full_name'], $form_data['email'], $form_data['phone'], $primary_role, $form_data['branch_id']])) {
+        if ($stmt->execute([
+            $form_data['username'], 
+            $hashed_password, 
+            $form_data['full_name'], 
+            $form_data['email'], 
+            $form_data['phone'], 
+            $primary_role_name,  // ← This is now the role NAME (e.g., 'doctor', not '1')
+            $form_data['branch_id']
+        ])) {
             $user_id = $db->lastInsertId();
             
             // Assign all selected roles
@@ -187,10 +240,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Log activity
             try {
                 $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'employee_added', ?)");
-                $stmt->execute([$_SESSION['user_id'], "Employee {$form_data['full_name']} added with " . count($form_data['selected_roles']) . " roles"]);
+                $stmt->execute([$_SESSION['user_id'], "Employee {$form_data['full_name']} added with role: $primary_role_name"]);
             } catch (Exception $e) {}
             
-            $message = "Employee added successfully with " . count($form_data['selected_roles']) . " role(s)!";
+            $message = "Employee added successfully with role: <strong>$primary_role_name</strong>!";
             $message_type = 'success';
             
             // Redirect to employees list
@@ -695,6 +748,9 @@ include_once '../../components/admin_sidebar.php';
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-users mr-1"></i> <?= $total_employees ?> employees
                 </span>
+                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
+                    <i class="fas fa-user-md mr-1"></i> <?= $total_doctors ?> doctors
+                </span>
             </p>
         </div>
         <div>
@@ -1158,9 +1214,10 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
-    console.log('%c👤 Braick - Add Employee', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Shared Header & Sidebar: ACTIVE', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Roles & Departments will be saved', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 Braick - Add Employee (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Role saved as NAME not ID', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Role: <?= isset($primary_role_name) ? $primary_role_name : 'Not set' ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👥 Total Doctors: <?= $total_doctors ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
 </script>
 
