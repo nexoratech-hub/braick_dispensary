@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/my_patients.php
-// DOCTOR - MY PATIENTS LIST
+// DOCTOR - MY PATIENTS LIST (NO DUPLICATES)
+// WITH SHARED DOCTOR SIDEBAR
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -71,7 +72,7 @@ if (file_exists($db_path)) {
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET DOCTOR'S BRANCH NAME
+// GET DOCTOR'S BRANCH NAME (For header display only)
 // ================================================================
 $doctor_branch_name = 'Not Assigned';
 try {
@@ -92,15 +93,19 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 
 // ================================================================
-// BUILD QUERY FOR PATIENTS
+// BUILD QUERY FOR PATIENTS - NO DUPLICATES
+// Using GROUP BY instead of DISTINCT to get unique patients
 // ================================================================
-$sql = "SELECT DISTINCT p.*, v.created_at as last_visit, v.id as last_visit_id
+$sql = "SELECT p.*, 
+               MAX(v.created_at) as last_visit,
+               COUNT(v.id) as visit_count
         FROM patients p
         JOIN visits v ON p.id = v.patient_id
         WHERE v.doctor_id = ?";
 
 $params = [$doctor_id];
 
+// Only add branch filter if column exists
 if (columnExists($db, 'visits', 'branch_id')) {
     $sql .= " AND v.branch_id = ?";
     $params[] = $doctor_branch_id;
@@ -118,14 +123,15 @@ if (!empty($status_filter)) {
     $params[] = $status_filter;
 }
 
-$sql .= " ORDER BY v.created_at DESC";
+// GROUP BY patient to get unique patients
+$sql .= " GROUP BY p.id ORDER BY last_visit DESC";
 
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - ONLY THIS DOCTOR'S PATIENTS
 // ================================================================
 $total_patients = count($patients);
 $active_patients = 0;
@@ -139,17 +145,19 @@ foreach ($patients as $p) {
 }
 
 // ================================================================
+// GET TOTAL VISITS FOR THIS DOCTOR
+// ================================================================
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ?");
+$stmt->execute([$doctor_id]);
+$total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// ================================================================
 // VARIABLES FOR SIDEBAR
 // ================================================================
 $selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = 0;
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
@@ -174,12 +182,16 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-user-injured mr-1"></i> <?= $total_patients ?> patients
                 </span>
+                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
+                    <i class="fas fa-clinic-medical mr-1"></i> <?= $total_visits ?> visits
+                </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="new_visit.php" class="btn btn-blue btn-sm">
-                <i class="fas fa-plus-circle"></i> New Visit
-            </a>
+        <div>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-user-md mr-1"></i>
+                <?= htmlspecialchars($doctor_name) ?>
+            </span>
         </div>
     </div>
 
@@ -215,8 +227,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div class="stat-card purple animate-fade-in-up">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="stat-label">Visits</p>
-                    <p class="stat-number">0</p>
+                    <p class="stat-label">Total Visits</p>
+                    <p class="stat-number"><?= $total_visits ?></p>
                 </div>
                 <div class="stat-icon"><i class="fas fa-clinic-medical"></i></div>
             </div>
@@ -245,11 +257,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </form>
     </div>
 
-    <!-- Patients Table -->
+    <!-- Patients Table - NO DUPLICATES -->
     <div class="card">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-list title-blue mr-2"></i> Patient List
+                <span class="text-sm font-normal text-gray-400">(<?= $total_patients ?> unique patients)</span>
             </h3>
         </div>
         <div class="table-wrap">
@@ -261,6 +274,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <th>Full Name</th>
                         <th>Gender</th>
                         <th>Phone</th>
+                        <th>Visits</th>
                         <th>Last Visit</th>
                         <th>Status</th>
                         <th style="border-radius: 0 8px 0 0; text-align: center;">Actions</th>
@@ -275,6 +289,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <td class="font-medium"><?= htmlspecialchars($patient['full_name']) ?></td>
                                 <td><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></td>
+                                <td class="text-center">
+                                    <span class="badge badge-info"><?= $patient['visit_count'] ?? 0 ?></span>
+                                </td>
                                 <td><?= isset($patient['last_visit']) ? time_ago($patient['last_visit']) : 'N/A' ?></td>
                                 <td>
                                     <span class="badge <?= ($patient['status'] ?? 'active') === 'active' ? 'badge-success' : 'badge-danger' ?>">
@@ -286,9 +303,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                         <a href="patient_details.php?id=<?= $patient['id'] ?>" class="btn btn-view" title="View">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <a href="new_visit.php?patient_id=<?= $patient['id'] ?>" class="btn btn-blue btn-sm" title="New Visit">
-                                            <i class="fas fa-plus-circle"></i>
-                                        </a>
                                         <a href="prescribe.php?patient_id=<?= $patient['id'] ?>" class="btn btn-green btn-sm" title="Prescribe">
                                             <i class="fas fa-prescription"></i>
                                         </a>
@@ -298,12 +312,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" class="text-center py-8 text-gray-400">
+                            <td colspan="9" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-users text-3xl block mb-2"></i>
                                 <?php if ($search): ?>
                                     No patients found matching "<strong><?= htmlspecialchars($search) ?></strong>"
                                 <?php else: ?>
-                                    No patients yet. Click "New Visit" to add your first patient.
+                                    No patients found for <strong><?= htmlspecialchars($doctor_name) ?></strong>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -394,6 +408,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .w-auto { width: auto; }
     .min-w-\[120px\] { min-width: 120px; }
     .min-w-\[200px\] { min-width: 200px; }
+    .text-center { text-align: center; }
     [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: #1E293B; }
     [data-theme="dark"] .data-table tbody tr:nth-child(odd) { background: #1E293B; }
     [data-theme="dark"] .data-table tbody tr:hover { background: #1A3A2A; }
@@ -415,7 +430,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
-    console.log('%c👨‍⚕️ My Patients - Doctor <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    
+    console.log('%c👨‍⚕️ My Patients - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👥 Total Unique Patients: <?= $total_patients ?>', 'font-size:12px; color:#059669;');
+    console.log('%c📋 Total Visits: <?= $total_visits ?>', 'font-size:12px; color:#059669;');
+    console.log('%c✅ GROUP BY p.id - NO DUPLICATES', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

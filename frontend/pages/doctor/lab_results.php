@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/lab_results.php
-// DOCTOR - LAB RESULTS (FIXED - Using visit_id)
+// DOCTOR - LAB RESULTS (FIXED COUNTS)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -37,7 +37,7 @@ if (file_exists($db_path)) {
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET LAB TESTS FOR THIS DOCTOR - FIXED
+// GET LAB TESTS FOR THIS DOCTOR
 // ================================================================
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
@@ -57,6 +57,12 @@ $sql = "SELECT lt.*,
         WHERE lt.doctor_id = ?";
 
 $params = [$doctor_id];
+
+// Only add branch filter if column exists
+if (columnExists($db, 'lab_tests', 'branch_id')) {
+    $sql .= " AND lt.branch_id = ?";
+    $params[] = $doctor_branch_id;
+}
 
 if (!empty($status_filter)) {
     $sql .= " AND lt.status = ?";
@@ -78,13 +84,14 @@ $stmt->execute($params);
 $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - ONLY THIS DOCTOR'S LAB TESTS
 // ================================================================
 $total_tests = count($lab_tests);
 $pending_tests = 0;
 $completed_tests = 0;
 $in_progress_tests = 0;
 $cancelled_tests = 0;
+
 foreach ($lab_tests as $test) {
     if ($test['status'] === 'completed') {
         $completed_tests++;
@@ -94,6 +101,18 @@ foreach ($lab_tests as $test) {
         $cancelled_tests++;
     } else {
         $pending_tests++;
+    }
+}
+
+// ================================================================
+// COLUMN EXISTS FUNCTION
+// ================================================================
+function columnExists($db, $table, $column) {
+    try {
+        $stmt = $db->query("SHOW COLUMNS FROM $table LIKE '$column'");
+        return $stmt->rowCount() > 0;
+    } catch (Exception $e) {
+        return false;
     }
 }
 
@@ -116,14 +135,9 @@ try {
 // VARIABLES FOR SIDEBAR
 // ================================================================
 $selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = $pending_tests;
-$pending_prescriptions = 0;
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
@@ -147,12 +161,16 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-flask mr-1"></i> <?= $total_tests ?> tests
                 </span>
+                <span class="ml-2 inline-flex bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs border border-orange-200">
+                    <i class="fas fa-clock mr-1"></i> <?= $pending_tests + $in_progress_tests ?> pending
+                </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="new_test.php" class="btn btn-purple btn-sm">
-                <i class="fas fa-plus"></i> New Test
-            </a>
+        <div>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-user-md mr-1"></i>
+                <?= htmlspecialchars($doctor_name) ?>
+            </span>
         </div>
     </div>
 
@@ -249,7 +267,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                     </div>
                                 </td>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></td>
-                                <td><?= date('M d, Y', strtotime($test['created_at'])) ?></td>
+                                <td><?= $test['test_date'] ? date('M d, Y', strtotime($test['test_date'])) : 'N/A' ?></td>
                                 <td><?= htmlspecialchars($test['technician_name'] ?? 'Not assigned') ?></td>
                                 <td>
                                     <span class="badge <?= $test['status'] === 'completed' ? 'badge-success' : ($test['status'] === 'cancelled' ? 'badge-danger' : ($test['status'] === 'in_progress' ? 'badge-warning' : 'badge-info')) ?>">
@@ -277,7 +295,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <?php if ($search): ?>
                                     No tests found matching "<strong><?= htmlspecialchars($search) ?></strong>"
                                 <?php else: ?>
-                                    No lab tests found. Click "New Test" to request one.
+                                    No lab tests found for <strong><?= htmlspecialchars($doctor_name) ?></strong>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -302,13 +320,51 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 
 </main>
 
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle"></i>
+    <div>
+        <p id="toastTitle">Notification</p>
+        <p id="toastMessage"></p>
+    </div>
+</div>
+
 <style>
-    .form-control { width: 100%; padding: 8px 14px; border: 2px solid var(--border-color); border-radius: 10px; font-size: 0.85rem; background: var(--bg-card); color: var(--text-primary); outline: none; transition: all 0.3s; }
-    .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12); }
-    .form-control::placeholder { color: var(--text-secondary); opacity: 0.6; }
+    .form-control {
+        width: 100%;
+        padding: 8px 14px;
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        outline: none;
+        transition: all 0.3s;
+    }
+    .form-control:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+    }
+    .form-control::placeholder {
+        color: var(--text-secondary);
+        opacity: 0.6;
+    }
     .table-wrap { overflow-x: auto; }
     .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    .data-table thead th { text-align: left; padding: 10px 14px; font-weight: 700; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: white; background: var(--primary); border-bottom: 3px solid var(--primary-dark); white-space: nowrap; }
+    .data-table thead th {
+        text-align: left;
+        padding: 10px 14px;
+        font-weight: 700;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: white;
+        background: var(--primary);
+        border-bottom: 3px solid var(--primary-dark);
+        white-space: nowrap;
+    }
     .data-table tbody tr:nth-child(even) { background: var(--primary-bg); }
     .data-table tbody tr:nth-child(odd) { background: var(--bg-card); }
     .data-table tbody tr:hover { background: var(--green-bg); }
@@ -322,8 +378,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .btn-view:hover { background: var(--primary-dark); transform: scale(1.05); }
     .btn-edit { background: var(--orange); color: white; padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; border: none; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
     .btn-edit:hover { background: #B45309; transform: scale(1.05); }
-    .btn-purple { background: var(--purple); color: white; }
-    .btn-purple:hover { background: #6B21A8; transform: translateY(-2px); }
     .action-buttons { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; justify-content: center; }
     .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
     .w-auto { width: auto; }
@@ -351,8 +405,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
-    console.log('%c👨‍⚕️ Lab Results (FIXED) - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Using visit_id to join with patients', 'font-size:12px; color:#059669;');
+    
+    console.log('%c🧪 Lab Results - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Total Tests: <?= $total_tests ?>', 'font-size:12px; color:#059669;');
+    console.log('%c⏳ Pending: <?= $pending_tests ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Completed: <?= $completed_tests ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🔬 In Progress: <?= $in_progress_tests ?>', 'font-size:12px; color:#7C3AED;');
 </script>
 
 </body>

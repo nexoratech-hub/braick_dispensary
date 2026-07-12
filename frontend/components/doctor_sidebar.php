@@ -2,9 +2,48 @@
 // ================================================================
 // FILE: frontend/components/doctor_sidebar.php
 // DOCTOR - SHARED SIDEBAR (BLUE BACKGROUND)
-// HAKUNA JINA LA DOCTOR WALA BRANCH
+// HAKUNA JINA LA DOCTOR, HAKUNA BRANCH
+// WITH REAL DATA FOR BADGES
 // BRAICK DISPENSARY
 // ================================================================
+
+// ================================================================
+// GET REAL DATA FOR BADGES (Only if database is available)
+// ================================================================
+$patient_count = 0;
+$lab_count = 0;
+$referral_count = 0;
+$appointment_count = 0;
+
+if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
+    $doctor_id = $_SESSION['user_id'];
+    $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+    
+    try {
+        // 1. Total Patients (distinct patients)
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?");
+        $stmt->execute([$doctor_id]);
+        $patient_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // 2. Pending Lab Tests
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status = 'pending'");
+        $stmt->execute([$doctor_id]);
+        $lab_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // 3. Pending Referrals
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM referrals WHERE from_doctor_id = ? AND status = 'pending'");
+        $stmt->execute([$doctor_id]);
+        $referral_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // 4. Today's Appointments
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE() AND status IN ('scheduled', 'confirmed')");
+        $stmt->execute([$doctor_id]);
+        $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+    } catch (Exception $e) {
+        // If error, keep counts as 0
+    }
+}
 
 // Detect current page
 $current_page = basename($_SERVER['PHP_SELF']);
@@ -203,7 +242,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 </style>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR - HAKUNA JINA LA DOCTOR WALA BRANCH -->
+<!-- SIDEBAR - HAKUNA JINA LA DOCTOR, HAKUNA BRANCH -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     
@@ -232,12 +271,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- My Patients -->
         <a href="../doctor/my_patients.php" class="sidebar-link <?= isActive('my_patients.php') ?>">
             <i class="fas fa-users"></i> My Patients
-            <span class="badge" id="patientCount">0</span>
-        </a>
-        
-        <!-- New Visit -->
-        <a href="../doctor/new_visit.php" class="sidebar-link <?= isActive('new_visit.php') ?>">
-            <i class="fas fa-plus-circle"></i> New Visit
+            <span class="badge" id="patientCount"><?= $patient_count ?></span>
         </a>
         
         <!-- Prescribe -->
@@ -256,13 +290,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- Lab Results -->
         <a href="../doctor/lab_results.php" class="sidebar-link <?= isActive('lab_results.php') ?>">
             <i class="fas fa-flask"></i> Lab Results
-            <span class="badge" id="labCount">0</span>
+            <span class="badge" id="labCount"><?= $lab_count ?></span>
         </a>
         
         <!-- Referrals -->
         <a href="../doctor/referrals.php" class="sidebar-link <?= isActive('referrals.php') ?>">
             <i class="fas fa-share-alt"></i> Referrals
-            <span class="badge" id="referralCount">0</span>
+            <span class="badge" id="referralCount"><?= $referral_count ?></span>
         </a>
         
         <!-- ===== SCHEDULE ===== -->
@@ -271,7 +305,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- Appointments -->
         <a href="../doctor/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
             <i class="fas fa-calendar-check"></i> Appointments
-            <span class="badge" id="appointmentCount">0</span>
+            <span class="badge" id="appointmentCount"><?= $appointment_count ?></span>
         </a>
         
         <!-- Documents -->
@@ -330,7 +364,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     });
 
     // ================================================================
-    // UPDATE SIDEBAR BADGES
+    // UPDATE SIDEBAR BADGES (Can be called from pages)
     // ================================================================
     function updateSidebarBadges(patientCount, labCount, referralCount, appointmentCount) {
         if (patientCount !== undefined) {
@@ -351,7 +385,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     }
 
-    console.log('%c👨‍⚕️ Doctor Sidebar - No Doctor Name or Branch', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🚫 Doctor Name: REMOVED', 'font-size:12px; color:#EF4444;');
-    console.log('%c🚫 Branch Name: REMOVED', 'font-size:12px; color:#EF4444;');
+    console.log('%c👨‍⚕️ Doctor Sidebar - With Real Data', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👥 Patients: <?= $patient_count ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🧪 Lab Tests: <?= $lab_count ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🔄 Referrals: <?= $referral_count ?>', 'font-size:12px; color:#059669;');
+    console.log('%c📅 Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#059669;');
 </script>
