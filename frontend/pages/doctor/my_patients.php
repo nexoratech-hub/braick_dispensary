@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/my_patients.php
-// DOCTOR - MY PATIENTS LIST (FIXED - REMOVED p.status)
+// DOCTOR - MY PATIENTS LIST (TABLE FORMAT)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -41,10 +41,9 @@ $db = Database::getInstance()->getConnection();
 // GET SEARCH PARAMETERS
 // ================================================================
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 
 // ================================================================
-// GET ALL PATIENTS FOR THIS DOCTOR - FIXED: REMOVED p.status
+// GET ALL PATIENTS FOR THIS DOCTOR
 // ================================================================
 $sql = "
     SELECT DISTINCT 
@@ -88,9 +87,16 @@ $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // GET STATISTICS
 // ================================================================
 $total_patients = count($patients);
+$pending_count = 0;
+$total_visits_count = 0;
+
+foreach ($patients as $p) {
+    $pending_count += $p['pending_visits'] ?? 0;
+    $total_visits_count += $p['total_visits'] ?? 0;
+}
 
 // ================================================================
-// GET BRANCH NAME
+// GET DOCTOR'S BRANCH NAME
 // ================================================================
 $doctor_branch_name = 'Not Assigned';
 try {
@@ -103,16 +109,6 @@ try {
 } catch (Exception $e) {
     $doctor_branch_name = 'Branch';
 }
-
-// ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = 0;
 
 // ================================================================
 // FUNCTIONS
@@ -140,6 +136,16 @@ function getUserColor($name) {
 }
 
 // ================================================================
+// VARIABLES FOR SIDEBAR
+// ================================================================
+$selected_branch_id = $doctor_branch_id;
+$total_employees = 0;
+$total_doctors = 0;
+$total_branches = 0;
+$pending_lab_tests = 0;
+$pending_prescriptions = 0;
+
+// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
@@ -165,95 +171,151 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-users mr-1"></i> <?= $total_patients ?> patients
                 </span>
+                <?php if ($pending_count > 0): ?>
+                    <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
+                        <i class="fas fa-clock mr-1"></i> <?= $pending_count ?> pending visits
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="dashboard.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Dashboard
-            </a>
+        <div>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-user-md mr-1"></i>
+                <?= htmlspecialchars($doctor_name) ?>
+            </span>
+        </div>
+    </div>
+
+    <!-- Statistics Cards -->
+    <div class="stats-grid">
+        <div class="stat-card blue">
+            <div>
+                <p class="stat-label">Total Patients</p>
+                <p class="stat-number"><?= $total_patients ?></p>
+            </div>
+            <div class="stat-icon"><i class="fas fa-users"></i></div>
+        </div>
+        <div class="stat-card yellow">
+            <div>
+                <p class="stat-label">Pending Visits</p>
+                <p class="stat-number"><?= $pending_count ?></p>
+            </div>
+            <div class="stat-icon"><i class="fas fa-clock"></i></div>
+        </div>
+        <div class="stat-card green">
+            <div>
+                <p class="stat-label">Total Visits</p>
+                <p class="stat-number"><?= $total_visits_count ?></p>
+            </div>
+            <div class="stat-icon"><i class="fas fa-clinic-medical"></i></div>
+        </div>
+        <div class="stat-card purple">
+            <div>
+                <p class="stat-label">Completed</p>
+                <p class="stat-number"><?= $total_visits_count - $pending_count ?></p>
+            </div>
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
         </div>
     </div>
 
     <!-- Search -->
     <div class="card mb-6">
-        <form method="GET" class="flex flex-wrap items-center gap-3">
-            <div class="flex-1 min-w-[200px]">
-                <input type="text" name="search" class="form-control" placeholder="Search by name, ID or phone..." value="<?= htmlspecialchars($search) ?>">
+        <form method="GET" class="filter-form">
+            <div class="filter-group">
+                <div class="filter-search">
+                    <i class="fas fa-search text-muted"></i>
+                    <input type="text" name="search" class="filter-input" placeholder="Search by name, ID or phone..." value="<?= htmlspecialchars($search) ?>">
+                </div>
+                <button type="submit" class="btn btn-blue btn-sm">
+                    <i class="fas fa-search"></i> Search
+                </button>
+                <?php if ($search): ?>
+                    <a href="my_patients.php" class="btn btn-outline btn-sm">
+                        <i class="fas fa-times"></i> Clear
+                    </a>
+                <?php endif; ?>
             </div>
-            <button type="submit" class="btn btn-blue btn-sm">
-                <i class="fas fa-search"></i> Search
-            </button>
-            <?php if ($search): ?>
-                <a href="my_patients.php" class="btn btn-outline btn-sm">
-                    <i class="fas fa-times"></i> Clear
-                </a>
-            <?php endif; ?>
         </form>
     </div>
 
-    <!-- Patients Grid -->
-    <?php if (count($patients) > 0): ?>
-        <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-            <?php foreach ($patients as $patient): ?>
-                <div class="patient-card animate-fade-in-up">
-                    <div class="patient-card-header">
-                        <div class="patient-card-avatar" style="background: <?= getUserColor($patient['full_name']) ?>;">
-                            <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
-                        </div>
-                        <div class="patient-card-info">
-                            <h4 class="patient-card-name"><?= htmlspecialchars($patient['full_name']) ?></h4>
-                            <p class="patient-card-id">ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></p>
-                            <p class="patient-card-phone"><?= htmlspecialchars($patient['phone'] ?? 'No phone') ?></p>
-                        </div>
-                    </div>
-                    <div class="patient-card-body">
-                        <div class="patient-card-stats">
-                            <div>
-                                <span class="stat-number"><?= $patient['total_visits'] ?? 0 ?></span>
-                                <span class="stat-label">Visits</span>
-                            </div>
-                            <div>
-                                <span class="stat-number text-orange-500"><?= $patient['pending_visits'] ?? 0 ?></span>
-                                <span class="stat-label">Pending</span>
-                            </div>
-                            <div>
-                                <span class="stat-number text-green-500"><?= ($patient['total_visits'] ?? 0) - ($patient['pending_visits'] ?? 0) ?></span>
-                                <span class="stat-label">Completed</span>
-                            </div>
-                        </div>
-                        <div class="patient-card-footer">
-                            <span class="last-visit">
-                                <i class="far fa-clock mr-1"></i>
-                                Last visit: <?= time_ago($patient['last_visit_date'] ?? '') ?>
-                            </span>
-                        </div>
-                    </div>
-                    <div class="patient-card-actions">
-                        <a href="patient_details.php?id=<?= $patient['id'] ?>" class="btn btn-view btn-sm" title="View Details">
-                            <i class="fas fa-eye"></i> View
-                        </a>
-                        <a href="consultation.php?patient_id=<?= $patient['id'] ?>" class="btn btn-consult btn-sm" title="Consult">
-                            <i class="fas fa-stethoscope"></i> Consult
-                        </a>
-                        <a href="prescribe.php?patient_id=<?= $patient['id'] ?>" class="btn btn-green btn-sm" title="Prescribe">
-                            <i class="fas fa-prescription"></i> Prescribe
-                        </a>
-                    </div>
-                </div>
-            <?php endforeach; ?>
+    <!-- Patients Table -->
+    <div class="card">
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="border-radius: 8px 0 0 0;">#</th>
+                        <th>Patient</th>
+                        <th>Patient ID</th>
+                        <th>Phone</th>
+                        <th>Visits</th>
+                        <th>Pending</th>
+                        <th>Last Visit</th>
+                        <th style="border-radius: 0 8px 0 0; text-align: center;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (count($patients) > 0): ?>
+                        <?php foreach ($patients as $index => $patient): ?>
+                            <tr>
+                                <td><?= $index + 1 ?></td>
+                                <td>
+                                    <div class="flex items-center gap-3">
+                                        <div class="patient-avatar-sm" style="background: <?= getUserColor($patient['full_name']) ?>;">
+                                            <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
+                                        </div>
+                                        <div>
+                                            <div class="font-medium"><?= htmlspecialchars($patient['full_name']) ?></div>
+                                            <div class="text-xs text-muted"><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?> • <?= !empty($patient['date_of_birth']) ? date('M d, Y', strtotime($patient['date_of_birth'])) : 'N/A' ?></div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="font-mono text-xs"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+                                </td>
+                                <td><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="badge badge-info"><?= $patient['total_visits'] ?? 0 ?></span>
+                                </td>
+                                <td>
+                                    <?php if (($patient['pending_visits'] ?? 0) > 0): ?>
+                                        <span class="badge badge-warning"><?= $patient['pending_visits'] ?? 0 ?></span>
+                                    <?php else: ?>
+                                        <span class="text-xs text-muted">0</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-sm"><?= time_ago($patient['last_visit_date'] ?? '') ?></td>
+                                <td>
+                                    <div class="action-buttons">
+                                        <a href="patient_details.php?id=<?= $patient['id'] ?>" class="btn btn-view btn-sm" title="View Details">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                        <a href="consultation.php?patient_id=<?= $patient['id'] ?>" class="btn btn-consult btn-sm" title="Consult">
+                                            <i class="fas fa-stethoscope"></i>
+                                        </a>
+                                        <a href="prescribe.php?patient_id=<?= $patient['id'] ?>" class="btn btn-green btn-sm" title="Prescribe">
+                                            <i class="fas fa-prescription"></i>
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="8" class="text-center py-8 text-muted">
+                                <i class="fas fa-user-injured text-3xl block mb-2"></i>
+                                <?php if ($search): ?>
+                                    No patients found matching "<strong><?= htmlspecialchars($search) ?></strong>"
+                                <?php else: ?>
+                                    No patients assigned to you yet
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
         </div>
-    <?php else: ?>
-        <div class="card text-center py-12">
-            <i class="fas fa-user-injured text-4xl text-gray-300 block mb-3"></i>
-            <p class="text-gray-400">
-                <?php if ($search): ?>
-                    No patients found matching "<strong><?= htmlspecialchars($search) ?></strong>"
-                <?php else: ?>
-                    No patients assigned to you yet
-                <?php endif; ?>
-            </p>
-        </div>
-    <?php endif; ?>
+    </div>
 
     <!-- Footer -->
     <footer class="footer">
@@ -271,126 +333,135 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </main>
 
 <!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle"></i>
+    <div>
+        <p id="toastTitle">Notification</p>
+        <p id="toastMessage"></p>
+    </div>
+</div>
+
+<!-- ================================================================ -->
 <!-- STYLES -->
 <!-- ================================================================ -->
 <style>
-    .patient-card {
+    /* ================================================================
+       STATS GRID
+       ================================================================ */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    
+    .stat-card {
         background: var(--bg-card);
-        border-radius: 16px;
+        border-radius: 14px;
+        padding: 18px 20px;
         border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        overflow: hidden;
-    }
-    
-    .patient-card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.12);
-        transform: translateY(-4px);
-    }
-    
-    .patient-card-header {
         display: flex;
         align-items: center;
-        gap: 16px;
-        padding: 16px 20px;
-        border-bottom: 1px solid var(--border-color);
+        justify-content: space-between;
+        transition: all 0.3s ease;
     }
     
-    .patient-card-avatar {
-        width: 48px;
-        height: 48px;
-        border-radius: 50%;
+    .stat-card:hover {
+        border-color: var(--primary);
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.08);
+    }
+    
+    .stat-card .stat-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.2rem;
-        font-weight: 700;
+        font-size: 1.1rem;
         color: white;
         flex-shrink: 0;
     }
     
-    .patient-card-info {
-        flex: 1;
+    .stat-card.blue .stat-icon { background: var(--primary); }
+    .stat-card.yellow .stat-icon { background: #D97706; }
+    .stat-card.green .stat-icon { background: #059669; }
+    .stat-card.purple .stat-icon { background: #7C3AED; }
+    
+    .stat-card .stat-number {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        line-height: 1.2;
     }
     
-    .patient-card-name {
-        font-size: 1rem;
-        font-weight: 600;
+    .stat-card .stat-label {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+        margin-top: 2px;
+    }
+    
+    /* ================================================================
+       FILTER FORM
+       ================================================================ */
+    .filter-form {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+    }
+    
+    .filter-group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+    }
+    
+    .filter-search {
+        display: flex;
+        align-items: center;
+        flex: 1;
+        min-width: 250px;
+        background: var(--bg-card);
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        transition: all 0.3s;
+        padding: 0 12px;
+    }
+    
+    .filter-search:focus-within {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+    }
+    
+    .filter-search .fa-search {
+        color: var(--text-muted);
+        font-size: 0.85rem;
+    }
+    
+    .filter-input {
+        border: none;
+        background: transparent;
+        padding: 8px 12px;
+        width: 100%;
+        font-size: 0.85rem;
+        outline: none;
         color: var(--text-primary);
     }
     
-    .patient-card-id {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-        font-family: monospace;
+    .filter-input::placeholder {
+        color: var(--text-muted);
     }
     
-    .patient-card-phone {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-    
-    .patient-card-body {
-        padding: 14px 20px;
-        border-bottom: 1px solid var(--border-color);
-    }
-    
-    .patient-card-stats {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 8px;
-        text-align: center;
-        margin-bottom: 10px;
-    }
-    
-    .patient-card-stats .stat-number {
-        display: block;
-        font-size: 1.3rem;
-        font-weight: 700;
-        color: var(--primary);
-    }
-    
-    .patient-card-stats .stat-number.text-orange-500 {
-        color: #D97706;
-    }
-    
-    .patient-card-stats .stat-number.text-green-500 {
-        color: #059669;
-    }
-    
-    .patient-card-stats .stat-label {
-        display: block;
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    
-    .patient-card-footer {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    
-    .last-visit {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .patient-card-actions {
-        display: flex;
-        gap: 6px;
-        padding: 12px 20px;
-        background: var(--bg-body);
-        flex-wrap: wrap;
-    }
-    
-    [data-theme="dark"] .patient-card-actions {
-        background: #0F172A;
-    }
-    
+    /* ================================================================
+       CARD
+       ================================================================ */
     .card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -404,28 +475,102 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
     }
     
-    .form-control {
+    .mb-6 { margin-bottom: 1.5rem; }
+    
+    /* ================================================================
+       TABLE
+       ================================================================ */
+    .table-wrap {
+        overflow-x: auto;
+    }
+    
+    .data-table {
         width: 100%;
-        padding: 8px 14px;
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
+        border-collapse: collapse;
         font-size: 0.85rem;
+    }
+    
+    .data-table thead th {
+        text-align: left;
+        padding: 10px 14px;
+        font-weight: 700;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #fff;
+        background: var(--primary);
+        border-bottom: 3px solid var(--primary-dark);
+        white-space: nowrap;
+    }
+    
+    .data-table tbody tr:nth-child(even) {
+        background: var(--primary-bg);
+    }
+    
+    .data-table tbody tr:nth-child(odd) {
         background: var(--bg-card);
+    }
+    
+    .data-table tbody tr:hover {
+        background: #D1FAE5;
+    }
+    
+    [data-theme="dark"] .data-table tbody tr:hover {
+        background: #1A3A2A;
+    }
+    
+    .data-table td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-color);
         color: var(--text-primary);
-        outline: none;
-        transition: all 0.3s;
+        vertical-align: middle;
     }
     
-    .form-control:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+    .data-table td .font-medium { font-weight: 500; }
+    .data-table td .font-mono { font-family: monospace; }
+    .data-table td .text-xs { font-size: 0.75rem; }
+    .data-table td .text-sm { font-size: 0.8rem; }
+    .data-table td .text-muted { color: var(--text-muted); }
+    
+    /* ================================================================
+       PATIENT AVATAR SMALL
+       ================================================================ */
+    .patient-avatar-sm {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: white;
+        flex-shrink: 0;
     }
     
-    .form-control::placeholder {
-        color: var(--text-secondary);
-        opacity: 0.6;
+    /* ================================================================
+       BADGES
+       ================================================================ */
+    .badge {
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: #fff;
+        border: none;
     }
     
+    .badge-success { background: #059669; }
+    .badge-danger { background: #EF4444; }
+    .badge-warning { background: #D97706; }
+    .badge-info { background: var(--primary); }
+    
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
     .btn {
         display: inline-flex;
         align-items: center;
@@ -442,48 +587,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     
     .btn-blue {
         background: var(--primary);
-        color: white;
+        color: #fff;
     }
     .btn-blue:hover {
         background: var(--primary-dark);
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-view {
-        background: var(--primary);
-        color: white;
-        padding: 4px 10px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-    }
-    .btn-view:hover {
-        background: var(--primary-dark);
-        transform: scale(1.05);
-    }
-    
-    .btn-consult {
-        background: #7C3AED;
-        color: white;
-        padding: 4px 10px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-    }
-    .btn-consult:hover {
-        background: #6D28D9;
-        transform: scale(1.05);
-    }
-    
-    .btn-green {
-        background: #059669;
-        color: white;
-        padding: 4px 10px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-    }
-    .btn-green:hover {
-        background: #047857;
-        transform: scale(1.05);
     }
     
     .btn-outline {
@@ -498,45 +607,286 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         transform: translateY(-2px);
     }
     
+    .btn-view {
+        background: var(--primary);
+        color: #fff;
+        padding: 4px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: none;
+        cursor: pointer;
+    }
+    .btn-view:hover {
+        background: var(--primary-dark);
+        transform: scale(1.05);
+    }
+    
+    .btn-consult {
+        background: #7C3AED;
+        color: #fff;
+        padding: 4px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: none;
+        cursor: pointer;
+    }
+    .btn-consult:hover {
+        background: #6D28D9;
+        transform: scale(1.05);
+    }
+    
+    .btn-green {
+        background: #059669;
+        color: #fff;
+        padding: 4px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: none;
+        cursor: pointer;
+    }
+    .btn-green:hover {
+        background: #047857;
+        transform: scale(1.05);
+    }
+    
     .btn-sm {
         padding: 4px 10px;
         font-size: 0.7rem;
         border-radius: 6px;
     }
     
-    .min-w-[200px] { min-width: 200px; }
-    .mb-6 { margin-bottom: 1.5rem; }
+    .action-buttons {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: nowrap;
+        justify-content: center;
+    }
+    
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header {
+        border-bottom: 3px solid var(--primary);
+        padding-bottom: 12px;
+    }
+    
+    .page-header .page-title {
+        color: var(--primary-dark);
+        font-size: 1.8rem;
+        font-weight: 700;
+    }
+    
+    [data-theme="dark"] .page-header .page-title {
+        color: var(--primary-light);
+    }
+    
+    .page-header .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+    }
+    
+    .branch-tag {
+        background: #059669;
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand {
+        color: var(--primary);
+        font-weight: 600;
+    }
+    
+    /* ================================================================
+       UTILITIES
+       ================================================================ */
+    .text-xs { font-size: 0.75rem; }
+    .text-sm { font-size: 0.875rem; }
+    .text-muted { color: var(--text-muted); }
+    .font-medium { font-weight: 500; }
+    .font-mono { font-family: monospace; }
+    .text-center { text-align: center; }
+    .py-8 { padding-top: 2rem; padding-bottom: 2rem; }
+    .text-3xl { font-size: 1.875rem; }
+    .block { display: block; }
+    .mb-2 { margin-bottom: 0.5rem; }
     .ml-2 { margin-left: 0.5rem; }
     .mr-1 { margin-right: 0.25rem; }
     .mr-2 { margin-right: 0.5rem; }
     .gap-2 { gap: 0.5rem; }
     .gap-3 { gap: 0.75rem; }
-    .gap-6 { gap: 1.5rem; }
+    .gap-4 { gap: 1rem; }
     .flex { display: flex; }
     .flex-wrap { flex-wrap: wrap; }
     .items-center { align-items: center; }
     .justify-between { justify-content: space-between; }
-    .text-center { text-align: center; }
-    .py-12 { padding-top: 3rem; padding-bottom: 3rem; }
-    .text-4xl { font-size: 2.25rem; }
-    .text-gray-300 { color: var(--text-muted); }
-    .text-gray-400 { color: var(--text-muted); }
+    .w-full { width: 100%; }
+    .min-w-\[250px\] { min-width: 250px; }
     
-    [data-theme="dark"] .text-gray-300 { color: #64748B; }
-    [data-theme="dark"] .text-gray-400 { color: #64748B; }
+    /* ================================================================
+       DARK MODE
+       ================================================================ */
+    [data-theme="dark"] .stat-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .stat-card .stat-number {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .stat-card .stat-label {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .data-table tbody tr:nth-child(even) {
+        background: #1E293B;
+    }
+    [data-theme="dark"] .data-table tbody tr:nth-child(odd) {
+        background: #1E293B;
+    }
+    [data-theme="dark"] .filter-search {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .filter-input {
+        color: #F1F5F9;
+    }
     
-    @media (max-width: 640px) {
-        .patient-card-actions {
-            flex-direction: column;
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 768px) {
+        .stats-grid {
+            grid-template-columns: 1fr 1fr;
         }
-        .patient-card-actions .btn {
+        .card {
+            padding: 14px 16px;
+        }
+        .filter-group {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .filter-search {
+            min-width: 100%;
+        }
+        .stat-card {
+            padding: 14px 16px;
+        }
+        .stat-card .stat-number {
+            font-size: 1.2rem;
+        }
+        .data-table {
+            font-size: 0.75rem;
+        }
+        .data-table th,
+        .data-table td {
+            padding: 6px 10px;
+        }
+        .btn-sm {
+            padding: 3px 8px;
+            font-size: 0.6rem;
+        }
+        .page-header .page-title {
+            font-size: 1.2rem;
+        }
+        .filter-form .btn {
             width: 100%;
             justify-content: center;
         }
-        .min-w-[200px] { min-width: 100%; }
-        .grid-cols-1 { grid-template-columns: 1fr; }
+        .action-buttons {
+            flex-wrap: wrap;
+            gap: 3px;
+        }
+        .action-buttons .btn {
+            flex: 1;
+            justify-content: center;
+        }
+    }
+    
+    @media (max-width: 480px) {
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+        .data-table th,
+        .data-table td {
+            padding: 4px 6px;
+            font-size: 0.7rem;
+        }
+        .btn-sm {
+            padding: 2px 6px;
+            font-size: 0.55rem;
+        }
+        .patient-avatar-sm {
+            width: 28px;
+            height: 28px;
+            font-size: 0.7rem;
+        }
+        .action-buttons {
+            flex-direction: column;
+        }
+        .action-buttons .btn {
+            width: 100%;
+            justify-content: center;
+        }
     }
 </style>
+
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
+<script>
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
+        }, 3500);
+    }
+
+    console.log('%c👨‍⚕️ My Patients - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Total Patients: <?= $total_patients ?> | Pending: <?= $pending_count ?>', 'font-size:12px; color:#059669;');
+    console.log('%c📋 Table format loaded', 'font-size:12px; color:#64748B;');
+</script>
 
 </body>
 </html>

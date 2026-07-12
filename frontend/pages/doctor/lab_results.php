@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/lab_results.php
-// DOCTOR - LAB RESULTS (EDIT BUTTON REMOVED ONLY)
+// DOCTOR - LAB RESULTS (CLEAN CSS - NO EDIT BUTTON)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -84,7 +84,7 @@ $stmt->execute($params);
 $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS - ONLY THIS DOCTOR'S LAB TESTS
+// GET STATISTICS
 // ================================================================
 $total_tests = count($lab_tests);
 $pending_tests = 0;
@@ -132,9 +132,27 @@ try {
 }
 
 // ================================================================
+// FUNCTIONS
+// ================================================================
+function getStatusBadgeClass($status) {
+    switch ($status) {
+        case 'completed': return 'badge-success';
+        case 'cancelled': return 'badge-danger';
+        case 'in_progress': return 'badge-warning';
+        case 'pending': return 'badge-warning';
+        default: return 'badge-info';
+    }
+}
+
+// ================================================================
 // VARIABLES FOR SIDEBAR
 // ================================================================
 $selected_branch_id = $doctor_branch_id;
+$total_employees = 0;
+$total_doctors = 0;
+$total_branches = 0;
+$pending_lab_tests = $pending_tests;
+$pending_prescriptions = 0;
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -148,6 +166,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <main class="main-content">
 
+    <!-- Page Header -->
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-6">
         <div>
             <h1 class="page-title">
@@ -175,66 +194,61 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 
     <!-- Statistics Cards -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        <div class="stat-card blue animate-fade-in-up">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Total Tests</p>
-                    <p class="stat-number"><?= $total_tests ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-flask"></i></div>
+    <div class="stats-grid">
+        <div class="stat-card blue">
+            <div>
+                <p class="stat-label">Total Tests</p>
+                <p class="stat-number"><?= $total_tests ?></p>
             </div>
+            <div class="stat-icon"><i class="fas fa-flask"></i></div>
         </div>
-        <div class="stat-card orange animate-fade-in-up">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Pending</p>
-                    <p class="stat-number"><?= $pending_tests ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-clock"></i></div>
+        <div class="stat-card orange">
+            <div>
+                <p class="stat-label">Pending</p>
+                <p class="stat-number"><?= $pending_tests ?></p>
             </div>
+            <div class="stat-icon"><i class="fas fa-clock"></i></div>
         </div>
-        <div class="stat-card purple animate-fade-in-up">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">In Progress</p>
-                    <p class="stat-number"><?= $in_progress_tests ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-spinner"></i></div>
+        <div class="stat-card purple">
+            <div>
+                <p class="stat-label">In Progress</p>
+                <p class="stat-number"><?= $in_progress_tests ?></p>
             </div>
+            <div class="stat-icon"><i class="fas fa-spinner"></i></div>
         </div>
-        <div class="stat-card green animate-fade-in-up">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Completed</p>
-                    <p class="stat-number"><?= $completed_tests ?></p>
-                </div>
-                <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+        <div class="stat-card green">
+            <div>
+                <p class="stat-label">Completed</p>
+                <p class="stat-number"><?= $completed_tests ?></p>
             </div>
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
         </div>
     </div>
 
     <!-- Search & Filter -->
     <div class="card mb-6">
-        <form method="GET" class="flex flex-wrap items-center gap-3">
-            <div class="flex-1 min-w-[200px]">
-                <input type="text" name="search" class="form-control" placeholder="Search by patient, test or visit..." value="<?= htmlspecialchars($search) ?>">
+        <form method="GET" class="filter-form">
+            <div class="filter-group">
+                <div class="filter-search">
+                    <i class="fas fa-search text-muted"></i>
+                    <input type="text" name="search" class="filter-input" placeholder="Search by patient, test or visit..." value="<?= htmlspecialchars($search) ?>">
+                </div>
+                <select name="status" class="filter-select">
+                    <option value="">All Status</option>
+                    <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Pending</option>
+                    <option value="in_progress" <?= $status_filter === 'in_progress' ? 'selected' : '' ?>>In Progress</option>
+                    <option value="completed" <?= $status_filter === 'completed' ? 'selected' : '' ?>>Completed</option>
+                    <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
+                </select>
+                <button type="submit" class="btn btn-blue btn-sm">
+                    <i class="fas fa-search"></i> Search
+                </button>
+                <?php if ($search || $status_filter): ?>
+                    <a href="lab_results.php" class="btn btn-outline btn-sm">
+                        <i class="fas fa-times"></i> Clear
+                    </a>
+                <?php endif; ?>
             </div>
-            <select name="status" class="form-control w-auto min-w-[120px]">
-                <option value="">All Status</option>
-                <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Pending</option>
-                <option value="in_progress" <?= $status_filter === 'in_progress' ? 'selected' : '' ?>>In Progress</option>
-                <option value="completed" <?= $status_filter === 'completed' ? 'selected' : '' ?>>Completed</option>
-                <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
-            </select>
-            <button type="submit" class="btn btn-blue btn-sm">
-                <i class="fas fa-search"></i> Search
-            </button>
-            <?php if ($search || $status_filter): ?>
-                <a href="lab_results.php" class="btn btn-outline btn-sm">
-                    <i class="fas fa-times"></i> Clear
-                </a>
-            <?php endif; ?>
         </form>
     </div>
 
@@ -257,37 +271,33 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <tbody>
                     <?php if (count($lab_tests) > 0): ?>
                         <?php foreach ($lab_tests as $index => $test): ?>
-                            <tr>
+                            <tr data-status="<?= $test['status'] ?? 'pending' ?>">
                                 <td><?= $index + 1 ?></td>
-                                <td class="font-medium"><?= htmlspecialchars($test['test_name']) ?></td>
+                                <td class="font-medium"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
                                 <td>
-                                    <div>
-                                        <div class="font-medium"><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></div>
-                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($test['patient_id'] ?? 'N/A') ?></div>
-                                    </div>
+                                    <div class="font-medium"><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></div>
+                                    <div class="text-xs text-muted"><?= htmlspecialchars($test['patient_id'] ?? 'N/A') ?></div>
                                 </td>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></td>
-                                <td><?= $test['test_date'] ? date('M d, Y', strtotime($test['test_date'])) : 'N/A' ?></td>
+                                <td><?= !empty($test['test_date']) ? date('M d, Y', strtotime($test['test_date'])) : 'N/A' ?></td>
                                 <td><?= htmlspecialchars($test['technician_name'] ?? 'Not assigned') ?></td>
                                 <td>
-                                    <span class="badge <?= $test['status'] === 'completed' ? 'badge-success' : ($test['status'] === 'cancelled' ? 'badge-danger' : ($test['status'] === 'in_progress' ? 'badge-warning' : 'badge-info')) ?>">
+                                    <span class="badge <?= getStatusBadgeClass($test['status']) ?>">
                                         <?= ucfirst(str_replace('_', ' ', $test['status'] ?? 'Pending')) ?>
                                     </span>
                                 </td>
                                 <td>
                                     <div class="action-buttons">
-                                        <!-- VIEW ONLY - Edit Button REMOVED -->
-                                        <a href="view_test.php?id=<?= $test['id'] ?>" class="btn btn-view" title="View Results">
-                                            <i class="fas fa-eye"></i>
+                                        <a href="view_test.php?id=<?= $test['id'] ?>" class="btn btn-view btn-sm" title="View Results">
+                                            <i class="fas fa-eye"></i> View
                                         </a>
-                                        <!-- EDIT BUTTON REMOVED - Doctor cannot edit -->
                                     </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" class="text-center py-8 text-gray-400">
+                            <td colspan="8" class="text-center py-8 text-muted">
                                 <i class="fas fa-flask text-3xl block mb-2"></i>
                                 <?php if ($search): ?>
                                     No tests found matching "<strong><?= htmlspecialchars($search) ?></strong>"
@@ -328,28 +338,171 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 </div>
 
+<!-- ================================================================ -->
+<!-- STYLES -->
+<!-- ================================================================ -->
 <style>
-    .form-control {
+    /* ================================================================
+       STATS GRID
+       ================================================================ */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    
+    .stat-card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 2px solid var(--border-color);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        transition: all 0.3s ease;
+    }
+    
+    .stat-card:hover {
+        border-color: var(--primary);
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.08);
+    }
+    
+    .stat-card .stat-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        color: white;
+        flex-shrink: 0;
+    }
+    
+    .stat-card.blue .stat-icon { background: var(--primary); }
+    .stat-card.orange .stat-icon { background: #D97706; }
+    .stat-card.purple .stat-icon { background: #7C3AED; }
+    .stat-card.green .stat-icon { background: #059669; }
+    
+    .stat-card .stat-number {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        line-height: 1.2;
+    }
+    
+    .stat-card .stat-label {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+        margin-top: 2px;
+    }
+    
+    /* ================================================================
+       CARD
+       ================================================================ */
+    .card {
+        background: var(--bg-card);
+        border-radius: 16px;
+        padding: 20px 24px;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s ease;
+    }
+    
+    .card:hover {
+        border-color: var(--primary);
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
+    }
+    
+    .mb-6 { margin-bottom: 1.5rem; }
+    
+    /* ================================================================
+       FILTER FORM
+       ================================================================ */
+    .filter-form {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+    }
+    
+    .filter-group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
         width: 100%;
-        padding: 8px 14px;
+    }
+    
+    .filter-search {
+        display: flex;
+        align-items: center;
+        flex: 1;
+        min-width: 200px;
+        background: var(--bg-card);
         border: 2px solid var(--border-color);
         border-radius: 10px;
-        font-size: 0.85rem;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        outline: none;
         transition: all 0.3s;
+        padding: 0 12px;
     }
-    .form-control:focus {
+    
+    .filter-search:focus-within {
         border-color: var(--primary);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
     }
-    .form-control::placeholder {
-        color: var(--text-secondary);
-        opacity: 0.6;
+    
+    .filter-search .fa-search {
+        color: var(--text-muted);
+        font-size: 0.85rem;
     }
-    .table-wrap { overflow-x: auto; }
-    .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    
+    .filter-input {
+        border: none;
+        background: transparent;
+        padding: 8px 12px;
+        width: 100%;
+        font-size: 0.85rem;
+        outline: none;
+        color: var(--text-primary);
+    }
+    
+    .filter-input::placeholder {
+        color: var(--text-muted);
+    }
+    
+    .filter-select {
+        padding: 8px 14px;
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        font-size: 0.85rem;
+        outline: none;
+        transition: all 0.3s;
+        cursor: pointer;
+        min-width: 140px;
+    }
+    
+    .filter-select:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+    }
+    
+    /* ================================================================
+       TABLE
+       ================================================================ */
+    .table-wrap {
+        overflow-x: auto;
+    }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+    }
+    
     .data-table thead th {
         text-align: left;
         padding: 10px 14px;
@@ -357,33 +510,291 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: white;
+        color: #fff;
         background: var(--primary);
         border-bottom: 3px solid var(--primary-dark);
         white-space: nowrap;
     }
-    .data-table tbody tr:nth-child(even) { background: var(--primary-bg); }
-    .data-table tbody tr:nth-child(odd) { background: var(--bg-card); }
-    .data-table tbody tr:hover { background: #D1FAE5; }
-    .data-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; }
-    .badge { padding: 3px 12px; border-radius: 20px; font-size: 0.7rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; color: white; border: none; }
-    .badge-success { background: var(--green); }
-    .badge-danger { background: var(--red); }
+    
+    .data-table tbody tr:nth-child(even) {
+        background: var(--primary-bg);
+    }
+    
+    .data-table tbody tr:nth-child(odd) {
+        background: var(--bg-card);
+    }
+    
+    .data-table tbody tr:hover {
+        background: #D1FAE5;
+    }
+    
+    [data-theme="dark"] .data-table tbody tr:hover {
+        background: #1A3A2A;
+    }
+    
+    .data-table td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+    }
+    
+    /* ================================================================
+       BADGES
+       ================================================================ */
+    .badge {
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: #fff;
+        border: none;
+    }
+    
+    .badge-success { background: #059669; }
+    .badge-danger { background: #EF4444; }
     .badge-info { background: var(--primary); }
-    .badge-warning { background: var(--orange); }
-    .btn-view { background: var(--primary); color: white; padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; border: none; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
-    .btn-view:hover { background: var(--primary-dark); transform: scale(1.05); }
-    .action-buttons { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; justify-content: center; }
-    .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
-    .w-auto { width: auto; }
-    .min-w-\[120px\] { min-width: 120px; }
-    .min-w-\[200px\] { min-width: 200px; }
+    .badge-warning { background: #D97706; }
+    
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.78rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    
+    .btn-blue {
+        background: var(--primary);
+        color: #fff;
+    }
+    .btn-blue:hover {
+        background: var(--primary-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+    }
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: var(--primary);
+        color: var(--primary);
+        transform: translateY(-2px);
+    }
+    
+    .btn-view {
+        background: var(--primary);
+        color: #fff;
+        padding: 4px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: none;
+        cursor: pointer;
+    }
+    .btn-view:hover {
+        background: var(--primary-dark);
+        transform: scale(1.05);
+    }
+    
+    .btn-sm {
+        padding: 4px 10px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+    }
+    
+    .action-buttons {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: nowrap;
+        justify-content: center;
+    }
+    
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header {
+        border-bottom: 3px solid var(--primary);
+        padding-bottom: 12px;
+    }
+    
+    .page-header .page-title {
+        color: var(--primary-dark);
+        font-size: 1.8rem;
+        font-weight: 700;
+    }
+    
+    [data-theme="dark"] .page-header .page-title {
+        color: var(--primary-light);
+    }
+    
+    .page-header .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+    }
+    
+    .branch-tag {
+        background: #059669;
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand {
+        color: var(--primary);
+        font-weight: 600;
+    }
+    
+    /* ================================================================
+       UTILITIES
+       ================================================================ */
+    .text-xs { font-size: 0.75rem; }
+    .text-sm { font-size: 0.875rem; }
+    .text-muted { color: var(--text-muted); }
     .font-mono { font-family: monospace; }
-    [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: #1E293B; }
-    [data-theme="dark"] .data-table tbody tr:nth-child(odd) { background: #1E293B; }
-    [data-theme="dark"] .data-table tbody tr:hover { background: #1A3A2A; }
+    .font-medium { font-weight: 500; }
+    .font-semibold { font-weight: 600; }
+    .text-center { text-align: center; }
+    .py-8 { padding-top: 2rem; padding-bottom: 2rem; }
+    .text-3xl { font-size: 1.875rem; }
+    .block { display: block; }
+    .mb-2 { margin-bottom: 0.5rem; }
+    .ml-2 { margin-left: 0.5rem; }
+    .mr-1 { margin-right: 0.25rem; }
+    .mr-2 { margin-right: 0.5rem; }
+    .gap-2 { gap: 0.5rem; }
+    .gap-3 { gap: 0.75rem; }
+    .gap-4 { gap: 1rem; }
+    .flex { display: flex; }
+    .flex-wrap { flex-wrap: wrap; }
+    .items-center { align-items: center; }
+    .justify-between { justify-content: space-between; }
+    .w-full { width: 100%; }
+    .min-w-\[140px\] { min-width: 140px; }
+    .min-w-\[200px\] { min-width: 200px; }
+    
+    /* ================================================================
+       DARK MODE
+       ================================================================ */
+    [data-theme="dark"] .stat-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .stat-card .stat-number {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .stat-card .stat-label {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .data-table tbody tr:nth-child(even) {
+        background: #1E293B;
+    }
+    [data-theme="dark"] .data-table tbody tr:nth-child(odd) {
+        background: #1E293B;
+    }
+    
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 768px) {
+        .stats-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+        .card {
+            padding: 14px 16px;
+        }
+        .filter-group {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .filter-search {
+            min-width: 100%;
+        }
+        .filter-select {
+            width: 100%;
+            min-width: 100%;
+        }
+        .stat-card {
+            padding: 14px 16px;
+        }
+        .stat-card .stat-number {
+            font-size: 1.2rem;
+        }
+        .action-buttons {
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .data-table {
+            font-size: 0.75rem;
+        }
+        .data-table th,
+        .data-table td {
+            padding: 6px 10px;
+        }
+        .btn-sm {
+            padding: 3px 8px;
+            font-size: 0.6rem;
+        }
+        .page-header .page-title {
+            font-size: 1.2rem;
+        }
+        .filter-form .btn {
+            width: 100%;
+            justify-content: center;
+        }
+    }
+    
+    @media (max-width: 480px) {
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+    }
 </style>
 
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
@@ -406,7 +817,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     console.log('%c⏳ Pending: <?= $pending_tests ?>', 'font-size:12px; color:#D97706;');
     console.log('%c✅ Completed: <?= $completed_tests ?>', 'font-size:12px; color:#059669;');
     console.log('%c🔬 In Progress: <?= $in_progress_tests ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c🔒 Doctor: View Only - Edit Button Removed', 'font-size:12px; color:#EF4444;');
+    console.log('%c🔒 Doctor: View Only - No Edit Button', 'font-size:12px; color:#EF4444;');
 </script>
 
 </body>
