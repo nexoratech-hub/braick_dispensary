@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/dashboard.php
-// DOCTOR DASHBOARD - USING REAL DOCTOR DATA
+// DOCTOR - FULL DASHBOARD (FIXED)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -11,7 +11,6 @@ session_start();
 // IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    // Set default doctor session (Dr. Sarah Mwamba - ID: 2)
     $_SESSION['user_id'] = 2;
     $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
     $_SESSION['username'] = 'dr.sarah';
@@ -20,24 +19,16 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
     $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['is_online'] = 1;
-    $_SESSION['profile_pic'] = NULL;
-    $_SESSION['status'] = 'active';
+    $_SESSION['profile_pic'] = '';
 }
 
-// ================================================================
-// GET DOCTOR INFO FROM SESSION
-// ================================================================
 $doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Doctor';
-$doctor_username = $_SESSION['username'] ?? 'doctor';
-$doctor_email = $_SESSION['email'] ?? 'No email';
-$doctor_phone = $_SESSION['phone'] ?? 'No phone';
-$doctor_specialty = $_SESSION['specialty'] ?? 'General Practitioner';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Practitioner';
 
 // ================================================================
-// FUNCTIONS
+// FUNCTIONS - ADDED time_ago()
 // ================================================================
 function time_ago($timestamp) {
     if (empty($timestamp)) return 'N/A';
@@ -61,22 +52,6 @@ function getUserColor($name) {
     return $colors[$index];
 }
 
-function columnExists($db, $table, $column) {
-    try {
-        $stmt = $db->query("SHOW COLUMNS FROM $table LIKE '$column'");
-        return $stmt->rowCount() > 0;
-    } catch (Exception $e) {
-        return false;
-    }
-}
-
-function getBranchFilter($db, $table, $branch_id) {
-    if (columnExists($db, $table, 'branch_id')) {
-        return " AND branch_id = " . (int)$branch_id;
-    }
-    return "";
-}
-
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
@@ -89,8 +64,152 @@ if (file_exists($db_path)) {
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET DOCTOR'S BRANCH NAME
+// GET DOCTOR STATISTICS
 // ================================================================
+
+// 1. Total Patients
+$stmt = $db->prepare("
+    SELECT COUNT(DISTINCT patient_id) as total 
+    FROM visits 
+    WHERE doctor_id = ?
+");
+$stmt->execute([$doctor_id]);
+$total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// 2. Pending Visits
+$stmt = $db->prepare("
+    SELECT COUNT(*) as pending 
+    FROM visits 
+    WHERE doctor_id = ? AND status IN ('pending', 'assigned')
+");
+$stmt->execute([$doctor_id]);
+$pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['pending'] ?? 0;
+
+// 3. Today's Visits
+$today = date('Y-m-d');
+$stmt = $db->prepare("
+    SELECT COUNT(*) as today 
+    FROM visits 
+    WHERE doctor_id = ? AND DATE(created_at) = ?
+");
+$stmt->execute([$doctor_id, $today]);
+$today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['today'] ?? 0;
+
+// 4. Completed Visits
+$stmt = $db->prepare("
+    SELECT COUNT(*) as completed 
+    FROM visits 
+    WHERE doctor_id = ? AND status = 'completed'
+");
+$stmt->execute([$doctor_id]);
+$completed_visits = $stmt->fetch(PDO::FETCH_ASSOC)['completed'] ?? 0;
+
+// 5. Total Prescriptions
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total 
+    FROM prescriptions 
+    WHERE doctor_id = ?
+");
+$stmt->execute([$doctor_id]);
+$total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// 6. Pending Lab Tests
+$stmt = $db->prepare("
+    SELECT COUNT(*) as pending 
+    FROM lab_tests 
+    WHERE doctor_id = ? AND status IN ('pending', 'in_progress')
+");
+$stmt->execute([$doctor_id]);
+$pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['pending'] ?? 0;
+
+// 7. Today's Appointments
+$stmt = $db->prepare("
+    SELECT a.*, p.full_name as patient_name, p.patient_id 
+    FROM appointments a
+    JOIN patients p ON a.patient_id = p.id
+    WHERE a.doctor_id = ? AND DATE(a.appointment_date) = ?
+    ORDER BY a.appointment_date ASC
+");
+$stmt->execute([$doctor_id, $today]);
+$today_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// 8. Pending Patients (Queue)
+$stmt = $db->prepare("
+    SELECT v.*, p.full_name as patient_name, p.patient_id, p.phone,
+           TIMESTAMPDIFF(MINUTE, v.created_at, NOW()) as waiting_time
+    FROM visits v
+    JOIN patients p ON v.patient_id = p.id
+    WHERE v.doctor_id = ? AND v.status IN ('pending', 'assigned')
+    ORDER BY v.created_at ASC
+    LIMIT 10
+");
+$stmt->execute([$doctor_id]);
+$pending_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// 9. Recent Activities
+$stmt = $db->prepare("
+    (SELECT 'visit' as type, v.id, v.created_at, p.full_name as patient_name, 
+            v.status, 'visit' as action_type
+     FROM visits v
+     JOIN patients p ON v.patient_id = p.id
+     WHERE v.doctor_id = ?
+     ORDER BY v.created_at DESC
+     LIMIT 5)
+    UNION ALL
+    (SELECT 'prescription' as type, pr.id, pr.created_at, p.full_name as patient_name,
+            pr.status, 'prescription' as action_type
+     FROM prescriptions pr
+     JOIN patients p ON pr.patient_id = p.id
+     WHERE pr.doctor_id = ?
+     ORDER BY pr.created_at DESC
+     LIMIT 5)
+    ORDER BY created_at DESC
+    LIMIT 8
+");
+$stmt->execute([$doctor_id, $doctor_id]);
+$recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// 10. Weekly Visits Data for Chart
+$stmt = $db->prepare("
+    SELECT DATE(created_at) as date, COUNT(*) as count 
+    FROM visits 
+    WHERE doctor_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+    GROUP BY DATE(created_at)
+    ORDER BY date
+");
+$stmt->execute([$doctor_id]);
+$weekly_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Prepare chart labels and values
+$chart_labels = [];
+$chart_values = [];
+for ($i = 6; $i >= 0; $i--) {
+    $date = date('Y-m-d', strtotime("-$i days"));
+    $chart_labels[] = date('D', strtotime($date));
+    $found = false;
+    foreach ($weekly_data as $data) {
+        if ($data['date'] == $date) {
+            $chart_values[] = (int)$data['count'];
+            $found = true;
+            break;
+        }
+    }
+    if (!$found) {
+        $chart_values[] = 0;
+    }
+}
+
+// 11. New Patients Today
+$stmt = $db->prepare("
+    SELECT COUNT(DISTINCT p.id) as new_patients
+    FROM visits v
+    JOIN patients p ON v.patient_id = p.id
+    WHERE v.doctor_id = ? AND DATE(v.created_at) = ?
+");
+$stmt->execute([$doctor_id, $today]);
+$new_patients_today = $stmt->fetch(PDO::FETCH_ASSOC)['new_patients'] ?? 0;
+
+// 12. Get Doctor's Branch Name
 $doctor_branch_name = 'Not Assigned';
 try {
     $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
@@ -103,179 +222,25 @@ try {
     $doctor_branch_name = 'Branch';
 }
 
-// ================================================================
-// FETCH ALL STATISTICS FOR THIS DOCTOR
-// ================================================================
-
-// 1. TOTAL PATIENTS
-$filter = getBranchFilter($db, 'visits', $doctor_branch_id);
-$sql = "SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?" . $filter;
-$stmt = $db->prepare($sql);
+// 13. New Patients Count (for notification)
+$stmt = $db->prepare("
+    SELECT COUNT(*) as new_count 
+    FROM visits 
+    WHERE doctor_id = ? AND status = 'pending' 
+    AND created_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+");
 $stmt->execute([$doctor_id]);
-$total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 2. TODAY'S VISITS
-$filter = getBranchFilter($db, 'visits', $doctor_branch_id);
-$sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND DATE(created_at) = CURDATE()" . $filter;
-$stmt = $db->prepare($sql);
-$stmt->execute([$doctor_id]);
-$today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 3. WEEKLY VISITS
-$filter = getBranchFilter($db, 'visits', $doctor_branch_id);
-$sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)" . $filter;
-$stmt = $db->prepare($sql);
-$stmt->execute([$doctor_id]);
-$week_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 4. MONTHLY VISITS
-$filter = getBranchFilter($db, 'visits', $doctor_branch_id);
-$sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)" . $filter;
-$stmt = $db->prepare($sql);
-$stmt->execute([$doctor_id]);
-$month_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 5. PENDING PRESCRIPTIONS
-$filter = getBranchFilter($db, 'prescriptions', $doctor_branch_id);
-$sql = "SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'" . $filter;
-$stmt = $db->prepare($sql);
-$stmt->execute([$doctor_id]);
-$pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 6. PENDING LAB TESTS
-$filter = getBranchFilter($db, 'lab_tests', $doctor_branch_id);
-$sql = "SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status = 'pending'" . $filter;
-$stmt = $db->prepare($sql);
-$stmt->execute([$doctor_id]);
-$pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 7. PENDING REFERRALS
-$filter = getBranchFilter($db, 'referrals', $doctor_branch_id);
-$sql = "SELECT COUNT(*) as count FROM referrals WHERE from_doctor_id = ? AND status = 'pending'" . $filter;
-$stmt = $db->prepare($sql);
-$stmt->execute([$doctor_id]);
-$pending_referrals = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 8. TODAY'S APPOINTMENTS COUNT
-$filter = getBranchFilter($db, 'appointments', $doctor_branch_id);
-$sql = "SELECT COUNT(*) as count FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE()" . $filter;
-$stmt = $db->prepare($sql);
-$stmt->execute([$doctor_id]);
-$today_appointments_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// 9. TODAY'S REVENUE
-$sql = "SELECT COALESCE(SUM(ps.total), 0) as revenue 
-        FROM pharmacy_sales ps
-        JOIN prescriptions p ON ps.prescription_id = p.id
-        WHERE p.doctor_id = ? AND ps.payment_status = 'paid' AND DATE(ps.sale_date) = CURDATE()";
-$params = [$doctor_id];
-if (columnExists($db, 'pharmacy_sales', 'branch_id')) {
-    $sql .= " AND ps.branch_id = ?";
-    $params[] = $doctor_branch_id;
-}
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$today_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
-
-// 10. MONTHLY REVENUE
-$sql = "SELECT COALESCE(SUM(ps.total), 0) as revenue 
-        FROM pharmacy_sales ps
-        JOIN prescriptions p ON ps.prescription_id = p.id
-        WHERE p.doctor_id = ? AND ps.payment_status = 'paid' AND MONTH(ps.sale_date) = MONTH(CURDATE())";
-$params = [$doctor_id];
-if (columnExists($db, 'pharmacy_sales', 'branch_id')) {
-    $sql .= " AND ps.branch_id = ?";
-    $params[] = $doctor_branch_id;
-}
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$month_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
-
-// 11. RECENT PATIENTS (Last 5)
-$sql = "SELECT DISTINCT p.*, v.created_at as last_visit 
-        FROM patients p
-        JOIN visits v ON p.id = v.patient_id
-        WHERE v.doctor_id = ?";
-$params = [$doctor_id];
-if (columnExists($db, 'visits', 'branch_id')) {
-    $sql .= " AND v.branch_id = ?";
-    $params[] = $doctor_branch_id;
-}
-$sql .= " ORDER BY v.created_at DESC LIMIT 5";
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$recent_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// 12. TODAY'S APPOINTMENTS LIST
-$sql = "SELECT a.*, p.full_name as patient_name, p.patient_id 
-        FROM appointments a
-        JOIN patients p ON a.patient_id = p.id
-        WHERE a.doctor_id = ? AND DATE(a.appointment_date) = CURDATE()";
-$params = [$doctor_id];
-if (columnExists($db, 'appointments', 'branch_id')) {
-    $sql .= " AND a.branch_id = ?";
-    $params[] = $doctor_branch_id;
-}
-$sql .= " ORDER BY a.appointment_date";
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$today_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// 13. WEEKLY VISITS CHART DATA
-$weekly_labels = [];
-$weekly_values = [];
-for ($i = 6; $i >= 0; $i--) {
-    $date = date('Y-m-d', strtotime("-$i days"));
-    $weekly_labels[] = date('D', strtotime($date));
-    $sql = "SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND DATE(created_at) = ?";
-    $params = [$doctor_id, $date];
-    if (columnExists($db, 'visits', 'branch_id')) {
-        $sql .= " AND branch_id = ?";
-        $params[] = $doctor_branch_id;
-    }
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    $weekly_values[] = $count;
-}
-
-// 14. RECENT ACTIVITIES
-$recent_activities = [];
-try {
-    $sql = "SELECT action, details, created_at FROM activity_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 5";
-    $stmt = $db->prepare($sql);
-    $stmt->execute([$doctor_id]);
-    $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $recent_activities = [
-        ['action' => 'Dashboard Loaded', 'details' => 'Doctor dashboard loaded successfully', 'created_at' => date('Y-m-d H:i:s')]
-    ];
-}
+$new_patients_count = $stmt->fetch(PDO::FETCH_ASSOC)['new_count'] ?? 0;
 
 // ================================================================
-// DOCTOR STATS ARRAY
+// VARIABLES FOR SIDEBAR
 // ================================================================
-$doctor_stats = [
-    'total_patients' => $total_patients,
-    'patients_growth' => 12,
-    'today_visits' => $today_visits,
-    'week_visits' => $week_visits,
-    'month_visits' => $month_visits,
-    'pending_prescriptions' => $pending_prescriptions,
-    'pending_lab_tests' => $pending_lab_tests,
-    'pending_referrals' => $pending_referrals,
-    'today_appointments' => $today_appointments_count,
-    'total_revenue' => $today_revenue,
-    'month_revenue' => $month_revenue,
-];
-
-// Variables for sidebar
 $selected_branch_id = $doctor_branch_id;
 $total_employees = 0;
 $total_doctors = 0;
 $total_branches = 0;
 $pending_lab_tests_sidebar = $pending_lab_tests;
-$pending_prescriptions_sidebar = $pending_prescriptions;
+$pending_prescriptions_sidebar = 0;
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -289,116 +254,176 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-6">
+    <!-- Welcome Section -->
+    <div class="flex flex-wrap justify-between items-start gap-4 mb-6">
         <div>
-            <h1 class="page-title flex items-center gap-3">
-                <i class="fas fa-home mr-2" style="color: #0B5ED7;"></i> 
-                Dashboard
-                <span class="text-sm font-normal text-gray-400 ml-2">| Welcome back</span>
+            <h1 class="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                <i class="fas fa-home text-blue-600"></i>
+                Welcome back, <?= htmlspecialchars($doctor_name) ?>!
             </h1>
-            <div class="page-subtitle flex flex-wrap items-center gap-3 mt-2">
-                <!-- Doctor Name -->
-                <span class="text-2xl font-bold text-gray-800 doctor-welcome">
-                    <i class="fas fa-user-md mr-2 text-blue-600"></i>
-                    <?= htmlspecialchars($doctor_name) ?>
+            <p class="text-gray-500 text-sm">
+                <i class="fas fa-stethoscope mr-1"></i>
+                <?= htmlspecialchars($doctor_specialty) ?> • 
+                <span class="bg-blue-600 text-white px-3 py-0.5 rounded-full text-xs">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?>
                 </span>
-                <!-- Doctor Specialty -->
-                <span class="inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm border border-blue-200">
-                    <i class="fas fa-stethoscope mr-1"></i>
-                    <?= htmlspecialchars($doctor_specialty) ?>
+                <span class="ml-2 text-gray-400 text-xs">
+                    <i class="far fa-calendar-alt mr-1"></i>
+                    <?= date('l, F d, Y') ?>
                 </span>
-                <!-- Branch -->
-                <span class="branch-tag">
-                    <i class="fas fa-store-alt"></i> 
-                    <?= htmlspecialchars($doctor_branch_name) ?>
-                </span>
-                <!-- Date -->
-                <span class="inline-flex bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs border border-gray-200">
-                    <i class="fas fa-calendar-day mr-1"></i> 
-                    <?= date('F d, Y') ?>
-                </span>
-            </div>
-            <!-- Doctor Contact Info -->
-            <div class="flex flex-wrap items-center gap-3 mt-2 text-sm text-gray-500">
-                <span><i class="fas fa-envelope mr-1 text-blue-500"></i><?= htmlspecialchars($doctor_email) ?></span>
-                <span class="text-gray-300">|</span>
-                <span><i class="fas fa-phone mr-1 text-green-500"></i><?= htmlspecialchars($doctor_phone) ?></span>
-                <span class="text-gray-300">|</span>
-                <span><i class="fas fa-id-badge mr-1 text-purple-500"></i>ID: <?= htmlspecialchars($doctor_id) ?></span>
-                <span class="text-gray-300">|</span>
-                <span><i class="fas fa-user-tag mr-1 text-orange-500"></i><?= htmlspecialchars($doctor_username) ?></span>
-            </div>
+            </p>
         </div>
         <div class="flex gap-2 flex-wrap">
-            <a href="new_visit.php" class="btn btn-blue btn-sm"><i class="fas fa-plus-circle"></i> New Visit</a>
-            <a href="prescribe.php" class="btn btn-green btn-sm"><i class="fas fa-prescription"></i> Prescribe</a>
-            <button onclick="location.reload()" class="btn btn-outline btn-sm"><i class="fas fa-sync-alt"></i> Refresh</button>
+            <?php if ($pending_visits > 0): ?>
+                <a href="#queue" class="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-orange-600 transition flex items-center gap-2 animate-pulse">
+                    <i class="fas fa-user-clock"></i>
+                    <?= $pending_visits ?> Patient(s) Waiting
+                </a>
+            <?php endif; ?>
+            <button onclick="window.location.reload()" class="bg-gray-100 text-gray-600 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-200 transition flex items-center gap-2">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
         </div>
     </div>
 
     <!-- ================================================================ -->
     <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-        <div class="stat-card blue animate-fade-in-up">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        
+        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-blue-600 hover:shadow-md transition">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="stat-label">Total Patients</p>
-                    <p class="stat-number"><?= number_format($doctor_stats['total_patients']) ?></p>
-                    <span class="stat-trend"><i class="fas fa-users"></i> All time</span>
+                    <p class="text-sm text-gray-500 font-medium">Total Patients</p>
+                    <p class="text-2xl font-bold text-blue-600"><?= number_format($total_patients) ?></p>
+                    <span class="text-xs text-green-600"><i class="fas fa-user-plus"></i> +<?= $new_patients_today ?> today</span>
                 </div>
-                <div class="stat-icon"><i class="fas fa-users"></i></div>
+                <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600">
+                    <i class="fas fa-users text-xl"></i>
+                </div>
             </div>
         </div>
-        <div class="stat-card green animate-fade-in-up">
+
+        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 <?= $pending_visits > 0 ? 'border-orange-500' : 'border-gray-300' ?> hover:shadow-md transition">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="stat-label">Today's Visits</p>
-                    <p class="stat-number"><?= $doctor_stats['today_visits'] ?></p>
-                    <span class="stat-trend"><i class="fas fa-calendar-day"></i> Today</span>
+                    <p class="text-sm text-gray-500 font-medium">Pending Patients</p>
+                    <p class="text-2xl font-bold <?= $pending_visits > 0 ? 'text-orange-500' : 'text-gray-400' ?>">
+                        <?= number_format($pending_visits) ?>
+                    </p>
+                    <span class="text-xs text-gray-400">
+                        <?php if ($pending_visits > 0): ?>
+                            <i class="fas fa-clock text-orange-500"></i> Waiting for you
+                        <?php else: ?>
+                            <i class="fas fa-check-circle text-green-500"></i> All clear
+                        <?php endif; ?>
+                    </span>
                 </div>
-                <div class="stat-icon"><i class="fas fa-clinic-medical"></i></div>
+                <div class="w-12 h-12 <?= $pending_visits > 0 ? 'bg-orange-100 text-orange-500' : 'bg-gray-100 text-gray-400' ?> rounded-full flex items-center justify-center">
+                    <i class="fas fa-clock text-xl"></i>
+                </div>
+            </div>
+            <?php if ($pending_visits > 0): ?>
+                <span class="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full"><?= $pending_visits ?></span>
+            <?php endif; ?>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-green-600 hover:shadow-md transition">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm text-gray-500 font-medium">Today's Visits</p>
+                    <p class="text-2xl font-bold text-green-600"><?= number_format($today_visits) ?></p>
+                    <span class="text-xs text-gray-400"><i class="fas fa-calendar-day"></i> <?= date('M d, Y') ?></span>
+                </div>
+                <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-green-600">
+                    <i class="fas fa-clinic-medical text-xl"></i>
+                </div>
             </div>
         </div>
-        <div class="stat-card blue-dark animate-fade-in-up">
+
+        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-purple-600 hover:shadow-md transition">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="stat-label">Weekly Visits</p>
-                    <p class="stat-number"><?= $doctor_stats['week_visits'] ?></p>
-                    <span class="stat-trend"><i class="fas fa-calendar-week"></i> This week</span>
+                    <p class="text-sm text-gray-500 font-medium">Completed</p>
+                    <p class="text-2xl font-bold text-purple-600"><?= number_format($completed_visits) ?></p>
+                    <span class="text-xs text-gray-400"><i class="fas fa-check-circle"></i> Total completed</span>
                 </div>
-                <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
+                <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center text-purple-600">
+                    <i class="fas fa-check-circle text-xl"></i>
+                </div>
             </div>
         </div>
-        <div class="stat-card orange animate-fade-in-up">
+    </div>
+
+    <!-- Second Row Stats -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        
+        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-teal-600 hover:shadow-md transition">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="stat-label">Pending Prescriptions</p>
-                    <p class="stat-number"><?= $doctor_stats['pending_prescriptions'] ?></p>
-                    <span class="stat-trend"><i class="fas fa-clock"></i> Needs action</span>
+                    <p class="text-sm text-gray-500 font-medium">Prescriptions</p>
+                    <p class="text-2xl font-bold text-teal-600"><?= number_format($total_prescriptions) ?></p>
+                    <span class="text-xs text-gray-400"><i class="fas fa-prescription"></i> Total issued</span>
                 </div>
-                <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+                <div class="w-12 h-12 bg-teal-100 rounded-full flex items-center justify-center text-teal-600">
+                    <i class="fas fa-prescription text-xl"></i>
+                </div>
             </div>
         </div>
-        <div class="stat-card purple animate-fade-in-up">
+
+        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 <?= $pending_lab_tests > 0 ? 'border-yellow-500' : 'border-gray-300' ?> hover:shadow-md transition">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="stat-label">Pending Lab Tests</p>
-                    <p class="stat-number"><?= $doctor_stats['pending_lab_tests'] ?></p>
-                    <span class="stat-trend"><i class="fas fa-flask"></i> Pending</span>
+                    <p class="text-sm text-gray-500 font-medium">Pending Lab Tests</p>
+                    <p class="text-2xl font-bold <?= $pending_lab_tests > 0 ? 'text-yellow-500' : 'text-gray-400' ?>">
+                        <?= number_format($pending_lab_tests) ?>
+                    </p>
+                    <span class="text-xs text-gray-400">
+                        <?php if ($pending_lab_tests > 0): ?>
+                            <i class="fas fa-flask text-yellow-500"></i> Waiting for results
+                        <?php else: ?>
+                            <i class="fas fa-check-circle text-green-500"></i> No pending
+                        <?php endif; ?>
+                    </span>
                 </div>
-                <div class="stat-icon"><i class="fas fa-flask"></i></div>
+                <div class="w-12 h-12 <?= $pending_lab_tests > 0 ? 'bg-yellow-100 text-yellow-500' : 'bg-gray-100 text-gray-400' ?> rounded-full flex items-center justify-center">
+                    <i class="fas fa-flask text-xl"></i>
+                </div>
+            </div>
+            <?php if ($pending_lab_tests > 0): ?>
+                <span class="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full"><?= $pending_lab_tests ?></span>
+            <?php endif; ?>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-indigo-600 hover:shadow-md transition">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm text-gray-500 font-medium">Appointments Today</p>
+                    <p class="text-2xl font-bold text-indigo-600"><?= number_format(count($today_appointments)) ?></p>
+                    <span class="text-xs text-gray-400"><i class="fas fa-calendar-check"></i> Scheduled</span>
+                </div>
+                <div class="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
+                    <i class="fas fa-calendar-check text-xl"></i>
+                </div>
             </div>
         </div>
-        <div class="stat-card green-dark animate-fade-in-up">
+
+        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-rose-600 hover:shadow-md transition">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="stat-label">Today's Revenue</p>
-                    <p class="stat-number">TSh <?= number_format($doctor_stats['total_revenue']) ?></p>
-                    <span class="stat-trend">TSh <?= number_format($doctor_stats['month_revenue']) ?> monthly</span>
+                    <p class="text-sm text-gray-500 font-medium">Completion Rate</p>
+                    <p class="text-2xl font-bold text-rose-600">
+                        <?php 
+                            $total = $total_patients > 0 ? $total_patients : 1;
+                            $rate = round(($completed_visits / $total) * 100);
+                            echo $rate . '%';
+                        ?>
+                    </p>
+                    <span class="text-xs text-gray-400"><i class="fas fa-chart-line"></i> Overall performance</span>
                 </div>
-                <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+                <div class="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center text-rose-600">
+                    <i class="fas fa-chart-line text-xl"></i>
+                </div>
             </div>
         </div>
     </div>
@@ -406,107 +431,216 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <!-- ================================================================ -->
     <!-- CHART & APPOINTMENTS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-chart-bar title-blue mr-2"></i> Weekly Visits <span class="text-xs font-normal text-gray-400">(Last 7 days)</span></h3>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+
+        <!-- Weekly Visits Chart -->
+        <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200 lg:col-span-2">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-gray-800 font-semibold flex items-center gap-2">
+                    <i class="fas fa-chart-area text-blue-600"></i>
+                    Weekly Visits Trend
+                </h3>
+                <span class="text-xs text-gray-400">Last 7 days</span>
             </div>
-            <div class="chart-container">
+            <div class="h-48">
                 <canvas id="visitsChart"></canvas>
             </div>
         </div>
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-calendar-check title-blue mr-2"></i> Today's Appointments <span class="text-xs font-normal text-gray-400">(<?= count($today_appointments) ?>)</span></h3>
-                <a href="appointments.php" class="text-xs text-blue-600 hover:underline">View All →</a>
+
+        <!-- Today's Appointments -->
+        <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-gray-800 font-semibold flex items-center gap-2">
+                    <i class="fas fa-calendar-check text-green-600"></i>
+                    Today's Appointments
+                    <span class="text-sm font-normal text-gray-400">(<?= count($today_appointments) ?>)</span>
+                </h3>
             </div>
-            <div class="space-y-1 max-h-52 overflow-y-auto">
+            <div class="max-h-52 overflow-y-auto">
                 <?php if (count($today_appointments) > 0): ?>
                     <?php foreach ($today_appointments as $appt): ?>
-                        <div class="appointment-item">
-                            <span class="appointment-time"><?= date('h:i A', strtotime($appt['appointment_date'])) ?></span>
-                            <span class="appointment-patient"><?= htmlspecialchars($appt['patient_name']) ?></span>
-                            <span class="appointment-type"><?= htmlspecialchars($appt['purpose'] ?? 'General') ?></span>
-                            <span class="appointment-status <?= $appt['status'] ?? 'scheduled' ?>"><?= ucfirst($appt['status'] ?? 'Scheduled') ?></span>
+                        <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
+                            <div>
+                                <span class="font-semibold text-sm text-gray-800"><?= date('h:i A', strtotime($appt['appointment_date'])) ?></span>
+                                <span class="text-sm text-gray-600 ml-2"><?= htmlspecialchars($appt['patient_name']) ?></span>
+                            </div>
+                            <span class="text-xs px-2 py-1 rounded-full <?= ($appt['status'] ?? 'scheduled') === 'confirmed' ? 'bg-green-100 text-green-600' : (($appt['status'] ?? 'scheduled') === 'cancelled' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600') ?>">
+                                <?= ucfirst($appt['status'] ?? 'Scheduled') ?>
+                            </span>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div class="text-center py-8 text-gray-400"><i class="fas fa-calendar-check text-2xl block mb-2"></i><p>No appointments scheduled for today</p></div>
+                    <div class="text-center py-6 text-gray-400">
+                        <i class="fas fa-calendar-check text-2xl block mb-2"></i>
+                        <p>No appointments scheduled for today</p>
+                    </div>
                 <?php endif; ?>
+            </div>
+            <div class="mt-3 pt-3 border-t text-center">
+                <a href="appointments.php" class="text-blue-600 text-sm hover:underline">View all appointments →</a>
             </div>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PATIENTS & ACTIVITIES -->
+    <!-- PENDING PATIENTS QUEUE -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-user-injured title-blue mr-2"></i> Recent Patients <span class="text-xs font-normal text-gray-400">(Last 5)</span></h3>
-                <a href="my_patients.php" class="text-xs text-blue-600 hover:underline">View All →</a>
-            </div>
-            <div class="space-y-1 max-h-56 overflow-y-auto">
-                <?php if (count($recent_patients) > 0): ?>
-                    <?php foreach ($recent_patients as $patient): ?>
-                        <div class="patient-item">
-                            <div class="patient-avatar" style="background: <?= getUserColor($patient['full_name']) ?>;"><?= strtoupper(substr($patient['full_name'], 0, 1)) ?></div>
-                            <div class="patient-info">
-                                <div class="name"><?= htmlspecialchars($patient['full_name']) ?></div>
-                                <div><span class="id"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span> <span class="phone">• <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span></div>
-                            </div>
-                            <div class="patient-last-visit"><?= isset($patient['last_visit']) ? time_ago($patient['last_visit']) : 'N/A' ?></div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-8 text-gray-400"><i class="fas fa-user-injured text-2xl block mb-2"></i><p>No patients yet</p></div>
-                <?php endif; ?>
-            </div>
+    <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200 mb-6" id="queue">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-gray-800 font-semibold flex items-center gap-2">
+                <i class="fas fa-user-clock text-orange-500"></i>
+                Pending Patients Queue
+                <span class="text-sm font-normal text-gray-400">(<?= count($pending_patients) ?> waiting)</span>
+            </h3>
+            <span class="text-xs text-gray-400">
+                <i class="far fa-clock mr-1"></i> Waiting time
+            </span>
         </div>
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-clock title-blue mr-2"></i> Recent Activities</h3>
-                <span class="text-xs text-gray-400">Latest</span>
+        
+        <?php if (count($pending_patients) > 0): ?>
+            <div class="max-h-72 overflow-y-auto">
+                <?php foreach ($pending_patients as $index => $patient): ?>
+                    <div class="flex items-center gap-4 py-3 border-b border-gray-100 last:border-0 <?= $index === 0 ? 'bg-blue-50 rounded-lg px-3 -mx-3' : '' ?>">
+                        <div class="font-bold text-gray-400 w-8">#<?= $index + 1 ?></div>
+                        <div class="flex-1">
+                            <div class="font-medium text-gray-800">
+                                <?= htmlspecialchars($patient['patient_name']) ?>
+                                <?php if ($index === 0): ?>
+                                    <span class="text-xs bg-orange-500 text-white px-2 py-0.5 rounded-full ml-2">Next</span>
+                                <?php endif; ?>
+                            </div>
+                            <div class="text-xs text-gray-400">
+                                <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?> • 
+                                <?= htmlspecialchars($patient['phone'] ?? '') ?>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-sm <?= ($patient['waiting_time'] ?? 0) > 30 ? 'text-red-500 font-semibold' : 'text-gray-500' ?>">
+                                <?= ($patient['waiting_time'] ?? 0) > 0 ? ($patient['waiting_time'] . ' min') : 'Just now' ?>
+                            </span>
+                            <div>
+                                <span class="text-xs px-2 py-0.5 rounded-full <?= ($patient['status'] ?? 'pending') === 'pending' ? 'bg-yellow-100 text-yellow-600' : 'bg-blue-100 text-blue-600' ?>">
+                                    <?= ucfirst($patient['status'] ?? 'Pending') ?>
+                                </span>
+                            </div>
+                        </div>
+                        <div>
+                            <a href="consultation.php?visit_id=<?= $patient['id'] ?>" class="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition flex items-center gap-1">
+                                <i class="fas fa-stethoscope"></i> Consult
+                            </a>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
             </div>
-            <div class="space-y-1 max-h-56 overflow-y-auto">
+            <?php if (count($pending_patients) >= 10): ?>
+                <div class="mt-3 pt-3 border-t text-center">
+                    <a href="my_patients.php?filter=pending" class="text-blue-600 text-sm hover:underline">
+                        View all waiting patients →
+                    </a>
+                </div>
+            <?php endif; ?>
+        <?php else: ?>
+            <div class="text-center py-8 text-gray-400">
+                <i class="fas fa-check-circle text-4xl text-green-500 block mb-3"></i>
+                <p>No patients waiting! All clear.</p>
+                <p class="text-xs text-gray-400 mt-1">Take a break or review completed cases</p>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- RECENT ACTIVITIES & QUICK ACTIONS -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+
+        <!-- Recent Activities -->
+        <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200 lg:col-span-2">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-gray-800 font-semibold flex items-center gap-2">
+                    <i class="fas fa-clock text-blue-600"></i>
+                    Recent Activities
+                </h3>
+                <a href="system_logs.php" class="text-blue-600 text-sm hover:underline">View All</a>
+            </div>
+            <div class="max-h-60 overflow-y-auto">
                 <?php if (count($recent_activities) > 0): ?>
                     <?php foreach ($recent_activities as $activity): ?>
-                        <div class="activity-item">
-                            <div class="activity-icon blue"><i class="fas fa-circle"></i></div>
-                            <div class="activity-content">
-                                <div class="action"><?= htmlspecialchars($activity['action'] ?? 'Activity') ?></div>
-                                <div class="details"><?= htmlspecialchars($activity['details'] ?? '') ?></div>
+                        <div class="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
+                            <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm <?= $activity['action_type'] === 'prescription' ? 'bg-green-500' : 'bg-blue-500' ?>">
+                                <i class="fas <?= $activity['action_type'] === 'prescription' ? 'fa-prescription' : 'fa-user-injured' ?>"></i>
                             </div>
-                            <div class="activity-time"><?= isset($activity['created_at']) ? time_ago($activity['created_at']) : 'Just now' ?></div>
+                            <div class="flex-1">
+                                <p class="text-sm text-gray-800">
+                                    <?= $activity['action_type'] === 'prescription' ? 'Prescription created' : 'Visit ' . $activity['status'] ?>
+                                    <span class="text-gray-500">- <?= htmlspecialchars($activity['patient_name'] ?? 'Unknown') ?></span>
+                                </p>
+                                <p class="text-xs text-gray-400">
+                                    <?php if ($activity['action_type'] === 'prescription'): ?>
+                                        Status: <?= ucfirst($activity['status'] ?? 'Pending') ?>
+                                    <?php else: ?>
+                                        Visit #<?= htmlspecialchars($activity['id'] ?? '') ?>
+                                    <?php endif; ?>
+                                    • <?= time_ago($activity['created_at'] ?? '') ?>
+                                </p>
+                            </div>
+                            <?php if ($activity['action_type'] === 'visit' && ($activity['status'] ?? '') === 'pending'): ?>
+                                <a href="consultation.php?visit_id=<?= $activity['id'] ?>" class="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition">
+                                    Consult
+                                </a>
+                            <?php elseif ($activity['action_type'] === 'prescription'): ?>
+                                <a href="view_prescription.php?id=<?= $activity['id'] ?>" class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 transition">
+                                    View
+                                </a>
+                            <?php endif; ?>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div class="text-center py-8 text-gray-400"><i class="fas fa-clock text-2xl block mb-2"></i><p>No recent activities</p></div>
+                    <div class="text-center py-6 text-gray-400">
+                        <i class="fas fa-inbox text-2xl block mb-2"></i>
+                        <p>No recent activities</p>
+                    </div>
                 <?php endif; ?>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-gray-800 font-semibold flex items-center gap-2">
+                    <i class="fas fa-bolt text-yellow-500"></i>
+                    Quick Actions
+                </h3>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <a href="my_patients.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-blue-500 hover:shadow-md transition group">
+                    <i class="fas fa-users text-blue-500 text-2xl group-hover:scale-110 transition"></i>
+                    <span class="text-xs font-medium text-gray-600 mt-1">My Patients</span>
+                </a>
+                <a href="consultation.php?patient_id=0" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-green-500 hover:shadow-md transition group">
+                    <i class="fas fa-stethoscope text-green-500 text-2xl group-hover:scale-110 transition"></i>
+                    <span class="text-xs font-medium text-gray-600 mt-1">Consultation</span>
+                </a>
+                <a href="prescribe.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-purple-500 hover:shadow-md transition group">
+                    <i class="fas fa-prescription text-purple-500 text-2xl group-hover:scale-110 transition"></i>
+                    <span class="text-xs font-medium text-gray-600 mt-1">Prescribe</span>
+                </a>
+                <a href="view_prescriptions.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-orange-500 hover:shadow-md transition group">
+                    <i class="fas fa-list text-orange-500 text-2xl group-hover:scale-110 transition"></i>
+                    <span class="text-xs font-medium text-gray-600 mt-1">Prescriptions</span>
+                </a>
+                <a href="lab_results.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-teal-500 hover:shadow-md transition group">
+                    <i class="fas fa-flask text-teal-500 text-2xl group-hover:scale-110 transition"></i>
+                    <span class="text-xs font-medium text-gray-600 mt-1">Lab Results</span>
+                </a>
+                <a href="profile.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-gray-500 hover:shadow-md transition group">
+                    <i class="fas fa-user-cog text-gray-500 text-2xl group-hover:scale-110 transition"></i>
+                    <span class="text-xs font-medium text-gray-600 mt-1">My Profile</span>
+                </a>
             </div>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- QUICK ACTIONS -->
-    <!-- ================================================================ -->
-    <div class="card mb-6">
-        <div class="card-header">
-            <h3 class="card-title"><i class="fas fa-bolt title-blue mr-2"></i> Quick Actions</h3>
-        </div>
-        <div class="grid grid-cols-3 sm:grid-cols-6 gap-3">
-            <a href="new_visit.php" class="quick-action"><i class="fas fa-user-plus icon-blue"></i><span class="label">New Visit</span></a>
-            <a href="prescribe.php" class="quick-action"><i class="fas fa-prescription icon-green"></i><span class="label">Prescribe</span></a>
-            <a href="my_patients.php" class="quick-action"><i class="fas fa-users icon-blue"></i><span class="label">My Patients</span></a>
-            <a href="appointments.php" class="quick-action"><i class="fas fa-calendar-check icon-blue"></i><span class="label">Appointments</span></a>
-            <a href="lab_results.php" class="quick-action"><i class="fas fa-flask icon-purple"></i><span class="label">Lab Results</span></a>
-            <a href="profile.php" class="quick-action"><i class="fas fa-user-circle icon-blue"></i><span class="label">My Profile</span></a>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -522,7 +656,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST -->
+<!-- TOAST NOTIFICATION -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
@@ -533,20 +667,92 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </div>
 
 <!-- ================================================================ -->
+<!-- STYLES -->
+<!-- ================================================================ -->
+<style>
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+    }
+    .toast-custom.show {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #EF4444; }
+    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.warning { background: #D97706; }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid #E2E8F0;
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: #94A3B8;
+    }
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    
+    .text-gray-300 { color: #D1D5DB; }
+    .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
+    .animate-pulse { animation: pulse 2s infinite; }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+    
+    [data-theme="dark"] .bg-white { background: #1E293B; }
+    [data-theme="dark"] .border-gray-200 { border-color: #334155; }
+    [data-theme="dark"] .text-gray-800 { color: #F1F5F9; }
+    [data-theme="dark"] .text-gray-600 { color: #94A3B8; }
+    [data-theme="dark"] .text-gray-500 { color: #94A3B8; }
+    [data-theme="dark"] .text-gray-400 { color: #64748B; }
+    [data-theme="dark"] .bg-blue-50 { background: #1E3A5F; }
+    [data-theme="dark"] .border-l-4 { border-left-color: #0B5ED7; }
+    [data-theme="dark"] .bg-gray-100 { background: #0F172A; }
+    [data-theme="dark"] .border-gray-100 { border-color: #334155; }
+    [data-theme="dark"] .footer { border-top-color: #334155; color: #64748B; }
+    [data-theme="dark"] .hover\:bg-gray-200:hover { background: #1E293B; }
+    [data-theme="dark"] .bg-blue-100 { background: #1E3A5F; }
+    [data-theme="dark"] .bg-green-100 { background: #1A3A2A; }
+    [data-theme="dark"] .bg-purple-100 { background: #2A1A3A; }
+    [data-theme="dark"] .bg-orange-100 { background: #3D2E0A; }
+    [data-theme="dark"] .bg-teal-100 { background: #1A3A3A; }
+    [data-theme="dark"] .bg-indigo-100 { background: #1A1A3A; }
+    [data-theme="dark"] .bg-rose-100 { background: #3A1A2A; }
+    [data-theme="dark"] .bg-yellow-100 { background: #3D2E0A; }
+</style>
+
+<!-- ================================================================ -->
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
     // ================================================================
-    // WEEKLY VISITS CHART
+    // CHART - Weekly Visits
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var ctx = document.getElementById('visitsChart')?.getContext('2d');
         if (ctx && typeof Chart !== 'undefined') {
-            var labels = <?= json_encode($weekly_labels) ?>;
-            var values = <?= json_encode($weekly_values) ?>;
             var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            var textColor = isDark ? '#94A3B8' : '#64748B';
             var gridColor = isDark ? '#334155' : '#E2E8F0';
+            var textColor = isDark ? '#94A3B8' : '#64748B';
+            
+            var labels = <?= json_encode($chart_labels) ?>;
+            var values = <?= json_encode($chart_values) ?>;
             
             new Chart(ctx, {
                 type: 'bar',
@@ -557,17 +763,26 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         data: values,
                         backgroundColor: '#0B5ED7',
                         borderColor: '#0A4CA8',
-                        borderWidth: 1,
+                        borderWidth: 2,
                         borderRadius: 6,
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
+                    plugins: {
+                        legend: { display: false },
+                    },
                     scales: {
-                        y: { beginAtZero: true, ticks: { stepSize: 1, color: textColor }, grid: { color: gridColor } },
-                        x: { grid: { display: false }, ticks: { color: textColor } }
+                        y: {
+                            beginAtZero: true,
+                            ticks: { stepSize: 1, color: textColor },
+                            grid: { color: gridColor }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: textColor }
+                        }
                     }
                 }
             });
@@ -575,21 +790,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     });
 
     // ================================================================
-    // UPDATE SIDEBAR BADGES
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        if (typeof updateSidebarBadges === 'function') {
-            updateSidebarBadges(
-                <?= $doctor_stats['total_patients'] ?>,
-                <?= $doctor_stats['pending_lab_tests'] ?>,
-                <?= $doctor_stats['pending_referrals'] ?>,
-                <?= $doctor_stats['today_appointments'] ?>
-            );
-        }
-    });
-
-    // ================================================================
-    // TOAST FUNCTION
+    // SHOW TOAST
     // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
@@ -604,14 +805,35 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
             setTimeout(function() { toast.style.display = 'none'; }, 400);
-        }, 3500);
+        }, 5000);
     }
 
-    console.log('%c👨‍⚕️ Braick - Doctor Dashboard', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Doctor: <?= htmlspecialchars($doctor_name) ?> (ID: <?= $doctor_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c🏥 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
-    console.log('%c📊 Total Patients: <?= number_format($doctor_stats['total_patients']) ?>', 'font-size:13px; color:#6EA8FE;');
-    console.log('%c✅ Using REAL doctor data from database', 'font-size:13px; color:#059669;');
+    // ================================================================
+    // NOTIFICATIONS
+    // ================================================================
+    <?php if ($pending_visits > 0): ?>
+    setTimeout(function() {
+        showToast('👋 Patients Waiting', 
+            'You have <?= $pending_visits ?> patient(s) waiting for consultation', 
+            'info'
+        );
+    }, 1000);
+    <?php endif; ?>
+
+    <?php if ($new_patients_count > 0): ?>
+    setTimeout(function() {
+        showToast('🆕 New Patient Assigned', 
+            '<?= $new_patients_count ?> new patient(s) have been assigned to you', 
+            'success'
+        );
+    }, 2000);
+    <?php endif; ?>
+
+    console.log('%c👨‍⚕️ Doctor Dashboard - <?= htmlspecialchars($doctor_name) ?>', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Total Patients: <?= number_format($total_patients) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c⏳ Pending: <?= number_format($pending_visits) ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Completed: <?= number_format($completed_visits) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c📅 Today: <?= number_format($today_visits) ?> visits', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>
