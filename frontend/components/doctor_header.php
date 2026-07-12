@@ -1,12 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/components/doctor_header.php
-// DOCTOR - SHARED HEADER (COMPLETE FIXED)
+// DOCTOR - SHARED HEADER (WITH PROFILE PICTURE SUPPORT)
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION DATA
+// SESSION DATA - Ensure doctor session exists
 // ================================================================
 if (!isset($_SESSION['doctor_id'])) {
     $_SESSION['doctor_id'] = 1;
@@ -14,6 +14,33 @@ if (!isset($_SESSION['doctor_id'])) {
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
     $_SESSION['specialty'] = 'Cardiology';
+    $_SESSION['profile_pic'] = '';
+}
+
+// ================================================================
+// GET DOCTOR PROFILE PICTURE
+// ================================================================
+$doctor_id = $_SESSION['doctor_id'] ?? 1;
+$full_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$specialty = $_SESSION['specialty'] ?? 'General Practitioner';
+
+// Build avatar URL
+$avatar_url = '';
+$show_initial = true;
+$initial = strtoupper(substr($full_name, 0, 1));
+
+// Check if profile picture exists in session and file system
+if (!empty($profile_pic)) {
+    $file_path = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
+    if (file_exists($file_path)) {
+        $avatar_url = '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
+        $show_initial = false;
+    } else {
+        // File doesn't exist, clear session
+        $_SESSION['profile_pic'] = '';
+        $profile_pic = '';
+    }
 }
 
 // ================================================================
@@ -189,19 +216,71 @@ $is_dark = $dark_mode === 'true';
             white-space: nowrap;
         }
         
-        .top-nav .avatar {
+        /* ================================================================
+           AVATAR - PROFILE PICTURE SUPPORT
+           ================================================================ */
+        .avatar-link {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        
+        .avatar-link:hover {
+            transform: scale(1.05);
+        }
+        
+        .avatar-link .avatar {
             width: 40px;
             height: 40px;
             border-radius: 50%;
             object-fit: cover;
             border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
+            transition: all 0.3s ease;
+            background: var(--bg-card);
         }
         
-        .top-nav .avatar:hover {
+        .avatar-link:hover .avatar {
+            border-color: var(--primary);
+        }
+        
+        .avatar-link .avatar-placeholder {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            font-weight: 700;
+            color: white;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+        
+        .avatar-link:hover .avatar-placeholder {
             border-color: var(--primary);
             transform: scale(1.05);
+        }
+        
+        /* Online status indicator on avatar */
+        .avatar-link .status-ring {
+            position: absolute;
+            bottom: -2px;
+            right: -2px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            background: var(--green);
+        }
+        
+        .avatar-link .status-ring.offline {
+            background: var(--text-muted);
         }
         
         .top-nav .icon-btn {
@@ -274,6 +353,7 @@ $is_dark = $dark_mode === 'true';
         
         .status-toggle .status-dot.offline {
             background: var(--text-muted);
+            animation: none;
         }
         
         .dark-toggle-btn {
@@ -806,6 +886,8 @@ $is_dark = $dark_mode === 'true';
             .dark-toggle-btn span { display: none; }
             .main-content { padding: 10px; }
             .page-header .page-title { font-size: 1.2rem; }
+            .avatar-link .avatar { width: 32px; height: 32px; }
+            .avatar-link .avatar-placeholder { width: 32px; height: 32px; font-size: 0.8rem; }
         }
         
         @keyframes fadeInUp {
@@ -831,6 +913,17 @@ $is_dark = $dark_mode === 'true';
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        
+        /* ================================================================
+           GET USER COLOR FUNCTION (for avatar placeholder)
+           ================================================================ */
+        .avatar-color-1 { background: #0B5ED7; }
+        .avatar-color-2 { background: #059669; }
+        .avatar-color-3 { background: #7C3AED; }
+        .avatar-color-4 { background: #DC2626; }
+        .avatar-color-5 { background: #D97706; }
+        .avatar-color-6 { background: #0D9488; }
+        .avatar-color-7 { background: #DB2777; }
     </style>
 </head>
 <body>
@@ -876,29 +969,36 @@ $is_dark = $dark_mode === 'true';
             <span class="notif-dot" id="notifDot" style="display: none;"></span>
         </button>
         
-        <a href="profile.php">
-            <img src="<?= $logo_path ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+        <!-- ================================================================
+             USER AVATAR - Shows profile picture or initial
+             ================================================================ -->
+        <a href="profile.php" class="avatar-link" title="Profile">
+            <?php if ($show_initial): ?>
+                <div class="avatar-placeholder avatar-color-<?= (abs(crc32($full_name)) % 7) + 1 ?>">
+                    <?= $initial ?>
+                </div>
+            <?php else: ?>
+                <img src="<?= $avatar_url ?>" alt="Profile" class="avatar">
+            <?php endif; ?>
+            <span class="status-ring" id="avatarStatusRing"></span>
         </a>
         
     </div>
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - DARK MODE FIXED -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
     // DARK MODE TOGGLE - FULLY WORKING
     // ================================================================
     (function() {
-        // Get elements
         var darkModeToggle = document.getElementById('darkModeToggle');
         var darkIcon = document.getElementById('darkIcon');
         var darkText = document.getElementById('darkText');
         var htmlElement = document.documentElement;
         
-        // Cookie functions
         function getCookie(name) {
             var value = "; " + document.cookie;
             var parts = value.split("; " + name + "=");
@@ -918,58 +1018,65 @@ $is_dark = $dark_mode === 'true';
             document.cookie = name + "=" + value + expires + "; path=/";
         }
         
-        // Load saved dark mode
         var savedDarkMode = getCookie('dark_mode');
-        console.log('🔄 Saved Dark Mode:', savedDarkMode);
         
         if (savedDarkMode === 'true') {
             htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) {
-                darkIcon.className = 'fas fa-sun';
-            }
-            if (darkText) {
-                darkText.textContent = 'Light';
-            }
-            console.log('🌙 Dark mode: ON');
-        } else {
-            console.log('☀️ Dark mode: OFF');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
         }
         
-        // Toggle dark mode on button click
         if (darkModeToggle) {
             darkModeToggle.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 
                 var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-                console.log('🔄 Toggle clicked. Current state:', isDark ? 'Dark' : 'Light');
                 
                 if (isDark) {
-                    // Switch to Light
                     htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) {
-                        darkIcon.className = 'fas fa-moon';
-                    }
-                    if (darkText) {
-                        darkText.textContent = 'Dark';
-                    }
+                    if (darkIcon) darkIcon.className = 'fas fa-moon';
+                    if (darkText) darkText.textContent = 'Dark';
                     setCookie('dark_mode', 'false', 365);
-                    console.log('☀️ Switched to Light mode');
                 } else {
-                    // Switch to Dark
                     htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) {
-                        darkIcon.className = 'fas fa-sun';
-                    }
-                    if (darkText) {
-                        darkText.textContent = 'Light';
-                    }
+                    if (darkIcon) darkIcon.className = 'fas fa-sun';
+                    if (darkText) darkText.textContent = 'Light';
                     setCookie('dark_mode', 'true', 365);
-                    console.log('🌙 Switched to Dark mode');
                 }
             });
-        } else {
-            console.error('❌ Dark mode toggle button not found!');
+        }
+    })();
+
+    // ================================================================
+    // ONLINE STATUS TOGGLE
+    // ================================================================
+    (function() {
+        var statusToggle = document.getElementById('statusToggle');
+        var statusDot = document.getElementById('statusDot');
+        var statusText = document.getElementById('statusText');
+        var avatarStatusRing = document.getElementById('avatarStatusRing');
+        
+        if (statusToggle) {
+            statusToggle.addEventListener('click', function() {
+                var isOnline = statusDot.classList.contains('online');
+                
+                if (isOnline) {
+                    statusDot.classList.remove('online');
+                    statusDot.classList.add('offline');
+                    statusText.textContent = 'Offline';
+                    if (avatarStatusRing) {
+                        avatarStatusRing.classList.add('offline');
+                    }
+                } else {
+                    statusDot.classList.remove('offline');
+                    statusDot.classList.add('online');
+                    statusText.textContent = 'Online';
+                    if (avatarStatusRing) {
+                        avatarStatusRing.classList.remove('offline');
+                    }
+                }
+            });
         }
     })();
 
@@ -1050,30 +1157,6 @@ $is_dark = $dark_mode === 'true';
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // ONLINE STATUS TOGGLE
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var statusToggle = document.getElementById('statusToggle');
-        var statusDot = document.getElementById('statusDot');
-        var statusText = document.getElementById('statusText');
-        
-        if (statusToggle) {
-            statusToggle.addEventListener('click', function() {
-                var isOnline = statusDot.classList.contains('online');
-                if (isOnline) {
-                    statusDot.classList.remove('online');
-                    statusDot.classList.add('offline');
-                    statusText.textContent = 'Offline';
-                } else {
-                    statusDot.classList.remove('offline');
-                    statusDot.classList.add('online');
-                    statusText.textContent = 'Online';
-                }
-            });
-        }
-    });
-
-    // ================================================================
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
@@ -1101,10 +1184,10 @@ $is_dark = $dark_mode === 'true';
         }
     });
 
-    console.log('%c👨‍⚕️ Braick - Doctor Header (COMPLETE FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Doctor Header (With Profile Picture)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:12px; color:#059669;');
     console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
     console.log('%c🔍 Ctrl+K to search | Ctrl+D to toggle dark mode', 'font-size:12px; color:#64748B;');
-    console.log('%c✅ All CSS moved to header - Dashboard styles fixed', 'font-size:12px; color:#059669;');
 </script>
 
 </body>
