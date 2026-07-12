@@ -1,12 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/components/doctor_header.php
-// DOCTOR - SHARED HEADER (WITH PROFILE PICTURE SUPPORT)
+// DOCTOR - SHARED HEADER (PROFILE PICTURE SUPPORT)
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION DATA - Ensure doctor session exists
+// SESSION DATA
 // ================================================================
 if (!isset($_SESSION['doctor_id'])) {
     $_SESSION['doctor_id'] = 1;
@@ -14,30 +14,27 @@ if (!isset($_SESSION['doctor_id'])) {
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
     $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+    $_SESSION['profile_pic'] = ''; // Profile picture filename
 }
 
 // ================================================================
-// GET DOCTOR PROFILE PICTURE
+// GET PROFILE PICTURE
 // ================================================================
 $doctor_id = $_SESSION['doctor_id'] ?? 1;
 $full_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-$specialty = $_SESSION['specialty'] ?? 'General Practitioner';
 
 // Build avatar URL
 $avatar_url = '';
 $show_initial = true;
 $initial = strtoupper(substr($full_name, 0, 1));
 
-// Check if profile picture exists in session and file system
 if (!empty($profile_pic)) {
     $file_path = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
     if (file_exists($file_path)) {
         $avatar_url = '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
         $show_initial = false;
     } else {
-        // File doesn't exist, clear session
         $_SESSION['profile_pic'] = '';
         $profile_pic = '';
     }
@@ -172,6 +169,7 @@ $is_dark = $dark_mode === 'true';
             transition: all 0.3s;
             flex: 1;
             max-width: 500px;
+            position: relative;
         }
         
         .top-nav .search-wrapper:focus-within {
@@ -209,6 +207,137 @@ $is_dark = $dark_mode === 'true';
             background: var(--primary-dark);
         }
         
+        /* ================================================================
+           SEARCH DROPDOWN
+           ================================================================ */
+        .search-dropdown {
+            display: none;
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            right: 0;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 2px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 100;
+            padding: 8px 0;
+        }
+        
+        .search-dropdown.active {
+            display: block;
+        }
+        
+        .search-dropdown::-webkit-scrollbar {
+            width: 4px;
+        }
+        .search-dropdown::-webkit-scrollbar-track {
+            background: var(--bg-body);
+            border-radius: 4px;
+        }
+        .search-dropdown::-webkit-scrollbar-thumb {
+            background: var(--primary);
+            border-radius: 4px;
+        }
+        
+        .search-dropdown .search-section {
+            padding: 6px 14px;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 4px;
+        }
+        
+        .search-dropdown .search-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            color: var(--text-primary);
+            border-radius: 6px;
+            margin: 0 4px;
+        }
+        
+        .search-dropdown .search-item:hover {
+            background: var(--primary-bg);
+        }
+        
+        [data-theme="dark"] .search-dropdown .search-item:hover {
+            background: #1E3A5F;
+        }
+        
+        .search-dropdown .search-item .item-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            flex-shrink: 0;
+            color: white;
+        }
+        
+        .search-dropdown .search-item .item-icon.blue { background: var(--primary); }
+        .search-dropdown .search-item .item-icon.green { background: var(--green); }
+        .search-dropdown .search-item .item-icon.purple { background: var(--purple); }
+        .search-dropdown .search-item .item-icon.orange { background: var(--orange); }
+        
+        .search-dropdown .search-item .item-info {
+            flex: 1;
+        }
+        
+        .search-dropdown .search-item .item-info .item-title {
+            font-weight: 500;
+            font-size: 0.85rem;
+        }
+        
+        .search-dropdown .search-item .item-info .item-sub {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .search-dropdown .search-item .item-badge {
+            font-size: 0.6rem;
+            padding: 2px 10px;
+            border-radius: 12px;
+            background: var(--bg-body);
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .search-dropdown .search-item .highlight {
+            background: #FEF08A;
+            padding: 0 2px;
+            border-radius: 2px;
+            font-weight: 600;
+        }
+        
+        [data-theme="dark"] .search-dropdown .search-item .highlight {
+            background: #F59E0B;
+            color: #0F172A;
+        }
+        
+        .search-dropdown .search-empty {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        
+        .search-dropdown .search-empty i {
+            font-size: 2rem;
+            display: block;
+            margin-bottom: 8px;
+        }
+        
         .top-nav .datetime {
             font-size: 0.78rem;
             color: var(--text-secondary);
@@ -217,7 +346,7 @@ $is_dark = $dark_mode === 'true';
         }
         
         /* ================================================================
-           AVATAR - PROFILE PICTURE SUPPORT
+           AVATAR - PROFILE PICTURE SUPPORT (NEW)
            ================================================================ */
         .avatar-link {
             display: flex;
@@ -227,13 +356,14 @@ $is_dark = $dark_mode === 'true';
             cursor: pointer;
             transition: all 0.3s ease;
             position: relative;
+            flex-shrink: 0;
         }
         
         .avatar-link:hover {
             transform: scale(1.05);
         }
         
-        .avatar-link .avatar {
+        .avatar-link .avatar-img {
             width: 40px;
             height: 40px;
             border-radius: 50%;
@@ -243,7 +373,7 @@ $is_dark = $dark_mode === 'true';
             background: var(--bg-card);
         }
         
-        .avatar-link:hover .avatar {
+        .avatar-link:hover .avatar-img {
             border-color: var(--primary);
         }
         
@@ -260,6 +390,7 @@ $is_dark = $dark_mode === 'true';
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
             text-transform: uppercase;
+            flex-shrink: 0;
         }
         
         .avatar-link:hover .avatar-placeholder {
@@ -267,7 +398,6 @@ $is_dark = $dark_mode === 'true';
             transform: scale(1.05);
         }
         
-        /* Online status indicator on avatar */
         .avatar-link .status-ring {
             position: absolute;
             bottom: -2px;
@@ -282,6 +412,15 @@ $is_dark = $dark_mode === 'true';
         .avatar-link .status-ring.offline {
             background: var(--text-muted);
         }
+        
+        /* Avatar Colors */
+        .avatar-color-1 { background: #0B5ED7; }
+        .avatar-color-2 { background: #059669; }
+        .avatar-color-3 { background: #7C3AED; }
+        .avatar-color-4 { background: #DC2626; }
+        .avatar-color-5 { background: #D97706; }
+        .avatar-color-6 { background: #0D9488; }
+        .avatar-color-7 { background: #DB2777; }
         
         .top-nav .icon-btn {
             width: 38px;
@@ -353,7 +492,6 @@ $is_dark = $dark_mode === 'true';
         
         .status-toggle .status-dot.offline {
             background: var(--text-muted);
-            animation: none;
         }
         
         .dark-toggle-btn {
@@ -863,6 +1001,7 @@ $is_dark = $dark_mode === 'true';
             .sidebar-toggle-btn { display: block; }
             .top-nav .search-wrapper { max-width: 300px; }
             .main-content { margin-left: 0; }
+            .search-dropdown { max-height: 300px; }
         }
         
         @media (max-width: 768px) {
@@ -875,6 +1014,7 @@ $is_dark = $dark_mode === 'true';
             .patient-item { flex-wrap: wrap; }
             .chart-container { height: 160px !important; }
             .stat-card .stat-number { font-size: 1.4rem; }
+            .search-dropdown { max-height: 250px; }
         }
         
         @media (max-width: 640px) {
@@ -886,7 +1026,8 @@ $is_dark = $dark_mode === 'true';
             .dark-toggle-btn span { display: none; }
             .main-content { padding: 10px; }
             .page-header .page-title { font-size: 1.2rem; }
-            .avatar-link .avatar { width: 32px; height: 32px; }
+            .search-dropdown { max-height: 200px; }
+            .avatar-link .avatar-img { width: 32px; height: 32px; }
             .avatar-link .avatar-placeholder { width: 32px; height: 32px; font-size: 0.8rem; }
         }
         
@@ -913,17 +1054,6 @@ $is_dark = $dark_mode === 'true';
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
-        
-        /* ================================================================
-           GET USER COLOR FUNCTION (for avatar placeholder)
-           ================================================================ */
-        .avatar-color-1 { background: #0B5ED7; }
-        .avatar-color-2 { background: #059669; }
-        .avatar-color-3 { background: #7C3AED; }
-        .avatar-color-4 { background: #DC2626; }
-        .avatar-color-5 { background: #D97706; }
-        .avatar-color-6 { background: #0D9488; }
-        .avatar-color-7 { background: #DB2777; }
     </style>
 </head>
 <body>
@@ -939,12 +1069,18 @@ $is_dark = $dark_mode === 'true';
             <i class="fas fa-bars"></i>
         </button>
         
-        <div class="search-wrapper">
+        <!-- Search Bar -->
+        <div class="search-wrapper" id="searchWrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
             <input type="text" id="searchInput" placeholder="Search patients, doctors..." autocomplete="off">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> <span>Search</span>
             </button>
+            
+            <!-- Search Results Dropdown -->
+            <div class="search-dropdown" id="searchDropdown">
+                <!-- Results populated by JavaScript -->
+            </div>
         </div>
     </div>
     
@@ -970,7 +1106,7 @@ $is_dark = $dark_mode === 'true';
         </button>
         
         <!-- ================================================================
-             USER AVATAR - Shows profile picture or initial
+             PROFILE AVATAR - Shows profile picture or initial
              ================================================================ -->
         <a href="profile.php" class="avatar-link" title="Profile">
             <?php if ($show_initial): ?>
@@ -978,7 +1114,7 @@ $is_dark = $dark_mode === 'true';
                     <?= $initial ?>
                 </div>
             <?php else: ?>
-                <img src="<?= $avatar_url ?>" alt="Profile" class="avatar">
+                <img src="<?= $avatar_url ?>" alt="Profile" class="avatar-img">
             <?php endif; ?>
             <span class="status-ring" id="avatarStatusRing"></span>
         </a>
@@ -987,207 +1123,426 @@ $is_dark = $dark_mode === 'true';
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - SEARCH + DARK MODE + STATUS -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE TOGGLE - FULLY WORKING
-    // ================================================================
-    (function() {
-        var darkModeToggle = document.getElementById('darkModeToggle');
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var htmlElement = document.documentElement;
-        
-        function getCookie(name) {
-            var value = "; " + document.cookie;
-            var parts = value.split("; " + name + "=");
-            if (parts.length === 2) {
-                return parts.pop().split(";").shift();
-            }
-            return null;
-        }
-        
-        function setCookie(name, value, days) {
-            var expires = "";
-            if (days) {
-                var date = new Date();
-                date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-                expires = "; expires=" + date.toUTCString();
-            }
-            document.cookie = name + "=" + value + expires + "; path=/";
-        }
-        
-        var savedDarkMode = getCookie('dark_mode');
-        
-        if (savedDarkMode === 'true') {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
-        }
-        
-        if (darkModeToggle) {
-            darkModeToggle.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                
-                var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-                
-                if (isDark) {
-                    htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) darkIcon.className = 'fas fa-moon';
-                    if (darkText) darkText.textContent = 'Dark';
-                    setCookie('dark_mode', 'false', 365);
-                } else {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) darkIcon.className = 'fas fa-sun';
-                    if (darkText) darkText.textContent = 'Light';
-                    setCookie('dark_mode', 'true', 365);
-                }
-            });
-        }
-    })();
+// ================================================================
+// GLOBAL SEARCH - COMPLETE WITH DROPDOWN
+// ================================================================
+(function() {
+    var searchInput = document.getElementById('searchInput');
+    var searchBtn = document.getElementById('searchBtn');
+    var searchDropdown = document.getElementById('searchDropdown');
+    var searchWrapper = document.getElementById('searchWrapper');
+    var searchTimeout = null;
 
-    // ================================================================
-    // ONLINE STATUS TOGGLE
-    // ================================================================
-    (function() {
-        var statusToggle = document.getElementById('statusToggle');
-        var statusDot = document.getElementById('statusDot');
-        var statusText = document.getElementById('statusText');
-        var avatarStatusRing = document.getElementById('avatarStatusRing');
-        
-        if (statusToggle) {
-            statusToggle.addEventListener('click', function() {
-                var isOnline = statusDot.classList.contains('online');
-                
-                if (isOnline) {
-                    statusDot.classList.remove('online');
-                    statusDot.classList.add('offline');
-                    statusText.textContent = 'Offline';
-                    if (avatarStatusRing) {
-                        avatarStatusRing.classList.add('offline');
-                    }
-                } else {
-                    statusDot.classList.remove('offline');
-                    statusDot.classList.add('online');
-                    statusText.textContent = 'Online';
-                    if (avatarStatusRing) {
-                        avatarStatusRing.classList.remove('offline');
-                    }
-                }
-            });
-        }
-    })();
-
-    // ================================================================
-    // SEARCH FUNCTIONALITY
-    // ================================================================
-    (function() {
-        var searchBtn = document.getElementById('searchBtn');
-        var searchInput = document.getElementById('searchInput');
-        
-        function performSearch() {
-            var query = searchInput.value.trim();
-            if (query.length > 0) {
-                window.location.href = '../search.php?q=' + encodeURIComponent(query) + '&module=doctor';
-            } else {
-                searchInput.focus();
-                searchInput.style.borderColor = '#EF4444';
-                setTimeout(function() {
-                    searchInput.style.borderColor = '';
-                }, 2000);
-            }
-        }
-        
-        if (searchBtn) {
-            searchBtn.addEventListener('click', performSearch);
-        }
-        if (searchInput) {
-            searchInput.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    performSearch();
-                }
-            });
-        }
-    })();
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var sidebar = document.getElementById('sidebar');
-        var sidebarToggle = document.getElementById('sidebarToggle');
-        
-        if (sidebarToggle && sidebar) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('open');
-            });
-        }
-        
-        document.addEventListener('click', function(e) {
-            if (window.innerWidth <= 1024) {
-                if (sidebar && sidebarToggle) {
-                    if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                        sidebar.classList.remove('open');
-                    }
-                }
-            }
-        });
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
+    function highlightText(text, query) {
+        if (!query || query.trim() === '') return text;
+        var q = query.trim();
+        var regex = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+        return text.replace(regex, '<span class="highlight">$1</span>');
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    function getSearchData(query) {
+        var q = query.toLowerCase().trim();
+        if (q.length === 0) return { patients: [], doctors: [], prescriptions: [], appointments: [] };
+        
+        var allData = {
+            patients: [
+                { id: 1, name: 'John Doe', phone: '0755 123 456', patient_id: 'P-2024-001', last_visit: '2024-01-15' },
+                { id: 2, name: 'Mary Jane', phone: '0755 234 567', patient_id: 'P-2024-002', last_visit: '2024-01-14' },
+                { id: 3, name: 'James Kijana', phone: '0755 345 678', patient_id: 'P-2024-003', last_visit: '2024-01-13' },
+                { id: 4, name: 'Sarah Mwamba', phone: '0755 456 789', patient_id: 'P-2024-004', last_visit: '2024-01-12' },
+                { id: 5, name: 'Peter Mushi', phone: '0755 567 890', patient_id: 'P-2024-005', last_visit: '2024-01-11' },
+            ],
+            doctors: [
+                { id: 1, name: 'Dr. Sarah Mwamba', specialty: 'Cardiology', status: 'online' },
+                { id: 2, name: 'Dr. James Kijana', specialty: 'Pediatrics', status: 'online' },
+                { id: 3, name: 'Dr. Mary Ngalula', specialty: 'Gynecology', status: 'offline' },
+                { id: 4, name: 'Dr. Peter Mushi', specialty: 'Orthopedics', status: 'online' },
+            ],
+            prescriptions: [
+                { id: 1, patient_name: 'John Doe', medication: 'Paracetamol 500mg', status: 'dispensed' },
+                { id: 2, patient_name: 'Mary Jane', medication: 'Amoxicillin 250mg', status: 'pending' },
+            ],
+            appointments: [
+                { id: 1, patient_name: 'John Doe', date: '2024-01-15 10:00', status: 'confirmed' },
+                { id: 2, patient_name: 'Mary Jane', date: '2024-01-15 11:30', status: 'scheduled' },
+            ]
+        };
+        
+        var results = { patients: [], doctors: [], prescriptions: [], appointments: [] };
+        
+        allData.patients.forEach(function(p) {
+            if (p.name.toLowerCase().includes(q) || p.patient_id.toLowerCase().includes(q) || p.phone.includes(q)) {
+                results.patients.push(p);
+            }
+        });
+        
+        allData.doctors.forEach(function(d) {
+            if (d.name.toLowerCase().includes(q) || d.specialty.toLowerCase().includes(q)) {
+                results.doctors.push(d);
+            }
+        });
+        
+        allData.prescriptions.forEach(function(p) {
+            if (p.patient_name.toLowerCase().includes(q) || p.medication.toLowerCase().includes(q)) {
+                results.prescriptions.push(p);
+            }
+        });
+        
+        allData.appointments.forEach(function(a) {
+            if (a.patient_name.toLowerCase().includes(q)) {
+                results.appointments.push(a);
+            }
+        });
+        
+        return results;
+    }
+
+    function renderResults(query) {
+        if (!query || query.trim().length === 0) {
+            searchDropdown.classList.remove('active');
+            return;
+        }
+        
+        var q = query.trim();
+        var data = getSearchData(q);
+        var total = data.patients.length + data.doctors.length + data.prescriptions.length + data.appointments.length;
+        
+        if (total === 0) {
+            searchDropdown.innerHTML = `
+                <div class="search-empty">
+                    <i class="fas fa-search"></i>
+                    <p>No results found for "<strong>${highlightText(q, q)}</strong>"</p>
+                    <p style="font-size:0.7rem;margin-top:4px;">Try searching with different keywords</p>
+                </div>
+            `;
+            searchDropdown.classList.add('active');
+            return;
+        }
+        
+        var html = '';
+        var hasResults = false;
+        
+        // PATIENTS
+        if (data.patients.length > 0) {
+            hasResults = true;
+            html += `<div class="search-section"><i class="fas fa-user-injured mr-1"></i> Patients (${data.patients.length})</div>`;
+            data.patients.forEach(function(p) {
+                html += `
+                    <a href="patient_details.php?id=${p.id}&search=${encodeURIComponent(q)}" class="search-item">
+                        <div class="item-icon blue"><i class="fas fa-user"></i></div>
+                        <div class="item-info">
+                            <div class="item-title">${highlightText(p.name, q)}</div>
+                            <div class="item-sub">${highlightText(p.patient_id, q)} • ${p.phone}</div>
+                        </div>
+                        <span class="item-badge">Patient</span>
+                    </a>
+                `;
+            });
+        }
+        
+        // DOCTORS
+        if (data.doctors.length > 0) {
+            hasResults = true;
+            html += `<div class="search-section"><i class="fas fa-user-md mr-1"></i> Doctors (${data.doctors.length})</div>`;
+            data.doctors.forEach(function(d) {
+                html += `
+                    <a href="profile.php?id=${d.id}&search=${encodeURIComponent(q)}" class="search-item">
+                        <div class="item-icon green"><i class="fas fa-user-md"></i></div>
+                        <div class="item-info">
+                            <div class="item-title">${highlightText(d.name, q)}</div>
+                            <div class="item-sub">${highlightText(d.specialty, q)} • ${d.status === 'online' ? '🟢 Online' : '🔴 Offline'}</div>
+                        </div>
+                        <span class="item-badge">Doctor</span>
+                    </a>
+                `;
+            });
+        }
+        
+        // PRESCRIPTIONS
+        if (data.prescriptions.length > 0) {
+            hasResults = true;
+            html += `<div class="search-section"><i class="fas fa-prescription mr-1"></i> Prescriptions (${data.prescriptions.length})</div>`;
+            data.prescriptions.forEach(function(p) {
+                html += `
+                    <a href="view_prescriptions.php?search=${encodeURIComponent(q)}" class="search-item">
+                        <div class="item-icon purple"><i class="fas fa-prescription"></i></div>
+                        <div class="item-info">
+                            <div class="item-title">${highlightText(p.patient_name, q)}</div>
+                            <div class="item-sub">${highlightText(p.medication, q)} • ${p.status}</div>
+                        </div>
+                        <span class="item-badge">Prescription</span>
+                    </a>
+                `;
+            });
+        }
+        
+        // APPOINTMENTS
+        if (data.appointments.length > 0) {
+            hasResults = true;
+            html += `<div class="search-section"><i class="fas fa-calendar-check mr-1"></i> Appointments (${data.appointments.length})</div>`;
+            data.appointments.forEach(function(a) {
+                html += `
+                    <a href="appointments.php?search=${encodeURIComponent(q)}" class="search-item">
+                        <div class="item-icon orange"><i class="fas fa-calendar-check"></i></div>
+                        <div class="item-info">
+                            <div class="item-title">${highlightText(a.patient_name, q)}</div>
+                            <div class="item-sub">${a.date} • ${a.status}</div>
+                        </div>
+                        <span class="item-badge">Appointment</span>
+                    </a>
+                `;
+            });
+        }
+        
+        // VIEW ALL
+        if (hasResults) {
+            html += `
+                <div style="padding:8px 14px;border-top:1px solid var(--border-color);margin-top:4px;">
+                    <a href="search.php?q=${encodeURIComponent(q)}&module=doctor" 
+                       style="display:flex;align-items:center;justify-content:center;gap:8px;padding:8px;border-radius:8px;background:var(--primary);color:white;text-decoration:none;font-weight:600;font-size:0.8rem;transition:all 0.3s;">
+                        <i class="fas fa-arrow-right"></i> View All Results (${total})
+                    </a>
+                </div>
+            `;
+        }
+        
+        searchDropdown.innerHTML = html;
+        searchDropdown.classList.add('active');
+    }
+
+    function handleSearch() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(function() {
+            renderResults(searchInput.value);
+        }, 200);
+    }
+    
+    searchInput.addEventListener('input', handleSearch);
+    
+    searchInput.addEventListener('focus', function() {
+        if (this.value.trim().length > 0) {
+            renderResults(this.value);
+        }
+    });
+    
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
             e.preventDefault();
-            var searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.focus();
-                searchInput.select();
+            var query = this.value.trim();
+            if (query.length > 0) {
+                window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&module=doctor';
             }
         }
         if (e.key === 'Escape') {
-            var searchInput = document.getElementById('searchInput');
-            if (searchInput && document.activeElement === searchInput) {
-                searchInput.value = '';
-                searchInput.blur();
-            }
+            searchDropdown.classList.remove('active');
+            this.blur();
         }
-        if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+    });
+    
+    searchBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&module=doctor';
+        }
+    });
+    
+    document.addEventListener('click', function(e) {
+        if (!searchWrapper.contains(e.target)) {
+            searchDropdown.classList.remove('active');
+        }
+    });
+    
+    document.addEventListener('scroll', function() {
+        searchDropdown.classList.remove('active');
+    });
+
+    console.log('%c🔍 Search: ACTIVE with dropdown', 'font-size:14px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Type to search patients, doctors, prescriptions, appointments', 'font-size:12px; color:#64748B;');
+
+})();
+
+// ================================================================
+// DARK MODE TOGGLE
+// ================================================================
+(function() {
+    var darkModeToggle = document.getElementById('darkModeToggle');
+    var darkIcon = document.getElementById('darkIcon');
+    var darkText = document.getElementById('darkText');
+    var htmlElement = document.documentElement;
+    
+    function getCookie(name) {
+        var value = "; " + document.cookie;
+        var parts = value.split("; " + name + "=");
+        if (parts.length === 2) {
+            return parts.pop().split(";").shift();
+        }
+        return null;
+    }
+    
+    function setCookie(name, value, days) {
+        var expires = "";
+        if (days) {
+            var date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            expires = "; expires=" + date.toUTCString();
+        }
+        document.cookie = name + "=" + value + expires + "; path=/";
+    }
+    
+    var savedDarkMode = getCookie('dark_mode');
+    
+    if (savedDarkMode === 'true') {
+        htmlElement.setAttribute('data-theme', 'dark');
+        if (darkIcon) {
+            darkIcon.className = 'fas fa-sun';
+        }
+        if (darkText) {
+            darkText.textContent = 'Light';
+        }
+    }
+    
+    if (darkModeToggle) {
+        darkModeToggle.addEventListener('click', function(e) {
             e.preventDefault();
-            var darkBtn = document.getElementById('darkModeToggle');
-            if (darkBtn) {
-                darkBtn.click();
+            e.stopPropagation();
+            
+            var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+            
+            if (isDark) {
+                htmlElement.removeAttribute('data-theme');
+                if (darkIcon) {
+                    darkIcon.className = 'fas fa-moon';
+                }
+                if (darkText) {
+                    darkText.textContent = 'Dark';
+                }
+                setCookie('dark_mode', 'false', 365);
+            } else {
+                htmlElement.setAttribute('data-theme', 'dark');
+                if (darkIcon) {
+                    darkIcon.className = 'fas fa-sun';
+                }
+                if (darkText) {
+                    darkText.textContent = 'Light';
+                }
+                setCookie('dark_mode', 'true', 365);
+            }
+        });
+    }
+})();
+
+// ================================================================
+// SIDEBAR TOGGLE
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    var sidebar = document.getElementById('sidebar');
+    var sidebarToggle = document.getElementById('sidebarToggle');
+    
+    if (sidebarToggle && sidebar) {
+        sidebarToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+        });
+    }
+    
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (sidebar && sidebarToggle) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
             }
         }
     });
+});
 
-    console.log('%c👨‍⚕️ Braick - Doctor Header (With Profile Picture)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
-    console.log('%c🔍 Ctrl+K to search | Ctrl+D to toggle dark mode', 'font-size:12px; color:#64748B;');
+// ================================================================
+// DATE & TIME
+// ================================================================
+function updateDateTime() {
+    var now = new Date();
+    var dateStr = now.toLocaleDateString('en-US', {
+        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+    });
+    var timeStr = now.toLocaleTimeString('en-US', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+    });
+    var el = document.getElementById('currentDateTime');
+    if (el) {
+        el.textContent = dateStr + ' • ' + timeStr;
+    }
+}
+updateDateTime();
+setInterval(updateDateTime, 1000);
+
+// ================================================================
+// ONLINE STATUS TOGGLE
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    var statusToggle = document.getElementById('statusToggle');
+    var statusDot = document.getElementById('statusDot');
+    var statusText = document.getElementById('statusText');
+    var avatarStatusRing = document.getElementById('avatarStatusRing');
+    
+    if (statusToggle) {
+        statusToggle.addEventListener('click', function() {
+            var isOnline = statusDot.classList.contains('online');
+            if (isOnline) {
+                statusDot.classList.remove('online');
+                statusDot.classList.add('offline');
+                statusText.textContent = 'Offline';
+                if (avatarStatusRing) {
+                    avatarStatusRing.classList.add('offline');
+                }
+            } else {
+                statusDot.classList.remove('offline');
+                statusDot.classList.add('online');
+                statusText.textContent = 'Online';
+                if (avatarStatusRing) {
+                    avatarStatusRing.classList.remove('offline');
+                }
+            }
+        });
+    }
+});
+
+// ================================================================
+// KEYBOARD SHORTCUTS
+// ================================================================
+document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        var searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+            searchInput.focus();
+            searchInput.select();
+        }
+    }
+    if (e.key === 'Escape') {
+        var searchInput = document.getElementById('searchInput');
+        if (searchInput && document.activeElement === searchInput) {
+            searchInput.value = '';
+            searchInput.blur();
+            var dropdown = document.getElementById('searchDropdown');
+            if (dropdown) dropdown.classList.remove('active');
+        }
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+        e.preventDefault();
+        var darkBtn = document.getElementById('darkModeToggle');
+        if (darkBtn) {
+            darkBtn.click();
+        }
+    }
+});
+
+console.log('%c👨‍⚕️ Braick - Doctor Header (PROFILE PICTURE SUPPORT)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:12px; color:#059669;');
+console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
+console.log('%c🔍 Ctrl+K to search | Ctrl+D to toggle dark mode', 'font-size:12px; color:#64748B;');
 </script>
 
 </body>
