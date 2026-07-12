@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/lab_results.php
-// DOCTOR - LAB RESULTS (FIXED COUNTS)
+// DOCTOR - LAB RESULTS (EDIT BUTTON REMOVED ONLY)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -251,7 +251,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <th>Test Date</th>
                         <th>Technician</th>
                         <th>Status</th>
-                        <th style="border-radius: 0 8px 0 0; text-align: center;">Actions</th>
+                        <th style="border-radius: 0 8px 0 0; text-align: center;">Action</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -276,14 +276,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 </td>
                                 <td>
                                     <div class="action-buttons">
+                                        <!-- VIEW ONLY - Edit Button REMOVED -->
                                         <a href="view_test.php?id=<?= $test['id'] ?>" class="btn btn-view" title="View Results">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <?php if (($test['status'] ?? 'pending') !== 'completed' && ($test['status'] ?? 'pending') !== 'cancelled'): ?>
-                                            <a href="edit_test.php?id=<?= $test['id'] ?>" class="btn btn-edit" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                        <?php endif; ?>
+                                        <!-- EDIT BUTTON REMOVED - Doctor cannot edit -->
                                     </div>
                                 </td>
                             </tr>
@@ -367,7 +364,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     .data-table tbody tr:nth-child(even) { background: var(--primary-bg); }
     .data-table tbody tr:nth-child(odd) { background: var(--bg-card); }
-    .data-table tbody tr:hover { background: var(--green-bg); }
+    .data-table tbody tr:hover { background: #D1FAE5; }
     .data-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; }
     .badge { padding: 3px 12px; border-radius: 20px; font-size: 0.7rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; color: white; border: none; }
     .badge-success { background: var(--green); }
@@ -376,8 +373,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .badge-warning { background: var(--orange); }
     .btn-view { background: var(--primary); color: white; padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; border: none; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
     .btn-view:hover { background: var(--primary-dark); transform: scale(1.05); }
-    .btn-edit { background: var(--orange); color: white; padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; border: none; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
-    .btn-edit:hover { background: #B45309; transform: scale(1.05); }
     .action-buttons { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; justify-content: center; }
     .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
     .w-auto { width: auto; }
@@ -411,6 +406,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     console.log('%c⏳ Pending: <?= $pending_tests ?>', 'font-size:12px; color:#D97706;');
     console.log('%c✅ Completed: <?= $completed_tests ?>', 'font-size:12px; color:#059669;');
     console.log('%c🔬 In Progress: <?= $in_progress_tests ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c🔒 Doctor: View Only - Edit Button Removed', 'font-size:12px; color:#EF4444;');
 </script>
 
 </body>
