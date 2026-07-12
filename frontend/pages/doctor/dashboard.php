@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/dashboard.php
-// DOCTOR - FULL DASHBOARD (FIXED)
+// DOCTOR - BEAUTIFUL DASHBOARD (BLUE & GREEN CARDS)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -28,7 +28,7 @@ $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Practitioner';
 
 // ================================================================
-// FUNCTIONS - ADDED time_ago()
+// FUNCTIONS
 // ================================================================
 function time_ago($timestamp) {
     if (empty($timestamp)) return 'N/A';
@@ -43,15 +43,6 @@ function time_ago($timestamp) {
     return date('M d, Y', $time);
 }
 
-function getUserColor($name) {
-    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
-    $index = 0;
-    for ($i = 0; $i < strlen($name); $i++) {
-        $index = ($index + ord($name[$i])) % count($colors);
-    }
-    return $colors[$index];
-}
-
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
@@ -59,66 +50,42 @@ $db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 if (file_exists($db_path)) {
     require_once $db_path;
 } else {
-    die("❌ Database file not found at: " . $db_path);
+    die("❌ Database file not found");
 }
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET DOCTOR STATISTICS
+// GET STATISTICS
 // ================================================================
 
 // 1. Total Patients
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT patient_id) as total 
-    FROM visits 
-    WHERE doctor_id = ?
-");
+$stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ?");
 $stmt->execute([$doctor_id]);
 $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // 2. Pending Visits
-$stmt = $db->prepare("
-    SELECT COUNT(*) as pending 
-    FROM visits 
-    WHERE doctor_id = ? AND status IN ('pending', 'assigned')
-");
+$stmt = $db->prepare("SELECT COUNT(*) as pending FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned')");
 $stmt->execute([$doctor_id]);
 $pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['pending'] ?? 0;
 
 // 3. Today's Visits
 $today = date('Y-m-d');
-$stmt = $db->prepare("
-    SELECT COUNT(*) as today 
-    FROM visits 
-    WHERE doctor_id = ? AND DATE(created_at) = ?
-");
+$stmt = $db->prepare("SELECT COUNT(*) as today FROM visits WHERE doctor_id = ? AND DATE(created_at) = ?");
 $stmt->execute([$doctor_id, $today]);
 $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['today'] ?? 0;
 
 // 4. Completed Visits
-$stmt = $db->prepare("
-    SELECT COUNT(*) as completed 
-    FROM visits 
-    WHERE doctor_id = ? AND status = 'completed'
-");
+$stmt = $db->prepare("SELECT COUNT(*) as completed FROM visits WHERE doctor_id = ? AND status = 'completed'");
 $stmt->execute([$doctor_id]);
 $completed_visits = $stmt->fetch(PDO::FETCH_ASSOC)['completed'] ?? 0;
 
 // 5. Total Prescriptions
-$stmt = $db->prepare("
-    SELECT COUNT(*) as total 
-    FROM prescriptions 
-    WHERE doctor_id = ?
-");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE doctor_id = ?");
 $stmt->execute([$doctor_id]);
 $total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // 6. Pending Lab Tests
-$stmt = $db->prepare("
-    SELECT COUNT(*) as pending 
-    FROM lab_tests 
-    WHERE doctor_id = ? AND status IN ('pending', 'in_progress')
-");
+$stmt = $db->prepare("SELECT COUNT(*) as pending FROM lab_tests WHERE doctor_id = ? AND status IN ('pending', 'in_progress')");
 $stmt->execute([$doctor_id]);
 $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['pending'] ?? 0;
 
@@ -133,7 +100,7 @@ $stmt = $db->prepare("
 $stmt->execute([$doctor_id, $today]);
 $today_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 8. Pending Patients (Queue)
+// 8. Pending Patients
 $stmt = $db->prepare("
     SELECT v.*, p.full_name as patient_name, p.patient_id, p.phone,
            TIMESTAMPDIFF(MINUTE, v.created_at, NOW()) as waiting_time
@@ -169,7 +136,7 @@ $stmt = $db->prepare("
 $stmt->execute([$doctor_id, $doctor_id]);
 $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 10. Weekly Visits Data for Chart
+// 10. Weekly Visits Data
 $stmt = $db->prepare("
     SELECT DATE(created_at) as date, COUNT(*) as count 
     FROM visits 
@@ -180,7 +147,6 @@ $stmt = $db->prepare("
 $stmt->execute([$doctor_id]);
 $weekly_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Prepare chart labels and values
 $chart_labels = [];
 $chart_values = [];
 for ($i = 6; $i >= 0; $i--) {
@@ -194,9 +160,7 @@ for ($i = 6; $i >= 0; $i--) {
             break;
         }
     }
-    if (!$found) {
-        $chart_values[] = 0;
-    }
+    if (!$found) $chart_values[] = 0;
 }
 
 // 11. New Patients Today
@@ -209,7 +173,17 @@ $stmt = $db->prepare("
 $stmt->execute([$doctor_id, $today]);
 $new_patients_today = $stmt->fetch(PDO::FETCH_ASSOC)['new_patients'] ?? 0;
 
-// 12. Get Doctor's Branch Name
+// 12. New Patients Count (for notification)
+$stmt = $db->prepare("
+    SELECT COUNT(*) as new_count 
+    FROM visits 
+    WHERE doctor_id = ? AND status = 'pending' 
+    AND created_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+");
+$stmt->execute([$doctor_id]);
+$new_patients_count = $stmt->fetch(PDO::FETCH_ASSOC)['new_count'] ?? 0;
+
+// 13. Get Doctor's Branch Name
 $doctor_branch_name = 'Not Assigned';
 try {
     $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
@@ -221,16 +195,6 @@ try {
 } catch (Exception $e) {
     $doctor_branch_name = 'Branch';
 }
-
-// 13. New Patients Count (for notification)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as new_count 
-    FROM visits 
-    WHERE doctor_id = ? AND status = 'pending' 
-    AND created_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)
-");
-$stmt->execute([$doctor_id]);
-$new_patients_count = $stmt->fetch(PDO::FETCH_ASSOC)['new_count'] ?? 0;
 
 // ================================================================
 // VARIABLES FOR SIDEBAR
@@ -254,178 +218,240 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Welcome Section -->
-    <div class="flex flex-wrap justify-between items-start gap-4 mb-6">
-        <div>
-            <h1 class="text-2xl font-bold text-gray-800 flex items-center gap-2">
-                <i class="fas fa-home text-blue-600"></i>
-                Welcome back, <?= htmlspecialchars($doctor_name) ?>!
-            </h1>
-            <p class="text-gray-500 text-sm">
-                <i class="fas fa-stethoscope mr-1"></i>
-                <?= htmlspecialchars($doctor_specialty) ?> • 
-                <span class="bg-blue-600 text-white px-3 py-0.5 rounded-full text-xs">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?>
-                </span>
-                <span class="ml-2 text-gray-400 text-xs">
-                    <i class="far fa-calendar-alt mr-1"></i>
-                    <?= date('l, F d, Y') ?>
-                </span>
-            </p>
-        </div>
-        <div class="flex gap-2 flex-wrap">
-            <?php if ($pending_visits > 0): ?>
-                <a href="#queue" class="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-orange-600 transition flex items-center gap-2 animate-pulse">
-                    <i class="fas fa-user-clock"></i>
-                    <?= $pending_visits ?> Patient(s) Waiting
-                </a>
-            <?php endif; ?>
-            <button onclick="window.location.reload()" class="bg-gray-100 text-gray-600 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-200 transition flex items-center gap-2">
-                <i class="fas fa-sync-alt"></i> Refresh
-            </button>
+    <!-- ================================================================ -->
+    <!-- WELCOME SECTION -->
+    <!-- ================================================================ -->
+    <div class="welcome-hero">
+        <div class="welcome-hero-content">
+            <div class="welcome-hero-left">
+                <div class="welcome-greeting">
+                    <span class="greeting-icon">👋</span>
+                    <div>
+                        <h1 class="welcome-title">Welcome back, <span class="doctor-name"><?= htmlspecialchars($doctor_name) ?></span></h1>
+                        <p class="welcome-subtitle">
+                            <span class="specialty-badge">
+                                <i class="fas fa-stethoscope"></i> <?= htmlspecialchars($doctor_specialty) ?>
+                            </span>
+                            <span class="branch-badge">
+                                <i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?>
+                            </span>
+                            <span class="date-badge">
+                                <i class="far fa-calendar-alt"></i> <?= date('l, F d, Y') ?>
+                            </span>
+                        </p>
+                    </div>
+                </div>
+                <div class="welcome-stats-mini">
+                    <div class="mini-stat">
+                        <span class="mini-stat-number"><?= $today_visits ?></span>
+                        <span class="mini-stat-label">Today</span>
+                    </div>
+                    <div class="mini-stat-divider"></div>
+                    <div class="mini-stat">
+                        <span class="mini-stat-number"><?= $pending_visits ?></span>
+                        <span class="mini-stat-label">Pending</span>
+                    </div>
+                    <div class="mini-stat-divider"></div>
+                    <div class="mini-stat">
+                        <span class="mini-stat-number"><?= $total_patients ?></span>
+                        <span class="mini-stat-label">Patients</span>
+                    </div>
+                </div>
+            </div>
+            <div class="welcome-hero-right">
+                <?php if ($pending_visits > 0): ?>
+                    <a href="#queue" class="btn-pulse">
+                        <i class="fas fa-user-clock"></i>
+                        <span><?= $pending_visits ?> Patient(s) Waiting</span>
+                        <span class="pulse-dot"></span>
+                    </a>
+                <?php endif; ?>
+                <button onclick="window.location.reload()" class="btn-refresh">
+                    <i class="fas fa-sync-alt"></i>
+                    <span>Refresh</span>
+                </button>
+            </div>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
+    <!-- STATISTICS CARDS - 4 BLUE + 4 GREEN -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="stats-grid">
         
-        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-blue-600 hover:shadow-md transition">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm text-gray-500 font-medium">Total Patients</p>
-                    <p class="text-2xl font-bold text-blue-600"><?= number_format($total_patients) ?></p>
-                    <span class="text-xs text-green-600"><i class="fas fa-user-plus"></i> +<?= $new_patients_today ?> today</span>
+        <!-- CARD 1: BLUE - Total Patients -->
+        <div class="stat-card stat-card-blue">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-users"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Total Patients</span>
+                        <span class="stat-card-number"><?= number_format($total_patients) ?></span>
+                        <span class="stat-card-trend">
+                            <i class="fas fa-arrow-up"></i> +<?= $new_patients_today ?> today
+                        </span>
+                    </div>
                 </div>
-                <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600">
-                    <i class="fas fa-users text-xl"></i>
+                <div class="stat-card-right">
+                    <span class="stat-card-badge">+<?= $new_patients_today ?></span>
                 </div>
             </div>
+            <div class="stat-card-progress" style="width: <?= $total_patients > 0 ? min(100, ($total_patients / 50) * 100) : 0 ?>%;"></div>
         </div>
 
-        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 <?= $pending_visits > 0 ? 'border-orange-500' : 'border-gray-300' ?> hover:shadow-md transition">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm text-gray-500 font-medium">Pending Patients</p>
-                    <p class="text-2xl font-bold <?= $pending_visits > 0 ? 'text-orange-500' : 'text-gray-400' ?>">
-                        <?= number_format($pending_visits) ?>
-                    </p>
-                    <span class="text-xs text-gray-400">
-                        <?php if ($pending_visits > 0): ?>
-                            <i class="fas fa-clock text-orange-500"></i> Waiting for you
-                        <?php else: ?>
-                            <i class="fas fa-check-circle text-green-500"></i> All clear
-                        <?php endif; ?>
-                    </span>
-                </div>
-                <div class="w-12 h-12 <?= $pending_visits > 0 ? 'bg-orange-100 text-orange-500' : 'bg-gray-100 text-gray-400' ?> rounded-full flex items-center justify-center">
-                    <i class="fas fa-clock text-xl"></i>
+        <!-- CARD 2: BLUE - Today's Visits -->
+        <div class="stat-card stat-card-blue">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-clinic-medical"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Today's Visits</span>
+                        <span class="stat-card-number"><?= number_format($today_visits) ?></span>
+                        <span class="stat-card-trend">
+                            <i class="fas fa-calendar-day"></i> <?= date('M d, Y') ?>
+                        </span>
+                    </div>
                 </div>
             </div>
-            <?php if ($pending_visits > 0): ?>
-                <span class="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full"><?= $pending_visits ?></span>
-            <?php endif; ?>
+            <div class="stat-card-progress" style="width: <?= $today_visits > 0 ? min(100, ($today_visits / 30) * 100) : 0 ?>%;"></div>
         </div>
 
-        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-green-600 hover:shadow-md transition">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm text-gray-500 font-medium">Today's Visits</p>
-                    <p class="text-2xl font-bold text-green-600"><?= number_format($today_visits) ?></p>
-                    <span class="text-xs text-gray-400"><i class="fas fa-calendar-day"></i> <?= date('M d, Y') ?></span>
-                </div>
-                <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-green-600">
-                    <i class="fas fa-clinic-medical text-xl"></i>
+        <!-- CARD 3: BLUE - Appointments Today -->
+        <div class="stat-card stat-card-blue">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-calendar-check"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Appointments Today</span>
+                        <span class="stat-card-number"><?= number_format(count($today_appointments)) ?></span>
+                        <span class="stat-card-trend">
+                            <i class="fas fa-calendar-check"></i> Scheduled
+                        </span>
+                    </div>
                 </div>
             </div>
+            <div class="stat-card-progress" style="width: <?= count($today_appointments) > 0 ? min(100, (count($today_appointments) / 20) * 100) : 0 ?>%;"></div>
         </div>
 
-        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-purple-600 hover:shadow-md transition">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm text-gray-500 font-medium">Completed</p>
-                    <p class="text-2xl font-bold text-purple-600"><?= number_format($completed_visits) ?></p>
-                    <span class="text-xs text-gray-400"><i class="fas fa-check-circle"></i> Total completed</span>
-                </div>
-                <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center text-purple-600">
-                    <i class="fas fa-check-circle text-xl"></i>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Second Row Stats -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        
-        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-teal-600 hover:shadow-md transition">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm text-gray-500 font-medium">Prescriptions</p>
-                    <p class="text-2xl font-bold text-teal-600"><?= number_format($total_prescriptions) ?></p>
-                    <span class="text-xs text-gray-400"><i class="fas fa-prescription"></i> Total issued</span>
-                </div>
-                <div class="w-12 h-12 bg-teal-100 rounded-full flex items-center justify-center text-teal-600">
-                    <i class="fas fa-prescription text-xl"></i>
+        <!-- CARD 4: BLUE - Total Prescriptions -->
+        <div class="stat-card stat-card-blue">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-prescription"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Prescriptions</span>
+                        <span class="stat-card-number"><?= number_format($total_prescriptions) ?></span>
+                        <span class="stat-card-trend">
+                            <i class="fas fa-prescription"></i> Total issued
+                        </span>
+                    </div>
                 </div>
             </div>
+            <div class="stat-card-progress" style="width: <?= $total_prescriptions > 0 ? min(100, ($total_prescriptions / 100) * 100) : 0 ?>%;"></div>
         </div>
 
-        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 <?= $pending_lab_tests > 0 ? 'border-yellow-500' : 'border-gray-300' ?> hover:shadow-md transition">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm text-gray-500 font-medium">Pending Lab Tests</p>
-                    <p class="text-2xl font-bold <?= $pending_lab_tests > 0 ? 'text-yellow-500' : 'text-gray-400' ?>">
-                        <?= number_format($pending_lab_tests) ?>
-                    </p>
-                    <span class="text-xs text-gray-400">
-                        <?php if ($pending_lab_tests > 0): ?>
-                            <i class="fas fa-flask text-yellow-500"></i> Waiting for results
-                        <?php else: ?>
-                            <i class="fas fa-check-circle text-green-500"></i> No pending
-                        <?php endif; ?>
-                    </span>
+        <!-- CARD 5: GREEN - Completed Visits -->
+        <div class="stat-card stat-card-green">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-check-circle"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Completed Visits</span>
+                        <span class="stat-card-number"><?= number_format($completed_visits) ?></span>
+                        <span class="stat-card-trend">
+                            <i class="fas fa-check-circle"></i> Total completed
+                        </span>
+                    </div>
                 </div>
-                <div class="w-12 h-12 <?= $pending_lab_tests > 0 ? 'bg-yellow-100 text-yellow-500' : 'bg-gray-100 text-gray-400' ?> rounded-full flex items-center justify-center">
-                    <i class="fas fa-flask text-xl"></i>
+                <div class="stat-card-right">
+                    <?php 
+                        $total = $total_patients > 0 ? $total_patients : 1;
+                        $rate = round(($completed_visits / $total) * 100);
+                    ?>
+                    <span class="stat-card-badge green"><?= $rate ?>%</span>
                 </div>
             </div>
-            <?php if ($pending_lab_tests > 0): ?>
-                <span class="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full"><?= $pending_lab_tests ?></span>
-            <?php endif; ?>
+            <div class="stat-card-progress" style="width: <?= $rate ?>%; background: #059669;"></div>
         </div>
 
-        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-indigo-600 hover:shadow-md transition">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm text-gray-500 font-medium">Appointments Today</p>
-                    <p class="text-2xl font-bold text-indigo-600"><?= number_format(count($today_appointments)) ?></p>
-                    <span class="text-xs text-gray-400"><i class="fas fa-calendar-check"></i> Scheduled</span>
+        <!-- CARD 6: GREEN - Pending Patients -->
+        <div class="stat-card stat-card-green <?= $pending_visits > 0 ? 'has-badge' : '' ?>">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-clock"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Pending Patients</span>
+                        <span class="stat-card-number <?= $pending_visits > 0 ? 'text-orange' : '' ?>">
+                            <?= number_format($pending_visits) ?>
+                        </span>
+                        <span class="stat-card-trend">
+                            <?php if ($pending_visits > 0): ?>
+                                <i class="fas fa-clock"></i> Waiting for you
+                            <?php else: ?>
+                                <i class="fas fa-check-circle"></i> All clear
+                            <?php endif; ?>
+                        </span>
+                    </div>
                 </div>
-                <div class="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
-                    <i class="fas fa-calendar-check text-xl"></i>
-                </div>
+                <?php if ($pending_visits > 0): ?>
+                    <div class="stat-card-right">
+                        <span class="stat-card-badge danger"><?= $pending_visits ?></span>
+                    </div>
+                <?php endif; ?>
             </div>
+            <div class="stat-card-progress" style="width: <?= $pending_visits > 0 ? min(100, ($pending_visits / 20) * 100) : 0 ?>%; background: #059669;"></div>
         </div>
 
-        <div class="bg-white rounded-xl shadow-sm p-5 border-l-4 border-rose-600 hover:shadow-md transition">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-sm text-gray-500 font-medium">Completion Rate</p>
-                    <p class="text-2xl font-bold text-rose-600">
-                        <?php 
-                            $total = $total_patients > 0 ? $total_patients : 1;
-                            $rate = round(($completed_visits / $total) * 100);
-                            echo $rate . '%';
-                        ?>
-                    </p>
-                    <span class="text-xs text-gray-400"><i class="fas fa-chart-line"></i> Overall performance</span>
-                </div>
-                <div class="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center text-rose-600">
-                    <i class="fas fa-chart-line text-xl"></i>
+        <!-- CARD 7: GREEN - Completion Rate -->
+        <div class="stat-card stat-card-green">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-chart-line"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Completion Rate</span>
+                        <span class="stat-card-number">
+                            <?php 
+                                $total = $total_patients > 0 ? $total_patients : 1;
+                                echo round(($completed_visits / $total) * 100) . '%';
+                            ?>
+                        </span>
+                        <span class="stat-card-trend">
+                            <i class="fas fa-chart-line"></i> Overall performance
+                        </span>
+                    </div>
                 </div>
             </div>
+            <div class="stat-card-progress" style="width: <?= $total > 0 ? min(100, ($completed_visits / $total) * 100) : 0 ?>%; background: #059669;"></div>
         </div>
+
+        <!-- CARD 8: GREEN - Pending Lab Tests -->
+        <div class="stat-card stat-card-green <?= $pending_lab_tests > 0 ? 'has-badge' : '' ?>">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-flask"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Pending Lab Tests</span>
+                        <span class="stat-card-number <?= $pending_lab_tests > 0 ? 'text-orange' : '' ?>">
+                            <?= number_format($pending_lab_tests) ?>
+                        </span>
+                        <span class="stat-card-trend">
+                            <?php if ($pending_lab_tests > 0): ?>
+                                <i class="fas fa-flask"></i> Waiting for results
+                            <?php else: ?>
+                                <i class="fas fa-check-circle"></i> No pending
+                            <?php endif; ?>
+                        </span>
+                    </div>
+                </div>
+                <?php if ($pending_lab_tests > 0): ?>
+                    <div class="stat-card-right">
+                        <span class="stat-card-badge danger"><?= $pending_lab_tests ?></span>
+                    </div>
+                <?php endif; ?>
+            </div>
+            <div class="stat-card-progress" style="width: <?= $pending_lab_tests > 0 ? min(100, ($pending_lab_tests / 20) * 100) : 0 ?>%; background: #059669;"></div>
+        </div>
+
     </div>
 
     <!-- ================================================================ -->
@@ -434,50 +460,51 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
 
         <!-- Weekly Visits Chart -->
-        <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200 lg:col-span-2">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-gray-800 font-semibold flex items-center gap-2">
-                    <i class="fas fa-chart-area text-blue-600"></i>
+        <div class="dashboard-card lg:col-span-2">
+            <div class="dashboard-card-header">
+                <h3 class="dashboard-card-title">
+                    <i class="fas fa-chart-area title-blue"></i>
                     Weekly Visits Trend
                 </h3>
                 <span class="text-xs text-gray-400">Last 7 days</span>
             </div>
-            <div class="h-48">
+            <div class="chart-container">
                 <canvas id="visitsChart"></canvas>
             </div>
         </div>
 
         <!-- Today's Appointments -->
-        <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-gray-800 font-semibold flex items-center gap-2">
-                    <i class="fas fa-calendar-check text-green-600"></i>
+        <div class="dashboard-card">
+            <div class="dashboard-card-header">
+                <h3 class="dashboard-card-title">
+                    <i class="fas fa-calendar-check title-green"></i>
                     Today's Appointments
                     <span class="text-sm font-normal text-gray-400">(<?= count($today_appointments) ?>)</span>
                 </h3>
             </div>
-            <div class="max-h-52 overflow-y-auto">
+            <div class="appointments-list">
                 <?php if (count($today_appointments) > 0): ?>
                     <?php foreach ($today_appointments as $appt): ?>
-                        <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
-                            <div>
-                                <span class="font-semibold text-sm text-gray-800"><?= date('h:i A', strtotime($appt['appointment_date'])) ?></span>
-                                <span class="text-sm text-gray-600 ml-2"><?= htmlspecialchars($appt['patient_name']) ?></span>
+                        <div class="appointment-item">
+                            <div class="appointment-time"><?= date('h:i A', strtotime($appt['appointment_date'])) ?></div>
+                            <div class="appointment-patient">
+                                <div class="appointment-name"><?= htmlspecialchars($appt['patient_name']) ?></div>
+                                <div class="appointment-id"><?= htmlspecialchars($appt['patient_id']) ?></div>
                             </div>
-                            <span class="text-xs px-2 py-1 rounded-full <?= ($appt['status'] ?? 'scheduled') === 'confirmed' ? 'bg-green-100 text-green-600' : (($appt['status'] ?? 'scheduled') === 'cancelled' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600') ?>">
+                            <span class="appointment-status <?= $appt['status'] ?? 'scheduled' ?>">
                                 <?= ucfirst($appt['status'] ?? 'Scheduled') ?>
                             </span>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div class="text-center py-6 text-gray-400">
-                        <i class="fas fa-calendar-check text-2xl block mb-2"></i>
+                    <div class="empty-state">
+                        <i class="fas fa-calendar-check"></i>
                         <p>No appointments scheduled for today</p>
                     </div>
                 <?php endif; ?>
             </div>
-            <div class="mt-3 pt-3 border-t text-center">
-                <a href="appointments.php" class="text-blue-600 text-sm hover:underline">View all appointments →</a>
+            <div class="dashboard-card-footer">
+                <a href="appointments.php" class="card-link">View all appointments →</a>
             </div>
         </div>
     </div>
@@ -485,10 +512,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <!-- ================================================================ -->
     <!-- PENDING PATIENTS QUEUE -->
     <!-- ================================================================ -->
-    <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200 mb-6" id="queue">
-        <div class="flex justify-between items-center mb-4">
-            <h3 class="text-gray-800 font-semibold flex items-center gap-2">
-                <i class="fas fa-user-clock text-orange-500"></i>
+    <div class="dashboard-card queue-card mb-6" id="queue">
+        <div class="dashboard-card-header">
+            <h3 class="dashboard-card-title">
+                <i class="fas fa-user-clock title-orange"></i>
                 Pending Patients Queue
                 <span class="text-sm font-normal text-gray-400">(<?= count($pending_patients) ?> waiting)</span>
             </h3>
@@ -498,52 +525,43 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </div>
         
         <?php if (count($pending_patients) > 0): ?>
-            <div class="max-h-72 overflow-y-auto">
+            <div class="queue-list">
                 <?php foreach ($pending_patients as $index => $patient): ?>
-                    <div class="flex items-center gap-4 py-3 border-b border-gray-100 last:border-0 <?= $index === 0 ? 'bg-blue-50 rounded-lg px-3 -mx-3' : '' ?>">
-                        <div class="font-bold text-gray-400 w-8">#<?= $index + 1 ?></div>
-                        <div class="flex-1">
-                            <div class="font-medium text-gray-800">
+                    <div class="queue-item <?= $index === 0 ? 'queue-item-first' : '' ?>">
+                        <div class="queue-number">#<?= $index + 1 ?></div>
+                        <div class="queue-patient">
+                            <div class="queue-name">
                                 <?= htmlspecialchars($patient['patient_name']) ?>
                                 <?php if ($index === 0): ?>
-                                    <span class="text-xs bg-orange-500 text-white px-2 py-0.5 rounded-full ml-2">Next</span>
+                                    <span class="queue-badge">Next</span>
                                 <?php endif; ?>
                             </div>
-                            <div class="text-xs text-gray-400">
+                            <div class="queue-details">
                                 <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?> • 
                                 <?= htmlspecialchars($patient['phone'] ?? '') ?>
                             </div>
                         </div>
-                        <div class="text-right">
-                            <span class="text-sm <?= ($patient['waiting_time'] ?? 0) > 30 ? 'text-red-500 font-semibold' : 'text-gray-500' ?>">
+                        <div class="queue-waiting">
+                            <span class="queue-time <?= ($patient['waiting_time'] ?? 0) > 30 ? 'queue-time-long' : '' ?>">
                                 <?= ($patient['waiting_time'] ?? 0) > 0 ? ($patient['waiting_time'] . ' min') : 'Just now' ?>
                             </span>
-                            <div>
-                                <span class="text-xs px-2 py-0.5 rounded-full <?= ($patient['status'] ?? 'pending') === 'pending' ? 'bg-yellow-100 text-yellow-600' : 'bg-blue-100 text-blue-600' ?>">
-                                    <?= ucfirst($patient['status'] ?? 'Pending') ?>
-                                </span>
-                            </div>
+                            <span class="queue-status <?= $patient['status'] ?? 'pending' ?>">
+                                <?= ucfirst($patient['status'] ?? 'Pending') ?>
+                            </span>
                         </div>
-                        <div>
-                            <a href="consultation.php?visit_id=<?= $patient['id'] ?>" class="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition flex items-center gap-1">
+                        <div class="queue-action">
+                            <a href="consultation.php?visit_id=<?= $patient['id'] ?>" class="btn-consult">
                                 <i class="fas fa-stethoscope"></i> Consult
                             </a>
                         </div>
                     </div>
                 <?php endforeach; ?>
             </div>
-            <?php if (count($pending_patients) >= 10): ?>
-                <div class="mt-3 pt-3 border-t text-center">
-                    <a href="my_patients.php?filter=pending" class="text-blue-600 text-sm hover:underline">
-                        View all waiting patients →
-                    </a>
-                </div>
-            <?php endif; ?>
         <?php else: ?>
-            <div class="text-center py-8 text-gray-400">
-                <i class="fas fa-check-circle text-4xl text-green-500 block mb-3"></i>
-                <p>No patients waiting! All clear.</p>
-                <p class="text-xs text-gray-400 mt-1">Take a break or review completed cases</p>
+            <div class="empty-state empty-state-large">
+                <i class="fas fa-check-circle text-green-500"></i>
+                <p class="text-gray-400">No patients waiting! All clear.</p>
+                <p class="text-xs text-gray-400">Take a break or review completed cases</p>
             </div>
         <?php endif; ?>
     </div>
@@ -554,49 +572,45 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
 
         <!-- Recent Activities -->
-        <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200 lg:col-span-2">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-gray-800 font-semibold flex items-center gap-2">
-                    <i class="fas fa-clock text-blue-600"></i>
+        <div class="dashboard-card lg:col-span-2">
+            <div class="dashboard-card-header">
+                <h3 class="dashboard-card-title">
+                    <i class="fas fa-clock title-blue"></i>
                     Recent Activities
                 </h3>
-                <a href="system_logs.php" class="text-blue-600 text-sm hover:underline">View All</a>
+                <a href="system_logs.php" class="card-link">View All</a>
             </div>
-            <div class="max-h-60 overflow-y-auto">
+            <div class="activities-list">
                 <?php if (count($recent_activities) > 0): ?>
                     <?php foreach ($recent_activities as $activity): ?>
-                        <div class="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
-                            <div class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm <?= $activity['action_type'] === 'prescription' ? 'bg-green-500' : 'bg-blue-500' ?>">
+                        <div class="activity-item">
+                            <div class="activity-icon <?= $activity['action_type'] === 'prescription' ? 'activity-icon-green' : 'activity-icon-blue' ?>">
                                 <i class="fas <?= $activity['action_type'] === 'prescription' ? 'fa-prescription' : 'fa-user-injured' ?>"></i>
                             </div>
-                            <div class="flex-1">
-                                <p class="text-sm text-gray-800">
+                            <div class="activity-content">
+                                <div class="activity-action">
                                     <?= $activity['action_type'] === 'prescription' ? 'Prescription created' : 'Visit ' . $activity['status'] ?>
-                                    <span class="text-gray-500">- <?= htmlspecialchars($activity['patient_name'] ?? 'Unknown') ?></span>
-                                </p>
-                                <p class="text-xs text-gray-400">
+                                    <span class="activity-patient">- <?= htmlspecialchars($activity['patient_name'] ?? 'Unknown') ?></span>
+                                </div>
+                                <div class="activity-details">
                                     <?php if ($activity['action_type'] === 'prescription'): ?>
                                         Status: <?= ucfirst($activity['status'] ?? 'Pending') ?>
                                     <?php else: ?>
                                         Visit #<?= htmlspecialchars($activity['id'] ?? '') ?>
                                     <?php endif; ?>
-                                    • <?= time_ago($activity['created_at'] ?? '') ?>
-                                </p>
+                                    <span class="activity-time">• <?= time_ago($activity['created_at'] ?? '') ?></span>
+                                </div>
                             </div>
                             <?php if ($activity['action_type'] === 'visit' && ($activity['status'] ?? '') === 'pending'): ?>
-                                <a href="consultation.php?visit_id=<?= $activity['id'] ?>" class="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition">
-                                    Consult
-                                </a>
+                                <a href="consultation.php?visit_id=<?= $activity['id'] ?>" class="btn-consult-sm">Consult</a>
                             <?php elseif ($activity['action_type'] === 'prescription'): ?>
-                                <a href="view_prescription.php?id=<?= $activity['id'] ?>" class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 transition">
-                                    View
-                                </a>
+                                <a href="view_prescription.php?id=<?= $activity['id'] ?>" class="btn-view-sm">View</a>
                             <?php endif; ?>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div class="text-center py-6 text-gray-400">
-                        <i class="fas fa-inbox text-2xl block mb-2"></i>
+                    <div class="empty-state">
+                        <i class="fas fa-inbox"></i>
                         <p>No recent activities</p>
                     </div>
                 <?php endif; ?>
@@ -604,37 +618,37 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </div>
 
         <!-- Quick Actions -->
-        <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-200">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-gray-800 font-semibold flex items-center gap-2">
-                    <i class="fas fa-bolt text-yellow-500"></i>
+        <div class="dashboard-card">
+            <div class="dashboard-card-header">
+                <h3 class="dashboard-card-title">
+                    <i class="fas fa-bolt title-yellow"></i>
                     Quick Actions
                 </h3>
             </div>
-            <div class="grid grid-cols-2 gap-3">
-                <a href="my_patients.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-blue-500 hover:shadow-md transition group">
-                    <i class="fas fa-users text-blue-500 text-2xl group-hover:scale-110 transition"></i>
-                    <span class="text-xs font-medium text-gray-600 mt-1">My Patients</span>
+            <div class="quick-actions-grid">
+                <a href="my_patients.php" class="quick-action quick-action-blue">
+                    <i class="fas fa-users"></i>
+                    <span>My Patients</span>
                 </a>
-                <a href="consultation.php?patient_id=0" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-green-500 hover:shadow-md transition group">
-                    <i class="fas fa-stethoscope text-green-500 text-2xl group-hover:scale-110 transition"></i>
-                    <span class="text-xs font-medium text-gray-600 mt-1">Consultation</span>
+                <a href="consultation.php?patient_id=0" class="quick-action quick-action-green">
+                    <i class="fas fa-stethoscope"></i>
+                    <span>Consultation</span>
                 </a>
-                <a href="prescribe.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-purple-500 hover:shadow-md transition group">
-                    <i class="fas fa-prescription text-purple-500 text-2xl group-hover:scale-110 transition"></i>
-                    <span class="text-xs font-medium text-gray-600 mt-1">Prescribe</span>
+                <a href="prescribe.php" class="quick-action quick-action-blue">
+                    <i class="fas fa-prescription"></i>
+                    <span>Prescribe</span>
                 </a>
-                <a href="view_prescriptions.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-orange-500 hover:shadow-md transition group">
-                    <i class="fas fa-list text-orange-500 text-2xl group-hover:scale-110 transition"></i>
-                    <span class="text-xs font-medium text-gray-600 mt-1">Prescriptions</span>
+                <a href="view_prescriptions.php" class="quick-action quick-action-green">
+                    <i class="fas fa-list"></i>
+                    <span>Prescriptions</span>
                 </a>
-                <a href="lab_results.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-teal-500 hover:shadow-md transition group">
-                    <i class="fas fa-flask text-teal-500 text-2xl group-hover:scale-110 transition"></i>
-                    <span class="text-xs font-medium text-gray-600 mt-1">Lab Results</span>
+                <a href="lab_results.php" class="quick-action quick-action-blue">
+                    <i class="fas fa-flask"></i>
+                    <span>Lab Results</span>
                 </a>
-                <a href="profile.php" class="flex flex-col items-center justify-center p-4 border-2 border-gray-200 rounded-xl hover:border-gray-500 hover:shadow-md transition group">
-                    <i class="fas fa-user-cog text-gray-500 text-2xl group-hover:scale-110 transition"></i>
-                    <span class="text-xs font-medium text-gray-600 mt-1">My Profile</span>
+                <a href="profile.php" class="quick-action quick-action-green">
+                    <i class="fas fa-user-cog"></i>
+                    <span>My Profile</span>
                 </a>
             </div>
         </div>
@@ -656,7 +670,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST NOTIFICATION -->
+<!-- TOAST -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
@@ -670,6 +684,950 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- STYLES -->
 <!-- ================================================================ -->
 <style>
+    /* ================================================================
+       WELCOME HERO
+       ================================================================ */
+    .welcome-hero {
+        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
+        border-radius: 20px;
+        padding: 28px 32px;
+        margin-bottom: 28px;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .welcome-hero::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 300px;
+        height: 300px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+    }
+    
+    .welcome-hero::after {
+        content: '';
+        position: absolute;
+        bottom: -30%;
+        left: -10%;
+        width: 200px;
+        height: 200px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 50%;
+    }
+    
+    .welcome-hero-content {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 16px;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .welcome-hero-left {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    
+    .welcome-greeting {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+    }
+    
+    .greeting-icon {
+        font-size: 2.2rem;
+        line-height: 1;
+    }
+    
+    .welcome-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: white;
+        margin: 0;
+    }
+    
+    .welcome-title .doctor-name {
+        color: #93C5FD;
+    }
+    
+    .welcome-subtitle {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        margin: 0;
+    }
+    
+    .specialty-badge {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        backdrop-filter: blur(4px);
+    }
+    
+    .branch-badge {
+        background: rgba(255,255,255,0.1);
+        color: #BFDBFE;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .date-badge {
+        background: rgba(255,255,255,0.08);
+        color: #93C5FD;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .welcome-stats-mini {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding-top: 4px;
+    }
+    
+    .mini-stat {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .mini-stat-number {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: white;
+    }
+    
+    .mini-stat-label {
+        font-size: 0.7rem;
+        color: #93C5FD;
+        font-weight: 500;
+    }
+    
+    .mini-stat-divider {
+        width: 1px;
+        height: 24px;
+        background: rgba(255,255,255,0.2);
+    }
+    
+    .welcome-hero-right {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    
+    .btn-pulse {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: #EF4444;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-decoration: none;
+        transition: all 0.3s ease;
+        animation: pulse-glow 2s infinite;
+    }
+    
+    .btn-pulse:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(239, 68, 68, 0.4);
+    }
+    
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background: white;
+        border-radius: 50%;
+        display: inline-block;
+        animation: pulse-dot 1.5s infinite;
+    }
+    
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+        50% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+    }
+    
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.8); }
+    }
+    
+    .btn-refresh {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 10px 18px;
+        border-radius: 12px;
+        font-weight: 500;
+        font-size: 0.85rem;
+        border: 1px solid rgba(255,255,255,0.2);
+        cursor: pointer;
+        transition: all 0.3s ease;
+        backdrop-filter: blur(4px);
+    }
+    
+    .btn-refresh:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+    }
+    
+    /* ================================================================
+       STAT CARDS - BLUE & GREEN THEME
+       ================================================================ */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 18px;
+        margin-bottom: 18px;
+    }
+    
+    .stat-card {
+        background: white;
+        border-radius: 16px;
+        padding: 20px 22px;
+        border: 1px solid #E2E8F0;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .stat-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 12px 40px rgba(0,0,0,0.08);
+    }
+    
+    .stat-card-inner {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+    }
+    
+    .stat-card-left {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        flex: 1;
+    }
+    
+    .stat-card-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        color: white;
+        flex-shrink: 0;
+    }
+    
+    .stat-card-blue .stat-card-icon { background: linear-gradient(135deg, #0B5ED7, #1A73E8); }
+    .stat-card-green .stat-card-icon { background: linear-gradient(135deg, #059669, #0AA84F); }
+    
+    .stat-card-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+    }
+    
+    .stat-card-label {
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: #94A3B8;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    
+    .stat-card-number {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: #1E293B;
+        line-height: 1.2;
+    }
+    
+    .stat-card-number.text-orange { color: #D97706; }
+    
+    .stat-card-trend {
+        font-size: 0.65rem;
+        color: #94A3B8;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .stat-card-trend .fa-arrow-up { color: #059669; }
+    .stat-card-trend .fa-clock { color: #D97706; }
+    .stat-card-trend .fa-check-circle { color: #059669; }
+    .stat-card-trend .fa-calendar-day { color: #0B5ED7; }
+    .stat-card-trend .fa-prescription { color: #0B5ED7; }
+    .stat-card-trend .fa-flask { color: #D97706; }
+    .stat-card-trend .fa-chart-line { color: #059669; }
+    
+    .stat-card-right {
+        display: flex;
+        align-items: flex-start;
+        flex-shrink: 0;
+    }
+    
+    .stat-card-badge {
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: white;
+        background: #0B5ED7;
+        padding: 2px 12px;
+        border-radius: 20px;
+        min-width: 24px;
+        text-align: center;
+    }
+    
+    .stat-card-badge.green {
+        background: #059669;
+    }
+    
+    .stat-card-badge.danger {
+        background: #EF4444;
+        animation: pulse-badge 2s infinite;
+    }
+    
+    @keyframes pulse-badge {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+    }
+    
+    .stat-card-progress {
+        height: 3px;
+        background: #0B5ED7;
+        border-radius: 0 0 16px 16px;
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        transition: width 1s ease;
+        opacity: 0.3;
+    }
+    
+    .stat-card-green .stat-card-progress { background: #059669; }
+    
+    [data-theme="dark"] .stat-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .stat-card-number {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .stat-card-label {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .stat-card-trend {
+        color: #64748B;
+    }
+    [data-theme="dark"] .stat-card:hover {
+        box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+    }
+    
+    /* ================================================================
+       DASHBOARD CARDS
+       ================================================================ */
+    .dashboard-card {
+        background: white;
+        border-radius: 16px;
+        padding: 20px 24px;
+        border: 1px solid #E2E8F0;
+        transition: all 0.3s ease;
+    }
+    
+    .dashboard-card:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
+    }
+    
+    .dashboard-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .dashboard-card-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #1E293B;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    .title-blue { color: #0B5ED7; }
+    .title-green { color: #059669; }
+    .title-orange { color: #D97706; }
+    .title-yellow { color: #D97706; }
+    
+    .dashboard-card-footer {
+        padding-top: 14px;
+        margin-top: 14px;
+        border-top: 1px solid #E2E8F0;
+        text-align: center;
+    }
+    
+    .card-link {
+        color: #0B5ED7;
+        font-size: 0.85rem;
+        text-decoration: none;
+        font-weight: 500;
+        transition: color 0.3s;
+    }
+    
+    .card-link:hover {
+        color: #0A4CA8;
+        text-decoration: underline;
+    }
+    
+    [data-theme="dark"] .dashboard-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .dashboard-card-title {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .dashboard-card-footer {
+        border-color: #334155;
+    }
+    
+    /* ================================================================
+       CHART
+       ================================================================ */
+    .chart-container {
+        height: 200px;
+        max-height: 200px;
+    }
+    
+    .chart-container canvas {
+        height: 100% !important;
+        max-height: 200px !important;
+    }
+    
+    /* ================================================================
+       APPOINTMENTS
+       ================================================================ */
+    .appointments-list {
+        max-height: 220px;
+        overflow-y: auto;
+    }
+    
+    .appointments-list::-webkit-scrollbar {
+        width: 4px;
+    }
+    .appointments-list::-webkit-scrollbar-track {
+        background: #F1F5F9;
+        border-radius: 4px;
+    }
+    .appointments-list::-webkit-scrollbar-thumb {
+        background: #0B5ED7;
+        border-radius: 4px;
+    }
+    
+    [data-theme="dark"] .appointments-list::-webkit-scrollbar-track {
+        background: #0F172A;
+    }
+    
+    .appointment-item {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid #F1F5F9;
+        gap: 12px;
+        border-radius: 6px;
+        transition: all 0.2s;
+    }
+    
+    .appointment-item:hover {
+        background: #E8F0FE;
+    }
+    
+    [data-theme="dark"] .appointment-item:hover {
+        background: #1E3A5F;
+    }
+    [data-theme="dark"] .appointment-item {
+        border-color: #334155;
+    }
+    
+    .appointment-item:last-child {
+        border-bottom: none;
+    }
+    
+    .appointment-time {
+        font-weight: 600;
+        font-size: 0.8rem;
+        color: #1E293B;
+        min-width: 55px;
+    }
+    
+    [data-theme="dark"] .appointment-time {
+        color: #F1F5F9;
+    }
+    
+    .appointment-patient {
+        flex: 1;
+    }
+    
+    .appointment-name {
+        font-weight: 500;
+        font-size: 0.85rem;
+        color: #1E293B;
+    }
+    
+    [data-theme="dark"] .appointment-name {
+        color: #F1F5F9;
+    }
+    
+    .appointment-id {
+        font-size: 0.65rem;
+        color: #94A3B8;
+    }
+    
+    .appointment-status {
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 12px;
+        white-space: nowrap;
+    }
+    
+    .appointment-status.scheduled { background: #EFF6FF; color: #0B5ED7; }
+    .appointment-status.confirmed { background: #ECFDF5; color: #059669; }
+    .appointment-status.completed { background: #ECFDF5; color: #059669; }
+    .appointment-status.cancelled { background: #FEE2E2; color: #EF4444; }
+    .appointment-status.pending { background: #FEF3C7; color: #D97706; }
+    
+    [data-theme="dark"] .appointment-status.scheduled { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .appointment-status.confirmed { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .appointment-status.completed { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .appointment-status.cancelled { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .appointment-status.pending { background: #3D2E0A; color: #FBBF24; }
+    
+    /* ================================================================
+       QUEUE
+       ================================================================ */
+    .queue-card {
+        border-color: #FDE68A;
+    }
+    
+    [data-theme="dark"] .queue-card {
+        border-color: #3D2E0A;
+    }
+    
+    .queue-list {
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    
+    .queue-list::-webkit-scrollbar {
+        width: 4px;
+    }
+    .queue-list::-webkit-scrollbar-track {
+        background: #F1F5F9;
+        border-radius: 4px;
+    }
+    .queue-list::-webkit-scrollbar-thumb {
+        background: #0B5ED7;
+        border-radius: 4px;
+    }
+    
+    [data-theme="dark"] .queue-list::-webkit-scrollbar-track {
+        background: #0F172A;
+    }
+    
+    .queue-item {
+        display: flex;
+        align-items: center;
+        padding: 10px 14px;
+        border-bottom: 1px solid #F1F5F9;
+        gap: 14px;
+        border-radius: 8px;
+        transition: all 0.2s;
+    }
+    
+    .queue-item:hover {
+        background: #F8FAFC;
+    }
+    
+    [data-theme="dark"] .queue-item:hover {
+        background: #0F172A;
+    }
+    [data-theme="dark"] .queue-item {
+        border-color: #334155;
+    }
+    
+    .queue-item-first {
+        background: #E8F0FE;
+        border-left: 4px solid #0B5ED7;
+        border-radius: 8px 0 0 8px;
+    }
+    
+    [data-theme="dark"] .queue-item-first {
+        background: #1E3A5F;
+    }
+    
+    .queue-number {
+        font-weight: 700;
+        font-size: 0.9rem;
+        color: #94A3B8;
+        min-width: 30px;
+    }
+    
+    .queue-patient {
+        flex: 1;
+    }
+    
+    .queue-name {
+        font-weight: 500;
+        font-size: 0.9rem;
+        color: #1E293B;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    [data-theme="dark"] .queue-name {
+        color: #F1F5F9;
+    }
+    
+    .queue-badge {
+        font-size: 0.55rem;
+        font-weight: 700;
+        background: #EF4444;
+        color: white;
+        padding: 2px 10px;
+        border-radius: 12px;
+        animation: pulse-badge 2s infinite;
+    }
+    
+    .queue-details {
+        font-size: 0.65rem;
+        color: #94A3B8;
+    }
+    
+    .queue-waiting {
+        text-align: right;
+        margin-left: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+    }
+    
+    .queue-time {
+        font-size: 0.7rem;
+        color: #94A3B8;
+    }
+    
+    .queue-time-long {
+        color: #EF4444;
+        font-weight: 600;
+    }
+    
+    .queue-status {
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 12px;
+        display: inline-block;
+    }
+    
+    .queue-status.pending { background: #FEF3C7; color: #D97706; }
+    .queue-status.assigned { background: #EFF6FF; color: #0B5ED7; }
+    .queue-status.with_doctor { background: #ECFDF5; color: #059669; }
+    
+    [data-theme="dark"] .queue-status.pending { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .queue-status.assigned { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .queue-status.with_doctor { background: #1A3A2A; color: #34D399; }
+    
+    .queue-action {
+        flex-shrink: 0;
+    }
+    
+    /* ================================================================
+       ACTIVITIES
+       ================================================================ */
+    .activities-list {
+        max-height: 260px;
+        overflow-y: auto;
+    }
+    
+    .activities-list::-webkit-scrollbar {
+        width: 4px;
+    }
+    .activities-list::-webkit-scrollbar-track {
+        background: #F1F5F9;
+        border-radius: 4px;
+    }
+    .activities-list::-webkit-scrollbar-thumb {
+        background: #0B5ED7;
+        border-radius: 4px;
+    }
+    
+    [data-theme="dark"] .activities-list::-webkit-scrollbar-track {
+        background: #0F172A;
+    }
+    
+    .activity-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 12px;
+        border-bottom: 1px solid #F1F5F9;
+        border-radius: 6px;
+        transition: all 0.2s;
+    }
+    
+    .activity-item:hover {
+        background: #F8FAFC;
+    }
+    
+    [data-theme="dark"] .activity-item:hover {
+        background: #0F172A;
+    }
+    [data-theme="dark"] .activity-item {
+        border-color: #334155;
+    }
+    
+    .activity-item:last-child {
+        border-bottom: none;
+    }
+    
+    .activity-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.8rem;
+        flex-shrink: 0;
+        color: white;
+    }
+    
+    .activity-icon-blue { background: #0B5ED7; }
+    .activity-icon-green { background: #059669; }
+    
+    .activity-content {
+        flex: 1;
+        min-width: 0;
+    }
+    
+    .activity-action {
+        font-weight: 500;
+        font-size: 0.85rem;
+        color: #1E293B;
+    }
+    
+    [data-theme="dark"] .activity-action {
+        color: #F1F5F9;
+    }
+    
+    .activity-patient {
+        color: #94A3B8;
+        font-weight: 400;
+    }
+    
+    .activity-details {
+        font-size: 0.7rem;
+        color: #94A3B8;
+    }
+    
+    .activity-time {
+        color: #CBD5E1;
+    }
+    
+    [data-theme="dark"] .activity-time {
+        color: #64748B;
+    }
+    
+    /* ================================================================
+       QUICK ACTIONS
+       ================================================================ */
+    .quick-actions-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 10px;
+    }
+    
+    .quick-action {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 16px 10px;
+        border-radius: 12px;
+        border: 2px solid #E2E8F0;
+        background: white;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        color: #1E293B;
+        cursor: pointer;
+        gap: 6px;
+    }
+    
+    .quick-action:hover {
+        border-color: #0B5ED7;
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.1);
+    }
+    
+    .quick-action i {
+        font-size: 1.3rem;
+    }
+    
+    .quick-action span {
+        font-size: 0.65rem;
+        font-weight: 500;
+        text-align: center;
+    }
+    
+    .quick-action-blue i { color: #0B5ED7; }
+    .quick-action-green i { color: #059669; }
+    
+    .quick-action-blue:hover { border-color: #0B5ED7; }
+    .quick-action-green:hover { border-color: #059669; }
+    
+    [data-theme="dark"] .quick-action {
+        background: #1E293B;
+        border-color: #334155;
+        color: #F1F5F9;
+    }
+    
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn-consult {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: #7C3AED;
+        color: white;
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.3s;
+        border: none;
+        cursor: pointer;
+    }
+    
+    .btn-consult:hover {
+        background: #6D28D9;
+        transform: scale(1.05);
+    }
+    
+    .btn-consult-sm {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: #7C3AED;
+        color: white;
+        padding: 3px 10px;
+        border-radius: 6px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.3s;
+        flex-shrink: 0;
+    }
+    
+    .btn-consult-sm:hover {
+        background: #6D28D9;
+        transform: scale(1.05);
+    }
+    
+    .btn-view-sm {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: #0B5ED7;
+        color: white;
+        padding: 3px 10px;
+        border-radius: 6px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.3s;
+        flex-shrink: 0;
+    }
+    
+    .btn-view-sm:hover {
+        background: #0A4CA8;
+        transform: scale(1.05);
+    }
+    
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state {
+        text-align: center;
+        padding: 20px 10px;
+        color: #94A3B8;
+    }
+    
+    .empty-state i {
+        font-size: 2rem;
+        color: #E2E8F0;
+        display: block;
+        margin-bottom: 6px;
+    }
+    
+    .empty-state p {
+        font-size: 0.85rem;
+    }
+    
+    .empty-state-large {
+        padding: 30px 10px;
+    }
+    
+    .empty-state-large i {
+        font-size: 3rem;
+    }
+    
+    .text-green-500 { color: #059669; }
+    
+    [data-theme="dark"] .empty-state i {
+        color: #334155;
+    }
+    
+    /* ================================================================
+       TOAST
+       ================================================================ */
     .toast-custom {
         position: fixed;
         bottom: 24px;
@@ -685,16 +1643,22 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         align-items: center;
         gap: 10px;
         color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
     }
+    
     .toast-custom.show {
         transform: translateY(0);
         opacity: 1;
     }
+    
     .toast-custom.success { background: #059669; }
     .toast-custom.error { background: #EF4444; }
     .toast-custom.info { background: #0B5ED7; }
     .toast-custom.warning { background: #D97706; }
     
+    /* ================================================================
+       FOOTER
+       ================================================================ */
     .footer {
         padding: 14px 0;
         border-top: 2px solid #E2E8F0;
@@ -703,37 +1667,152 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-size: 0.7rem;
         color: #94A3B8;
     }
-    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    
+    .footer .footer-brand {
+        color: #0B5ED7;
+        font-weight: 600;
+    }
+    
+    [data-theme="dark"] .footer {
+        border-color: #334155;
+        color: #64748B;
+    }
     
     .text-gray-300 { color: #D1D5DB; }
     .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
-    .animate-pulse { animation: pulse 2s infinite; }
     
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.7; }
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1200px) {
+        .stats-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
     }
     
-    [data-theme="dark"] .bg-white { background: #1E293B; }
-    [data-theme="dark"] .border-gray-200 { border-color: #334155; }
-    [data-theme="dark"] .text-gray-800 { color: #F1F5F9; }
-    [data-theme="dark"] .text-gray-600 { color: #94A3B8; }
-    [data-theme="dark"] .text-gray-500 { color: #94A3B8; }
-    [data-theme="dark"] .text-gray-400 { color: #64748B; }
-    [data-theme="dark"] .bg-blue-50 { background: #1E3A5F; }
-    [data-theme="dark"] .border-l-4 { border-left-color: #0B5ED7; }
-    [data-theme="dark"] .bg-gray-100 { background: #0F172A; }
-    [data-theme="dark"] .border-gray-100 { border-color: #334155; }
-    [data-theme="dark"] .footer { border-top-color: #334155; color: #64748B; }
-    [data-theme="dark"] .hover\:bg-gray-200:hover { background: #1E293B; }
-    [data-theme="dark"] .bg-blue-100 { background: #1E3A5F; }
-    [data-theme="dark"] .bg-green-100 { background: #1A3A2A; }
-    [data-theme="dark"] .bg-purple-100 { background: #2A1A3A; }
-    [data-theme="dark"] .bg-orange-100 { background: #3D2E0A; }
-    [data-theme="dark"] .bg-teal-100 { background: #1A3A3A; }
-    [data-theme="dark"] .bg-indigo-100 { background: #1A1A3A; }
-    [data-theme="dark"] .bg-rose-100 { background: #3A1A2A; }
-    [data-theme="dark"] .bg-yellow-100 { background: #3D2E0A; }
+    @media (max-width: 1024px) {
+        .quick-actions-grid {
+            grid-template-columns: 1fr 1fr 1fr;
+        }
+        .welcome-hero {
+            padding: 20px 24px;
+        }
+        .welcome-title {
+            font-size: 1.3rem;
+        }
+    }
+    
+    @media (max-width: 768px) {
+        .stats-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+        .quick-actions-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+        .welcome-hero-content {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .welcome-hero-right {
+            width: 100%;
+        }
+        .welcome-hero-right .btn-pulse,
+        .welcome-hero-right .btn-refresh {
+            flex: 1;
+            justify-content: center;
+        }
+        .stat-card-number {
+            font-size: 1.4rem;
+        }
+        .queue-item {
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .queue-waiting {
+            flex-direction: row;
+            align-items: center;
+            margin-left: 0;
+            width: 100%;
+            gap: 10px;
+        }
+        .queue-action {
+            width: 100%;
+        }
+        .queue-action .btn-consult {
+            width: 100%;
+            justify-content: center;
+        }
+        .appointment-item {
+            flex-wrap: wrap;
+        }
+        .appointment-time {
+            min-width: 50px;
+        }
+        .activity-item {
+            flex-wrap: wrap;
+        }
+        .activity-item .btn-consult-sm,
+        .activity-item .btn-view-sm {
+            width: 100%;
+            justify-content: center;
+        }
+        .dashboard-card {
+            padding: 14px 16px;
+        }
+        .chart-container {
+            height: 160px;
+        }
+        .welcome-stats-mini {
+            flex-wrap: wrap;
+        }
+        .welcome-greeting {
+            flex-wrap: wrap;
+        }
+        .greeting-icon {
+            font-size: 1.8rem;
+        }
+    }
+    
+    @media (max-width: 480px) {
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+        .quick-actions-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+        .stat-card-number {
+            font-size: 1.2rem;
+        }
+        .welcome-title {
+            font-size: 1.1rem;
+        }
+        .welcome-hero {
+            padding: 16px 18px;
+        }
+        .btn-pulse {
+            font-size: 0.75rem;
+            padding: 8px 14px;
+        }
+        .btn-refresh {
+            font-size: 0.75rem;
+            padding: 8px 14px;
+        }
+        .specialty-badge,
+        .branch-badge,
+        .date-badge {
+            font-size: 0.7rem;
+            padding: 2px 10px;
+        }
+    }
+    
+    @media print {
+        .top-nav, .sidebar, .btn, .footer { display: none !important; }
+        .main-content { margin: 0 !important; padding: 20px !important; }
+        .stat-card, .dashboard-card { border: 1px solid #ddd !important; box-shadow: none !important; }
+        .welcome-hero { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .stat-card-icon { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .chart-container { height: 120px !important; }
+    }
 </style>
 
 <!-- ================================================================ -->
@@ -742,7 +1821,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
     // ================================================================
-    // CHART - Weekly Visits
+    // CHART
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var ctx = document.getElementById('visitsChart')?.getContext('2d');
@@ -790,7 +1869,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     });
 
     // ================================================================
-    // SHOW TOAST
+    // TOAST
     // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
