@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/dashboard.php
-// DOCTOR - BEAUTIFUL DASHBOARD (BLUE & GREEN CARDS)
+// DOCTOR DASHBOARD - FULL VERSION
+// 8 CLICKABLE CARDS - SMART AUTO-UPDATE (3 SECONDS)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -46,61 +47,118 @@ function time_ago($timestamp) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found");
-}
+require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET STATISTICS
+// TODAY'S DATE
+// ================================================================
+$today = date('Y-m-d');
+
+// ================================================================
+// GET INITIAL STATISTICS
 // ================================================================
 
-// 1. Total Patients
+// 1. Today's Patients
+$stmt = $db->prepare("
+    SELECT 
+        COUNT(DISTINCT CASE WHEN status IN ('pending', 'assigned') THEN patient_id END) as pending,
+        COUNT(DISTINCT CASE WHEN status = 'completed' THEN patient_id END) as completed
+    FROM visits 
+    WHERE doctor_id = ? AND DATE(created_at) = ?
+");
+$stmt->execute([$doctor_id, $today]);
+$today_patients = $stmt->fetch(PDO::FETCH_ASSOC);
+$today_patients_pending = $today_patients['pending'] ?? 0;
+$today_patients_completed = $today_patients['completed'] ?? 0;
+$today_patients_total = $today_patients_pending + $today_patients_completed;
+
+// 2. Today's Visits
+$stmt = $db->prepare("
+    SELECT 
+        COUNT(CASE WHEN status IN ('pending', 'assigned') THEN 1 END) as pending,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed
+    FROM visits 
+    WHERE doctor_id = ? AND DATE(created_at) = ?
+");
+$stmt->execute([$doctor_id, $today]);
+$today_visits = $stmt->fetch(PDO::FETCH_ASSOC);
+$today_visits_pending = $today_visits['pending'] ?? 0;
+$today_visits_completed = $today_visits['completed'] ?? 0;
+$today_visits_total = $today_visits_pending + $today_visits_completed;
+
+// 3. Total Patients
 $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ?");
 $stmt->execute([$doctor_id]);
 $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 2. Pending Visits
-$stmt = $db->prepare("SELECT COUNT(*) as pending FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned')");
+// 4. Total Visits
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE doctor_id = ?");
 $stmt->execute([$doctor_id]);
-$pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['pending'] ?? 0;
+$total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 3. Today's Visits
-$today = date('Y-m-d');
-$stmt = $db->prepare("SELECT COUNT(*) as today FROM visits WHERE doctor_id = ? AND DATE(created_at) = ?");
+// 5. Today's Appointments
+$stmt = $db->prepare("
+    SELECT 
+        COUNT(CASE WHEN status IN ('scheduled', 'pending', 'confirmed') THEN 1 END) as pending,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed
+    FROM appointments 
+    WHERE doctor_id = ? AND DATE(appointment_date) = ?
+");
 $stmt->execute([$doctor_id, $today]);
-$today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['today'] ?? 0;
+$today_appointments = $stmt->fetch(PDO::FETCH_ASSOC);
+$today_appointments_pending = $today_appointments['pending'] ?? 0;
+$today_appointments_completed = $today_appointments['completed'] ?? 0;
+$today_appointments_total = $today_appointments_pending + $today_appointments_completed;
 
-// 4. Completed Visits
-$stmt = $db->prepare("SELECT COUNT(*) as completed FROM visits WHERE doctor_id = ? AND status = 'completed'");
+// 6. Total Appointments
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE doctor_id = ?");
 $stmt->execute([$doctor_id]);
-$completed_visits = $stmt->fetch(PDO::FETCH_ASSOC)['completed'] ?? 0;
+$total_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 5. Total Prescriptions
+// 7. Total Prescriptions
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE doctor_id = ?");
 $stmt->execute([$doctor_id]);
 $total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 6. Pending Lab Tests
-$stmt = $db->prepare("SELECT COUNT(*) as pending FROM lab_tests WHERE doctor_id = ? AND status IN ('pending', 'in_progress')");
-$stmt->execute([$doctor_id]);
-$pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['pending'] ?? 0;
-
-// 7. Today's Appointments
+// 8. Lab Tests
 $stmt = $db->prepare("
-    SELECT a.*, p.full_name as patient_name, p.patient_id 
+    SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN status IN ('pending', 'in_progress') THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+    FROM lab_tests 
+    WHERE doctor_id = ?
+");
+$stmt->execute([$doctor_id]);
+$lab_tests = $stmt->fetch(PDO::FETCH_ASSOC);
+$lab_tests_total = $lab_tests['total'] ?? 0;
+$lab_tests_pending = $lab_tests['pending'] ?? 0;
+$lab_tests_completed = $lab_tests['completed'] ?? 0;
+
+// 9. Pending Visits Count
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM visits 
+    WHERE doctor_id = ? AND status IN ('pending', 'assigned')
+");
+$stmt->execute([$doctor_id]);
+$pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// 10. Today's Appointments List
+$stmt = $db->prepare("
+    SELECT a.*, p.full_name as patient_name, p.patient_id, p.phone 
     FROM appointments a
     JOIN patients p ON a.patient_id = p.id
     WHERE a.doctor_id = ? AND DATE(a.appointment_date) = ?
+    AND a.status NOT IN ('cancelled')
     ORDER BY a.appointment_date ASC
+    LIMIT 10
 ");
 $stmt->execute([$doctor_id, $today]);
-$today_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$today_appointments_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 8. Pending Patients
+// 11. Pending Patients Queue
 $stmt = $db->prepare("
     SELECT v.*, p.full_name as patient_name, p.patient_id, p.phone,
            TIMESTAMPDIFF(MINUTE, v.created_at, NOW()) as waiting_time
@@ -113,35 +171,13 @@ $stmt = $db->prepare("
 $stmt->execute([$doctor_id]);
 $pending_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 9. Recent Activities
+// 12. Weekly Appointments Chart
 $stmt = $db->prepare("
-    (SELECT 'visit' as type, v.id, v.created_at, p.full_name as patient_name, 
-            v.status, 'visit' as action_type
-     FROM visits v
-     JOIN patients p ON v.patient_id = p.id
-     WHERE v.doctor_id = ?
-     ORDER BY v.created_at DESC
-     LIMIT 5)
-    UNION ALL
-    (SELECT 'prescription' as type, pr.id, pr.created_at, p.full_name as patient_name,
-            pr.status, 'prescription' as action_type
-     FROM prescriptions pr
-     JOIN patients p ON pr.patient_id = p.id
-     WHERE pr.doctor_id = ?
-     ORDER BY pr.created_at DESC
-     LIMIT 5)
-    ORDER BY created_at DESC
-    LIMIT 8
-");
-$stmt->execute([$doctor_id, $doctor_id]);
-$recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// 10. Weekly Visits Data
-$stmt = $db->prepare("
-    SELECT DATE(created_at) as date, COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-    GROUP BY DATE(created_at)
+    SELECT DATE(appointment_date) as date, COUNT(*) as count 
+    FROM appointments 
+    WHERE doctor_id = ? AND appointment_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+    AND status NOT IN ('cancelled')
+    GROUP BY DATE(appointment_date)
     ORDER BY date
 ");
 $stmt->execute([$doctor_id]);
@@ -163,27 +199,30 @@ for ($i = 6; $i >= 0; $i--) {
     if (!$found) $chart_values[] = 0;
 }
 
-// 11. New Patients Today
+// 13. Recent Activities
 $stmt = $db->prepare("
-    SELECT COUNT(DISTINCT p.id) as new_patients
-    FROM visits v
-    JOIN patients p ON v.patient_id = p.id
-    WHERE v.doctor_id = ? AND DATE(v.created_at) = ?
+    (SELECT 'visit' as type, v.id, v.created_at, p.full_name as patient_name, 
+            v.status, 'visit' as action_type
+     FROM visits v
+     JOIN patients p ON v.patient_id = p.id
+     WHERE v.doctor_id = ?
+     ORDER BY v.created_at DESC
+     LIMIT 5)
+    UNION ALL
+    (SELECT 'appointment' as type, a.id, a.created_at, p.full_name as patient_name,
+            a.status, 'appointment' as action_type
+     FROM appointments a
+     JOIN patients p ON a.patient_id = p.id
+     WHERE a.doctor_id = ?
+     ORDER BY a.created_at DESC
+     LIMIT 5)
+    ORDER BY created_at DESC
+    LIMIT 10
 ");
-$stmt->execute([$doctor_id, $today]);
-$new_patients_today = $stmt->fetch(PDO::FETCH_ASSOC)['new_patients'] ?? 0;
+$stmt->execute([$doctor_id, $doctor_id]);
+$recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 12. New Patients Count (for notification)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as new_count 
-    FROM visits 
-    WHERE doctor_id = ? AND status = 'pending' 
-    AND created_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)
-");
-$stmt->execute([$doctor_id]);
-$new_patients_count = $stmt->fetch(PDO::FETCH_ASSOC)['new_count'] ?? 0;
-
-// 13. Get Doctor's Branch Name
+// 14. Get Doctor's Branch Name
 $doctor_branch_name = 'Not Assigned';
 try {
     $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
@@ -203,7 +242,7 @@ $selected_branch_id = $doctor_branch_id;
 $total_employees = 0;
 $total_doctors = 0;
 $total_branches = 0;
-$pending_lab_tests_sidebar = $pending_lab_tests;
+$pending_lab_tests_sidebar = $lab_tests_pending;
 $pending_prescriptions_sidebar = 0;
 
 // ================================================================
@@ -227,7 +266,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <div class="welcome-greeting">
                     <span class="greeting-icon">👋</span>
                     <div>
-                        <h1 class="welcome-title">Welcome back, <span class="doctor-name"><?= htmlspecialchars($doctor_name) ?></span></h1>
+                        <h1 class="welcome-title">Welcome back, <span class="doctor-name" id="doctorName"><?= htmlspecialchars($doctor_name) ?></span></h1>
                         <p class="welcome-subtitle">
                             <span class="specialty-badge">
                                 <i class="fas fa-stethoscope"></i> <?= htmlspecialchars($doctor_specialty) ?>
@@ -238,35 +277,44 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             <span class="date-badge">
                                 <i class="far fa-calendar-alt"></i> <?= date('l, F d, Y') ?>
                             </span>
+                            <span class="update-badge" id="lastUpdateBadge">
+                                <i class="fas fa-sync-alt fa-spin"></i> Starting...
+                            </span>
                         </p>
                     </div>
                 </div>
                 <div class="welcome-stats-mini">
                     <div class="mini-stat">
-                        <span class="mini-stat-number"><?= $today_visits ?></span>
-                        <span class="mini-stat-label">Today</span>
+                        <span class="mini-stat-number" id="miniAppointments"><?= $today_appointments_total ?></span>
+                        <span class="mini-stat-label">Appointments Today</span>
                     </div>
                     <div class="mini-stat-divider"></div>
                     <div class="mini-stat">
-                        <span class="mini-stat-number"><?= $pending_visits ?></span>
-                        <span class="mini-stat-label">Pending</span>
+                        <span class="mini-stat-number" id="miniPending"><?= $today_patients_pending ?></span>
+                        <span class="mini-stat-label">Pending Patients</span>
                     </div>
                     <div class="mini-stat-divider"></div>
                     <div class="mini-stat">
-                        <span class="mini-stat-number"><?= $total_patients ?></span>
-                        <span class="mini-stat-label">Patients</span>
+                        <span class="mini-stat-number" id="miniTotalPatients"><?= $total_patients ?></span>
+                        <span class="mini-stat-label">Total Patients</span>
                     </div>
                 </div>
             </div>
             <div class="welcome-hero-right">
-                <?php if ($pending_visits > 0): ?>
-                    <a href="#queue" class="btn-pulse">
+                <?php if ($today_patients_pending > 0): ?>
+                    <a href="#queue" class="btn-pulse" id="btnPulse">
                         <i class="fas fa-user-clock"></i>
-                        <span><?= $pending_visits ?> Patient(s) Waiting</span>
+                        <span id="btnPulseText"><?= $today_patients_pending ?> Patient(s) Waiting</span>
+                        <span class="pulse-dot"></span>
+                    </a>
+                <?php else: ?>
+                    <a href="#queue" class="btn-pulse" id="btnPulse" style="display:none;">
+                        <i class="fas fa-user-clock"></i>
+                        <span id="btnPulseText">0 Patient(s) Waiting</span>
                         <span class="pulse-dot"></span>
                     </a>
                 <?php endif; ?>
-                <button onclick="window.location.reload()" class="btn-refresh">
+                <button onclick="manualRefresh()" class="btn-refresh" id="refreshBtn">
                     <i class="fas fa-sync-alt"></i>
                     <span>Refresh</span>
                 </button>
@@ -275,216 +323,211 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - 4 BLUE + 4 GREEN -->
+    <!-- 8 STATISTICS CARDS - CLICKABLE -->
     <!-- ================================================================ -->
-    <div class="stats-grid">
+    
+    <!-- TOP 4 CARDS -->
+    <div class="stats-grid" id="topCards">
         
-        <!-- CARD 1: BLUE - Total Patients -->
-        <div class="stat-card stat-card-blue">
+        <!-- CARD 1: Today's Patients -->
+        <a href="my_patients.php?filter=today" class="stat-card stat-card-blue card-clickable" id="cardTodayPatients">
             <div class="stat-card-inner">
                 <div class="stat-card-left">
-                    <div class="stat-card-icon"><i class="fas fa-users"></i></div>
+                    <div class="stat-card-icon"><i class="fas fa-user-injured"></i></div>
                     <div class="stat-card-info">
-                        <span class="stat-card-label">Total Patients</span>
-                        <span class="stat-card-number"><?= number_format($total_patients) ?></span>
-                        <span class="stat-card-trend">
-                            <i class="fas fa-arrow-up"></i> +<?= $new_patients_today ?> today
-                        </span>
+                        <span class="stat-card-label">Today's Patients</span>
+                        <span class="stat-card-number" id="todayPatientsTotal"><?= $today_patients_total ?></span>
+                        <div class="stat-card-details">
+                            <span class="stat-detail pending" id="todayPatientsPending">
+                                <i class="fas fa-clock"></i> <?= $today_patients_pending ?> Pending
+                            </span>
+                            <span class="stat-detail completed" id="todayPatientsCompleted">
+                                <i class="fas fa-check-circle"></i> <?= $today_patients_completed ?> Complete
+                            </span>
+                        </div>
                     </div>
                 </div>
-                <div class="stat-card-right">
-                    <span class="stat-card-badge">+<?= $new_patients_today ?></span>
-                </div>
             </div>
-            <div class="stat-card-progress" style="width: <?= $total_patients > 0 ? min(100, ($total_patients / 50) * 100) : 0 ?>%;"></div>
-        </div>
+            <div class="stat-card-progress" id="todayPatientsProgress" style="width: <?= $today_patients_total > 0 ? min(100, ($today_patients_completed / max($today_patients_total, 1)) * 100) : 0 ?>%;"></div>
+        </a>
 
-        <!-- CARD 2: BLUE - Today's Visits -->
-        <div class="stat-card stat-card-blue">
+        <!-- CARD 2: Today's Visits -->
+        <a href="visits.php?filter=today" class="stat-card stat-card-blue card-clickable" id="cardTodayVisits">
             <div class="stat-card-inner">
                 <div class="stat-card-left">
                     <div class="stat-card-icon"><i class="fas fa-clinic-medical"></i></div>
                     <div class="stat-card-info">
                         <span class="stat-card-label">Today's Visits</span>
-                        <span class="stat-card-number"><?= number_format($today_visits) ?></span>
+                        <span class="stat-card-number" id="todayVisitsTotal"><?= $today_visits_total ?></span>
+                        <div class="stat-card-details">
+                            <span class="stat-detail pending" id="todayVisitsPending">
+                                <i class="fas fa-clock"></i> <?= $today_visits_pending ?> Pending
+                            </span>
+                            <span class="stat-detail completed" id="todayVisitsCompleted">
+                                <i class="fas fa-check-circle"></i> <?= $today_visits_completed ?> Complete
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card-progress" id="todayVisitsProgress" style="width: <?= $today_visits_total > 0 ? min(100, ($today_visits_completed / max($today_visits_total, 1)) * 100) : 0 ?>%;"></div>
+        </a>
+
+        <!-- CARD 3: Total Patients -->
+        <a href="my_patients.php" class="stat-card stat-card-green card-clickable" id="cardTotalPatients">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-users"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Total Patients</span>
+                        <span class="stat-card-number" id="totalPatients"><?= number_format($total_patients) ?></span>
                         <span class="stat-card-trend">
-                            <i class="fas fa-calendar-day"></i> <?= date('M d, Y') ?>
+                            <i class="fas fa-arrow-up"></i> All time
                         </span>
                     </div>
                 </div>
             </div>
-            <div class="stat-card-progress" style="width: <?= $today_visits > 0 ? min(100, ($today_visits / 30) * 100) : 0 ?>%;"></div>
-        </div>
+            <div class="stat-card-progress" style="width: <?= $total_patients > 0 ? min(100, ($total_patients / 200) * 100) : 0 ?>%; background: #059669;"></div>
+        </a>
 
-        <!-- CARD 3: BLUE - Appointments Today -->
-        <div class="stat-card stat-card-blue">
+        <!-- CARD 4: Total Visits -->
+        <a href="visits.php" class="stat-card stat-card-green card-clickable" id="cardTotalVisits">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-notes-medical"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Total Visits</span>
+                        <span class="stat-card-number" id="totalVisits"><?= number_format($total_visits) ?></span>
+                        <span class="stat-card-trend">
+                            <i class="fas fa-arrow-up"></i> All time
+                        </span>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card-progress" style="width: <?= $total_visits > 0 ? min(100, ($total_visits / 500) * 100) : 0 ?>%; background: #059669;"></div>
+        </a>
+
+    </div>
+
+    <!-- BOTTOM 4 CARDS -->
+    <div class="stats-grid stats-grid-bottom" id="bottomCards">
+        
+        <!-- CARD 5: Today's Appointments -->
+        <a href="appointments.php?filter=today" class="stat-card stat-card-blue card-clickable" id="cardTodayAppointments">
             <div class="stat-card-inner">
                 <div class="stat-card-left">
                     <div class="stat-card-icon"><i class="fas fa-calendar-check"></i></div>
                     <div class="stat-card-info">
-                        <span class="stat-card-label">Appointments Today</span>
-                        <span class="stat-card-number"><?= number_format(count($today_appointments)) ?></span>
+                        <span class="stat-card-label">Today's Appointments</span>
+                        <span class="stat-card-number" id="todayAppointmentsTotal"><?= $today_appointments_total ?></span>
+                        <div class="stat-card-details">
+                            <span class="stat-detail pending" id="todayAppointmentsPending">
+                                <i class="fas fa-clock"></i> <?= $today_appointments_pending ?> Pending
+                            </span>
+                            <span class="stat-detail completed" id="todayAppointmentsCompleted">
+                                <i class="fas fa-check-circle"></i> <?= $today_appointments_completed ?> Complete
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card-progress" id="todayAppointmentsProgress" style="width: <?= $today_appointments_total > 0 ? min(100, ($today_appointments_completed / max($today_appointments_total, 1)) * 100) : 0 ?>%;"></div>
+        </a>
+
+        <!-- CARD 6: Total Appointments -->
+        <a href="appointments.php" class="stat-card stat-card-blue card-clickable" id="cardTotalAppointments">
+            <div class="stat-card-inner">
+                <div class="stat-card-left">
+                    <div class="stat-card-icon"><i class="fas fa-calendar-alt"></i></div>
+                    <div class="stat-card-info">
+                        <span class="stat-card-label">Total Appointments</span>
+                        <span class="stat-card-number" id="totalAppointments"><?= number_format($total_appointments) ?></span>
                         <span class="stat-card-trend">
-                            <i class="fas fa-calendar-check"></i> Scheduled
+                            <i class="fas fa-arrow-up"></i> All time
                         </span>
                     </div>
                 </div>
             </div>
-            <div class="stat-card-progress" style="width: <?= count($today_appointments) > 0 ? min(100, (count($today_appointments) / 20) * 100) : 0 ?>%;"></div>
-        </div>
+            <div class="stat-card-progress" style="width: <?= $total_appointments > 0 ? min(100, ($total_appointments / 200) * 100) : 0 ?>%;"></div>
+        </a>
 
-        <!-- CARD 4: BLUE - Total Prescriptions -->
-        <div class="stat-card stat-card-blue">
+        <!-- CARD 7: Prescriptions -->
+        <a href="view_prescriptions.php" class="stat-card stat-card-green card-clickable" id="cardPrescriptions">
             <div class="stat-card-inner">
                 <div class="stat-card-left">
                     <div class="stat-card-icon"><i class="fas fa-prescription"></i></div>
                     <div class="stat-card-info">
                         <span class="stat-card-label">Prescriptions</span>
-                        <span class="stat-card-number"><?= number_format($total_prescriptions) ?></span>
+                        <span class="stat-card-number" id="totalPrescriptions"><?= number_format($total_prescriptions) ?></span>
                         <span class="stat-card-trend">
                             <i class="fas fa-prescription"></i> Total issued
                         </span>
                     </div>
                 </div>
             </div>
-            <div class="stat-card-progress" style="width: <?= $total_prescriptions > 0 ? min(100, ($total_prescriptions / 100) * 100) : 0 ?>%;"></div>
-        </div>
+            <div class="stat-card-progress" style="width: <?= $total_prescriptions > 0 ? min(100, ($total_prescriptions / 100) * 100) : 0 ?>%; background: #059669;"></div>
+        </a>
 
-        <!-- CARD 5: GREEN - Completed Visits -->
-        <div class="stat-card stat-card-green">
-            <div class="stat-card-inner">
-                <div class="stat-card-left">
-                    <div class="stat-card-icon"><i class="fas fa-check-circle"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-label">Completed Visits</span>
-                        <span class="stat-card-number"><?= number_format($completed_visits) ?></span>
-                        <span class="stat-card-trend">
-                            <i class="fas fa-check-circle"></i> Total completed
-                        </span>
-                    </div>
-                </div>
-                <div class="stat-card-right">
-                    <?php 
-                        $total = $total_patients > 0 ? $total_patients : 1;
-                        $rate = round(($completed_visits / $total) * 100);
-                    ?>
-                    <span class="stat-card-badge green"><?= $rate ?>%</span>
-                </div>
-            </div>
-            <div class="stat-card-progress" style="width: <?= $rate ?>%; background: #059669;"></div>
-        </div>
-
-        <!-- CARD 6: GREEN - Pending Patients -->
-        <div class="stat-card stat-card-green <?= $pending_visits > 0 ? 'has-badge' : '' ?>">
-            <div class="stat-card-inner">
-                <div class="stat-card-left">
-                    <div class="stat-card-icon"><i class="fas fa-clock"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-label">Pending Patients</span>
-                        <span class="stat-card-number <?= $pending_visits > 0 ? 'text-orange' : '' ?>">
-                            <?= number_format($pending_visits) ?>
-                        </span>
-                        <span class="stat-card-trend">
-                            <?php if ($pending_visits > 0): ?>
-                                <i class="fas fa-clock"></i> Waiting for you
-                            <?php else: ?>
-                                <i class="fas fa-check-circle"></i> All clear
-                            <?php endif; ?>
-                        </span>
-                    </div>
-                </div>
-                <?php if ($pending_visits > 0): ?>
-                    <div class="stat-card-right">
-                        <span class="stat-card-badge danger"><?= $pending_visits ?></span>
-                    </div>
-                <?php endif; ?>
-            </div>
-            <div class="stat-card-progress" style="width: <?= $pending_visits > 0 ? min(100, ($pending_visits / 20) * 100) : 0 ?>%; background: #059669;"></div>
-        </div>
-
-        <!-- CARD 7: GREEN - Completion Rate -->
-        <div class="stat-card stat-card-green">
-            <div class="stat-card-inner">
-                <div class="stat-card-left">
-                    <div class="stat-card-icon"><i class="fas fa-chart-line"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-label">Completion Rate</span>
-                        <span class="stat-card-number">
-                            <?php 
-                                $total = $total_patients > 0 ? $total_patients : 1;
-                                echo round(($completed_visits / $total) * 100) . '%';
-                            ?>
-                        </span>
-                        <span class="stat-card-trend">
-                            <i class="fas fa-chart-line"></i> Overall performance
-                        </span>
-                    </div>
-                </div>
-            </div>
-            <div class="stat-card-progress" style="width: <?= $total > 0 ? min(100, ($completed_visits / $total) * 100) : 0 ?>%; background: #059669;"></div>
-        </div>
-
-        <!-- CARD 8: GREEN - Pending Lab Tests -->
-        <div class="stat-card stat-card-green <?= $pending_lab_tests > 0 ? 'has-badge' : '' ?>">
+        <!-- CARD 8: Lab Tests -->
+        <a href="lab_results.php" class="stat-card stat-card-green card-clickable <?= $lab_tests_pending > 0 ? 'has-badge' : '' ?>" id="cardLabTests">
             <div class="stat-card-inner">
                 <div class="stat-card-left">
                     <div class="stat-card-icon"><i class="fas fa-flask"></i></div>
                     <div class="stat-card-info">
-                        <span class="stat-card-label">Pending Lab Tests</span>
-                        <span class="stat-card-number <?= $pending_lab_tests > 0 ? 'text-orange' : '' ?>">
-                            <?= number_format($pending_lab_tests) ?>
-                        </span>
-                        <span class="stat-card-trend">
-                            <?php if ($pending_lab_tests > 0): ?>
-                                <i class="fas fa-flask"></i> Waiting for results
-                            <?php else: ?>
-                                <i class="fas fa-check-circle"></i> No pending
-                            <?php endif; ?>
-                        </span>
+                        <span class="stat-card-label">Lab Tests</span>
+                        <span class="stat-card-number" id="labTestsTotal"><?= number_format($lab_tests_total) ?></span>
+                        <div class="stat-card-details">
+                            <span class="stat-detail pending <?= $lab_tests_pending > 0 ? 'text-orange' : '' ?>" id="labTestsPending">
+                                <i class="fas fa-clock"></i> <?= $lab_tests_pending ?> Pending
+                            </span>
+                            <span class="stat-detail completed" id="labTestsCompleted">
+                                <i class="fas fa-check-circle"></i> <?= $lab_tests_completed ?> Complete
+                            </span>
+                        </div>
                     </div>
                 </div>
-                <?php if ($pending_lab_tests > 0): ?>
+                <?php if ($lab_tests_pending > 0): ?>
                     <div class="stat-card-right">
-                        <span class="stat-card-badge danger"><?= $pending_lab_tests ?></span>
+                        <span class="stat-card-badge danger" id="labTestsBadge"><?= $lab_tests_pending ?></span>
                     </div>
                 <?php endif; ?>
             </div>
-            <div class="stat-card-progress" style="width: <?= $pending_lab_tests > 0 ? min(100, ($pending_lab_tests / 20) * 100) : 0 ?>%; background: #059669;"></div>
-        </div>
+            <div class="stat-card-progress" id="labTestsProgress" style="width: <?= $lab_tests_total > 0 ? min(100, ($lab_tests_completed / max($lab_tests_total, 1)) * 100) : 0 ?>%; background: #059669;"></div>
+        </a>
 
     </div>
 
     <!-- ================================================================ -->
-    <!-- CHART & APPOINTMENTS -->
+    <!-- CHART & TODAY'S APPOINTMENTS -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
 
-        <!-- Weekly Visits Chart -->
+        <!-- Weekly Appointments Chart -->
         <div class="dashboard-card lg:col-span-2">
             <div class="dashboard-card-header">
                 <h3 class="dashboard-card-title">
                     <i class="fas fa-chart-area title-blue"></i>
-                    Weekly Visits Trend
+                    Weekly Appointments Trend
                 </h3>
                 <span class="text-xs text-gray-400">Last 7 days</span>
             </div>
             <div class="chart-container">
-                <canvas id="visitsChart"></canvas>
+                <canvas id="appointmentsChart"></canvas>
             </div>
         </div>
 
-        <!-- Today's Appointments -->
+        <!-- Today's Appointments List -->
         <div class="dashboard-card">
             <div class="dashboard-card-header">
                 <h3 class="dashboard-card-title">
                     <i class="fas fa-calendar-check title-green"></i>
                     Today's Appointments
-                    <span class="text-sm font-normal text-gray-400">(<?= count($today_appointments) ?>)</span>
+                    <span class="text-sm font-normal text-gray-400" id="appointmentsCount">(<?= $today_appointments_total ?>)</span>
                 </h3>
             </div>
-            <div class="appointments-list">
-                <?php if (count($today_appointments) > 0): ?>
-                    <?php foreach ($today_appointments as $appt): ?>
+            <div class="appointments-list" id="appointmentsList">
+                <?php if (count($today_appointments_list) > 0): ?>
+                    <?php foreach ($today_appointments_list as $appt): ?>
                         <div class="appointment-item">
                             <div class="appointment-time"><?= date('h:i A', strtotime($appt['appointment_date'])) ?></div>
                             <div class="appointment-patient">
@@ -517,15 +560,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <h3 class="dashboard-card-title">
                 <i class="fas fa-user-clock title-orange"></i>
                 Pending Patients Queue
-                <span class="text-sm font-normal text-gray-400">(<?= count($pending_patients) ?> waiting)</span>
+                <span class="text-sm font-normal text-gray-400" id="queueCount">(<?= count($pending_patients) ?> waiting)</span>
             </h3>
             <span class="text-xs text-gray-400">
                 <i class="far fa-clock mr-1"></i> Waiting time
             </span>
         </div>
         
-        <?php if (count($pending_patients) > 0): ?>
-            <div class="queue-list">
+        <div class="queue-list" id="queueList">
+            <?php if (count($pending_patients) > 0): ?>
                 <?php foreach ($pending_patients as $index => $patient): ?>
                     <div class="queue-item <?= $index === 0 ? 'queue-item-first' : '' ?>">
                         <div class="queue-number">#<?= $index + 1 ?></div>
@@ -556,14 +599,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         </div>
                     </div>
                 <?php endforeach; ?>
-            </div>
-        <?php else: ?>
-            <div class="empty-state empty-state-large">
-                <i class="fas fa-check-circle text-green-500"></i>
-                <p class="text-gray-400">No patients waiting! All clear.</p>
-                <p class="text-xs text-gray-400">Take a break or review completed cases</p>
-            </div>
-        <?php endif; ?>
+            <?php else: ?>
+                <div class="empty-state empty-state-large">
+                    <i class="fas fa-check-circle text-green-500"></i>
+                    <p class="text-gray-400">No patients waiting! All clear.</p>
+                    <p class="text-xs text-gray-400">Take a break or review completed cases</p>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
 
     <!-- ================================================================ -->
@@ -580,21 +623,25 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </h3>
                 <a href="system_logs.php" class="card-link">View All</a>
             </div>
-            <div class="activities-list">
+            <div class="activities-list" id="activitiesList">
                 <?php if (count($recent_activities) > 0): ?>
                     <?php foreach ($recent_activities as $activity): ?>
                         <div class="activity-item">
-                            <div class="activity-icon <?= $activity['action_type'] === 'prescription' ? 'activity-icon-green' : 'activity-icon-blue' ?>">
-                                <i class="fas <?= $activity['action_type'] === 'prescription' ? 'fa-prescription' : 'fa-user-injured' ?>"></i>
+                            <div class="activity-icon <?= $activity['action_type'] === 'appointment' ? 'activity-icon-blue' : 'activity-icon-green' ?>">
+                                <i class="fas <?= $activity['action_type'] === 'appointment' ? 'fa-calendar-check' : 'fa-user-injured' ?>"></i>
                             </div>
                             <div class="activity-content">
                                 <div class="activity-action">
-                                    <?= $activity['action_type'] === 'prescription' ? 'Prescription created' : 'Visit ' . $activity['status'] ?>
+                                    <?php if ($activity['action_type'] === 'appointment'): ?>
+                                        Appointment <?= $activity['status'] ?>
+                                    <?php else: ?>
+                                        Visit <?= $activity['status'] ?>
+                                    <?php endif; ?>
                                     <span class="activity-patient">- <?= htmlspecialchars($activity['patient_name'] ?? 'Unknown') ?></span>
                                 </div>
                                 <div class="activity-details">
-                                    <?php if ($activity['action_type'] === 'prescription'): ?>
-                                        Status: <?= ucfirst($activity['status'] ?? 'Pending') ?>
+                                    <?php if ($activity['action_type'] === 'appointment'): ?>
+                                        <?= date('M d, h:i A', strtotime($activity['created_at'] ?? '')) ?>
                                     <?php else: ?>
                                         Visit #<?= htmlspecialchars($activity['id'] ?? '') ?>
                                     <?php endif; ?>
@@ -603,8 +650,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             </div>
                             <?php if ($activity['action_type'] === 'visit' && ($activity['status'] ?? '') === 'pending'): ?>
                                 <a href="consultation.php?visit_id=<?= $activity['id'] ?>" class="btn-consult-sm">Consult</a>
-                            <?php elseif ($activity['action_type'] === 'prescription'): ?>
-                                <a href="view_prescription.php?id=<?= $activity['id'] ?>" class="btn-view-sm">View</a>
+                            <?php elseif ($activity['action_type'] === 'appointment'): ?>
+                                <a href="appointment_details.php?id=<?= $activity['id'] ?>" class="btn-view-sm">View</a>
                             <?php endif; ?>
                         </div>
                     <?php endforeach; ?>
@@ -630,9 +677,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <i class="fas fa-users"></i>
                     <span>My Patients</span>
                 </a>
-                <a href="consultation.php?patient_id=0" class="quick-action quick-action-green">
-                    <i class="fas fa-stethoscope"></i>
-                    <span>Consultation</span>
+                <a href="appointments.php" class="quick-action quick-action-green">
+                    <i class="fas fa-calendar-check"></i>
+                    <span>Appointments</span>
                 </a>
                 <a href="prescribe.php" class="quick-action quick-action-blue">
                     <i class="fas fa-prescription"></i>
@@ -663,6 +710,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="text-gray-300 mx-2">|</span>
             Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -684,6 +733,54 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- STYLES -->
 <!-- ================================================================ -->
 <style>
+    /* ================================================================
+       CLICKABLE CARDS
+       ================================================================ */
+    .card-clickable {
+        text-decoration: none;
+        color: inherit;
+        display: block;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    
+    .card-clickable:hover {
+        transform: translateY(-6px);
+        box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+    }
+    
+    .card-clickable .stat-card-inner {
+        pointer-events: none;
+    }
+    
+    .card-clickable .stat-card-progress {
+        pointer-events: none;
+    }
+    
+    /* ================================================================
+       UPDATE BADGE
+       ================================================================ */
+    .update-badge {
+        background: rgba(255,255,255,0.1);
+        color: #93C5FD;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .update-badge .fa-spin {
+        animation: fa-spin 2s infinite linear;
+    }
+    
+    @keyframes fa-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
     /* ================================================================
        WELCOME HERO
        ================================================================ */
@@ -900,13 +997,17 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     /* ================================================================
-       STAT CARDS - BLUE & GREEN THEME
+       STAT CARDS
        ================================================================ */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
         gap: 18px;
         margin-bottom: 18px;
+    }
+    
+    .stats-grid-bottom {
+        margin-bottom: 28px;
     }
     
     .stat-card {
@@ -972,9 +1073,30 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-weight: 700;
         color: #1E293B;
         line-height: 1.2;
+        transition: all 0.3s ease;
     }
     
     .stat-card-number.text-orange { color: #D97706; }
+    
+    .stat-card-details {
+        display: flex;
+        gap: 12px;
+        margin-top: 4px;
+        flex-wrap: wrap;
+    }
+    
+    .stat-detail {
+        font-size: 0.65rem;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        transition: all 0.3s ease;
+    }
+    
+    .stat-detail.pending { color: #D97706; }
+    .stat-detail.completed { color: #059669; }
+    .stat-detail.text-orange { color: #D97706; }
     
     .stat-card-trend {
         font-size: 0.65rem;
@@ -1620,6 +1742,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .text-green-500 { color: #059669; }
+    .text-gray-400 { color: #94A3B8; }
+    .text-xs { font-size: 0.75rem; }
+    .text-blue-500 { color: #0B5ED7; }
+    .text-orange { color: #D97706; }
     
     [data-theme="dark"] .empty-state i {
         color: #334155;
@@ -1816,57 +1942,62 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </style>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - WITH SMART AUTO-UPDATE (3 SECONDS) -->
 <!-- ================================================================ -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
     // ================================================================
-    // CHART
+    // CHART - INITIAL RENDER
     // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var ctx = document.getElementById('visitsChart')?.getContext('2d');
-        if (ctx && typeof Chart !== 'undefined') {
-            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            var gridColor = isDark ? '#334155' : '#E2E8F0';
-            var textColor = isDark ? '#94A3B8' : '#64748B';
-            
-            var labels = <?= json_encode($chart_labels) ?>;
-            var values = <?= json_encode($chart_values) ?>;
-            
-            new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Visits',
-                        data: values,
-                        backgroundColor: '#0B5ED7',
-                        borderColor: '#0A4CA8',
-                        borderWidth: 2,
-                        borderRadius: 6,
-                    }]
+    var chartInstance = null;
+    var chartLabels = <?= json_encode($chart_labels) ?>;
+    var chartValues = <?= json_encode($chart_values) ?>;
+    
+    function renderChart(labels, values) {
+        var ctx = document.getElementById('appointmentsChart')?.getContext('2d');
+        if (!ctx) return;
+        
+        if (chartInstance) {
+            chartInstance.destroy();
+        }
+        
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var gridColor = isDark ? '#334155' : '#E2E8F0';
+        var textColor = isDark ? '#94A3B8' : '#64748B';
+        
+        chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Appointments',
+                    data: values,
+                    backgroundColor: '#0B5ED7',
+                    borderColor: '#0A4CA8',
+                    borderWidth: 2,
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
                 },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { stepSize: 1, color: textColor },
+                        grid: { color: gridColor }
                     },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            ticks: { stepSize: 1, color: textColor },
-                            grid: { color: gridColor }
-                        },
-                        x: {
-                            grid: { display: false },
-                            ticks: { color: textColor }
-                        }
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: textColor }
                     }
                 }
-            });
-        }
-    });
+            }
+        });
+    }
 
     // ================================================================
     // TOAST
@@ -1888,31 +2019,372 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     // ================================================================
+    // HELPER FUNCTIONS
+    // ================================================================
+    function formatTime(datetime) {
+        var d = new Date(datetime);
+        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function capitalize(text) {
+        return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    // ================================================================
+    // SMART AUTO-UPDATE - UPDATES ONLY WHEN DATA CHANGES
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    var lastHash = null;
+    var updateCount = 0;
+    
+    function fetchAndUpdateStats() {
+        if (isUpdating) return;
+        isUpdating = true;
+        
+        updateCount++;
+        
+        // Update badge every 3 updates
+        if (updateCount % 3 === 0) {
+            document.getElementById('lastUpdateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Checking...';
+        }
+        
+        fetch('get_stats.php')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Check if data has changed
+                    if (lastHash !== data.hash) {
+                        lastHash = data.hash;
+                        updateDashboard(data.data);
+                        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + data.data.timestamp;
+                        
+                        // Show subtle notification on change
+                        if (updateCount > 1) {
+                            showToast('🔄 Updated', 'Dashboard auto-updated at ' + data.data.timestamp, 'info');
+                        }
+                    }
+                    
+                    // Update badge
+                    var now = new Date();
+                    document.getElementById('lastUpdateBadge').innerHTML = 
+                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
+                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }
+                isUpdating = false;
+            })
+            .catch(function(error) {
+                console.error('Error fetching stats:', error);
+                document.getElementById('lastUpdateBadge').innerHTML = '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Connection error';
+                isUpdating = false;
+            });
+    }
+    
+    function updateDashboard(data) {
+        // ================================================================
+        // CARD 1: Today's Patients
+        // ================================================================
+        document.getElementById('todayPatientsTotal').textContent = data.today_patients.total;
+        document.getElementById('todayPatientsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_patients.pending + ' Pending';
+        document.getElementById('todayPatientsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_patients.completed + ' Complete';
+        var pct1 = data.today_patients.total > 0 ? Math.min(100, (data.today_patients.completed / Math.max(data.today_patients.total, 1)) * 100) : 0;
+        document.getElementById('todayPatientsProgress').style.width = pct1 + '%';
+
+        // ================================================================
+        // CARD 2: Today's Visits
+        // ================================================================
+        document.getElementById('todayVisitsTotal').textContent = data.today_visits.total;
+        document.getElementById('todayVisitsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_visits.pending + ' Pending';
+        document.getElementById('todayVisitsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_visits.completed + ' Complete';
+        var pct2 = data.today_visits.total > 0 ? Math.min(100, (data.today_visits.completed / Math.max(data.today_visits.total, 1)) * 100) : 0;
+        document.getElementById('todayVisitsProgress').style.width = pct2 + '%';
+
+        // ================================================================
+        // CARD 3: Total Patients
+        // ================================================================
+        document.getElementById('totalPatients').textContent = Number(data.total_patients).toLocaleString();
+
+        // ================================================================
+        // CARD 4: Total Visits
+        // ================================================================
+        document.getElementById('totalVisits').textContent = Number(data.total_visits).toLocaleString();
+
+        // ================================================================
+        // CARD 5: Today's Appointments
+        // ================================================================
+        document.getElementById('todayAppointmentsTotal').textContent = data.today_appointments.total;
+        document.getElementById('todayAppointmentsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_appointments.pending + ' Pending';
+        document.getElementById('todayAppointmentsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_appointments.completed + ' Complete';
+        var pct5 = data.today_appointments.total > 0 ? Math.min(100, (data.today_appointments.completed / Math.max(data.today_appointments.total, 1)) * 100) : 0;
+        document.getElementById('todayAppointmentsProgress').style.width = pct5 + '%';
+
+        // ================================================================
+        // CARD 6: Total Appointments
+        // ================================================================
+        document.getElementById('totalAppointments').textContent = Number(data.total_appointments).toLocaleString();
+
+        // ================================================================
+        // CARD 7: Prescriptions
+        // ================================================================
+        document.getElementById('totalPrescriptions').textContent = Number(data.total_prescriptions).toLocaleString();
+
+        // ================================================================
+        // CARD 8: Lab Tests
+        // ================================================================
+        document.getElementById('labTestsTotal').textContent = Number(data.lab_tests.total).toLocaleString();
+        document.getElementById('labTestsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.lab_tests.pending + ' Pending';
+        document.getElementById('labTestsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.lab_tests.completed + ' Complete';
+        var pct8 = data.lab_tests.total > 0 ? Math.min(100, (data.lab_tests.completed / Math.max(data.lab_tests.total, 1)) * 100) : 0;
+        document.getElementById('labTestsProgress').style.width = pct8 + '%';
+        
+        // Lab badge
+        var badge = document.getElementById('labTestsBadge');
+        if (data.lab_tests.pending > 0) {
+            if (!badge) {
+                var card = document.getElementById('cardLabTests');
+                var rightDiv = card.querySelector('.stat-card-right');
+                if (!rightDiv) {
+                    rightDiv = document.createElement('div');
+                    rightDiv.className = 'stat-card-right';
+                    card.querySelector('.stat-card-inner').appendChild(rightDiv);
+                }
+                rightDiv.innerHTML = '<span class="stat-card-badge danger" id="labTestsBadge">' + data.lab_tests.pending + '</span>';
+            } else {
+                badge.textContent = data.lab_tests.pending;
+                badge.style.display = 'inline-block';
+            }
+            document.getElementById('cardLabTests').classList.add('has-badge');
+        } else {
+            if (badge) badge.style.display = 'none';
+            document.getElementById('cardLabTests').classList.remove('has-badge');
+        }
+
+        // ================================================================
+        // UPDATE WELCOME MINI STATS
+        // ================================================================
+        document.getElementById('miniAppointments').textContent = data.today_appointments.total;
+        document.getElementById('miniPending').textContent = data.today_patients.pending;
+        document.getElementById('miniTotalPatients').textContent = data.total_patients;
+
+        // ================================================================
+        // UPDATE APPOINTMENTS COUNT
+        // ================================================================
+        document.getElementById('appointmentsCount').textContent = '(' + data.today_appointments.total + ')';
+
+        // ================================================================
+        // UPDATE PULSE BUTTON
+        // ================================================================
+        var btnPulse = document.getElementById('btnPulse');
+        var btnPulseText = document.getElementById('btnPulseText');
+        if (data.today_patients.pending > 0) {
+            btnPulse.style.display = 'inline-flex';
+            btnPulseText.textContent = data.today_patients.pending + ' Patient(s) Waiting';
+        } else {
+            btnPulse.style.display = 'none';
+        }
+
+        // ================================================================
+        // UPDATE QUEUE COUNT
+        // ================================================================
+        document.getElementById('queueCount').textContent = '(' + data.pending_visits + ' waiting)';
+
+        // ================================================================
+        // UPDATE APPOINTMENTS LIST
+        // ================================================================
+        var appointmentsList = document.getElementById('appointmentsList');
+        if (data.today_appointments.list) {
+            var currentItems = appointmentsList.querySelectorAll('.appointment-item');
+            var newItems = data.today_appointments.list;
+            
+            if (currentItems.length !== newItems.length || newItems.length > 0) {
+                var listHtml = '';
+                if (newItems.length > 0) {
+                    newItems.forEach(function(appt) {
+                        var statusClass = appt.status || 'scheduled';
+                        listHtml += `
+                            <div class="appointment-item">
+                                <div class="appointment-time">${formatTime(appt.appointment_date)}</div>
+                                <div class="appointment-patient">
+                                    <div class="appointment-name">${escapeHtml(appt.patient_name)}</div>
+                                    <div class="appointment-id">${escapeHtml(appt.patient_id)}</div>
+                                </div>
+                                <span class="appointment-status ${statusClass}">
+                                    ${capitalize(statusClass)}
+                                </span>
+                            </div>
+                        `;
+                    });
+                } else {
+                    listHtml = `
+                        <div class="empty-state">
+                            <i class="fas fa-calendar-check"></i>
+                            <p>No appointments scheduled for today</p>
+                        </div>
+                    `;
+                }
+                appointmentsList.innerHTML = listHtml;
+            }
+        }
+
+        // ================================================================
+        // UPDATE QUEUE LIST
+        // ================================================================
+        var queueList = document.getElementById('queueList');
+        if (data.pending_patients) {
+            var currentQueueItems = queueList.querySelectorAll('.queue-item');
+            var newQueueItems = data.pending_patients;
+            
+            if (currentQueueItems.length !== newQueueItems.length) {
+                var queueHtml = '';
+                if (newQueueItems.length > 0) {
+                    newQueueItems.forEach(function(patient, index) {
+                        var isFirst = index === 0 ? 'queue-item-first' : '';
+                        var waitingTime = patient.waiting_time > 0 ? patient.waiting_time + ' min' : 'Just now';
+                        var isLong = patient.waiting_time > 30 ? 'queue-time-long' : '';
+                        queueHtml += `
+                            <div class="queue-item ${isFirst}">
+                                <div class="queue-number">#${index + 1}</div>
+                                <div class="queue-patient">
+                                    <div class="queue-name">
+                                        ${escapeHtml(patient.patient_name)}
+                                        ${index === 0 ? '<span class="queue-badge">Next</span>' : ''}
+                                    </div>
+                                    <div class="queue-details">
+                                        ${escapeHtml(patient.patient_id || 'N/A')} • ${escapeHtml(patient.phone || '')}
+                                    </div>
+                                </div>
+                                <div class="queue-waiting">
+                                    <span class="queue-time ${isLong}">${waitingTime}</span>
+                                    <span class="queue-status ${patient.status || 'pending'}">${capitalize(patient.status || 'Pending')}</span>
+                                </div>
+                                <div class="queue-action">
+                                    <a href="consultation.php?visit_id=${patient.id}" class="btn-consult">
+                                        <i class="fas fa-stethoscope"></i> Consult
+                                    </a>
+                                </div>
+                            </div>
+                        `;
+                    });
+                } else {
+                    queueHtml = `
+                        <div class="empty-state empty-state-large">
+                            <i class="fas fa-check-circle text-green-500"></i>
+                            <p class="text-gray-400">No patients waiting! All clear.</p>
+                            <p class="text-xs text-gray-400">Take a break or review completed cases</p>
+                        </div>
+                    `;
+                }
+                queueList.innerHTML = queueHtml;
+            }
+        }
+
+        // ================================================================
+        // UPDATE RECENT ACTIVITIES
+        // ================================================================
+        // For simplicity, we don't auto-update activities to keep performance
+        // This would require additional API call if needed
+    }
+
+    // ================================================================
+    // START AUTO-UPDATE - EVERY 3 SECONDS
+    // ================================================================
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        // Update every 3 seconds
+        updateInterval = setInterval(fetchAndUpdateStats, 3000);
+        document.getElementById('lastUpdateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Live mode active';
+        fetchAndUpdateStats();
+    }
+
+    // ================================================================
+    // STOP AUTO-UPDATE
+    // ================================================================
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            document.getElementById('lastUpdateBadge').innerHTML = '<i class="fas fa-pause"></i> Paused';
+        }
+    }
+
+    // ================================================================
+    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
+
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Loading...';
+        btn.disabled = true;
+        
+        // Force reset hash to force update
+        lastHash = null;
+        fetchAndUpdateStats();
+        
+        setTimeout(function() {
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+            btn.disabled = false;
+        }, 1000);
+    }
+
+    // ================================================================
+    // INITIALIZE DASHBOARD
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        // Render chart
+        renderChart(chartLabels, chartValues);
+        
+        // Start auto-update after 2 seconds
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 2000);
+    });
+
+    // ================================================================
     // NOTIFICATIONS
     // ================================================================
-    <?php if ($pending_visits > 0): ?>
+    <?php if ($today_patients_pending > 0): ?>
     setTimeout(function() {
         showToast('👋 Patients Waiting', 
-            'You have <?= $pending_visits ?> patient(s) waiting for consultation', 
+            'You have <?= $today_patients_pending ?> patient(s) waiting for consultation', 
             'info'
         );
     }, 1000);
     <?php endif; ?>
 
-    <?php if ($new_patients_count > 0): ?>
+    <?php if ($today_appointments_completed > 0): ?>
     setTimeout(function() {
-        showToast('🆕 New Patient Assigned', 
-            '<?= $new_patients_count ?> new patient(s) have been assigned to you', 
+        showToast('✅ Appointments Completed', 
+            'You have completed <?= $today_appointments_completed ?> appointment(s) today', 
             'success'
         );
     }, 2000);
     <?php endif; ?>
 
     console.log('%c👨‍⚕️ Doctor Dashboard - <?= htmlspecialchars($doctor_name) ?>', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Total Patients: <?= number_format($total_patients) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c⏳ Pending: <?= number_format($pending_visits) ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c✅ Completed: <?= number_format($completed_visits) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📅 Today: <?= number_format($today_visits) ?> visits', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📊 Today Patients: <?= $today_patients_total ?> (Pending: <?= $today_patients_pending ?>, Complete: <?= $today_patients_completed ?>)', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📅 Today Visits: <?= $today_visits_total ?> (Pending: <?= $today_visits_pending ?>, Complete: <?= $today_visits_completed ?>)', 'font-size:12px; color:#059669;');
+    console.log('%c📋 Today Appointments: <?= $today_appointments_total ?> (Pending: <?= $today_appointments_pending ?>, Complete: <?= $today_appointments_completed ?>)', 'font-size:12px; color:#D97706;');
+    console.log('%c🧪 Lab Tests: <?= $lab_tests_total ?> (Pending: <?= $lab_tests_pending ?>, Complete: <?= $lab_tests_completed ?>)', 'font-size:12px; color:#7C3AED;');
+    console.log('%c🔄 Auto-update: Every 3 seconds (Smart - only when data changes)', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Click any card to navigate to related page', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>
