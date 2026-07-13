@@ -54,6 +54,17 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $selected_branch_id = 'all';
 }
 
+// ================================================================
+// GET PROFILE PICTURE FROM SESSION
+// ================================================================
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// Logo path
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
 // Get current page name
 $current_page = basename($_SERVER['PHP_SELF']);
 $page_title = ucfirst(str_replace('.php', '', $current_page));

@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/appointments.php
 // RECEPTION - APPOINTMENTS LIST (BRANCH FILTERED)
+// WITH VIEW BUTTON ONLY
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -146,6 +147,178 @@ include_once '../../components/reception_sidebar.php';
         background: #1A3A2A;
         color: #34D399;
     }
+    
+    /* ===== BUTTONS ===== */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.7rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    .btn-blue {
+        background: #0B5ED7;
+        color: white;
+    }
+    .btn-blue:hover {
+        background: #0A4CA8;
+        transform: scale(1.05);
+    }
+    .btn-sm {
+        padding: 3px 8px;
+        font-size: 0.65rem;
+        border-radius: 4px;
+    }
+    
+    .badge {
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: white;
+        border: none;
+    }
+    .badge-green { background: #059669; color: white; }
+    .badge-yellow { background: #D97706; color: white; }
+    .badge-red { background: #DC2626; color: white; }
+    .badge-blue { background: #0B5ED7; color: white; }
+    .badge-gray { background: #94A3B8; color: white; }
+    
+    .card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s;
+    }
+    .card:hover {
+        border-color: var(--primary);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+    }
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .card-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .card-title .title-blue { color: #0B5ED7; }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+    }
+    .data-table thead th {
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: 700;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: white;
+        background: #0B5ED7;
+        border-bottom: 3px solid #0A4CA8;
+        white-space: nowrap;
+    }
+    .data-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+    }
+    
+    .page-header {
+        border-bottom: 3px solid #0B5ED7;
+        padding-bottom: 12px;
+    }
+    .page-header .page-title {
+        color: #0B3D8A;
+        font-size: 1.6rem;
+        font-weight: 700;
+    }
+    [data-theme="dark"] .page-header .page-title {
+        color: #6EA8FE;
+    }
+    .page-header .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    
+    .form-control {
+        padding: 4px 10px;
+        border: 2px solid var(--border-color);
+        border-radius: 8px;
+        font-size: 0.8rem;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        outline: none;
+        transition: all 0.3s;
+    }
+    .form-control:focus {
+        border-color: #0B5ED7;
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+    }
+    
+    .action-buttons {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        justify-content: center;
+    }
+    
+    @media (max-width: 768px) {
+        .data-table {
+            font-size: 0.7rem;
+        }
+        .data-table th,
+        .data-table td {
+            padding: 6px 8px;
+        }
+        .btn-sm {
+            padding: 2px 6px;
+            font-size: 0.55rem;
+        }
+        .action-buttons .btn {
+            flex: 1;
+            justify-content: center;
+        }
+        .filter-btn {
+            font-size: 0.6rem;
+            padding: 3px 8px;
+        }
+        .card {
+            padding: 12px 14px;
+        }
+        .page-header .page-title {
+            font-size: 1.2rem;
+        }
+    }
 </style>
 
 <!-- ================================================================ -->
@@ -210,7 +383,7 @@ include_once '../../components/reception_sidebar.php';
             </p>
         </div>
         <div>
-            <a href="new_appointment.php" class="btn btn-green btn-sm">
+            <a href="new_appointment.php" class="btn btn-blue btn-sm">
                 <i class="fas fa-plus-circle"></i> New Appointment
             </a>
         </div>
@@ -234,7 +407,7 @@ include_once '../../components/reception_sidebar.php';
             <span class="text-sm font-medium text-gray-600 ml-4 mr-2">Date:</span>
             <input type="date" id="dateFilter" value="<?= $date_filter ?>" 
                    onchange="window.location.href='appointments.php?date='+this.value+'&status=<?= $status_filter ?>'"
-                   class="form-control" style="width:auto;padding:4px 10px;font-size:0.8rem;border:2px solid var(--border-color);border-radius:8px;background:var(--bg-card);color:var(--text-primary);">
+                   class="form-control" style="width:auto;">
         </div>
     </div>
 
@@ -259,7 +432,7 @@ include_once '../../components/reception_sidebar.php';
                         <th>Doctor</th>
                         <th>Purpose</th>
                         <th>Status</th>
-                        <th style="border-radius: 0 8px 0 0;">Actions</th>
+                        <th style="border-radius: 0 8px 0 0; text-align:center;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -277,21 +450,12 @@ include_once '../../components/reception_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <div class="flex gap-1">
-                                        <a href="view_patient.php?id=<?= $appt['patient_id'] ?>" 
-                                           class="btn btn-blue btn-sm" title="View Patient">
-                                            <i class="fas fa-eye"></i>
+                                    <div class="action-buttons">
+                                        <!-- VIEW BUTTON ONLY -->
+                                        <a href="view_appointment.php?id=<?= $appt['id'] ?>" 
+                                           class="btn btn-blue btn-sm" title="View Appointment">
+                                            <i class="fas fa-eye"></i> View
                                         </a>
-                                        <?php if ($appt['status'] !== 'completed' && $appt['status'] !== 'cancelled'): ?>
-                                            <a href="appointment_status.php?id=<?= $appt['id'] ?>&status=confirmed" 
-                                               class="btn btn-green btn-sm" title="Confirm">
-                                                <i class="fas fa-check"></i>
-                                            </a>
-                                            <a href="appointment_status.php?id=<?= $appt['id'] ?>&status=cancelled" 
-                                               class="btn btn-outline btn-sm" title="Cancel" style="color:var(--danger);border-color:var(--danger);">
-                                                <i class="fas fa-times"></i>
-                                            </a>
-                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -311,6 +475,20 @@ include_once '../../components/reception_sidebar.php';
                 </tbody>
             </table>
         </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- QUICK STATS -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
+        <?php foreach ($status_counts as $status => $count): ?>
+            <div class="card text-center <?= $status === 'completed' ? 'border-green-500' : ($status === 'cancelled' ? 'border-red-500' : '') ?>">
+                <p class="text-2xl font-bold <?= $status === 'completed' ? 'text-green-600' : ($status === 'cancelled' ? 'text-red-500' : 'text-blue-600') ?>">
+                    <?= $count ?>
+                </p>
+                <p class="text-sm text-gray-500 capitalize"><?= ucfirst($status) ?></p>
+            </div>
+        <?php endforeach; ?>
     </div>
 
     <!-- ================================================================ -->
@@ -445,9 +623,10 @@ include_once '../../components/reception_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c📅 Braick - Appointments List (Branch Filtered)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📅 Braick - Appointments List', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Appointments: <?= count($appointments) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Actions: View only', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
