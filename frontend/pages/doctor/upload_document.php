@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/upload_document.php
-// DOCTOR - UPLOAD PATIENT DOCUMENT
+// DOCTOR - UPLOAD PATIENT DOCUMENT (FIXED)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -38,7 +38,7 @@ if (file_exists($db_path)) {
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET PATIENTS FOR DROPDOWN (Only doctor's patients)
+// GET PATIENTS FOR DROPDOWN
 // ================================================================
 $stmt = $db->prepare("
     SELECT DISTINCT p.id, p.full_name, p.patient_id
@@ -93,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message_type = 'error';
     } else {
         // ================================================================
-        // UPLOAD FILE - FIXED PATH
+        // UPLOAD FILE
         // ================================================================
         $upload_dir = 'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/';
         
@@ -103,13 +103,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         $file = $_FILES['document_file'];
-        $file_name = basename($file['name']);
+        $original_name = basename($file['name']);
         $file_size = $file['size'];
         $file_tmp = $file['tmp_name'];
         $file_type = $file['type'];
         
         // Generate unique filename
-        $file_extension = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+        $file_extension = strtolower(pathinfo($original_name, PATHINFO_EXTENSION));
         $new_filename = 'doc_' . date('Ymd_His') . '_' . uniqid() . '.' . $file_extension;
         $target_file = $upload_dir . $new_filename;
         
@@ -124,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message_type = 'error';
         } elseif (move_uploaded_file($file_tmp, $target_file)) {
             // ================================================================
-            // SAVE TO DATABASE
+            // SAVE TO DATABASE - Store both original name and new filename
             // ================================================================
             $document_number = 'DOC-' . date('Y') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             $file_path = '/dispensary_system/frontend/assets/uploads/documents/' . $new_filename;
@@ -156,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $document_number,
                 $document_name,
                 $document_type,
-                $file_name,
+                $new_filename,  // Store the actual filename
                 $file_path,
                 $file_size,
                 $file_type,
@@ -183,7 +183,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message_type = 'error';
             }
         } else {
-            $message = 'Failed to upload file';
+            $message = 'Failed to upload file. Error: ' . $_FILES['document_file']['error'];
             $message_type = 'error';
         }
     }
@@ -644,7 +644,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             return;
         }
         
-        // Load visits via AJAX
         fetch('get_visits.php?patient_id=' + patientId)
             .then(response => response.json())
             .then(data => {
@@ -716,6 +715,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 
     console.log('%c📄 Upload Document - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📁 Upload path: C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Fixed: File names now saved correctly', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>
