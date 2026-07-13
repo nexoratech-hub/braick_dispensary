@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/documents.php
-// DOCTOR - PATIENT DOCUMENTS (DOCTOR'S PATIENTS ONLY)
+// DOCTOR - PATIENT DOCUMENTS (WITH UPLOAD BUTTON)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -63,7 +63,7 @@ $sql = "
         SELECT DISTINCT patient_id 
         FROM visits 
         WHERE doctor_id = ?
-    )  -- ← Only patients assigned to this doctor
+    )
 ";
 
 $params = [$doctor_id, $doctor_id];
@@ -92,7 +92,7 @@ $stmt->execute($params);
 $documents = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS - Only for patients of this doctor
+// GET STATISTICS
 // ================================================================
 $total_documents = count($documents);
 $verified_count = 0;
@@ -114,7 +114,7 @@ foreach ($documents as $doc) {
 }
 
 // ================================================================
-// GET PATIENTS FOR FILTER - Only patients assigned to this doctor
+// GET PATIENTS FOR FILTER
 // ================================================================
 $stmt = $db->prepare("
     SELECT DISTINCT p.id, p.full_name, p.patient_id
@@ -240,17 +240,44 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-file mr-1"></i> <?= $total_documents ?> documents
                 </span>
+                <?php if ($unverified_count > 0): ?>
+                    <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
+                        <i class="fas fa-clock mr-1"></i> <?= $unverified_count ?> pending verification
+                    </span>
+                <?php endif; ?>
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-user-md mr-1"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
                 </span>
             </p>
         </div>
         <div>
+            <!-- ================================================================ -->
+            <!-- UPLOAD BUTTON - Doctor can upload documents -->
+            <!-- ================================================================ -->
             <a href="upload_document.php" class="btn btn-blue btn-sm">
                 <i class="fas fa-upload"></i> Upload Document
             </a>
         </div>
     </div>
+
+    <!-- Message -->
+    <?php if (isset($_GET['uploaded'])): ?>
+        <div class="p-4 rounded-xl mb-4 bg-green-100 text-green-700 border border-green-200">
+            <i class="fas fa-check-circle mr-2"></i> Document uploaded successfully!
+        </div>
+    <?php endif; ?>
+
+    <?php if (isset($_GET['verified'])): ?>
+        <div class="p-4 rounded-xl mb-4 bg-green-100 text-green-700 border border-green-200">
+            <i class="fas fa-check-circle mr-2"></i> Document verified successfully!
+        </div>
+    <?php endif; ?>
+
+    <?php if (isset($_GET['error'])): ?>
+        <div class="p-4 rounded-xl mb-4 bg-red-100 text-red-700 border border-red-200">
+            <i class="fas fa-exclamation-circle mr-2"></i> <?= htmlspecialchars($_GET['error']) ?>
+        </div>
+    <?php endif; ?>
 
     <!-- Statistics Cards -->
     <div class="stats-grid">
@@ -284,7 +311,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </div>
     </div>
 
-    <!-- Search & Filter - Only Doctor's Patients -->
+    <!-- Search & Filter -->
     <div class="card mb-6">
         <div class="filter-info">
             <i class="fas fa-info-circle text-blue-600"></i>
@@ -406,7 +433,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <?php if ($search || $type_filter || $patient_filter): ?>
                                     No documents found matching your filters
                                 <?php else: ?>
-                                    No documents found for your patients. Click "Upload Document" to add one.
+                                    No documents found for your patients.
+                                    <div class="mt-3">
+                                        <a href="upload_document.php" class="btn btn-blue btn-sm">
+                                            <i class="fas fa-upload"></i> Upload First Document
+                                        </a>
+                                    </div>
                                 <?php endif; ?>
                                 <div class="text-xs text-muted mt-2">
                                     <i class="fas fa-info-circle"></i> Showing documents for <strong>your patients</strong> only
@@ -897,6 +929,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .text-3xl { font-size: 1.875rem; }
     .block { display: block; }
     .mb-2 { margin-bottom: 0.5rem; }
+    .mt-2 { margin-top: 0.5rem; }
+    .mt-3 { margin-top: 0.75rem; }
     .ml-2 { margin-left: 0.5rem; }
     .mr-1 { margin-right: 0.25rem; }
     .mr-2 { margin-right: 0.5rem; }
@@ -1039,6 +1073,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             height: 24px;
             font-size: 0.6rem;
         }
+        .page-header .page-title {
+            font-size: 1rem;
+        }
+        .page-header .page-subtitle {
+            font-size: 0.7rem;
+        }
     }
 </style>
 
@@ -1064,9 +1104,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 
     console.log('%c📄 Patient Documents - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📊 Total: <?= $total_documents ?> | Verified: <?= $verified_count ?> | Pending: <?= $unverified_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🔒 Doctor ID: <?= $doctor_id ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c👥 Patients: <?= count($patients_list) ?> patients assigned', 'font-size:12px; color:#64748B;');
-    console.log('%c✅ Only documents for doctor\'s patients are shown', 'font-size:12px; color:#059669;');
+    console.log('%c🔒 Doctor ID: <?= $doctor_id ?> - Only your patients', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📤 Upload button is visible at top right', 'font-size:12px; color:#059669;');
 </script>
 
 </body>
