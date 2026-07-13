@@ -1,8 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/dashboard.php
-// RECEPTION DASHBOARD - ROSE MWANGI
-// FULL VERSION WITH ALL FEATURES
+// RECEPTION DASHBOARD - WITH TODAY PATIENTS & TODAY VISITS
+// WITH AJAX AUTO-UPDATE (3 SECONDS) - FIXED
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -43,6 +43,7 @@ $branch_name = $user_branch_name;
 // ================================================================
 try {
     $db = getDB();
+    $today = date('Y-m-d');
     
     // Branch filter
     $branch_filter = " AND branch_id = ?";
@@ -57,20 +58,73 @@ try {
     $stmt->execute($params);
     $total_patients = $stmt->fetch()['total'] ?? 0;
     
-    // Today's Patients
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE DATE(created_at) = CURDATE() " . $branch_filter);
+    // Total Visits
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE 1=1 " . $branch_filter);
     $stmt->execute($params);
-    $today_patients = $stmt->fetch()['total'] ?? 0;
+    $total_visits = $stmt->fetch()['total'] ?? 0;
+    
+    // Today's Patients - PENDING
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT patient_id) as count 
+        FROM visits 
+        WHERE branch_id = ? AND DATE(created_at) = ? AND status IN ('pending', 'assigned')
+    ");
+    $stmt->execute([$selected_branch_id, $today]);
+    $today_patients_pending = $stmt->fetch()['count'] ?? 0;
+    
+    // Today's Patients - COMPLETED
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT patient_id) as count 
+        FROM visits 
+        WHERE branch_id = ? AND DATE(created_at) = ? AND status = 'completed'
+    ");
+    $stmt->execute([$selected_branch_id, $today]);
+    $today_patients_completed = $stmt->fetch()['count'] ?? 0;
+    $today_patients_total = $today_patients_pending + $today_patients_completed;
+    
+    // Today's Visits - PENDING
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM visits 
+        WHERE branch_id = ? AND DATE(created_at) = ? AND status IN ('pending', 'assigned')
+    ");
+    $stmt->execute([$selected_branch_id, $today]);
+    $today_visits_pending = $stmt->fetch()['count'] ?? 0;
+    
+    // Today's Visits - COMPLETED
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM visits 
+        WHERE branch_id = ? AND DATE(created_at) = ? AND status = 'completed'
+    ");
+    $stmt->execute([$selected_branch_id, $today]);
+    $today_visits_completed = $stmt->fetch()['count'] ?? 0;
+    $today_visits_total = $today_visits_pending + $today_visits_completed;
     
     // Total Appointments
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE 1=1 " . $branch_filter);
     $stmt->execute($params);
     $total_appointments = $stmt->fetch()['total'] ?? 0;
     
-    // Today's Appointments
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE DATE(appointment_date) = CURDATE() " . $branch_filter);
-    $stmt->execute($params);
-    $today_appointments = $stmt->fetch()['total'] ?? 0;
+    // Today's Appointments - PENDING
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM appointments 
+        WHERE branch_id = ? AND DATE(appointment_date) = ? 
+        AND status IN ('scheduled', 'pending', 'confirmed')
+    ");
+    $stmt->execute([$selected_branch_id, $today]);
+    $today_appointments_pending = $stmt->fetch()['count'] ?? 0;
+    
+    // Today's Appointments - COMPLETED
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM appointments 
+        WHERE branch_id = ? AND DATE(appointment_date) = ? AND status = 'completed'
+    ");
+    $stmt->execute([$selected_branch_id, $today]);
+    $today_appointments_completed = $stmt->fetch()['count'] ?? 0;
+    $today_appointments_total = $today_appointments_pending + $today_appointments_completed;
     
     // Pending Appointments
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE status IN ('scheduled', 'pending') " . $branch_filter);
@@ -162,24 +216,33 @@ try {
     }
     
     // ================================================================
-    // BRANCHES FOR SELECTOR (only if admin)
+    // UNREAD NOTIFICATIONS
     // ================================================================
-    $branches = [];
-    if ($_SESSION['is_admin']) {
-        $branches = getBranches();
-    } else {
-        $branch = getBranch($selected_branch_id);
-        if ($branch) {
-            $branches[] = $branch;
+    $unread_notifications = 0;
+    if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+            $stmt->execute([$_SESSION['user_id']]);
+            $unread_notifications = $stmt->fetch()['total'] ?? 0;
+        } catch (Exception $e) {
+            $unread_notifications = 0;
         }
     }
     
 } catch (Exception $e) {
-    // Fallback data
+    // Fallback data - FIXED: Added $total_visits
     $total_patients = 0;
-    $today_patients = 0;
+    $total_visits = 0;  // ← HII ILIKOSA AWALI!
+    $today_patients_pending = 0;
+    $today_patients_completed = 0;
+    $today_patients_total = 0;
+    $today_visits_pending = 0;
+    $today_visits_completed = 0;
+    $today_visits_total = 0;
     $total_appointments = 0;
-    $today_appointments = 0;
+    $today_appointments_pending = 0;
+    $today_appointments_completed = 0;
+    $today_appointments_total = 0;
     $pending_appointments = 0;
     $total_doctors = 0;
     $online_doctors = 0;
@@ -188,23 +251,9 @@ try {
     $recent_patients = [];
     $online_doctors_list = [];
     $recent_activities = [];
-    $branches = [];
+    $unread_notifications = 0;
     $chart_labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     $chart_values = [0, 0, 0, 0, 0, 0, 0];
-}
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
-    try {
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
-    } catch (Exception $e) {
-        $unread_notifications = 0;
-    }
 }
 
 // ================================================================
@@ -218,6 +267,9 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
 ?>
+
+<!-- Rest of the HTML stays the same -->
+<!-- Make sure line 1361 uses $total_visits properly -->
 
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
@@ -241,7 +293,7 @@ include_once '../../components/reception_sidebar.php';
     
     <style>
         /* ================================================================
-           BRAICK DISPENSARY - COMPLETE STYLES
+           COMPLETE STYLES
            ================================================================ */
         
         :root {
@@ -249,20 +301,16 @@ include_once '../../components/reception_sidebar.php';
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
-            
             --success: #059669;
             --success-dark: #047857;
             --success-light: #34D399;
             --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
             --danger-dark: #B91C1C;
             --danger-light: #F87171;
             --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -274,13 +322,11 @@ include_once '../../components/reception_sidebar.php';
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
-            
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
             --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
             --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
-            
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -496,35 +542,6 @@ include_once '../../components/reception_sidebar.php';
             font-size: 0.9rem;
         }
         
-        .role-badge {
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge {
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
         /* ================================================================
            MAIN CONTENT
            ================================================================ */
@@ -537,30 +554,36 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           STAT CARDS
+           STAT CARDS - CLICKABLE
            ================================================================ */
-        .stat-card {
+        .stat-card-clickable {
             border-radius: 16px;
             padding: 18px 20px;
             border: none;
             transition: all 0.3s;
             color: white;
+            text-decoration: none;
+            display: block;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
         }
         
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        .stat-card-clickable:hover {
+            transform: translateY(-6px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.2);
         }
         
-        .stat-card.blue { background: var(--primary); }
-        .stat-card.blue-dark { background: var(--primary-dark); }
-        .stat-card.green { background: var(--success); }
-        .stat-card.green-dark { background: var(--success-dark); }
-        .stat-card.purple { background: #7C3AED; }
-        .stat-card.orange { background: #D97706; }
-        .stat-card.red { background: var(--danger); }
+        .stat-card-clickable.blue { background: var(--primary); }
+        .stat-card-clickable.blue-dark { background: var(--primary-dark); }
+        .stat-card-clickable.green { background: var(--success); }
+        .stat-card-clickable.green-dark { background: var(--success-dark); }
+        .stat-card-clickable.purple { background: #7C3AED; }
+        .stat-card-clickable.orange { background: #D97706; }
+        .stat-card-clickable.red { background: var(--danger); }
+        .stat-card-clickable.teal { background: #0D9488; }
         
-        .stat-card .stat-icon {
+        .stat-card-clickable .stat-icon {
             width: 42px;
             height: 42px;
             border-radius: 12px;
@@ -572,25 +595,74 @@ include_once '../../components/reception_sidebar.php';
             color: white;
         }
         
-        .stat-card .stat-number {
+        .stat-card-clickable .stat-number {
             font-size: 1.8rem;
             font-weight: 700;
             color: white;
         }
         
-        .stat-card .stat-label {
+        .stat-card-clickable .stat-label {
             font-size: 0.75rem;
             color: rgba(255,255,255,0.8);
             font-weight: 500;
         }
         
-        .stat-card .stat-trend {
-            font-size: 0.65rem;
-            font-weight: 600;
+        .stat-card-clickable .stat-details {
+            display: flex;
+            gap: 12px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+        
+        .stat-card-clickable .stat-detail {
+            font-size: 0.6rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            color: rgba(255,255,255,0.7);
+        }
+        
+        .stat-card-clickable .stat-detail.pending { color: #FCD34D; }
+        .stat-card-clickable .stat-detail.completed { color: #6EE7B7; }
+        
+        .stat-card-clickable .stat-progress {
+            height: 3px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 0 0 16px 16px;
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            overflow: hidden;
+        }
+        
+        .stat-card-clickable .stat-progress .stat-progress-bar {
+            height: 100%;
+            background: rgba(255,255,255,0.5);
+            transition: width 0.5s ease;
+        }
+        
+        .stat-card-clickable .stat-badge {
+            position: absolute;
+            top: 10px;
+            right: 14px;
+            font-size: 0.6rem;
+            font-weight: 700;
+            background: rgba(255,255,255,0.2);
             padding: 2px 10px;
             border-radius: 20px;
-            background: rgba(255,255,255,0.15);
             color: white;
+            animation: pulse-badge 2s infinite;
+        }
+        
+        .stat-card-clickable .stat-badge.danger {
+            background: #EF4444;
+        }
+        
+        @keyframes pulse-badge {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
         }
         
         /* ================================================================
@@ -626,6 +698,7 @@ include_once '../../components/reception_sidebar.php';
         
         .card-title .title-blue { color: var(--primary); }
         .card-title .title-green { color: var(--success); }
+        .card-title .title-orange { color: #D97706; }
         
         /* ================================================================
            BUTTONS
@@ -676,27 +749,6 @@ include_once '../../components/reception_sidebar.php';
         }
         
         .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .badge {
-            padding: 3px 10px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            color: white;
-            border: none;
-        }
-        
-        .badge-blue { background: var(--primary); }
-        .badge-green { background: var(--success); }
-        .badge-gray { background: var(--gray-500); }
-        .badge-yellow { background: var(--warning); }
-        .badge-red { background: var(--danger); }
         
         /* ================================================================
            PAGE HEADER
@@ -1071,6 +1123,26 @@ include_once '../../components/reception_sidebar.php';
             to { transform: rotate(360deg); }
         }
         
+        .update-badge {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            background: var(--bg-body);
+            padding: 2px 12px;
+            border-radius: 20px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .update-badge .fa-spin {
+            animation: fa-spin 2s infinite linear;
+        }
+        
+        @keyframes fa-spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
         /* ================================================================
            RESPONSIVE
            ================================================================ */
@@ -1088,7 +1160,7 @@ include_once '../../components/reception_sidebar.php';
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .stat-card .stat-number { font-size: 1.4rem; }
+            .stat-card-clickable .stat-number { font-size: 1.4rem; }
             .top-nav .search-wrapper { max-width: 120px; }
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
         }
@@ -1115,7 +1187,6 @@ include_once '../../components/reception_sidebar.php';
     </div>
     
     <div class="flex items-center gap-3">
-        <!-- Branch display - fixed -->
         <span class="branch-badge-display">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
@@ -1152,6 +1223,9 @@ include_once '../../components/reception_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-home mr-2" style="color: var(--primary);"></i> Reception Dashboard
                 <span class="role-badge-display ml-2">RECEPTION</span>
+                <span class="update-badge ml-2" id="updateBadge">
+                    <i class="fas fa-sync-alt fa-spin"></i> Live
+                </span>
             </h1>
             <p class="page-subtitle">
                 Welcome back, <strong class="welcome-text"><?= htmlspecialchars($user_full_name) ?></strong>!
@@ -1161,96 +1235,200 @@ include_once '../../components/reception_sidebar.php';
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
                 </span>
-                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
-                    <i class="fas fa-clock mr-1"></i> <?= date('h:i A') ?>
+                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200" id="liveTime">
+                    <i class="fas fa-clock mr-1"></i> <?= date('h:i:s A') ?>
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap">
-            <a href="new_patient.php?branch=<?= $selected_branch_id ?>" class="btn btn-blue btn-sm">
+            <a href="new_patient.php" class="btn btn-blue btn-sm">
                 <i class="fas fa-user-plus"></i> Register Patient
             </a>
-            <a href="new_appointment.php?branch=<?= $selected_branch_id ?>" class="btn btn-green btn-sm">
+            <a href="new_appointment.php" class="btn btn-green btn-sm">
                 <i class="fas fa-plus-circle"></i> New Appointment
             </a>
+            <button onclick="manualRefresh()" class="btn btn-outline btn-sm" id="refreshBtn">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
+    <!-- 8 STATISTICS CARDS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-5">
         
-        <div class="stat-card blue animate-fade-in-up">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Total Patients</p>
-                    <p class="stat-number"><?= number_format($total_patients) ?></p>
-                    <span class="stat-trend"><i class="fas fa-arrow-up"></i> All time</span>
-                </div>
-                <div class="stat-icon"><i class="fas fa-users"></i></div>
-            </div>
-        </div>
-        
-        <div class="stat-card green animate-fade-in-up">
+        <!-- CARD 1: Today's Patients -->
+        <a href="visits.php?filter=today" class="stat-card-clickable blue" id="cardTodayPatients">
             <div class="flex items-center justify-between">
                 <div>
                     <p class="stat-label">Today's Patients</p>
-                    <p class="stat-number"><?= number_format($today_patients) ?></p>
-                    <span class="stat-trend"><i class="fas fa-user-plus"></i> New today</span>
+                    <p class="stat-number" id="todayPatientsTotal"><?= $today_patients_total ?></p>
+                    <div class="stat-details">
+                        <span class="stat-detail pending" id="todayPatientsPending">
+                            <i class="fas fa-clock"></i> <?= $today_patients_pending ?> Pending
+                        </span>
+                        <span class="stat-detail completed" id="todayPatientsCompleted">
+                            <i class="fas fa-check-circle"></i> <?= $today_patients_completed ?> Complete
+                        </span>
+                    </div>
                 </div>
-                <div class="stat-icon"><i class="fas fa-user-plus"></i></div>
+                <div class="stat-icon"><i class="fas fa-user-injured"></i></div>
             </div>
-        </div>
+            <div class="stat-progress">
+                <div class="stat-progress-bar" id="todayPatientsProgress" style="width: <?= $today_patients_total > 0 ? min(100, ($today_patients_completed / max($today_patients_total, 1)) * 100) : 0 ?>%;"></div>
+            </div>
+        </a>
         
-        <div class="stat-card purple animate-fade-in-up">
+        <!-- CARD 2: Today's Visits -->
+        <a href="visits.php?filter=today" class="stat-card-clickable green" id="cardTodayVisits">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="stat-label">Total Appointments</p>
-                    <p class="stat-number"><?= number_format($total_appointments) ?></p>
-                    <span class="stat-trend"><i class="fas fa-calendar-alt"></i> All time</span>
+                    <p class="stat-label">Today's Visits</p>
+                    <p class="stat-number" id="todayVisitsTotal"><?= $today_visits_total ?></p>
+                    <div class="stat-details">
+                        <span class="stat-detail pending" id="todayVisitsPending">
+                            <i class="fas fa-clock"></i> <?= $today_visits_pending ?> Pending
+                        </span>
+                        <span class="stat-detail completed" id="todayVisitsCompleted">
+                            <i class="fas fa-check-circle"></i> <?= $today_visits_completed ?> Complete
+                        </span>
+                    </div>
                 </div>
-                <div class="stat-icon"><i class="fas fa-calendar-check"></i></div>
+                <div class="stat-icon"><i class="fas fa-clinic-medical"></i></div>
             </div>
-        </div>
+            <div class="stat-progress">
+                <div class="stat-progress-bar" id="todayVisitsProgress" style="width: <?= $today_visits_total > 0 ? min(100, ($today_visits_completed / max($today_visits_total, 1)) * 100) : 0 ?>%;"></div>
+            </div>
+        </a>
         
-        <div class="stat-card orange animate-fade-in-up">
+        <!-- CARD 3: Today's Appointments -->
+        <a href="appointments.php?filter=today" class="stat-card-clickable purple" id="cardTodayAppointments">
             <div class="flex items-center justify-between">
                 <div>
                     <p class="stat-label">Today's Appointments</p>
-                    <p class="stat-number"><?= number_format($today_appointments) ?></p>
-                    <span class="stat-trend"><i class="fas fa-clock"></i> <?= $pending_appointments ?> pending</span>
+                    <p class="stat-number" id="todayAppointmentsTotal"><?= $today_appointments_total ?></p>
+                    <div class="stat-details">
+                        <span class="stat-detail pending" id="todayAppointmentsPending">
+                            <i class="fas fa-clock"></i> <?= $today_appointments_pending ?> Pending
+                        </span>
+                        <span class="stat-detail completed" id="todayAppointmentsCompleted">
+                            <i class="fas fa-check-circle"></i> <?= $today_appointments_completed ?> Complete
+                        </span>
+                    </div>
                 </div>
-                <div class="stat-icon"><i class="fas fa-calendar-day"></i></div>
+                <div class="stat-icon"><i class="fas fa-calendar-check"></i></div>
             </div>
-        </div>
+            <div class="stat-progress">
+                <div class="stat-progress-bar" id="todayAppointmentsProgress" style="width: <?= $today_appointments_total > 0 ? min(100, ($today_appointments_completed / max($today_appointments_total, 1)) * 100) : 0 ?>%;"></div>
+            </div>
+        </a>
         
-        <div class="stat-card blue-dark animate-fade-in-up">
+        <!-- CARD 4: Total Appointments -->
+        <a href="appointments.php" class="stat-card-clickable teal" id="cardTotalAppointments">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Total Appointments</p>
+                    <p class="stat-number" id="totalAppointments"><?= number_format($total_appointments) ?></p>
+                    <div class="stat-details">
+                        <span class="stat-detail">
+                            <i class="fas fa-arrow-up"></i> All time
+                        </span>
+                    </div>
+                </div>
+                <div class="stat-icon"><i class="fas fa-calendar-alt"></i></div>
+            </div>
+            <div class="stat-progress">
+                <div class="stat-progress-bar" style="width: <?= $total_appointments > 0 ? min(100, ($total_appointments / 200) * 100) : 0 ?>%;"></div>
+            </div>
+        </a>
+        
+        <!-- CARD 5: Total Patients -->
+        <a href="patients.php" class="stat-card-clickable blue-dark" id="cardTotalPatients">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Total Patients</p>
+                    <p class="stat-number" id="totalPatients"><?= number_format($total_patients) ?></p>
+                    <div class="stat-details">
+                        <span class="stat-detail">
+                            <i class="fas fa-arrow-up"></i> All time
+                        </span>
+                    </div>
+                </div>
+                <div class="stat-icon"><i class="fas fa-users"></i></div>
+            </div>
+            <div class="stat-progress">
+                <div class="stat-progress-bar" style="width: <?= $total_patients > 0 ? min(100, ($total_patients / 200) * 100) : 0 ?>%;"></div>
+            </div>
+        </a>
+        
+        <!-- CARD 6: Total Visits -->
+        <a href="visits.php" class="stat-card-clickable green-dark" id="cardTotalVisits">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Total Visits</p>
+                    <p class="stat-number" id="totalVisits"><?= number_format($total_visits) ?></p>
+                    <div class="stat-details">
+                        <span class="stat-detail">
+                            <i class="fas fa-arrow-up"></i> All time
+                        </span>
+                    </div>
+                </div>
+                <div class="stat-icon"><i class="fas fa-notes-medical"></i></div>
+            </div>
+            <div class="stat-progress">
+                <div class="stat-progress-bar" style="width: <?= $total_visits > 0 ? min(100, ($total_visits / 500) * 100) : 0 ?>%;"></div>
+            </div>
+        </a>
+        
+        <!-- CARD 7: Pending Appointments -->
+        <a href="appointments.php?status=pending" class="stat-card-clickable orange" id="cardPendingAppointments">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="stat-label">Pending Appointments</p>
+                    <p class="stat-number" id="pendingAppointments"><?= $pending_appointments ?></p>
+                    <div class="stat-details">
+                        <span class="stat-detail">
+                            <i class="fas fa-clock"></i> Awaiting confirmation
+                        </span>
+                    </div>
+                </div>
+                <div class="stat-icon"><i class="fas fa-clock"></i></div>
+            </div>
+            <?php if ($pending_appointments > 0): ?>
+                <span class="stat-badge danger"><?= $pending_appointments ?></span>
+            <?php endif; ?>
+            <div class="stat-progress">
+                <div class="stat-progress-bar" style="width: <?= $pending_appointments > 0 ? min(100, ($pending_appointments / 20) * 100) : 0 ?>%;"></div>
+            </div>
+        </a>
+        
+        <!-- CARD 8: Online Doctors - CLICKABLE -->
+        <a href="online_doctors.php" class="stat-card-clickable purple" id="cardOnlineDoctors">
             <div class="flex items-center justify-between">
                 <div>
                     <p class="stat-label">Online Doctors</p>
-                    <p class="stat-number"><?= number_format($online_doctors) ?></p>
-                    <span class="stat-trend"><i class="fas fa-user-md"></i> Available</span>
+                    <p class="stat-number" id="onlineDoctors"><?= $online_doctors ?></p>
+                    <div class="stat-details">
+                        <span class="stat-detail">
+                            <i class="fas fa-user-md"></i> Available now
+                        </span>
+                    </div>
                 </div>
                 <div class="stat-icon"><i class="fas fa-user-md"></i></div>
             </div>
-        </div>
-        
-        <div class="stat-card green-dark animate-fade-in-up">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="stat-label">Today's Revenue</p>
-                    <p class="stat-number">TSh <?= number_format($today_revenue) ?></p>
-                    <span class="stat-trend"><i class="fas fa-money-bill-wave"></i> Today</span>
-                </div>
-                <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <?php if ($online_doctors > 0): ?>
+                <span class="stat-badge" style="background: #059669;"><?= $online_doctors ?></span>
+            <?php endif; ?>
+            <div class="stat-progress">
+                <div class="stat-progress-bar" style="width: <?= $online_doctors > 0 ? min(100, ($online_doctors / 10) * 100) : 0 ?>%;"></div>
             </div>
-        </div>
+        </a>
         
     </div>
 
     <!-- ================================================================ -->
-    <!-- CHART & ONLINE DOCTORS -->
+    <!-- CHART & ONLINE DOCTORS LIST -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
         
@@ -1271,11 +1449,14 @@ include_once '../../components/reception_sidebar.php';
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-user-md title-green mr-2"></i> Online Doctors
-                    <span class="text-sm font-normal text-gray-400">(<?= count($online_doctors_list) ?> online)</span>
+                    <span class="text-sm font-normal text-gray-400" id="onlineDoctorsCount">(<?= count($online_doctors_list) ?> online)</span>
                 </h3>
+                <a href="online_doctors.php" class="text-primary text-sm hover:underline">
+                    <i class="fas fa-arrow-right mr-1"></i> View all
+                </a>
             </div>
             
-            <div class="scroll-container" style="max-height: 180px;">
+            <div class="scroll-container" style="max-height: 180px;" id="onlineDoctorsList">
                 <?php if (count($online_doctors_list) > 0): ?>
                     <?php foreach ($online_doctors_list as $doc): ?>
                         <div class="flex items-center justify-between p-2 bg-gray-50 rounded-lg hover:bg-primary-bg transition mb-1">
@@ -1300,7 +1481,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <div class="mt-3 pt-3 border-t text-center">
-                <a href="../admin/doctors_list.php?branch=<?= $selected_branch_id ?>" class="text-primary text-sm hover:underline">
+                <a href="online_doctors.php" class="text-primary text-sm hover:underline">
                     <i class="fas fa-arrow-right mr-1"></i> View all doctors
                 </a>
             </div>
@@ -1316,12 +1497,12 @@ include_once '../../components/reception_sidebar.php';
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-calendar-check title-blue mr-2"></i> Today's Appointments
-                    <span class="text-sm font-normal text-gray-400">(<?= count($today_appointments_list) ?>)</span>
+                    <span class="text-sm font-normal text-gray-400" id="appointmentsCount">(<?= count($today_appointments_list) ?>)</span>
                 </h3>
-                <a href="appointments.php?branch=<?= $selected_branch_id ?>" class="text-primary text-sm hover:underline">View All →</a>
+                <a href="appointments.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
-            <div class="scroll-container" style="max-height: 220px;">
+            <div class="scroll-container" style="max-height: 220px;" id="appointmentsList">
                 <?php if (count($today_appointments_list) > 0): ?>
                     <?php foreach ($today_appointments_list as $appt): ?>
                         <div class="appointment-item">
@@ -1349,10 +1530,10 @@ include_once '../../components/reception_sidebar.php';
                 <h3 class="card-title">
                     <i class="fas fa-user-injured title-green mr-2"></i> Recent Patients
                 </h3>
-                <a href="patients.php?branch=<?= $selected_branch_id ?>" class="text-primary text-sm hover:underline">View All →</a>
+                <a href="patients.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
-            <div class="scroll-container" style="max-height: 220px;">
+            <div class="scroll-container" style="max-height: 220px;" id="recentPatientsList">
                 <?php if (count($recent_patients) > 0): ?>
                     <?php foreach ($recent_patients as $patient): ?>
                         <div class="flex items-center justify-between p-2 border-b border-gray-100 hover:bg-gray-50 rounded-lg transition">
@@ -1370,7 +1551,7 @@ include_once '../../components/reception_sidebar.php';
                             </div>
                             <div class="text-right">
                                 <p class="text-xs text-gray-400"><?= isset($patient['created_at']) ? time_ago($patient['created_at']) : 'N/A' ?></p>
-                                <a href="view_patient.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="text-primary text-xs hover:underline">View</a>
+                                <a href="view_patient.php?id=<?= $patient['id'] ?>" class="text-primary text-xs hover:underline">View</a>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -1398,22 +1579,22 @@ include_once '../../components/reception_sidebar.php';
                     </h3>
                 </div>
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <a href="new_patient.php?branch=<?= $selected_branch_id ?>" class="quick-action blue">
+                    <a href="new_patient.php" class="quick-action blue">
                         <span class="icon blue"><i class="fas fa-user-plus"></i></span>
                         <span class="label">Register Patient</span>
                     </a>
                     
-                    <a href="new_appointment.php?branch=<?= $selected_branch_id ?>" class="quick-action green">
+                    <a href="new_appointment.php" class="quick-action green">
                         <span class="icon green"><i class="fas fa-calendar-plus"></i></span>
                         <span class="label">New Appointment</span>
                     </a>
                     
-                    <a href="patients.php?branch=<?= $selected_branch_id ?>" class="quick-action purple">
+                    <a href="patients.php" class="quick-action purple">
                         <span class="icon purple"><i class="fas fa-users"></i></span>
                         <span class="label">View Patients</span>
                     </a>
                     
-                    <a href="assign_doctor.php?branch=<?= $selected_branch_id ?>" class="quick-action orange">
+                    <a href="assign_doctor.php" class="quick-action orange">
                         <span class="icon orange"><i class="fas fa-user-md"></i></span>
                         <span class="label">Assign Doctor</span>
                     </a>
@@ -1429,7 +1610,7 @@ include_once '../../components/reception_sidebar.php';
                 <a href="activities.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
-            <div class="scroll-container" style="max-height: 180px;">
+            <div class="scroll-container" style="max-height: 180px;" id="recentActivities">
                 <?php if (count($recent_activities) > 0): ?>
                     <?php foreach ($recent_activities as $activity): ?>
                         <div class="activity-item">
@@ -1465,6 +1646,8 @@ include_once '../../components/reception_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Version 2.0
             <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1483,11 +1666,11 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - NO AUTO REFRESH -->
+<!-- JAVASCRIPT - WITH AJAX AUTO-UPDATE (3 SECONDS) -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE - MANUAL ONLY
+    // DARK MODE
     // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
@@ -1535,101 +1718,66 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // BRANCH SWITCHER
+    // CHART - INITIAL RENDER
     // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // CHART - RENDER ONCE ONLY
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
+    var chartInstance = null;
+    var chartLabels = <?= json_encode($chart_labels) ?>;
+    var chartValues = <?= json_encode($chart_values) ?>;
+    
+    function renderChart(labels, values) {
         var ctx = document.getElementById('appointmentsChart')?.getContext('2d');
-        if (ctx && typeof Chart !== 'undefined') {
-            var labels = <?= json_encode($chart_labels) ?>;
-            var values = <?= json_encode($chart_values) ?>;
-            
-            new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Appointments',
-                        data: values,
-                        backgroundColor: '#0B5ED7',
-                        borderRadius: 6,
-                        borderSkipped: false,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return context.raw + ' appointments';
-                                }
+        if (!ctx) return;
+        
+        if (chartInstance) {
+            chartInstance.destroy();
+        }
+        
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var gridColor = isDark ? '#334155' : '#E2E8F0';
+        var textColor = isDark ? '#94A3B8' : '#64748B';
+        
+        chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Appointments',
+                    data: values,
+                    backgroundColor: '#0B5ED7',
+                    borderRadius: 6,
+                    borderSkipped: false,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return context.raw + ' appointments';
                             }
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            grid: { color: 'rgba(0,0,0,0.05)' },
-                            ticks: { 
-                                stepSize: 1,
-                                color: '#64748B'
-                            }
-                        },
-                        x: {
-                            grid: { display: false },
-                            ticks: { color: '#64748B' }
                         }
                     }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: gridColor },
+                        ticks: { 
+                            stepSize: 1,
+                            color: textColor
+                        }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: textColor }
+                    }
                 }
-            });
-        }
-    });
-
-    // ================================================================
-    // DATE & TIME - LIVE CLOCK ONLY
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+            }
         });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // SEARCH - USER CLICK ONLY
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
 
     // ================================================================
     // TOAST
@@ -1655,6 +1803,382 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
+    // AJAX AUTO-UPDATE - SMART (3 SECONDS)
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    var lastHash = null;
+    var updateCount = 0;
+
+    function fetchAndUpdateStats() {
+        if (isUpdating) return;
+        isUpdating = true;
+        
+        updateCount++;
+        
+        // Update badge every 3 updates
+        if (updateCount % 3 === 0) {
+            document.getElementById('updateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Updating...';
+        }
+        
+        fetch('get_reception_stats.php')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Check if data has changed
+                    if (lastHash !== data.hash) {
+                        lastHash = data.hash;
+                        updateDashboard(data.data);
+                        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + data.data.timestamp;
+                        
+                        // Show notification on change
+                        if (updateCount > 1) {
+                            showToast('🔄 Updated', 'Dashboard auto-updated at ' + data.data.timestamp, 'info');
+                        }
+                    }
+                    
+                    // Update badge
+                    var now = new Date();
+                    document.getElementById('updateBadge').innerHTML = 
+                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
+                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }
+                isUpdating = false;
+            })
+            .catch(function(error) {
+                console.error('Update error:', error);
+                document.getElementById('updateBadge').innerHTML = '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Error';
+                isUpdating = false;
+            });
+    }
+
+    function updateDashboard(data) {
+        // ================================================================
+        // CARD 1: Today's Patients
+        // ================================================================
+        document.getElementById('todayPatientsTotal').textContent = data.today_patients.total;
+        document.getElementById('todayPatientsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_patients.pending + ' Pending';
+        document.getElementById('todayPatientsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_patients.completed + ' Complete';
+        var pct1 = data.today_patients.total > 0 ? Math.min(100, (data.today_patients.completed / Math.max(data.today_patients.total, 1)) * 100) : 0;
+        document.getElementById('todayPatientsProgress').style.width = pct1 + '%';
+
+        // ================================================================
+        // CARD 2: Today's Visits
+        // ================================================================
+        document.getElementById('todayVisitsTotal').textContent = data.today_visits.total;
+        document.getElementById('todayVisitsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_visits.pending + ' Pending';
+        document.getElementById('todayVisitsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_visits.completed + ' Complete';
+        var pct2 = data.today_visits.total > 0 ? Math.min(100, (data.today_visits.completed / Math.max(data.today_visits.total, 1)) * 100) : 0;
+        document.getElementById('todayVisitsProgress').style.width = pct2 + '%';
+
+        // ================================================================
+        // CARD 3: Today's Appointments
+        // ================================================================
+        document.getElementById('todayAppointmentsTotal').textContent = data.today_appointments.total;
+        document.getElementById('todayAppointmentsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_appointments.pending + ' Pending';
+        document.getElementById('todayAppointmentsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_appointments.completed + ' Complete';
+        var pct3 = data.today_appointments.total > 0 ? Math.min(100, (data.today_appointments.completed / Math.max(data.today_appointments.total, 1)) * 100) : 0;
+        document.getElementById('todayAppointmentsProgress').style.width = pct3 + '%';
+
+        // ================================================================
+        // CARD 4: Total Appointments
+        // ================================================================
+        document.getElementById('totalAppointments').textContent = Number(data.total_appointments).toLocaleString();
+
+        // ================================================================
+        // CARD 5: Total Patients
+        // ================================================================
+        document.getElementById('totalPatients').textContent = Number(data.total_patients).toLocaleString();
+
+        // ================================================================
+        // CARD 6: Total Visits
+        // ================================================================
+        document.getElementById('totalVisits').textContent = Number(data.total_visits).toLocaleString();
+
+        // ================================================================
+        // CARD 7: Pending Appointments
+        // ================================================================
+        document.getElementById('pendingAppointments').textContent = data.pending_appointments;
+        var badge = document.querySelector('#cardPendingAppointments .stat-badge');
+        if (data.pending_appointments > 0) {
+            if (!badge) {
+                var card = document.getElementById('cardPendingAppointments');
+                var span = document.createElement('span');
+                span.className = 'stat-badge danger';
+                span.textContent = data.pending_appointments;
+                card.appendChild(span);
+            } else {
+                badge.textContent = data.pending_appointments;
+                badge.style.display = 'inline-block';
+            }
+        } else {
+            if (badge) badge.style.display = 'none';
+        }
+
+        // ================================================================
+        // CARD 8: Online Doctors
+        // ================================================================
+        document.getElementById('onlineDoctors').textContent = data.online_doctors;
+
+        // ================================================================
+        // ONLINE DOCTORS LIST
+        // ================================================================
+        var onlineList = document.getElementById('onlineDoctorsList');
+        document.getElementById('onlineDoctorsCount').textContent = '(' + data.online_doctors + ' online)';
+        
+        if (data.online_doctors_list && data.online_doctors_list.length > 0) {
+            var listHtml = '';
+            data.online_doctors_list.forEach(function(doc) {
+                var initial = doc.full_name.charAt(0).toUpperCase();
+                listHtml += `
+                    <div class="flex items-center justify-between p-2 bg-gray-50 rounded-lg hover:bg-primary-bg transition mb-1">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-white text-sm font-bold">
+                                ${escapeHtml(initial)}
+                            </div>
+                            <div>
+                                <p class="font-medium text-sm text-gray-800">${escapeHtml(doc.full_name)}</p>
+                                <p class="text-xs text-gray-500">${escapeHtml(doc.specialty || 'General Practitioner')}</p>
+                            </div>
+                        </div>
+                        <span class="online-dot" title="Online"></span>
+                    </div>
+                `;
+            });
+            onlineList.innerHTML = listHtml;
+        } else {
+            onlineList.innerHTML = `
+                <div class="text-center py-4 text-gray-400">
+                    <i class="fas fa-user-md text-2xl block mb-2"></i>
+                    <p class="text-sm">No doctors online</p>
+                </div>
+            `;
+        }
+
+        // ================================================================
+        // APPOINTMENTS LIST
+        // ================================================================
+        var appointmentsList = document.getElementById('appointmentsList');
+        document.getElementById('appointmentsCount').textContent = '(' + data.today_appointments.list.length + ')';
+        
+        if (data.today_appointments.list && data.today_appointments.list.length > 0) {
+            var listHtml = '';
+            data.today_appointments.list.forEach(function(appt) {
+                var time = formatTime(appt.appointment_date);
+                var statusClass = appt.status || 'scheduled';
+                listHtml += `
+                    <div class="appointment-item">
+                        <span class="appointment-time">${time}</span>
+                        <div class="appointment-patient flex-1 ml-3">
+                            <span class="name">${escapeHtml(appt.patient_name)}</span>
+                            <span class="doctor block">Dr. ${escapeHtml(appt.doctor_name)}</span>
+                        </div>
+                        <span class="appointment-status ${statusClass}">
+                            ${capitalize(statusClass)}
+                        </span>
+                    </div>
+                `;
+            });
+            appointmentsList.innerHTML = listHtml;
+        } else {
+            appointmentsList.innerHTML = `
+                <div class="text-center py-6 text-gray-400">
+                    <i class="fas fa-calendar-check text-2xl block mb-2"></i>
+                    <p class="text-sm">No appointments scheduled for today</p>
+                </div>
+            `;
+        }
+
+        // ================================================================
+        // RECENT PATIENTS
+        // ================================================================
+        var recentPatients = document.getElementById('recentPatientsList');
+        if (data.recent_patients && data.recent_patients.length > 0) {
+            var listHtml = '';
+            data.recent_patients.forEach(function(patient) {
+                var initial = patient.full_name.charAt(0).toUpperCase();
+                var color = '#' + patient.full_name.split('').reduce(function(a, b) {
+                    a = ((a << 5) - a) + b.charCodeAt(0);
+                    return a & a;
+                }, 0).toString(16).padStart(6, '0');
+                listHtml += `
+                    <div class="flex items-center justify-between p-2 border-b border-gray-100 hover:bg-gray-50 rounded-lg transition">
+                        <div class="flex items-center gap-3">
+                            <div class="patient-avatar-sm" style="background: ${color};">
+                                ${escapeHtml(initial)}
+                            </div>
+                            <div>
+                                <p class="font-medium text-sm text-gray-800">${escapeHtml(patient.full_name)}</p>
+                                <p class="text-xs text-gray-500">
+                                    ${escapeHtml(patient.patient_id || 'N/A')} • ${escapeHtml(patient.phone || 'No phone')}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-xs text-gray-400">${patient.created_at ? timeAgo(patient.created_at) : 'N/A'}</p>
+                            <a href="view_patient.php?id=${patient.id}" class="text-primary text-xs hover:underline">View</a>
+                        </div>
+                    </div>
+                `;
+            });
+            recentPatients.innerHTML = listHtml;
+        } else {
+            recentPatients.innerHTML = `
+                <div class="text-center py-6 text-gray-400">
+                    <i class="fas fa-users text-2xl block mb-2"></i>
+                    <p class="text-sm">No patients registered yet</p>
+                </div>
+            `;
+        }
+
+        // ================================================================
+        // RECENT ACTIVITIES
+        // ================================================================
+        var activities = document.getElementById('recentActivities');
+        if (data.recent_activities && data.recent_activities.length > 0) {
+            var listHtml = '';
+            data.recent_activities.forEach(function(activity) {
+                listHtml += `
+                    <div class="activity-item">
+                        <div class="activity-icon">
+                            <i class="fas fa-circle text-[6px]"></i>
+                        </div>
+                        <div class="activity-content">
+                            <p class="action">${escapeHtml(activity.action || 'Action')}</p>
+                            <p class="details">${escapeHtml(activity.details || '')}</p>
+                            <p class="time">${activity.created_at ? timeAgo(activity.created_at) : 'Just now'}</p>
+                        </div>
+                    </div>
+                `;
+            });
+            activities.innerHTML = listHtml;
+        } else {
+            activities.innerHTML = `
+                <div class="text-center py-4 text-gray-400">
+                    <i class="fas fa-clock text-2xl block mb-2"></i>
+                    <p class="text-sm">No recent activities</p>
+                </div>
+            `;
+        }
+    }
+
+    // ================================================================
+    // HELPER FUNCTIONS
+    // ================================================================
+    function formatTime(datetime) {
+        var d = new Date(datetime);
+        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function capitalize(text) {
+        return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+    
+    function timeAgo(timestamp) {
+        var now = new Date();
+        var past = new Date(timestamp);
+        var diff = Math.floor((now - past) / 1000);
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+        return past.toLocaleDateString();
+    }
+
+    // ================================================================
+    // START AUTO-UPDATE
+    // ================================================================
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        updateInterval = setInterval(fetchAndUpdateStats, 3000);
+        document.getElementById('updateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Live mode active';
+        fetchAndUpdateStats();
+    }
+
+    // ================================================================
+    // STOP AUTO-UPDATE
+    // ================================================================
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            document.getElementById('updateBadge').innerHTML = '<i class="fas fa-pause"></i> Paused';
+        }
+    }
+
+    // ================================================================
+    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
+
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        btn.innerHTML = '<span class="spinner"></span> Loading...';
+        btn.disabled = true;
+        
+        lastHash = null;
+        fetchAndUpdateStats();
+        
+        setTimeout(function() {
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+            btn.disabled = false;
+            showToast('✅ Refreshed', 'Dashboard data updated manually', 'success');
+        }, 1500);
+    }
+
+    // ================================================================
+    // DATE & TIME - LIVE CLOCK
+    // ================================================================
+    function updateDateTime() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
+        document.getElementById('liveTime').innerHTML = '<i class="fas fa-clock mr-1"></i> ' + timeStr;
+    }
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            window.location.href = 'search.php?q=' + encodeURIComponent(query);
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
+
+    // ================================================================
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
@@ -1665,11 +2189,11 @@ include_once '../../components/reception_sidebar.php';
         }
         if (e.altKey && e.key === 'n') {
             e.preventDefault();
-            window.location.href = 'new_patient.php?branch=<?= $selected_branch_id ?>';
+            window.location.href = 'new_patient.php';
         }
         if (e.altKey && e.key === 'a') {
             e.preventDefault();
-            window.location.href = 'new_appointment.php?branch=<?= $selected_branch_id ?>';
+            window.location.href = 'new_appointment.php';
         }
         if (e.key === 'Escape' && document.activeElement === searchInput) {
             searchInput.value = '';
@@ -1678,16 +2202,27 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // CONSOLE INFO
+    // INITIALIZE
     // ================================================================
-    console.log('%c🏥 Braick Dispensary - Reception Dashboard', 'font-size:20px; font-weight:bold; color:#0B5ED7;');
+    document.addEventListener('DOMContentLoaded', function() {
+        renderChart(chartLabels, chartValues);
+        
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 2000);
+    });
+
+    // ================================================================
+    // CONSOLE
+    // ================================================================
+    console.log('%c🏥 Braick Dispensary - Reception Dashboard (FIXED)', 'font-size:20px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👋 Welcome, <?= htmlspecialchars($user_full_name) ?>!', 'font-size:14px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c👑 Role: RECEPTION', 'font-size:13px; color:#64748B;');
-    console.log('%c📊 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📅 Today Appointments: <?= number_format($today_appointments) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Today Revenue: TSh <?= number_format($today_revenue) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🚫 Auto Refresh: DISABLED', 'font-size:13px; color:#DC2626;');
+    console.log('%c📊 8 Cards: Today Patients, Today Visits, Today Appointments, Total Appointments, Total Patients, Total Visits, Pending Appointments, Online Doctors', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c✅ Today Patients: <?= $today_patients_total ?> (Pending: <?= $today_patients_pending ?>, Complete: <?= $today_patients_completed ?>)', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Today Visits: <?= $today_visits_total ?> (Pending: <?= $today_visits_pending ?>, Complete: <?= $today_visits_completed ?>)', 'font-size:12px; color:#34D399;');
+    console.log('%c🔄 Auto-update: Every 3 seconds (Smart - only when data changes)', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Click Online Doctors card to see all online doctors', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

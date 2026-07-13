@@ -1,227 +1,150 @@
 <?php
 // ================================================================
 // FILE: frontend/components/reception_sidebar.php
-// SHARED SIDEBAR - RECEPTION & CASHIER
-// CLEAN VERSION - NO "Braick Dispensary - Dodoma"
+// RECEPTION - SHARED SIDEBAR (BLUE BACKGROUND)
+// HAKUNA JINA LA RECEPTIONIST, HAKUNA BRANCH
+// WITH REAL DATA FOR BADGES + AJAX AUTO-UPDATE
 // BRAICK DISPENSARY
 // ================================================================
 
-// Include database config
-require_once __DIR__ . '/../../backend/config/config.php';
-
 // ================================================================
-// GET SESSION DATA - DEFAULT TO RECEPTION.ROSE
+// GET REAL DATA FOR BADGES (Only if database is available)
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 6;  // reception.rose
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
-}
+$patient_count = 0;
+$appointment_count = 0;
+$pending_appointments = 0;
+$today_visits = 0;
+$pending_patients = 0;
 
-$is_admin = ($_SESSION['role'] ?? '') === 'admin';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_role = $_SESSION['role'] ?? 'reception';
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-
-// Display role name for sidebar
-$display_role = ucfirst($user_role); // "Reception" or "Cashier"
-
-// ================================================================
-// BRANCH FILTER - Admin sees all, others see only their branch
-// ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
-
-// If not admin, force to their branch
-if (!$is_admin) {
-    $selected_branch_id = $user_branch_id;
-}
-
-// ================================================================
-// GET STATISTICS FROM DATABASE (WITH BRANCH FILTER)
-// ================================================================
-try {
-    $db = getDB();
+if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
+    $user_id = $_SESSION['user_id'];
+    $user_branch_id = $_SESSION['branch_id'] ?? 1;
     
-    // Build branch filter
-    $branch_filter = '';
-    $params = [];
-    
-    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $branch_filter = " AND branch_id = ?";
-        $params[] = $selected_branch_id;
+    try {
+        // 1. Total Patients (for this branch)
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
+        $stmt->execute([$user_branch_id]);
+        $patient_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // 2. Today's Appointments (for this branch)
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
+        $stmt->execute([$user_branch_id]);
+        $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // 3. Pending Appointments (for this branch)
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
+        $stmt->execute([$user_branch_id]);
+        $pending_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // 4. Today's Visits (for this branch)
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
+        $stmt->execute([$user_branch_id]);
+        $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // 5. Pending Patients (waiting for doctor)
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
+        $stmt->execute([$user_branch_id]);
+        $pending_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+    } catch (Exception $e) {
+        // If error, keep counts as 0
     }
-    
-    // Total patients
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE 1=1 " . $branch_filter);
-    $stmt->execute($params);
-    $total_patients = $stmt->fetch()['total'] ?? 0;
-    
-    // Today's appointments
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE DATE(appointment_date) = CURDATE() " . $branch_filter);
-    $stmt->execute($params);
-    $today_appointments = $stmt->fetch()['total'] ?? 0;
-    
-    // Pending payments
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE (status = 'pending' OR status = 'assigned') " . $branch_filter);
-    $stmt->execute($params);
-    $pending_payments = $stmt->fetch()['total'] ?? 0;
-    
-    // Today's revenue
-    $stmt = $db->prepare("SELECT COALESCE(SUM(total), 0) as total FROM pharmacy_sales WHERE DATE(sale_date) = CURDATE() AND payment_status = 'paid' " . $branch_filter);
-    $stmt->execute($params);
-    $today_revenue = $stmt->fetch()['total'] ?? 0;
-    
-    // Get branches for selector (only if admin)
-    if ($is_admin) {
-        $branches = getBranches();
-    } else {
-        // Get only user's branch - but don't show branch name in selector label
-        $branches = [];
-        $branch = getBranch($user_branch_id);
-        if ($branch) {
-            $branches[] = $branch;
-        }
-    }
-    
-} catch (Exception $e) {
-    $total_patients = 0;
-    $today_appointments = 0;
-    $pending_payments = 0;
-    $today_revenue = 0;
-    $branches = [];
 }
 
-// ================================================================
-// DETECT CURRENT PAGE
-// ================================================================
+// Detect current page
 $current_page = basename($_SERVER['PHP_SELF']);
-$current_module = basename(dirname($_SERVER['PHP_SELF']));
 
+// ================================================================
+// FUNCTION TO CHECK ACTIVE STATE
+// ================================================================
 function isActive($page) {
     global $current_page;
-    return $page === $current_page ? 'active' : '';
+    if ($page === $current_page) {
+        return 'active';
+    }
+    return '';
 }
 
-function isModuleActive($module) {
-    global $current_module;
-    return $module === $current_module ? 'active' : '';
-}
-
+// ================================================================
+// LOGO PATH
+// ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 ?>
 
 <style>
     /* ================================================================
-       SIDEBAR - RECEPTION & CASHIER
+       SIDEBAR STYLES - BLUE BACKGROUND
        ================================================================ */
     .sidebar {
-        position: fixed;
-        top: 0;
-        left: 0;
+        position: fixed; 
+        top: 0; 
+        left: 0; 
         bottom: 0;
-        width: 270px;
+        width: 270px; 
         background: #0B4EA8;
         color: white;
-        z-index: 50;
+        z-index: 50; 
         overflow-y: auto;
         transition: transform 0.3s ease;
     }
     
+    [data-theme="dark"] .sidebar {
+        background: #0A3D7A;
+    }
+    
     .sidebar::-webkit-scrollbar { width: 5px; }
-    .sidebar::-webkit-scrollbar-track { background: #0B3D8A; }
-    .sidebar::-webkit-scrollbar-thumb { background: #0AA84F; border-radius: 10px; }
+    .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
+    .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
     
     .sidebar-brand {
         padding: 22px 20px 16px;
-        border-bottom: 2px solid #0B3D8A;
+        border-bottom: 2px solid #0A3D7A;
     }
     
     .sidebar-brand .logo {
-        width: 48px;
-        height: 48px;
+        width: 48px; 
+        height: 48px; 
         border-radius: 12px;
-        object-fit: cover;
-        background: white;
+        object-fit: cover; 
+        background: white; 
         padding: 4px;
     }
     
-    .sidebar-brand .brand-text {
-        color: white;
-        font-weight: 700;
-        font-size: 1rem;
+    .sidebar-brand .brand-text { 
+        color: white; 
+        font-weight: 700; 
+        font-size: 1rem; 
     }
     
-    .sidebar-brand .brand-sub {
-        color: #9EC5FE;
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+    .sidebar-brand .brand-sub { 
+        color: #9EC5FE; 
+        font-size: 0.7rem; 
     }
     
-    /* Branch Selector - Clean, just the dropdown */
-    .sidebar-branch-selector {
-        padding: 12px 16px;
-        border-bottom: 2px solid #0B3D8A;
-    }
-    
-    .sidebar-branch-selector select {
-        width: 100%;
-        padding: 8px 12px;
-        border-radius: 10px;
-        border: none;
-        background: rgba(255,255,255,0.12);
-        color: white;
-        font-size: 0.8rem;
-        cursor: pointer;
-        outline: none;
-        transition: all 0.3s ease;
-    }
-    
-    .sidebar-branch-selector select:hover {
-        background: rgba(255,255,255,0.2);
-    }
-    
-    .sidebar-branch-selector select option {
-        background: #0B4EA8;
-        color: white;
-    }
-    
-    .sidebar-branch-selector select:disabled {
-        opacity: 0.7;
-        cursor: not-allowed;
-    }
-    
-    .sidebar-nav {
-        padding: 14px 10px;
+    .sidebar-nav { 
+        padding: 14px 10px; 
     }
     
     .sidebar-nav .nav-label {
-        font-size: 0.55rem;
+        font-size: 0.55rem; 
         text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: #6EA8FE;
-        padding: 0 12px;
-        margin: 12px 0 6px;
+        letter-spacing: 0.1em; 
+        color: #9EC5FE;
+        padding: 0 12px; 
+        margin: 12px 0 6px; 
         font-weight: 700;
     }
     
-    /* ================================================================
-       SIDEBAR LINKS - BLUE BG, GREEN HOVER
-       ================================================================ */
     .sidebar-link {
-        display: flex;
-        align-items: center;
+        display: flex; 
+        align-items: center; 
         gap: 12px;
-        padding: 9px 14px;
+        padding: 9px 14px; 
         border-radius: 10px;
-        color: #D2E3FC;
+        color: #D2E3FC; 
         text-decoration: none;
-        transition: all 0.3s ease;
-        font-size: 0.85rem;
+        transition: all 0.3s ease; 
+        font-size: 0.85rem; 
         font-weight: 500;
         margin: 2px 0;
         background: transparent;
@@ -229,22 +152,22 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     }
     
     .sidebar-link:hover {
-        background: #0AA84F;
+        background: #0B5ED7;
         color: white;
-        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.4);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.4);
         transform: translateX(4px);
     }
     
     .sidebar-link.active {
-        background: #0AA84F;
+        background: #0B5ED7;
         color: white;
-        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.4);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.4);
     }
     
-    .sidebar-link i {
-        width: 20px;
-        text-align: center;
-        font-size: 1rem;
+    .sidebar-link i { 
+        width: 20px; 
+        text-align: center; 
+        font-size: 1rem; 
     }
     
     .sidebar-link .badge {
@@ -264,6 +187,21 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     
     .sidebar-link.active .badge {
         background: rgba(255,255,255,0.25);
+        color: white;
+    }
+    
+    .sidebar-link .badge.danger {
+        background: #EF4444;
+        animation: pulse-badge 2s infinite;
+    }
+    
+    .sidebar-link .badge.green {
+        background: #059669;
+    }
+    
+    @keyframes pulse-badge {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.1); }
     }
     
     .sidebar-link.logout-link {
@@ -279,18 +217,58 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
     }
     
+    .sidebar-status {
+        padding: 12px 20px;
+        border-top: 2px solid #0A3D7A;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    
+    .sidebar-status .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+    }
+    
+    .sidebar-status .status-dot.online {
+        background: #34D399;
+        animation: pulse-dot 1.5s infinite;
+    }
+    
+    .sidebar-status .status-dot.offline {
+        background: #94A3B8;
+    }
+    
+    .sidebar-status .status-text {
+        font-size: 0.75rem;
+        color: #D2E3FC;
+    }
+    
+    .sidebar-status .status-time {
+        font-size: 0.6rem;
+        color: #9EC5FE;
+        margin-left: auto;
+    }
+    
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+    
     @media (max-width: 1024px) {
-        .sidebar {
-            transform: translateX(-100%);
+        .sidebar { 
+            transform: translateX(-100%); 
         }
-        .sidebar.open {
-            transform: translateX(0);
+        .sidebar.open { 
+            transform: translateX(0); 
         }
     }
 </style>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR -->
+<!-- SIDEBAR - HAKUNA JINA LA RECEPTIONIST, HAKUNA BRANCH -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     
@@ -301,23 +279,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div>
                 <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub"><?= $display_role ?></p>
+                <p class="brand-sub">Reception Panel</p>
             </div>
         </div>
-    </div>
-    
-    <!-- Branch Selector - Clean dropdown only -->
-    <div class="sidebar-branch-selector">
-        <select id="sidebarBranchSelector" onchange="switchBranch(this.value)" <?= !$is_admin ? 'disabled' : '' ?>>
-            <?php if ($is_admin): ?>
-                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php endif; ?>
-            <?php foreach ($branches as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
     </div>
     
     <nav class="sidebar-nav">
@@ -325,99 +289,89 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- ===== RECEPTION MENU ===== -->
         <div class="nav-label">Reception</div>
         
-        <a href="../reception/dashboard.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isModuleActive('reception') && isActive('dashboard.php') ? 'active' : '' ?>">
+        <!-- 1. Dashboard -->
+        <a href="../reception/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
-        <a href="../reception/patients.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('patients.php') || isActive('view_patient.php') || isActive('new_patient.php') ? 'active' : '' ?>">
-            <i class="fas fa-users"></i> Patients
-            <span class="badge"><?= $total_patients ?></span>
-        </a>
-        
-        <a href="../reception/new_patient.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('new_patient.php') ? 'active' : '' ?>">
+        <!-- 2. Register Patient -->
+        <a href="../reception/new_patient.php" class="sidebar-link <?= isActive('new_patient.php') ?>">
             <i class="fas fa-user-plus"></i> Register Patient
         </a>
         
-        <a href="../reception/appointments.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('appointments.php') || isActive('new_appointment.php') ? 'active' : '' ?>">
+        <!-- 3. Patients -->
+        <a href="../reception/patients.php" class="sidebar-link <?= isActive('patients.php') ?>">
+            <i class="fas fa-users"></i> Patients
+            <span class="badge" id="receptionPatientCount"><?= $patient_count ?></span>
+        </a>
+        
+        <!-- ===== APPOINTMENTS ===== -->
+        <div class="nav-label mt-2">Appointments</div>
+        
+        <!-- 4. Appointments -->
+        <a href="../reception/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
             <i class="fas fa-calendar-check"></i> Appointments
-            <span class="badge"><?= $today_appointments ?></span>
+            <span class="badge <?= $pending_appointments > 0 ? 'danger' : '' ?>" id="receptionAppointmentCount"><?= $appointment_count ?></span>
         </a>
         
-        <a href="../reception/assign_doctor.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('assign_doctor.php') ? 'active' : '' ?>">
+        <!-- ===== VISITS ===== -->
+        <div class="nav-label mt-2">Visits</div>
+        
+        <!-- 5. Visit (Today's Visits) -->
+        <a href="../reception/visits.php?filter=today" class="sidebar-link <?= isActive('visits.php') ?>">
+            <i class="fas fa-clinic-medical"></i> Visit
+            <span class="badge" id="receptionTodayVisits"><?= $today_visits ?></span>
+        </a>
+        
+        <!-- 6. Assign Doctor -->
+        <a href="../reception/assign_doctor.php" class="sidebar-link <?= isActive('assign_doctor.php') ?>">
             <i class="fas fa-user-md"></i> Assign Doctor
+            <span class="badge <?= $pending_patients > 0 ? 'danger' : '' ?>" id="receptionPendingPatients"><?= $pending_patients ?></span>
         </a>
         
-        <a href="../reception/search.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('search.php') ? 'active' : '' ?>">
-            <i class="fas fa-search"></i> Search Patients
-        </a>
+        <!-- ===== CASHIER ===== -->
+        <div class="nav-label mt-2">Finance</div>
         
-        <!-- ===== CASHIER MENU ===== -->
-        <div class="nav-label mt-2">Cashier</div>
-        
-        <a href="../cashier/dashboard.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isModuleActive('cashier') && isActive('dashboard.php') ? 'active' : '' ?>">
-            <i class="fas fa-home"></i> Dashboard
-        </a>
-        
-        <a href="../cashier/payments.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('payments.php') || isActive('new_payment.php') ? 'active' : '' ?>">
-            <i class="fas fa-money-bill-wave"></i> Payments
-            <span class="badge"><?= $pending_payments ?></span>
-        </a>
-        
-        <a href="../cashier/new_payment.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('new_payment.php') ? 'active' : '' ?>">
-            <i class="fas fa-plus-circle"></i> New Payment
-        </a>
-        
-        <a href="../cashier/payment_history.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('payment_history.php') ? 'active' : '' ?>">
-            <i class="fas fa-history"></i> Payment History
-        </a>
-        
-        <a href="../cashier/daily_summary.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('daily_summary.php') ? 'active' : '' ?>">
-            <i class="fas fa-file-alt"></i> Daily Summary
-            <span class="badge">TSh <?= number_format($today_revenue) ?></span>
+        <!-- 7. Cashier -->
+        <a href="../cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') && strpos($_SERVER['REQUEST_URI'], 'cashier') !== false ? 'active' : '' ?>">
+            <i class="fas fa-cash-register"></i> Cashier
         </a>
         
         <!-- ===== ACCOUNT ===== -->
         <div class="nav-label mt-2">Account</div>
         
-        <a href="../reception/profile.php" 
-           class="sidebar-link <?= isActive('profile.php') ? 'active' : '' ?>">
+        <!-- Profile -->
+        <a href="../reception/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <a href="../../auth/reception_logout.php" 
-           class="sidebar-link logout-link">
+        <!-- Logout -->
+        <a href="../../../logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
         
     </nav>
+    
+    <!-- Online Status -->
+    <div class="sidebar-status">
+        <span class="status-dot online" id="sidebarStatusDot"></span>
+        <span class="status-text" id="sidebarStatusText">Online</span>
+        <span class="status-time" id="sidebarStatusTime"><?= date('H:i:s') ?></span>
+    </div>
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - WITH AJAX AUTO-UPDATE (EVERY 3 SECONDS) -->
 <!-- ================================================================ -->
 <script>
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        window.location.href = url.toString();
-    }
-    
+    // ================================================================
+    // SIDEBAR TOGGLE (Mobile)
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var sidebar = document.getElementById('sidebar');
         var sidebarToggle = document.getElementById('sidebarToggle');
         
-        if (sidebarToggle) {
+        if (sidebarToggle && sidebar) {
             sidebarToggle.addEventListener('click', function() {
                 sidebar.classList.toggle('open');
             });
@@ -433,8 +387,136 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             }
         });
     });
-    
-    console.log('%c🏥 Reception Sidebar (Clean)', 'font-size:16px; font-weight:bold; color:#0AA84F;');
-    console.log('%c👤 User: <?= $_SESSION['full_name'] ?? 'Rose Mwangi' ?>', 'font-size:12px; color:#9EC5FE;');
-    console.log('%c👑 Role: <?= $display_role ?>', 'font-size:12px; color:#9EC5FE;');
+
+    // ================================================================
+    // UPDATE SIDEBAR BADGES
+    // ================================================================
+    function updateSidebarBadges(patientCount, appointmentCount, todayVisits, pendingPatients) {
+        if (patientCount !== undefined) {
+            var el = document.getElementById('receptionPatientCount');
+            if (el) el.textContent = patientCount;
+        }
+        if (appointmentCount !== undefined) {
+            var el = document.getElementById('receptionAppointmentCount');
+            if (el) {
+                el.textContent = appointmentCount;
+                // If there are pending appointments, show danger badge
+                // This requires additional data from server
+            }
+        }
+        if (todayVisits !== undefined) {
+            var el = document.getElementById('receptionTodayVisits');
+            if (el) el.textContent = todayVisits;
+        }
+        if (pendingPatients !== undefined) {
+            var el = document.getElementById('receptionPendingPatients');
+            if (el) {
+                el.textContent = pendingPatients;
+                if (pendingPatients > 0) {
+                    el.className = 'badge danger';
+                } else {
+                    el.className = 'badge';
+                }
+            }
+        }
+        
+        // Update status time
+        var timeEl = document.getElementById('sidebarStatusTime');
+        if (timeEl) {
+            var now = new Date();
+            timeEl.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+    }
+
+    // ================================================================
+    // AJAX AUTO-UPDATE - FETCH SIDEBAR DATA EVERY 3 SECONDS
+    // ================================================================
+    var sidebarUpdateInterval = null;
+    var sidebarIsUpdating = false;
+    var sidebarLastHash = null;
+
+    function fetchSidebarData() {
+        if (sidebarIsUpdating) return;
+        sidebarIsUpdating = true;
+        
+        fetch('../reception/get_sidebar_stats.php')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Check if data has changed
+                    if (sidebarLastHash !== data.hash) {
+                        sidebarLastHash = data.hash;
+                        updateSidebarBadges(
+                            data.patients,
+                            data.appointments,
+                            data.today_visits,
+                            data.pending_patients
+                        );
+                    }
+                    
+                    // Update status time
+                    var timeEl = document.getElementById('sidebarStatusTime');
+                    if (timeEl) {
+                        var now = new Date();
+                        timeEl.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    }
+                }
+                sidebarIsUpdating = false;
+            })
+            .catch(function(error) {
+                console.error('Sidebar update error:', error);
+                sidebarIsUpdating = false;
+            });
+    }
+
+    // ================================================================
+    // START SIDEBAR AUTO-UPDATE
+    // ================================================================
+    function startSidebarAutoUpdate() {
+        if (sidebarUpdateInterval) {
+            clearInterval(sidebarUpdateInterval);
+        }
+        // Update every 3 seconds
+        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
+        // Fetch immediately
+        fetchSidebarData();
+    }
+
+    // ================================================================
+    // STOP SIDEBAR AUTO-UPDATE
+    // ================================================================
+    function stopSidebarAutoUpdate() {
+        if (sidebarUpdateInterval) {
+            clearInterval(sidebarUpdateInterval);
+            sidebarUpdateInterval = null;
+        }
+    }
+
+    // ================================================================
+    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopSidebarAutoUpdate();
+        } else {
+            startSidebarAutoUpdate();
+        }
+    });
+
+    // ================================================================
+    // INITIALIZE SIDEBAR AUTO-UPDATE
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        // Start after 2 seconds
+        setTimeout(function() {
+            startSidebarAutoUpdate();
+        }, 2000);
+    });
+
+    console.log('%c🏥 Reception Sidebar - v2', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Menu: Dashboard, Register Patient, Patients, Appointments, Visit, Assign Doctor, Cashier', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c👥 Patients: <?= $patient_count ?>', 'font-size:12px; color:#059669;');
+    console.log('%c📅 Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#059669;');
+    console.log('%c⏳ Pending Patients: <?= $pending_patients ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c🔄 Auto-update: Every 3 seconds', 'font-size:12px; color:#34D399;');
 </script>
