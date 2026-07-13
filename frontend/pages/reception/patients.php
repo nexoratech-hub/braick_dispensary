@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
 // RECEPTION - PATIENTS LIST (BRANCH FILTERED)
+// FIXED: No redirect loop
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -10,13 +11,15 @@ session_start();
 // ================================================================
 // FORCE SESSION - Rose Mwangi (Reception)
 // ================================================================
-$_SESSION['user_id'] = 6;
-$_SESSION['full_name'] = 'Rose Mwangi';
-$_SESSION['role'] = 'reception';
-$_SESSION['branch_id'] = 1;
-$_SESSION['branch_name'] = 'Dodoma';
-$_SESSION['username'] = 'reception.rose';
-$_SESSION['is_admin'] = false;
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
+    $_SESSION['user_id'] = 6;
+    $_SESSION['full_name'] = 'Rose Mwangi';
+    $_SESSION['role'] = 'reception';
+    $_SESSION['branch_id'] = 1;
+    $_SESSION['branch_name'] = 'Dodoma';
+    $_SESSION['username'] = 'reception.rose';
+    $_SESSION['is_admin'] = false;
+}
 
 // ================================================================
 // PATH SAHIHI
@@ -24,19 +27,48 @@ $_SESSION['is_admin'] = false;
 require_once __DIR__ . '/../../../backend/config/config.php';
 
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id; // Force to user's branch
+$selected_branch_id = $_GET['branch'] ?? 'all';
 $search = $_GET['search'] ?? '';
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $limit = 20;
 $offset = ($page - 1) * $limit;
 
+// ================================================================
+// FORCE TO USER'S BRANCH IF NOT ADMIN
+// ================================================================
+$is_admin = ($_SESSION['role'] === 'admin');
+if (!$is_admin) {
+    $selected_branch_id = $user_branch_id;
+}
+
+// ================================================================
+// GET BRANCH NAME
+// ================================================================
+$branch_name = 'All Branches';
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $branch = getBranch($selected_branch_id);
+    if ($branch) {
+        $branch_name = $branch['name'];
+    }
+} else {
+    $selected_branch_id = 'all';
+}
+
 try {
     $db = getDB();
     
-    // Build query with branch filter
-    $query = "SELECT * FROM patients WHERE branch_id = ?";
-    $count_query = "SELECT COUNT(*) as total FROM patients WHERE branch_id = ?";
-    $params = [$selected_branch_id];
+    // ================================================================
+    // BUILD QUERY
+    // ================================================================
+    $query = "SELECT * FROM patients WHERE 1=1";
+    $count_query = "SELECT COUNT(*) as total FROM patients WHERE 1=1";
+    $params = [];
+    
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $query .= " AND branch_id = ?";
+        $count_query .= " AND branch_id = ?";
+        $params[] = $selected_branch_id;
+    }
     
     if (!empty($search)) {
         $query .= " AND (full_name LIKE ? OR patient_id LIKE ? OR phone LIKE ? OR email LIKE ?)";
@@ -47,12 +79,17 @@ try {
         $params[] = "%$search%";
     }
     
-    // Get total count
+    // ================================================================
+    // GET TOTAL COUNT
+    // ================================================================
     $stmt = $db->prepare($count_query);
     $stmt->execute($params);
     $total_patients = $stmt->fetch()['total'] ?? 0;
+    $total_pages = ceil($total_patients / $limit);
     
-    // Get paginated results
+    // ================================================================
+    // GET PAGINATED RESULTS
+    // ================================================================
     $query .= " ORDER BY created_at DESC LIMIT ? OFFSET ?";
     $params[] = $limit;
     $params[] = $offset;
@@ -61,12 +98,11 @@ try {
     $stmt->execute($params);
     $patients = $stmt->fetchAll();
     
-    $total_pages = ceil($total_patients / $limit);
-    
 } catch (Exception $e) {
     $patients = [];
     $total_patients = 0;
     $total_pages = 0;
+    $error_message = $e->getMessage();
 }
 
 // ================================================================
@@ -98,6 +134,14 @@ include_once '../../components/reception_sidebar.php';
         flex-shrink: 0;
     }
     .table-wrap { overflow-x: auto; }
+    
+    .pagination {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 12px;
+    }
     .pagination .page-link {
         padding: 5px 12px;
         border-radius: 6px;
@@ -122,13 +166,7 @@ include_once '../../components/reception_sidebar.php';
         cursor: not-allowed;
         pointer-events: none;
     }
-    .pagination {
-        display: flex;
-        gap: 4px;
-        flex-wrap: wrap;
-        justify-content: center;
-        margin-top: 12px;
-    }
+    
     .branch-badge-display {
         display: inline-block;
         font-size: 0.6rem;
@@ -141,6 +179,239 @@ include_once '../../components/reception_sidebar.php';
     [data-theme="dark"] .branch-badge-display {
         background: #1A3A2A;
         color: #34D399;
+    }
+    
+    .role-badge-display {
+        display: inline-block;
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 20px;
+        background: var(--primary-bg);
+        color: var(--primary);
+        text-transform: uppercase;
+    }
+    [data-theme="dark"] .role-badge-display {
+        background: #1E3A5F;
+        color: #6EA8FE;
+    }
+    
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.7rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    .btn-blue {
+        background: #0B5ED7;
+        color: white;
+    }
+    .btn-blue:hover {
+        background: #0A4CA8;
+        transform: scale(1.05);
+    }
+    .btn-green {
+        background: #059669;
+        color: white;
+    }
+    .btn-green:hover {
+        background: #047857;
+        transform: scale(1.05);
+    }
+    .btn-sm {
+        padding: 3px 8px;
+        font-size: 0.65rem;
+        border-radius: 4px;
+    }
+    
+    .card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s;
+    }
+    .card:hover {
+        border-color: var(--primary);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+    }
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .card-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .card-title .title-blue { color: #0B5ED7; }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+        min-width: 700px;
+    }
+    .data-table thead th {
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: 700;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: white;
+        background: #0B5ED7;
+        border-bottom: 3px solid #0A4CA8;
+        white-space: nowrap;
+    }
+    .data-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+    }
+    
+    .page-header {
+        border-bottom: 3px solid #0B5ED7;
+        padding-bottom: 12px;
+    }
+    .page-header .page-title {
+        color: #0B3D8A;
+        font-size: 1.6rem;
+        font-weight: 700;
+    }
+    [data-theme="dark"] .page-header .page-title {
+        color: #6EA8FE;
+    }
+    .page-header .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+    .page-header .branch-tag {
+        background: #059669;
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    
+    .filter-search {
+        display: flex;
+        align-items: center;
+        flex: 1;
+        min-width: 200px;
+        background: var(--bg-body);
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        transition: all 0.3s;
+        padding: 0 12px;
+    }
+    .filter-search:focus-within {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+    }
+    .filter-search .fa-search {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        opacity: 0.5;
+    }
+    .filter-input {
+        border: none;
+        background: transparent;
+        padding: 8px 12px;
+        width: 100%;
+        font-size: 0.85rem;
+        outline: none;
+        color: var(--text-primary);
+    }
+    .filter-input::placeholder {
+        color: var(--text-secondary);
+        opacity: 0.5;
+    }
+    
+    .filter-group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+    }
+    
+    @media (max-width: 768px) {
+        .data-table {
+            font-size: 0.7rem;
+            min-width: 600px;
+        }
+        .data-table th,
+        .data-table td {
+            padding: 6px 8px;
+        }
+        .btn-sm {
+            padding: 2px 6px;
+            font-size: 0.55rem;
+        }
+        .card {
+            padding: 12px 14px;
+        }
+        .page-header .page-title {
+            font-size: 1.2rem;
+        }
+        .filter-group {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .filter-search {
+            min-width: 100%;
+        }
+        .filter-group .btn {
+            width: 100%;
+            justify-content: center;
+        }
+        .pagination .page-link {
+            padding: 3px 8px;
+            font-size: 0.7rem;
+        }
+    }
+    
+    @media (max-width: 480px) {
+        .data-table {
+            font-size: 0.6rem;
+            min-width: 500px;
+        }
+        .data-table th,
+        .data-table td {
+            padding: 4px 6px;
+        }
+        .patient-avatar-sm {
+            width: 24px;
+            height: 24px;
+            font-size: 0.6rem;
+        }
     }
 </style>
 
@@ -164,7 +435,7 @@ include_once '../../components/reception_sidebar.php';
     
     <div class="flex items-center gap-3">
         <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name ?? 'Dodoma') ?>
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime"></span>
@@ -199,14 +470,17 @@ include_once '../../components/reception_sidebar.php';
                 <span class="role-badge-display ml-2">RECEPTION</span>
             </h1>
             <p class="page-subtitle">
-                Manage all registered patients in <?= htmlspecialchars($branch_name ?? 'Dodoma') ?>
+                Manage all registered patients
+                <span class="branch-tag ml-2">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
+                </span>
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-user mr-1"></i> <?= $total_patients ?> patients
                 </span>
                 <?php if (!empty($search)): ?>
                     <span class="ml-2 inline-flex bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-xs border border-yellow-200">
                         <i class="fas fa-search mr-1"></i> Results for: "<?= htmlspecialchars($search) ?>"
-                        <a href="patients.php" class="ml-2 text-yellow-600 hover:text-yellow-800">
+                        <a href="patients.php?branch=<?= $selected_branch_id ?>" class="ml-2 text-yellow-600 hover:text-yellow-800">
                             <i class="fas fa-times"></i>
                         </a>
                     </span>
@@ -218,6 +492,27 @@ include_once '../../components/reception_sidebar.php';
                 <i class="fas fa-user-plus"></i> Register Patient
             </a>
         </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- SEARCH -->
+    <!-- ================================================================ -->
+    <div class="card mb-5">
+        <form method="GET" class="filter-group">
+            <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
+            <div class="filter-search">
+                <i class="fas fa-search"></i>
+                <input type="text" name="search" class="filter-input" placeholder="Search patients..." value="<?= htmlspecialchars($search) ?>">
+            </div>
+            <button type="submit" class="btn btn-blue">
+                <i class="fas fa-search"></i> Search
+            </button>
+            <?php if (!empty($search)): ?>
+                <a href="patients.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                    <i class="fas fa-times"></i> Clear
+                </a>
+            <?php endif; ?>
+        </form>
     </div>
 
     <!-- ================================================================ -->
@@ -236,13 +531,13 @@ include_once '../../components/reception_sidebar.php';
                 <thead>
                     <tr>
                         <th style="border-radius: 8px 0 0 0;">#</th>
+                        <th>Patient</th>
                         <th>Patient ID</th>
-                        <th>Full Name</th>
-                        <th>Gender</th>
                         <th>Phone</th>
                         <th>Email</th>
+                        <th>Gender</th>
                         <th>Registered</th>
-                        <th style="border-radius: 0 8px 0 0;">Actions</th>
+                        <th style="border-radius: 0 8px 0 0; text-align:center;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -250,14 +545,24 @@ include_once '../../components/reception_sidebar.php';
                         <?php $i = $offset + 1; foreach ($patients as $patient): ?>
                             <tr class="patient-row">
                                 <td><?= $i++ ?></td>
-                                <td><span class="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span></td>
-                                <td class="font-medium"><?= htmlspecialchars($patient['full_name']) ?></td>
-                                <td><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></td>
+                                <td>
+                                    <div class="flex items-center gap-3">
+                                        <div class="patient-avatar-sm" style="background: <?= '#' . substr(md5($patient['full_name']), 0, 6) ?>;">
+                                            <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
+                                        </div>
+                                        <div>
+                                            <div class="font-medium"><?= htmlspecialchars($patient['full_name']) ?></div>
+                                            <div class="text-xs text-gray-400"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td><span class="font-mono text-xs"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span></td>
                                 <td><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></td>
-                                <td class="text-xs"><?= isset($patient['created_at']) ? time_ago($patient['created_at']) : 'N/A' ?></td>
+                                <td><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></td>
+                                <td class="text-xs"><?= isset($patient['created_at']) ? date('M d, Y', strtotime($patient['created_at'])) : 'N/A' ?></td>
                                 <td>
-                                    <div class="flex gap-1">
+                                    <div class="action-buttons" style="display:flex;gap:4px;justify-content:center;">
                                         <a href="view_patient.php?id=<?= $patient['id'] ?>" 
                                            class="btn btn-blue btn-sm" title="View Patient">
                                             <i class="fas fa-eye"></i>
@@ -277,7 +582,7 @@ include_once '../../components/reception_sidebar.php';
                                 <?php if (!empty($search)): ?>
                                     No patients found matching "<strong><?= htmlspecialchars($search) ?></strong>"
                                 <?php else: ?>
-                                    No patients registered in <?= htmlspecialchars($branch_name ?? 'Dodoma') ?>
+                                    No patients registered yet
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -286,27 +591,51 @@ include_once '../../components/reception_sidebar.php';
             </table>
         </div>
         
-        <!-- Pagination -->
+        <!-- ================================================================ -->
+        <!-- PAGINATION -->
+        <!-- ================================================================ -->
         <?php if ($total_pages > 1): ?>
             <div class="pagination">
                 <?php if ($page > 1): ?>
-                    <a href="?page=<?= $page-1 ?>&search=<?= urlencode($search) ?>" class="page-link">&laquo; Prev</a>
+                    <a href="?page=<?= $page-1 ?>&branch=<?= $selected_branch_id ?>&search=<?= urlencode($search) ?>" class="page-link">&laquo; Prev</a>
                 <?php else: ?>
                     <span class="page-link disabled">&laquo; Prev</span>
                 <?php endif; ?>
                 
                 <?php for ($i = 1; $i <= $total_pages; $i++): ?>
-                    <a href="?page=<?= $i ?>&search=<?= urlencode($search) ?>" 
+                    <a href="?page=<?= $i ?>&branch=<?= $selected_branch_id ?>&search=<?= urlencode($search) ?>" 
                        class="page-link <?= $i == $page ? 'active' : '' ?>"><?= $i ?></a>
                 <?php endfor; ?>
                 
                 <?php if ($page < $total_pages): ?>
-                    <a href="?page=<?= $page+1 ?>&search=<?= urlencode($search) ?>" class="page-link">Next &raquo;</a>
+                    <a href="?page=<?= $page+1 ?>&branch=<?= $selected_branch_id ?>&search=<?= urlencode($search) ?>" class="page-link">Next &raquo;</a>
                 <?php else: ?>
                     <span class="page-link disabled">Next &raquo;</span>
                 <?php endif; ?>
             </div>
         <?php endif; ?>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- QUICK STATS -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
+        <div class="card text-center">
+            <p class="text-2xl font-bold text-primary"><?= $total_patients ?></p>
+            <p class="text-sm text-gray-500">Total Patients</p>
+        </div>
+        <div class="card text-center">
+            <p class="text-2xl font-bold text-green-600"><?= count($patients) ?></p>
+            <p class="text-sm text-gray-500">Showing</p>
+        </div>
+        <div class="card text-center">
+            <p class="text-2xl font-bold text-purple-600"><?= $total_pages ?></p>
+            <p class="text-sm text-gray-500">Pages</p>
+        </div>
+        <div class="card text-center">
+            <p class="text-2xl font-bold text-orange-500"><?= date('M d, Y') ?></p>
+            <p class="text-sm text-gray-500">Today</p>
+        </div>
     </div>
 
     <!-- ================================================================ -->
@@ -385,14 +714,17 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // SEARCH - Filtered by branch
+    // SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
     function performSearch() {
         var query = searchInput.value.trim();
-        window.location.href = 'patients.php?search=' + encodeURIComponent(query);
+        var branch = '<?= $selected_branch_id ?>';
+        if (query.length > 0) {
+            window.location.href = 'patients.php?search=' + encodeURIComponent(query) + '&branch=' + branch;
+        }
     }
     
     searchBtn?.addEventListener('click', performSearch);
@@ -439,9 +771,10 @@ include_once '../../components/reception_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c👥 Braick - Patients List (Branch Filtered)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name ?? 'Dodoma') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👥 Braick - Patients List', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Patients: <?= $total_patients ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Showing page <?= $page ?> of <?= $total_pages ?>', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

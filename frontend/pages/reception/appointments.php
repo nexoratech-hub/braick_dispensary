@@ -1,8 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/appointments.php
-// RECEPTION - APPOINTMENTS LIST (BRANCH FILTERED)
-// WITH VIEW BUTTON ONLY
+// RECEPTION - APPOINTMENTS LIST WITH DATE SELECTOR
+// FIXED: View Patient goes to patient profile (view_patient.php?id=...)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -25,24 +25,41 @@ $_SESSION['is_admin'] = false;
 require_once __DIR__ . '/../../../backend/config/config.php';
 
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id; // Force to user's branch
+$selected_branch_id = $user_branch_id;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $status_filter = $_GET['status'] ?? '';
-$date_filter = $_GET['date'] ?? date('Y-m-d');
+$date_filter = $_GET['date'] ?? '';
 $search = $_GET['search'] ?? '';
+
+// ================================================================
+// NO PAGINATION - SHOW ALL
+// ================================================================
+$limit = 99999;
 
 try {
     $db = getDB();
     
-    // Build query with branch filter
+    // ================================================================
+    // GET APPOINTMENTS WITH PATIENT APPOINTMENT COUNT
+    // ================================================================
     $query = "
-        SELECT a.*, p.full_name as patient_name, p.patient_id, u.full_name as doctor_name 
+        SELECT a.*, 
+               p.full_name as patient_name, 
+               p.patient_id,
+               p.id as patient_id,
+               u.full_name as doctor_name,
+               (
+                   SELECT COUNT(*) 
+                   FROM appointments 
+                   WHERE patient_id = a.patient_id 
+                   AND branch_id = ?
+               ) as patient_appointment_count
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
         JOIN users u ON a.doctor_id = u.id
         WHERE a.branch_id = ?
     ";
-    $params = [$selected_branch_id];
+    $params = [$selected_branch_id, $selected_branch_id];
     
     if (!empty($status_filter)) {
         $query .= " AND a.status = ?";
@@ -66,19 +83,45 @@ try {
     $stmt = $db->prepare($query);
     $stmt->execute($params);
     $appointments = $stmt->fetchAll();
+    $total_records = count($appointments);
     
-    // Status counts for this branch
+    // ================================================================
+    // STATUS COUNTS (WITH DATE FILTER IF APPLIED)
+    // ================================================================
     $status_counts = [];
     $statuses = ['scheduled', 'confirmed', 'in-progress', 'completed', 'cancelled'];
     foreach ($statuses as $status) {
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE status = ? AND branch_id = ?");
-        $stmt->execute([$status, $selected_branch_id]);
+        $sql = "SELECT COUNT(*) as total FROM appointments WHERE status = ? AND branch_id = ?";
+        $params_status = [$status, $selected_branch_id];
+        
+        if (!empty($date_filter)) {
+            $sql .= " AND DATE(appointment_date) = ?";
+            $params_status[] = $date_filter;
+        }
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params_status);
         $status_counts[$status] = $stmt->fetch()['total'] ?? 0;
     }
+    
+    // Total appointments in this branch (with date filter if applied)
+    $sql_total = "SELECT COUNT(*) as total FROM appointments WHERE branch_id = ?";
+    $params_total = [$selected_branch_id];
+    
+    if (!empty($date_filter)) {
+        $sql_total .= " AND DATE(appointment_date) = ?";
+        $params_total[] = $date_filter;
+    }
+    
+    $stmt = $db->prepare($sql_total);
+    $stmt->execute($params_total);
+    $total_appointments_all = $stmt->fetch()['total'] ?? 0;
     
 } catch (Exception $e) {
     $appointments = [];
     $status_counts = [];
+    $total_records = 0;
+    $total_appointments_all = 0;
 }
 
 // ================================================================
@@ -119,7 +162,33 @@ include_once '../../components/reception_sidebar.php';
         color: white;
         border-color: var(--primary);
     }
-    .table-wrap { overflow-x: auto; }
+    
+    /* ================================================================
+       SCROLLABLE TABLE
+       ================================================================ */
+    .table-wrap-scroll {
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 550px;
+        border-radius: 0 0 12px 12px;
+    }
+    
+    .table-wrap-scroll::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    .table-wrap-scroll::-webkit-scrollbar-track {
+        background: var(--bg-body);
+        border-radius: 4px;
+    }
+    .table-wrap-scroll::-webkit-scrollbar-thumb {
+        background: var(--primary);
+        border-radius: 4px;
+    }
+    .table-wrap-scroll::-webkit-scrollbar-thumb:hover {
+        background: var(--primary-dark);
+    }
+    
     .role-badge-display {
         display: inline-block;
         font-size: 0.6rem;
@@ -148,7 +217,6 @@ include_once '../../components/reception_sidebar.php';
         color: #34D399;
     }
     
-    /* ===== BUTTONS ===== */
     .btn {
         display: inline-flex;
         align-items: center;
@@ -192,6 +260,24 @@ include_once '../../components/reception_sidebar.php';
     .badge-red { background: #DC2626; color: white; }
     .badge-blue { background: #0B5ED7; color: white; }
     .badge-gray { background: #94A3B8; color: white; }
+    .badge-purple { background: #7C3AED; color: white; }
+    
+    /* Appointment Count Badge */
+    .appointment-count-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: #E8F0FE;
+        color: #0B5ED7;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+    }
+    [data-theme="dark"] .appointment-count-badge {
+        background: #1E3A5F;
+        color: #6EA8FE;
+    }
     
     .card {
         background: var(--bg-card);
@@ -223,6 +309,7 @@ include_once '../../components/reception_sidebar.php';
         width: 100%;
         border-collapse: collapse;
         font-size: 0.82rem;
+        min-width: 800px;
     }
     .data-table thead th {
         text-align: left;
@@ -235,6 +322,9 @@ include_once '../../components/reception_sidebar.php';
         background: #0B5ED7;
         border-bottom: 3px solid #0A4CA8;
         white-space: nowrap;
+        position: sticky;
+        top: 0;
+        z-index: 10;
     }
     .data-table td {
         padding: 8px 12px;
@@ -270,7 +360,17 @@ include_once '../../components/reception_sidebar.php';
     }
     .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
     
-    .form-control {
+    /* ================================================================
+       DATE SELECTOR STYLES
+       ================================================================ */
+    .date-selector-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    
+    .date-selector-group .form-control {
         padding: 4px 10px;
         border: 2px solid var(--border-color);
         border-radius: 8px;
@@ -280,9 +380,25 @@ include_once '../../components/reception_sidebar.php';
         outline: none;
         transition: all 0.3s;
     }
-    .form-control:focus {
+    
+    .date-selector-group .form-control:focus {
         border-color: #0B5ED7;
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+    }
+    
+    .date-selector-group .form-control select {
+        cursor: pointer;
+        appearance: auto;
+    }
+    
+    .date-selector-group .form-control input[type="date"] {
+        cursor: pointer;
+    }
+    
+    .date-selector-group .form-label-date {
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--text-secondary);
     }
     
     .action-buttons {
@@ -292,9 +408,29 @@ include_once '../../components/reception_sidebar.php';
         justify-content: center;
     }
     
+    .record-count {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+    }
+    .record-count strong {
+        color: var(--primary);
+    }
+    
+    .card-footer {
+        padding: 10px 20px;
+        border-top: 2px solid var(--border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
     @media (max-width: 768px) {
         .data-table {
             font-size: 0.7rem;
+            min-width: 700px;
         }
         .data-table th,
         .data-table td {
@@ -317,6 +453,41 @@ include_once '../../components/reception_sidebar.php';
         }
         .page-header .page-title {
             font-size: 1.2rem;
+        }
+        .table-wrap-scroll {
+            max-height: 400px;
+        }
+        .card-footer {
+            flex-direction: column;
+            text-align: center;
+        }
+        .date-selector-group {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .date-selector-group .form-control {
+            width: 100% !important;
+        }
+    }
+    
+    @media (max-width: 480px) {
+        .table-wrap-scroll {
+            max-height: 300px;
+        }
+        .data-table {
+            font-size: 0.6rem;
+            min-width: 600px;
+        }
+        .data-table th,
+        .data-table td {
+            padding: 4px 6px;
+        }
+        .filter-group {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .filter-group .filter-btn {
+            text-align: center;
         }
     }
 </style>
@@ -374,11 +545,19 @@ include_once '../../components/reception_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-calendar-check mr-2" style="color: var(--primary);"></i> Appointments
                 <span class="role-badge-display ml-2">RECEPTION</span>
+                <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
+                    <i class="fas fa-calendar-alt mr-1"></i> Total: <?= $total_appointments_all ?>
+                </span>
+                <?php if (!empty($date_filter)): ?>
+                    <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                        <i class="fas fa-calendar-day mr-1"></i> <?= date('M d, Y', strtotime($date_filter)) ?>
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Manage all patient appointments in <?= htmlspecialchars($branch_name) ?>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y', strtotime($date_filter)) ?>
+                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
+                    <i class="fas fa-list mr-1"></i> <?= $total_records ?> appointments found
                 </span>
             </p>
         </div>
@@ -393,42 +572,62 @@ include_once '../../components/reception_sidebar.php';
     <!-- FILTERS -->
     <!-- ================================================================ -->
     <div class="card mb-5">
-        <div class="flex flex-wrap items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2 filter-group">
             <span class="text-sm font-medium text-gray-600 mr-2">Status:</span>
-            <a href="appointments.php?date=<?= $date_filter ?>" 
+            <a href="appointments.php?date=<?= $date_filter ?>&search=<?= urlencode($search) ?>" 
                class="filter-btn <?= empty($status_filter) ? 'active' : '' ?>">All (<?= array_sum($status_counts) ?>)</a>
             <?php foreach ($status_counts as $status => $count): ?>
-                <a href="appointments.php?status=<?= $status ?>&date=<?= $date_filter ?>" 
+                <a href="appointments.php?status=<?= $status ?>&date=<?= $date_filter ?>&search=<?= urlencode($search) ?>" 
                    class="filter-btn <?= $status_filter === $status ? 'active' : '' ?>">
                     <?= ucfirst($status) ?> (<?= $count ?>)
                 </a>
             <?php endforeach; ?>
             
-            <span class="text-sm font-medium text-gray-600 ml-4 mr-2">Date:</span>
-            <input type="date" id="dateFilter" value="<?= $date_filter ?>" 
-                   onchange="window.location.href='appointments.php?date='+this.value+'&status=<?= $status_filter ?>'"
-                   class="form-control" style="width:auto;">
+            <!-- ============================================================ -->
+            <!-- DATE SELECTOR - DROPDOWN + CUSTOM DATE -->
+            <!-- ============================================================ -->
+            <div class="date-selector-group ml-4">
+                <span class="form-label-date"><i class="fas fa-calendar-alt mr-1"></i> Date:</span>
+                
+                <select id="dateFilterSelect" class="form-control" 
+                        onchange="window.location.href='appointments.php?date='+this.value+'&status=<?= $status_filter ?>&search=<?= urlencode($search) ?>'"
+                        style="width:auto;min-width:120px;">
+                    <option value="">All Dates</option>
+                    <option value="<?= date('Y-m-d') ?>" <?= $date_filter === date('Y-m-d') ? 'selected' : '' ?>>Today</option>
+                    <option value="<?= date('Y-m-d', strtotime('-1 day')) ?>" <?= $date_filter === date('Y-m-d', strtotime('-1 day')) ? 'selected' : '' ?>>Yesterday</option>
+                    <option value="<?= date('Y-m-d', strtotime('-7 days')) ?>" <?= $date_filter === date('Y-m-d', strtotime('-7 days')) ? 'selected' : '' ?>>Last 7 Days</option>
+                    <option value="<?= date('Y-m-d', strtotime('-30 days')) ?>" <?= $date_filter === date('Y-m-d', strtotime('-30 days')) ? 'selected' : '' ?>>Last 30 Days</option>
+                    <option value="custom" <?= !empty($date_filter) && !in_array($date_filter, [date('Y-m-d'), date('Y-m-d', strtotime('-1 day')), date('Y-m-d', strtotime('-7 days')), date('Y-m-d', strtotime('-30 days'))]) ? 'selected' : '' ?>>Custom</option>
+                </select>
+                
+                <input type="date" id="customDate" value="<?= $date_filter ?>" 
+                       onchange="window.location.href='appointments.php?date='+this.value+'&status=<?= $status_filter ?>&search=<?= urlencode($search) ?>'"
+                       class="form-control" 
+                       style="width:auto;padding:4px 10px;font-size:0.8rem;border:2px solid var(--border-color);border-radius:8px;background:var(--bg-card);color:var(--text-primary);<?= empty($date_filter) || in_array($date_filter, [date('Y-m-d'), date('Y-m-d', strtotime('-1 day')), date('Y-m-d', strtotime('-7 days')), date('Y-m-d', strtotime('-30 days'))]) ? 'display:none;' : '' ?>">
+            </div>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- APPOINTMENTS TABLE -->
+    <!-- APPOINTMENTS TABLE - SCROLLABLE -->
     <!-- ================================================================ -->
     <div class="card">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-list title-blue mr-2"></i> Appointments List
+                <span class="record-count">(<strong><?= $total_records ?></strong> records)</span>
             </h3>
-            <span class="text-sm text-gray-400"><?= count($appointments) ?> record(s)</span>
+            <span class="text-sm text-gray-400">Scroll to view all</span>
         </div>
         
-        <div class="table-wrap">
+        <div class="table-wrap-scroll">
             <table class="data-table">
                 <thead>
                     <tr>
                         <th style="border-radius: 8px 0 0 0;">#</th>
                         <th>Date & Time</th>
                         <th>Patient</th>
+                        <th style="text-align:center;">Appointments</th>
                         <th>Doctor</th>
                         <th>Purpose</th>
                         <th>Status</th>
@@ -441,7 +640,17 @@ include_once '../../components/reception_sidebar.php';
                             <tr class="appointment-row">
                                 <td><?= $i++ ?></td>
                                 <td><?= date('M d, Y h:i A', strtotime($appt['appointment_date'])) ?></td>
-                                <td><?= htmlspecialchars($appt['patient_name']) ?></td>
+                                <td>
+                                    <div>
+                                        <span class="font-medium"><?= htmlspecialchars($appt['patient_name']) ?></span>
+                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($appt['patient_id'] ?? 'N/A') ?></div>
+                                    </div>
+                                </td>
+                                <td style="text-align:center;">
+                                    <span class="appointment-count-badge">
+                                        <i class="fas fa-calendar-alt"></i> <?= $appt['patient_appointment_count'] ?? 0 ?>
+                                    </span>
+                                </td>
                                 <td>Dr. <?= htmlspecialchars($appt['doctor_name']) ?></td>
                                 <td><?= htmlspecialchars($appt['purpose'] ?? 'N/A') ?></td>
                                 <td>
@@ -451,10 +660,17 @@ include_once '../../components/reception_sidebar.php';
                                 </td>
                                 <td>
                                     <div class="action-buttons">
-                                        <!-- VIEW BUTTON ONLY -->
+                                        <!-- View Appointment -->
                                         <a href="view_appointment.php?id=<?= $appt['id'] ?>" 
                                            class="btn btn-blue btn-sm" title="View Appointment">
                                             <i class="fas fa-eye"></i> View
+                                        </a>
+                                        
+                                        <!-- View Patient Profile - GOES DIRECTLY TO PATIENT PROFILE -->
+                                        <a href="view_patient.php?id=<?= $appt['patient_id'] ?>" 
+                                           class="btn btn-outline btn-sm" title="View Patient Profile" 
+                                           style="border-color:var(--primary);color:var(--primary);">
+                                            <i class="fas fa-user"></i>
                                         </a>
                                     </div>
                                 </td>
@@ -462,18 +678,34 @@ include_once '../../components/reception_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="7" class="text-center py-8 text-gray-400">
+                            <td colspan="8" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-calendar-check text-3xl block mb-2"></i>
-                                <?php if (!empty($search) || !empty($status_filter)): ?>
+                                <?php if (!empty($search) || !empty($status_filter) || !empty($date_filter)): ?>
                                     No appointments found matching the filters in <?= htmlspecialchars($branch_name) ?>
                                 <?php else: ?>
-                                    No appointments scheduled for this date in <?= htmlspecialchars($branch_name) ?>
+                                    No appointments scheduled in <?= htmlspecialchars($branch_name) ?>
                                 <?php endif; ?>
                             </td>
                         </tr>
                     <?php endif; ?>
                 </tbody>
             </table>
+        </div>
+        
+        <!-- Card Footer -->
+        <div class="card-footer">
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-calendar-alt mr-1"></i> 
+                Showing <strong><?= $total_records ?></strong> appointment(s)
+            </span>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-user mr-1"></i> 
+                Branch: <strong><?= htmlspecialchars($branch_name) ?></strong>
+            </span>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-clock mr-1"></i> 
+                Last updated: <?= date('h:i:s A') ?>
+            </span>
         </div>
     </div>
 
@@ -567,7 +799,20 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // SEARCH - Filtered by branch
+    // DATE SELECTOR - SHOW/HIDE CUSTOM DATE
+    // ================================================================
+    document.getElementById('dateFilterSelect')?.addEventListener('change', function() {
+        var customDate = document.getElementById('customDate');
+        if (this.value === 'custom') {
+            customDate.style.display = 'inline-block';
+            customDate.focus();
+        } else {
+            customDate.style.display = 'none';
+        }
+    });
+
+    // ================================================================
+    // SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
@@ -625,8 +870,9 @@ include_once '../../components/reception_sidebar.php';
 
     console.log('%c📅 Braick - Appointments List', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Total Appointments: <?= count($appointments) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Actions: View only', 'font-size:13px; color:#059669;');
+    console.log('%c📊 Total Appointments: <?= $total_appointments_all ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Showing <?= $total_records ?> appointments', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ View Patient goes to patient profile (view_patient.php?id=...)', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
