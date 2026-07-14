@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/patient_details.php
-// DOCTOR - PATIENT DETAILS (CLEAN CSS)
+// DOCTOR - PATIENT DETAILS (NO PRICES VISIBLE)
+// ALL FEES GO TO BACKGROUND - CASHIER ONLY
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -145,6 +146,96 @@ $stmt->execute([$patient_id]);
 $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
+// ADD CONSULTATION FEE TO BILL (BACKGROUND - DOCTOR DOESN'T SEE)
+// ================================================================
+
+// Get current bill ID from session or database
+$bill_id = $_SESSION['current_bill_id'] ?? 0;
+
+if ($bill_id == 0) {
+    $stmt = $db->prepare("
+        SELECT id FROM patient_bills 
+        WHERE patient_id = ? AND status IN ('pending', 'partial') 
+        ORDER BY created_at DESC LIMIT 1
+    ");
+    $stmt->execute([$patient_id]);
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($bill) {
+        $bill_id = $bill['id'];
+        $_SESSION['current_bill_id'] = $bill_id;
+    }
+}
+
+// Get consultation fee from services
+$consultation_fee = 0;
+$consultation_service_name = 'Consultation Fee';
+
+$stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE service_name LIKE '%consultation%' AND is_active = 1 LIMIT 1");
+$stmt->execute();
+$consultation_service = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if ($consultation_service) {
+    $consultation_fee = $consultation_service['price'];
+    $consultation_service_name = $consultation_service['service_name'];
+} else {
+    // If no consultation service found, get first service
+    $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE is_active = 1 LIMIT 1");
+    $stmt->execute();
+    $consultation_service = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($consultation_service) {
+        $consultation_fee = $consultation_service['price'];
+        $consultation_service_name = $consultation_service['service_name'];
+    }
+}
+
+// Add consultation fee to bill (BACKGROUND - DOCTOR DOESN'T SEE)
+if ($bill_id > 0 && $consultation_fee > 0) {
+    // Check if consultation fee already added
+    $stmt = $db->prepare("SELECT id FROM bill_items WHERE bill_id = ? AND item_type = 'consultation'");
+    $stmt->execute([$bill_id]);
+    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$existing) {
+        try {
+            // Update patient_bills
+            $stmt = $db->prepare("
+                UPDATE patient_bills 
+                SET consultation_fee = ?,
+                    subtotal = subtotal + ?,
+                    total_amount = total_amount + ?,
+                    balance = balance + ?
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $consultation_fee,
+                $consultation_fee,
+                $consultation_fee,
+                $consultation_fee,
+                $bill_id
+            ]);
+            
+            // Add to bill_items
+            $stmt = $db->prepare("
+                INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
+                VALUES (?, 'consultation', ?, 1, ?, ?)
+            ");
+            $stmt->execute([
+                $bill_id,
+                $consultation_service_name,
+                $consultation_fee,
+                $consultation_fee
+            ]);
+            
+            $_SESSION['current_bill_id'] = $bill_id;
+            
+        } catch (Exception $e) {
+            // Log error but continue
+            error_log("Consultation fee error: " . $e->getMessage());
+        }
+    }
+}
+
+// ================================================================
 // GET DOCTOR'S BRANCH NAME
 // ================================================================
 $doctor_branch_name = 'Not Assigned';
@@ -181,7 +272,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- Page Header - NO PRICES VISIBLE -->
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-6">
         <div>
             <h1 class="page-title">
@@ -198,6 +289,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
                     <i class="fas fa-id-card mr-1"></i> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
                 </span>
+                <!-- NO PRICE BADGE HERE - DOCTOR DOESN'T SEE FEES -->
             </p>
         </div>
         <div class="flex gap-2 flex-wrap">
@@ -298,7 +390,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
+    <!-- STATISTICS CARDS - NO PRICES -->
     <!-- ================================================================ -->
     <div class="stats-grid">
         <div class="stat-card blue">
@@ -342,7 +434,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 
     <!-- ================================================================ -->
-    <!-- VISITS HISTORY -->
+    <!-- VISITS HISTORY - NO PRICES -->
     <!-- ================================================================ -->
     <div class="result-card">
         <h4 class="result-card-title">
@@ -391,7 +483,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 
     <!-- ================================================================ -->
-    <!-- PRESCRIPTIONS -->
+    <!-- PRESCRIPTIONS - NO PRICES -->
     <!-- ================================================================ -->
     <div class="result-card">
         <h4 class="result-card-title">
@@ -440,7 +532,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 
     <!-- ================================================================ -->
-    <!-- LAB TESTS -->
+    <!-- LAB TESTS - NO PRICES -->
     <!-- ================================================================ -->
     <div class="result-card">
         <h4 class="result-card-title">
@@ -1087,6 +1179,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 
     console.log('%c👨‍⚕️ Patient Details - <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📊 Visits: <?= count($visits) ?> | Prescriptions: <?= count($prescriptions) ?> | Lab Tests: <?= count($lab_tests) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🚫 NO PRICES VISIBLE - Doctor cannot see any fees', 'font-size:12px; color:#EF4444;');
+    console.log('%c💰 All fees go to background - Cashier only', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Patient Details page loaded', 'font-size:12px; color:#64748B;');
 </script>
 

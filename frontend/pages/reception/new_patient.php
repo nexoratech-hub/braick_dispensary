@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/new_patient.php
-// RECEPTION - REGISTER NEW PATIENT (BRANCH FILTERED)
+// RECEPTION - REGISTER NEW PATIENT (WITH AUTO BILL)
+// REGISTRATION FEE IN BACKGROUND - CASHIER ANAONA
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -22,15 +23,31 @@ $_SESSION['is_admin'] = false;
 // PATH SAHIHI
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id; // Force to user's branch
+$selected_branch_id = $user_branch_id;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $message = '';
 $message_type = '';
 
 try {
     $db = getDB();
+    
+    // ================================================================
+    // GET REGISTRATION FEE FROM SERVICES
+    // ================================================================
+    $registration_fee = 0;
+    $registration_service_name = 'Registration Fee';
+    
+    $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category = 'registration' AND is_active = 1 LIMIT 1");
+    $stmt->execute();
+    $registration_service = $stmt->fetch();
+    
+    if ($registration_service) {
+        $registration_fee = $registration_service['price'];
+        $registration_service_name = $registration_service['service_name'];
+    }
     
     // Get branches (only user's branch)
     $branches = [];
@@ -44,7 +61,7 @@ try {
     $stmt->execute([$selected_branch_id]);
     $count = $stmt->fetch()['total'] ?? 0;
     $next_id = str_pad($count + 1, 4, '0', STR_PAD_LEFT);
-    $patient_id = 'P-' . date('Y') . '-' . $next_id;
+    $patient_id_number = 'P-' . date('Y') . '-' . $next_id;
     
     // Handle form submission
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -57,7 +74,7 @@ try {
         $emergency_contact = trim($_POST['emergency_contact'] ?? '');
         $blood_group = $_POST['blood_group'] ?? null;
         $allergies = trim($_POST['allergies'] ?? '');
-        $branch_id = $selected_branch_id; // Force to user's branch
+        $branch_id = $selected_branch_id;
         
         // Validation
         $errors = [];
@@ -66,24 +83,102 @@ try {
         if (empty($phone)) $errors[] = 'Phone number is required';
         
         if (empty($errors)) {
+            // ================================================================
+            // 1. INSERT PATIENT
+            // ================================================================
             $stmt = $db->prepare("
-                INSERT INTO patients (patient_id, full_name, date_of_birth, gender, phone, email, address, emergency_contact, blood_group, allergies, branch_id, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                INSERT INTO patients (
+                    patient_id, full_name, date_of_birth, gender, phone, email, 
+                    address, emergency_contact, blood_group, allergies, branch_id, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             
-            if ($stmt->execute([$patient_id, $full_name, $date_of_birth, $gender, $phone, $email, $address, $emergency_contact, $blood_group, $allergies, $branch_id, $_SESSION['user_id']])) {
+            if ($stmt->execute([
+                $patient_id_number, $full_name, $date_of_birth, $gender, $phone, $email,
+                $address, $emergency_contact, $blood_group, $allergies, $branch_id, $_SESSION['user_id']
+            ])) {
                 $patient_db_id = $db->lastInsertId();
+                
+                // ================================================================
+                // 2. CREATE VISIT
+                // ================================================================
+                $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT);
+                
+                $stmt = $db->prepare("
+                    INSERT INTO visits (
+                        visit_number, patient_id, receptionist_id, branch_id, visit_type, status
+                    ) VALUES (?, ?, ?, ?, 'new', 'pending')
+                ");
+                $stmt->execute([$visit_number, $patient_db_id, $_SESSION['user_id'], $branch_id]);
+                $visit_id = $db->lastInsertId();
+                
+                // ================================================================
+                // 3. CREATE BILL WITH REGISTRATION FEE (BACKGROUND)
+                // ================================================================
+                if ($registration_fee > 0) {
+                    $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_db_id, 6, '0', STR_PAD_LEFT);
+                    
+                    // Check if patient_bills table exists, if not create it
+                    try {
+                        $stmt = $db->prepare("
+                            INSERT INTO patient_bills (
+                                bill_number, patient_id, visit_id, 
+                                registration_fee, subtotal, total_amount, balance, 
+                                status, created_by, branch_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                        ");
+                        $subtotal = $registration_fee;
+                        $stmt->execute([
+                            $bill_number,
+                            $patient_db_id,
+                            $visit_id,
+                            $registration_fee,
+                            $subtotal,
+                            $subtotal,
+                            $subtotal,
+                            $_SESSION['user_id'],
+                            $branch_id
+                        ]);
+                        $bill_id = $db->lastInsertId();
+                        
+                        // ================================================================
+                        // 4. ADD REGISTRATION FEE TO BILL ITEMS
+                        // ================================================================
+                        $stmt = $db->prepare("
+                            INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
+                            VALUES (?, 'registration', ?, 1, ?, ?)
+                        ");
+                        $stmt->execute([
+                            $bill_id,
+                            $registration_service_name,
+                            $registration_fee,
+                            $registration_fee
+                        ]);
+                        
+                        $_SESSION['current_bill_id'] = $bill_id;
+                        
+                    } catch (Exception $e) {
+                        // If patient_bills table doesn't exist, log error but continue
+                        error_log("Bill creation failed: " . $e->getMessage());
+                    }
+                }
+                
+                $_SESSION['current_patient_id'] = $patient_db_id;
+                $_SESSION['current_visit_id'] = $visit_id;
                 
                 // Log activity
                 try {
                     $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'patient_registered', ?)");
-                    $stmt->execute([$_SESSION['user_id'], "New patient registered: $full_name (ID: $patient_id) in $branch_name"]);
+                    $stmt->execute([$_SESSION['user_id'], "New patient registered: $full_name (ID: $patient_id_number) in $branch_name"]);
                 } catch (Exception $e) {}
                 
-                $message = "Patient registered successfully! Patient ID: <strong>$patient_id</strong>";
+                $message = "Patient registered successfully! Patient ID: <strong>$patient_id_number</strong>";
+                if ($registration_fee > 0) {
+                    $message .= "<br>Registration Fee: <strong>TSh " . number_format($registration_fee) . "</strong> added to bill automatically.";
+                }
                 $message_type = 'success';
                 
-                echo '<script>setTimeout(function(){ window.location.href = "view_patient.php?id=' . $patient_db_id . '&success=1"; }, 2000);</script>';
+                echo '<script>setTimeout(function(){ window.location.href = "../doctor/patient_details.php?id=' . $patient_db_id . '&visit_id=' . $visit_id . '"; }, 2000);</script>';
             } else {
                 $message = "Failed to register patient!";
                 $message_type = 'error';
@@ -103,8 +198,8 @@ try {
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/reception_header.php';
-include_once '../../components/reception_sidebar.php';
+include_once __DIR__ . '/../../components/reception_header.php';
+include_once __DIR__ . '/../../components/reception_sidebar.php';
 ?>
 
 <style>
@@ -198,6 +293,26 @@ include_once '../../components/reception_sidebar.php';
         background: #1A3A2A;
         color: #34D399;
     }
+    .fee-info {
+        background: var(--success-bg);
+        border: 1px solid var(--success);
+        border-radius: 10px;
+        padding: 10px 14px;
+        color: var(--success);
+        font-size: 0.85rem;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    [data-theme="dark"] .fee-info {
+        background: #1A3A2A;
+        border-color: #34D399;
+        color: #34D399;
+    }
+    .fee-info i {
+        font-size: 1.1rem;
+    }
 </style>
 
 <!-- ================================================================ -->
@@ -257,7 +372,7 @@ include_once '../../components/reception_sidebar.php';
             <p class="page-subtitle">
                 Create a new patient record in <?= htmlspecialchars($branch_name) ?>
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-id-card mr-1"></i> Next ID: <?= $patient_id ?>
+                    <i class="fas fa-id-card mr-1"></i> Next ID: <?= $patient_id_number ?>
                 </span>
             </p>
         </div>
@@ -265,6 +380,15 @@ include_once '../../components/reception_sidebar.php';
             <a href="patients.php" class="btn btn-outline btn-sm">
                 <i class="fas fa-arrow-left"></i> Back to Patients
             </a>
+        </div>
+    </div>
+
+    <!-- Fee Info - Hidden from normal view, shows that fee is automatic -->
+    <div class="fee-info">
+        <i class="fas fa-info-circle"></i>
+        <div>
+            <strong>Registration Fee: TSh <?= number_format($registration_fee) ?></strong>
+            <span style="font-size:0.8rem; opacity:0.8;"> - This will be added to the patient's bill automatically (visible to cashier only)</span>
         </div>
     </div>
 
@@ -504,9 +628,10 @@ include_once '../../components/reception_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c👤 Braick - New Patient Registration', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick - New Patient Registration (With Auto Bill)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Next Patient ID: <?= $patient_id ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Next Patient ID: <?= $patient_id_number ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Registration Fee: TSh <?= number_format($registration_fee) ?> (Added to bill automatically)', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>
