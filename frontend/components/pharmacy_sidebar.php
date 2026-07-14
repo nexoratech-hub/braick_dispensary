@@ -1,49 +1,53 @@
 <?php
 // ================================================================
-// FILE: frontend/components/cashier_sidebar.php
-// CASHIER - SHARED SIDEBAR
+// FILE: frontend/components/pharmacy_sidebar.php
+// PHARMACY - SHARED SIDEBAR
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
 // GET REAL DATA FOR BADGES
 // ================================================================
-$pending_bills = 0;
-$partial_payments = 0;
-$paid_today = 0;
-$patients_waiting = 0;
+$pending_prescriptions = 0;
+$low_stock_count = 0;
+$today_sales = 0;
+$today_otc = 0;
 
 if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
     $user_branch_id = $_SESSION['branch_id'] ?? 1;
     
     try {
-        // Pending Bills
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'pending'");
+        // Pending Prescriptions
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescription_sales WHERE branch_id = ? AND status = 'pending'");
         $stmt->execute([$user_branch_id]);
-        $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // Partial Payments
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'partial'");
-        $stmt->execute([$user_branch_id]);
-        $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        
-        // Paid Today
+        // Low Stock Medicines
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
-            FROM bills 
-            WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()
+            FROM medications_inventory 
+            WHERE branch_id = ? AND quantity <= reorder_level AND status = 'active'
         ");
         $stmt->execute([$user_branch_id]);
-        $paid_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $low_stock_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // Patients Waiting for Payment (pending + partial)
+        // Today's Sales
         $stmt = $db->prepare("
-            SELECT COUNT(DISTINCT patient_id) as count 
-            FROM bills 
-            WHERE branch_id = ? AND status IN ('pending', 'partial')
+            SELECT COUNT(*) as count 
+            FROM prescription_sales 
+            WHERE branch_id = ? AND DATE(created_at) = CURDATE()
         ");
         $stmt->execute([$user_branch_id]);
-        $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $today_sales = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Today's OTC Sales
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM otc_sales 
+            WHERE branch_id = ? AND DATE(created_at) = CURDATE()
+        ");
+        $stmt->execute([$user_branch_id]);
+        $today_otc = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
     } catch (Exception $e) {
         // Keep counts as 0
@@ -72,6 +76,9 @@ function isActive($page) {
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 ?>
 <style>
+    /* ================================================================
+       SIDEBAR STYLES - BLUE THEME
+       ================================================================ */
     .sidebar {
         position: fixed; 
         top: 0; 
@@ -200,10 +207,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         background: #D97706;
     }
     
-    .sidebar-link .badge.blue {
-        background: #0B5ED7;
-    }
-    
     @keyframes pulse-badge {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.1); }
@@ -273,115 +276,109 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 </style>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR - CASHIER -->
+<!-- SIDEBAR - PHARMACY -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     
+    <!-- Brand -->
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div>
                 <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub">Cashier Panel</p>
+                <p class="brand-sub">Pharmacy Panel</p>
             </div>
         </div>
     </div>
     
     <nav class="sidebar-nav">
         
-        <div class="nav-label">Cashier</div>
+        <!-- ===== PHARMACY MENU ===== -->
+        <div class="nav-label">Pharmacy</div>
         
         <!-- 1. Dashboard -->
-        <a href="../cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
+        <a href="../pharmacy/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
-        <!-- 2. Billing -->
-        <div class="nav-label mt-2">Billing</div>
+        <!-- 2. Prescription Sales -->
+        <div class="nav-label mt-2">Prescription Sales</div>
         
-        <!-- Pending Bills -->
-        <a href="../cashier/pending_bills.php" class="sidebar-link <?= isActive('pending_bills.php') ?>">
-            <i class="fas fa-clock"></i> Pending Bills
-            <?php if ($pending_bills > 0): ?>
-                <span class="badge orange"><?= $pending_bills ?></span>
+        <!-- Pending Prescriptions -->
+        <a href="../pharmacy/pending_prescriptions.php" class="sidebar-link <?= isActive('pending_prescriptions.php') ?>">
+            <i class="fas fa-clock"></i> Pending Prescriptions
+            <?php if ($pending_prescriptions > 0): ?>
+                <span class="badge danger"><?= $pending_prescriptions ?></span>
             <?php else: ?>
                 <span class="badge">0</span>
             <?php endif; ?>
         </a>
         
-        <!-- Paid Bills -->
-        <a href="../cashier/paid_bills.php" class="sidebar-link <?= isActive('paid_bills.php') ?>">
-            <i class="fas fa-check-circle"></i> Paid Bills
-            <?php if ($paid_today > 0): ?>
-                <span class="badge green"><?= $paid_today ?></span>
+        <!-- Dispensing -->
+        <a href="../pharmacy/dispensing.php" class="sidebar-link <?= isActive('dispensing.php') ?>">
+            <i class="fas fa-prescription"></i> Dispensing
+        </a>
+        
+        <!-- Prescription History -->
+        <a href="../pharmacy/prescription_history.php" class="sidebar-link <?= isActive('prescription_history.php') ?>">
+            <i class="fas fa-history"></i> Prescription History
+            <span class="badge"><?= $today_sales ?></span>
+        </a>
+        
+        <!-- 3. OTC Sales -->
+        <div class="nav-label mt-2">OTC Sales</div>
+        
+        <!-- New OTC Sale -->
+        <a href="../pharmacy/new_otc_sale.php" class="sidebar-link <?= isActive('new_otc_sale.php') ?>">
+            <i class="fas fa-plus-circle"></i> New OTC Sale
+        </a>
+        
+        <!-- OTC History -->
+        <a href="../pharmacy/otc_history.php" class="sidebar-link <?= isActive('otc_history.php') ?>">
+            <i class="fas fa-shopping-cart"></i> OTC History
+            <span class="badge"><?= $today_otc ?></span>
+        </a>
+        
+        <!-- 4. Medicines -->
+        <div class="nav-label mt-2">Medicines</div>
+        
+        <!-- Inventory -->
+        <a href="../pharmacy/inventory.php" class="sidebar-link <?= isActive('inventory.php') ?>">
+            <i class="fas fa-warehouse"></i> Inventory
+        </a>
+        
+        <!-- Low Stock -->
+        <a href="../pharmacy/low_stock.php" class="sidebar-link <?= isActive('low_stock.php') ?>">
+            <i class="fas fa-exclamation-triangle"></i> Low Stock
+            <?php if ($low_stock_count > 0): ?>
+                <span class="badge danger"><?= $low_stock_count ?></span>
             <?php else: ?>
                 <span class="badge">0</span>
             <?php endif; ?>
         </a>
         
-        <!-- Partial Payments -->
-        <a href="../cashier/partial_payments.php" class="sidebar-link <?= isActive('partial_payments.php') ?>">
-            <i class="fas fa-hand-holding-usd"></i> Partial Payments
-            <?php if ($partial_payments > 0): ?>
-                <span class="badge blue"><?= $partial_payments ?></span>
-            <?php else: ?>
-                <span class="badge">0</span>
-            <?php endif; ?>
-        </a>
-        
-        <!-- Cancelled Bills -->
-        <a href="../cashier/cancelled_bills.php" class="sidebar-link <?= isActive('cancelled_bills.php') ?>">
-            <i class="fas fa-times-circle"></i> Cancelled Bills
-        </a>
-        
-        <!-- 3. Payments -->
-        <div class="nav-label mt-2">Payments</div>
-        
-        <!-- Receive Payment -->
-        <a href="../cashier/receive_payment.php" class="sidebar-link <?= isActive('receive_payment.php') ?>">
-            <i class="fas fa-hand-holding-usd"></i> Receive Payment
-        </a>
-        
-        <!-- Payment History -->
-        <a href="../cashier/payment_history.php" class="sidebar-link <?= isActive('payment_history.php') ?>">
-            <i class="fas fa-history"></i> Payment History
-        </a>
-        
-        <!-- 4. Invoices -->
-        <div class="nav-label mt-2">Invoices</div>
-        
-        <!-- Invoice History -->
-        <a href="../cashier/invoice_history.php" class="sidebar-link <?= isActive('invoice_history.php') ?>">
-            <i class="fas fa-file-invoice"></i> Invoice History
-        </a>
-        
-        <!-- 5. Receipts -->
-        <div class="nav-label mt-2">Receipts</div>
-        
-        <!-- Receipt History -->
-        <a href="../cashier/receipt_history.php" class="sidebar-link <?= isActive('receipt_history.php') ?>">
-            <i class="fas fa-receipt"></i> Receipt History
-        </a>
-        
-        <!-- 6. Reports -->
-        <a href="../cashier/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
+        <!-- 5. Reports -->
+        <a href="../pharmacy/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
             <i class="fas fa-chart-bar"></i> Reports
         </a>
         
         <!-- ===== ACCOUNT ===== -->
         <div class="nav-label mt-2">Account</div>
         
-        <a href="../cashier/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
+        <!-- Profile -->
+        <a href="../pharmacy/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
+        <!-- Logout -->
         <a href="../../../logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
         
     </nav>
     
+    <!-- Online Status -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
@@ -390,6 +387,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 </aside>
 
 <script>
+    // ================================================================
+    // SIDEBAR TOGGLE (Mobile)
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var sidebar = document.getElementById('sidebar');
         var sidebarToggle = document.getElementById('sidebarToggle');
@@ -411,38 +411,47 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         });
     });
 
-    function updateSidebarBadges(pending, partial, paid, waiting) {
+    // ================================================================
+    // UPDATE SIDEBAR BADGES (AJAX every 3 seconds)
+    // ================================================================
+    function updateSidebarBadges(pending, lowStock, todaySales, todayOtc) {
         var links = document.querySelectorAll('.sidebar-link');
         links.forEach(function(link) {
             var text = link.textContent.trim();
-            if (text.includes('Pending Bills')) {
+            if (text.includes('Pending Prescriptions')) {
                 var badge = link.querySelector('.badge');
                 if (badge) {
                     if (pending > 0) {
                         badge.textContent = pending;
-                        badge.className = 'badge orange';
+                        badge.className = 'badge danger';
                     } else {
                         badge.textContent = '0';
                         badge.className = 'badge';
                     }
                 }
             }
-            if (text.includes('Partial Payments')) {
+            if (text.includes('Low Stock')) {
                 var badge = link.querySelector('.badge');
                 if (badge) {
-                    if (partial > 0) {
-                        badge.textContent = partial;
-                        badge.className = 'badge blue';
+                    if (lowStock > 0) {
+                        badge.textContent = lowStock;
+                        badge.className = 'badge danger';
                     } else {
                         badge.textContent = '0';
                         badge.className = 'badge';
                     }
                 }
             }
-            if (text.includes('Paid Bills')) {
+            if (text.includes('Prescription History')) {
                 var badge = link.querySelector('.badge');
                 if (badge) {
-                    badge.textContent = paid;
+                    badge.textContent = todaySales;
+                }
+            }
+            if (text.includes('OTC History')) {
+                var badge = link.querySelector('.badge');
+                if (badge) {
+                    badge.textContent = todayOtc;
                 }
             }
         });
@@ -454,6 +463,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     }
 
+    // ================================================================
+    // AJAX AUTO-UPDATE
+    // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
 
@@ -461,15 +473,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         if (sidebarIsUpdating) return;
         sidebarIsUpdating = true;
         
-        fetch('../cashier/get_sidebar_stats.php')
+        fetch('../pharmacy/get_sidebar_stats.php')
             .then(function(response) { return response.json(); })
             .then(function(data) {
                 if (data.success) {
                     updateSidebarBadges(
-                        data.pending_bills,
-                        data.partial_payments,
-                        data.paid_today,
-                        data.patients_waiting
+                        data.pending_prescriptions,
+                        data.low_stock,
+                        data.today_prescriptions,
+                        data.today_otc
                     );
                 }
                 sidebarIsUpdating = false;
@@ -509,6 +521,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }, 2000);
     });
 
-    console.log('%c💰 Cashier Sidebar', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Pending: <?= $pending_bills ?> | Partial: <?= $partial_payments ?> | Paid: <?= $paid_today ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c💊 Pharmacy Sidebar', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Pending: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?>', 'font-size:12px; color:#9EC5FE;');
 </script>
