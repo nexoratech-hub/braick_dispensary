@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/doctor/edit_profile.php
-// DOCTOR - EDIT PROFILE
+// FILE: frontend/pages/laboratory/edit_profile.php
+// LABORATORY - EDIT PROFILE (FIXED UPLOAD)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -14,37 +14,35 @@ require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 // ================================================================
-// SESSION - Default to Dr. Sarah Mwamba
+// SESSION - Default to lab.anna
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['role'] = 'doctor';
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
+    $_SESSION['user_id'] = 4;
+    $_SESSION['full_name'] = 'Anna Mushi';
+    $_SESSION['role'] = 'laboratory';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['specialty'] = 'Cardiology';
+    $_SESSION['username'] = 'lab.anna';
+    $_SESSION['email'] = 'anna@braick.com';
+    $_SESSION['phone'] = '+255 700 000 003';
     $_SESSION['is_admin'] = false;
     $_SESSION['profile_pic'] = '';
 }
 
-$user_id = $_SESSION['user_id'] ?? 2;
-$user_full_name = $_SESSION['full_name'] ?? 'Dr. Sarah Mwamba';
-$user_role = $_SESSION['role'] ?? 'doctor';
+$user_id = $_SESSION['user_id'] ?? 4;
+$user_full_name = $_SESSION['full_name'] ?? 'Anna Mushi';
+$user_role = $_SESSION['role'] ?? 'laboratory';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_username = $_SESSION['username'] ?? 'dr.sarah';
-$user_email = $_SESSION['email'] ?? 'sarah@braick.com';
-$user_phone = $_SESSION['phone'] ?? '+255 700 000 001';
-$user_specialty = $_SESSION['specialty'] ?? 'Cardiology';
+$user_username = $_SESSION['username'] ?? 'lab.anna';
+$user_email = $_SESSION['email'] ?? 'anna@braick.com';
+$user_phone = $_SESSION['phone'] ?? '+255 700 000 003';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $db = getDB();
 
 // ================================================================
-// UPLOAD DIRECTORY
+// UPLOAD DIRECTORY - FIXED
 // ================================================================
 $upload_dir = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/';
 $upload_url = '/dispensary_system/frontend/assets/uploads/profiles/';
@@ -68,7 +66,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $full_name = trim($_POST['full_name'] ?? '');
         $email = trim($_POST['email'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
-        $specialty = trim($_POST['specialty'] ?? '');
         $current_password = $_POST['current_password'] ?? '';
         $new_password = $_POST['new_password'] ?? '';
         $confirm_password = $_POST['confirm_password'] ?? '';
@@ -122,24 +119,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (isset($hashed_password)) {
                 $stmt = $db->prepare("
                     UPDATE users 
-                    SET full_name = ?, email = ?, phone = ?, specialty = ?, password = ?
+                    SET full_name = ?, email = ?, phone = ?, password = ?
                     WHERE id = ?
                 ");
-                $stmt->execute([$full_name, $email, $phone, $specialty, $hashed_password, $user_id]);
+                $stmt->execute([$full_name, $email, $phone, $hashed_password, $user_id]);
             } else {
                 $stmt = $db->prepare("
                     UPDATE users 
-                    SET full_name = ?, email = ?, phone = ?, specialty = ?
+                    SET full_name = ?, email = ?, phone = ?
                     WHERE id = ?
                 ");
-                $stmt->execute([$full_name, $email, $phone, $specialty, $user_id]);
+                $stmt->execute([$full_name, $email, $phone, $user_id]);
             }
             
             // Update session
             $_SESSION['full_name'] = $full_name;
             $_SESSION['email'] = $email;
             $_SESSION['phone'] = $phone;
-            $_SESSION['specialty'] = $specialty;
             
             $message = "Profile updated successfully!";
             $message_type = 'success';
@@ -149,7 +145,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $user_full_name = $full_name;
             $user_email = $email;
             $user_phone = $phone;
-            $user_specialty = $specialty;
             
             echo '<script>setTimeout(function(){ window.location.href = "profile.php?success=1"; }, 1500);</script>';
         } else {
@@ -159,7 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     
     // ================================================================
-    // UPDATE AVATAR
+    // UPDATE AVATAR - FIXED
     // ================================================================
     if ($action === 'update_avatar') {
         if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] === UPLOAD_ERR_OK) {
@@ -223,21 +218,9 @@ $profile_pic_url = !empty($profile_pic)
 // ================================================================
 // GET STATISTICS FOR SIDEBAR
 // ================================================================
-$total_employees = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-$total_employees = $stmt->fetch()['count'] ?? 0;
-
-$total_doctors = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-$total_doctors = $stmt->fetch()['count'] ?? 0;
-
-$total_branches = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-$total_branches = $stmt->fetch()['count'] ?? 0;
-
 $pending_lab_tests = 0;
 try {
-    $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending'");
+    $stmt = $db->query("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$user_branch_id]);
     $pending_lab_tests = $stmt->fetch()['count'] ?? 0;
 } catch (Exception $e) {
@@ -245,6 +228,9 @@ try {
 }
 
 $pending_prescriptions = 0;
+$total_employees = 0;
+$total_doctors = 0;
+$total_branches = 0;
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -261,8 +247,8 @@ try {
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
-include_once __DIR__ . '/../../components/doctor_header.php';
-include_once __DIR__ . '/../../components/doctor_sidebar.php';
+include_once __DIR__ . '/../../components/laboratory_header.php';
+include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 ?>
 
 <style>
@@ -695,19 +681,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                    value="<?= htmlspecialchars($user_phone) ?>">
                         </div>
                         
-                        <!-- Specialty -->
-                        <div class="form-row">
-                            <label class="form-label">Specialty <span class="required">*</span></label>
-                            <input type="text" name="specialty" class="form-control" 
-                                   value="<?= htmlspecialchars($user_specialty) ?>" required>
-                            <div class="help-text">e.g. Cardiology, Pediatrics, Gynecology</div>
-                        </div>
-                        
                         <!-- Branch (Read Only) -->
                         <div class="form-row">
                             <label class="form-label">Branch</label>
                             <input type="text" class="form-control" 
                                    value="<?= htmlspecialchars($user_branch_name) ?>" disabled>
+                        </div>
+                        
+                        <!-- Role (Read Only) -->
+                        <div class="form-row">
+                            <label class="form-label">Role</label>
+                            <input type="text" class="form-control" 
+                                   value="<?= ucfirst($user_role) ?>" disabled>
                         </div>
                         
                     </div>
@@ -942,10 +927,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
-    console.log('%c👨‍⚕️ Braick - Doctor Edit Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🧪 Braick - Edit Profile (Fixed Upload)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📁 Upload Dir: <?= $upload_dir ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Specialty: <?= htmlspecialchars($user_specialty) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Upload fixed with proper directory path', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
