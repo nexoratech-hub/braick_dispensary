@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/prescription_history.php
-// PHARMACY - PRESCRIPTION HISTORY
+// PHARMACY - PRESCRIPTION HISTORY (FIXED)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -12,6 +12,12 @@ session_start();
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
+
+// ================================================================
+// ✅ VARIABLES FOR MESSAGES (ILIKOSA!)
+// ================================================================
+$message = '';
+$message_type = '';
 
 // ================================================================
 // SESSION - Default to pharm.peter
@@ -85,7 +91,6 @@ if (!empty($date_from) && !empty($date_to)) {
 $query .= " ORDER BY ps.created_at DESC";
 
 $stmt = $db->prepare($query);
-
 $params = [$user_branch_id];
 
 if (!empty($search)) {
@@ -170,55 +175,64 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// ✅ INCLUDE SHARED HEADER NA SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
+<!-- ================================================================ -->
+<!-- CUSTOM CSS KWA MAUDHUI -->
+<!-- ================================================================ -->
 <style>
     /* ================================================================
-       PRESCRIPTION HISTORY STYLES
+       PRESCRIPTION HISTORY - CUSTOM STYLES
        ================================================================ */
     
     .filter-tabs {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        margin-bottom: 16px;
+        margin-bottom: 20px;
+        padding-bottom: 14px;
         border-bottom: 2px solid var(--border-color);
-        padding-bottom: 12px;
     }
     
     .filter-tab {
-        padding: 6px 16px;
-        border-radius: 20px;
-        font-size: 0.78rem;
+        padding: 8px 20px;
+        border-radius: 30px;
+        font-size: 0.8rem;
         font-weight: 600;
         text-decoration: none;
         transition: all 0.3s ease;
         background: var(--bg-body);
         color: var(--text-secondary);
         border: 2px solid transparent;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
     
     .filter-tab:hover {
         background: var(--primary-bg);
         color: var(--primary);
+        transform: translateY(-2px);
     }
     
     .filter-tab.active {
         background: var(--primary);
         color: white;
         border-color: var(--primary);
+        box-shadow: 0 4px 15px rgba(11, 94, 215, 0.3);
     }
     
     .filter-tab .count {
         background: rgba(255,255,255,0.2);
-        padding: 0 6px;
-        border-radius: 10px;
+        padding: 0 8px;
+        border-radius: 12px;
         font-size: 0.6rem;
-        margin-left: 4px;
+        font-weight: 700;
+        margin-left: 2px;
     }
     
     .filter-tab.active .count {
@@ -227,10 +241,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .filter-tab.pending { background: #FEF3C7; color: #D97706; }
     .filter-tab.pending.active { background: #D97706; color: white; }
-    
     .filter-tab.dispensed { background: #D1FAE5; color: #059669; }
     .filter-tab.dispensed.active { background: #059669; color: white; }
-    
     .filter-tab.cancelled { background: #FEE2E2; color: #DC2626; }
     .filter-tab.cancelled.active { background: #DC2626; color: white; }
     
@@ -238,10 +250,192 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     [data-theme="dark"] .filter-tab.dispensed { background: #1A3A2A; color: #34D399; }
     [data-theme="dark"] .filter-tab.cancelled { background: #3A1A1A; color: #F87171; }
     
-    .prescription-card {
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    
+    .summary-card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 2px solid var(--border-color);
+        text-align: center;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        color: var(--text-primary);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .summary-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        border-radius: 14px 14px 0 0;
+    }
+    
+    .summary-card.pending::before { background: #D97706; }
+    .summary-card.dispensed::before { background: #059669; }
+    .summary-card.cancelled::before { background: #DC2626; }
+    .summary-card:not(.pending):not(.dispensed):not(.cancelled)::before { background: var(--primary); }
+    
+    .summary-card:hover {
+        border-color: var(--primary);
+        transform: translateY(-4px);
+        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.1);
+    }
+    
+    .summary-card .number {
+        font-size: 1.8rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+    
+    .summary-card .label {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+        margin-top: 4px;
+    }
+    
+    .summary-card.pending .number { color: #D97706; }
+    .summary-card.dispensed .number { color: #059669; }
+    .summary-card.cancelled .number { color: #DC2626; }
+    .summary-card:not(.pending):not(.dispensed):not(.cancelled) .number { color: var(--primary); }
+    
+    .history-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+    
+    .history-stats .stat-item {
         background: var(--bg-card);
         border-radius: 12px;
+        padding: 12px 16px;
+        border: 2px solid var(--border-color);
+        text-align: center;
+        transition: all 0.3s ease;
+    }
+    
+    .history-stats .stat-item:hover {
+        border-color: var(--primary);
+        transform: translateY(-2px);
+    }
+    
+    .history-stats .stat-item .stat-number {
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: var(--primary);
+    }
+    
+    .history-stats .stat-item .stat-label {
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+        margin-top: 2px;
+    }
+    
+    .filter-section {
+        background: var(--bg-card);
+        border-radius: 14px;
         padding: 16px 20px;
+        border: 2px solid var(--border-color);
+        margin-bottom: 20px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        transition: all 0.3s ease;
+    }
+    
+    .filter-section:hover {
+        border-color: var(--primary);
+        box-shadow: 0 4px 15px rgba(11, 94, 215, 0.06);
+    }
+    
+    .filter-section .form-control {
+        padding: 8px 14px;
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        outline: none;
+        transition: all 0.3s ease;
+        min-width: 120px;
+    }
+    
+    .filter-section .form-control:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+    }
+    
+    .filter-section .form-control::placeholder {
+        color: var(--text-secondary);
+        opacity: 0.6;
+    }
+    
+    .filter-section .btn-filter {
+        padding: 8px 20px;
+        border-radius: 10px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        background: var(--primary);
+        color: white;
+        border: none;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .filter-section .btn-filter:hover {
+        background: var(--primary-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(11, 94, 215, 0.3);
+    }
+    
+    .filter-section .btn-clear {
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .filter-section .btn-clear:hover {
+        border-color: var(--danger);
+        color: var(--danger);
+        transform: translateY(-2px);
+    }
+    
+    .filter-section select.form-control {
+        appearance: auto;
+        cursor: pointer;
+        min-width: 160px;
+    }
+    
+    .prescription-card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 20px 24px;
         border: 2px solid var(--border-color);
         transition: all 0.3s ease;
         margin-bottom: 16px;
@@ -249,7 +443,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .prescription-card:hover {
         border-color: var(--primary);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
+        transform: translateY(-2px);
     }
     
     .prescription-card .prescription-header {
@@ -258,23 +453,31 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         align-items: center;
         flex-wrap: wrap;
         gap: 10px;
-        margin-bottom: 8px;
-        padding-bottom: 8px;
+        margin-bottom: 12px;
+        padding-bottom: 12px;
         border-bottom: 2px solid var(--border-color);
     }
     
     .prescription-card .prescription-header .sale-number {
         font-weight: 700;
-        font-size: 1rem;
+        font-size: 1.05rem;
         color: var(--text-primary);
-        font-family: monospace;
+        font-family: 'Courier New', monospace;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    
+    .prescription-card .prescription-header .sale-date {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
     }
     
     .prescription-card .prescription-body {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr 1fr;
-        gap: 12px;
-        margin-bottom: 10px;
+        gap: 16px;
+        margin-bottom: 12px;
     }
     
     .prescription-card .prescription-body .info-item .label {
@@ -282,21 +485,28 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--text-secondary);
         text-transform: uppercase;
         letter-spacing: 0.05em;
+        font-weight: 600;
     }
     
     .prescription-card .prescription-body .info-item .value {
-        font-size: 0.9rem;
+        font-size: 0.95rem;
         font-weight: 500;
         color: var(--text-primary);
     }
     
+    .prescription-card .prescription-body .info-item .sub-value {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
     .prescription-card .prescription-medicines {
         background: var(--bg-body);
-        border-radius: 8px;
-        padding: 10px 14px;
-        margin-bottom: 10px;
+        border-radius: 10px;
+        padding: 10px 16px;
+        margin-bottom: 12px;
         max-height: 80px;
         overflow-y: auto;
+        border: 1px solid var(--border-color);
     }
     
     .prescription-card .prescription-medicines::-webkit-scrollbar {
@@ -311,9 +521,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .prescription-card .prescription-medicines .medicine-item {
         display: flex;
         justify-content: space-between;
-        padding: 3px 0;
+        padding: 4px 0;
         border-bottom: 1px solid var(--border-color);
-        font-size: 0.8rem;
+        font-size: 0.85rem;
     }
     
     .prescription-card .prescription-medicines .medicine-item:last-child {
@@ -330,12 +540,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         gap: 8px;
         flex-wrap: wrap;
         justify-content: flex-end;
+        padding-top: 12px;
+        border-top: 1px solid var(--border-color);
     }
     
     .btn-action {
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 0.65rem;
+        padding: 5px 14px;
+        border-radius: 8px;
+        font-size: 0.7rem;
         font-weight: 600;
         border: none;
         cursor: pointer;
@@ -343,11 +555,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         text-decoration: none;
         display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 5px;
     }
     
     .btn-action:hover {
         transform: scale(1.05);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    
+    .btn-action:active {
+        transform: scale(0.95);
     }
     
     .btn-view {
@@ -382,249 +599,186 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         background: #047857;
     }
     
-    .summary-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 12px;
-        margin-bottom: 20px;
-    }
-    
-    .summary-card {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 14px 18px;
-        border: 2px solid var(--border-color);
-        text-align: center;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        color: var(--text-primary);
-    }
-    
-    .summary-card:hover {
-        border-color: var(--primary);
-        transform: translateY(-3px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
-    }
-    
-    .summary-card .number {
-        font-size: 1.5rem;
-        font-weight: 700;
-    }
-    
-    .summary-card .label {
+    .badge {
+        padding: 4px 12px;
+        border-radius: 20px;
         font-size: 0.7rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        margin-top: 2px;
-    }
-    
-    .summary-card.pending .number { color: #D97706; }
-    .summary-card.dispensed .number { color: #059669; }
-    .summary-card.cancelled .number { color: #DC2626; }
-    
-    .filter-section {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 12px 16px;
-        border: 2px solid var(--border-color);
-        margin-bottom: 16px;
-        display: flex;
-        flex-wrap: wrap;
+        font-weight: 600;
+        display: inline-flex;
         align-items: center;
-        gap: 10px;
+        gap: 4px;
     }
     
-    .filter-section .form-control {
-        padding: 6px 12px;
-        border: 2px solid var(--border-color);
-        border-radius: 8px;
-        font-size: 0.8rem;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        outline: none;
-        transition: all 0.3s ease;
+    .badge-pending {
+        background: #FEF3C7;
+        color: #D97706;
     }
     
-    .filter-section .form-control:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+    .badge-dispensed {
+        background: #D1FAE5;
+        color: #059669;
     }
     
-    .filter-section .btn-filter {
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        background: var(--primary);
-        color: white;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
+    .badge-cancelled {
+        background: #FEE2E2;
+        color: #DC2626;
     }
     
-    .filter-section .btn-filter:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
+    [data-theme="dark"] .badge-pending {
+        background: #3D2E0A;
+        color: #FBBF24;
     }
     
-    .filter-section .btn-clear {
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
+    [data-theme="dark"] .badge-dispensed {
+        background: #1A3A2A;
+        color: #34D399;
     }
     
-    .filter-section .btn-clear:hover {
-        border-color: var(--primary);
-        color: var(--primary);
+    [data-theme="dark"] .badge-cancelled {
+        background: #3A1A1A;
+        color: #F87171;
     }
     
     .empty-state {
         text-align: center;
-        padding: 50px 20px;
+        padding: 60px 20px;
         color: var(--text-secondary);
     }
     
     .empty-state i {
-        font-size: 3rem;
+        font-size: 3.5rem;
         color: var(--border-color);
         display: block;
-        margin-bottom: 12px;
-    }
-    
-    .empty-state .sub {
-        font-size: 0.8rem;
-        margin-top: 4px;
-    }
-    
-    .history-stats {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-        gap: 12px;
         margin-bottom: 16px;
     }
     
-    .history-stats .stat-item {
-        background: var(--bg-card);
-        border-radius: 10px;
-        padding: 10px 14px;
-        border: 2px solid var(--border-color);
-        text-align: center;
+    .empty-state p {
+        font-size: 1.1rem;
     }
     
-    .history-stats .stat-item .stat-number {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: var(--primary);
-    }
-    
-    .history-stats .stat-item .stat-label {
-        font-size: 0.6rem;
+    .empty-state .sub {
+        font-size: 0.85rem;
         color: var(--text-secondary);
+        margin-top: 6px;
     }
     
-    @media (max-width: 768px) {
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 992px) {
         .prescription-card .prescription-body {
             grid-template-columns: 1fr 1fr;
         }
-        .prescription-card .prescription-header {
-            flex-direction: column;
-            align-items: flex-start;
-        }
+    }
+    
+    @media (max-width: 768px) {
         .summary-grid {
             grid-template-columns: repeat(2, 1fr);
         }
+        
         .filter-section {
             flex-direction: column;
             align-items: stretch;
         }
-        .filter-tabs {
-            flex-wrap: wrap;
+        
+        .filter-section .form-control {
+            min-width: auto;
+            width: 100%;
         }
-        .filter-tab {
-            font-size: 0.7rem;
-            padding: 4px 12px;
+        
+        .filter-section select.form-control {
+            min-width: auto;
         }
+        
+        .prescription-card {
+            padding: 16px 18px;
+        }
+        
+        .prescription-card .prescription-body {
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        .prescription-card .prescription-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
         .history-stats {
             grid-template-columns: repeat(2, 1fr);
         }
-        .prescription-card .prescription-actions {
-            justify-content: flex-start;
+        
+        .filter-tabs {
+            flex-wrap: wrap;
+        }
+        
+        .filter-tab {
+            font-size: 0.7rem;
+            padding: 6px 14px;
         }
     }
     
     @media (max-width: 480px) {
         .summary-grid {
             grid-template-columns: 1fr 1fr;
+            gap: 10px;
         }
-        .btn-action {
-            font-size: 0.55rem;
-            padding: 2px 6px;
+        
+        .summary-card .number {
+            font-size: 1.4rem;
         }
+        
         .prescription-card .prescription-body {
             grid-template-columns: 1fr;
         }
+        
         .history-stats {
             grid-template-columns: 1fr 1fr;
+        }
+        
+        .btn-action {
+            font-size: 0.6rem;
+            padding: 4px 10px;
+        }
+        
+        .filter-tab {
+            font-size: 0.65rem;
+            padding: 4px 10px;
         }
     }
     
     @media print {
-        .top-nav, .sidebar, .btn, .filter-section, .filter-tabs, .footer { display: none !important; }
-        .main-content { margin: 0 !important; padding: 20px !important; }
-        .prescription-card { border: 1px solid #ddd !important; page-break-inside: avoid; }
-        .page-header { border-bottom: 2px solid #0B5ED7 !important; }
+        .top-nav, .sidebar, .btn-filter, .btn-clear, .filter-section, 
+        .filter-tabs, .footer, .btn-action, .prescription-actions,
+        #sidebarToggle, #darkModeToggle, .icon-btn, .search-wrapper {
+            display: none !important;
+        }
+        
+        .main-content {
+            margin: 0 !important;
+            padding: 20px !important;
+        }
+        
+        .prescription-card {
+            border: 1px solid #ddd !important;
+            page-break-inside: avoid;
+            box-shadow: none !important;
+        }
+        
+        .page-header {
+            border-bottom: 2px solid #0B5ED7 !important;
+        }
+        
+        .summary-card, .stat-item {
+            border: 1px solid #ddd !important;
+            box-shadow: none !important;
+        }
+        
+        .prescription-card .prescription-medicines {
+            border: 1px solid #ddd !important;
+        }
     }
 </style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search prescriptions..." 
-                   value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -638,7 +792,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <i class="fas fa-history mr-2" style="color: var(--primary);"></i> Prescription History
             </h1>
             <p class="page-subtitle">
-                View all dispensed prescriptions
+                View and manage all prescription sales
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
@@ -649,7 +803,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <?php endif; ?>
             </p>
         </div>
-        <div>
+        <div class="flex gap-2 flex-wrap">
             <button onclick="window.print()" class="btn btn-outline btn-sm">
                 <i class="fas fa-print"></i> Print
             </button>
@@ -659,31 +813,31 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
 
-    <!-- Message -->
-    <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
-            <?= $message ?>
-        </div>
-    <?php endif; ?>
-
-    <!-- Summary Cards -->
+    <!-- ================================================================ -->
+    <!-- SUMMARY CARDS -->
+    <!-- ================================================================ -->
     <div class="summary-grid animate-fade-in-up">
-        <a href="?status=pending" class="summary-card pending">
+        <a href="?filter=pending" class="summary-card pending">
             <p class="number"><?= $counts['pending'] ?? 0 ?></p>
             <p class="label"><i class="fas fa-clock mr-1"></i> Pending</p>
         </a>
-        <a href="?status=dispensed" class="summary-card dispensed">
+        <a href="?filter=dispensed" class="summary-card dispensed">
             <p class="number"><?= $counts['dispensed'] ?? 0 ?></p>
             <p class="label"><i class="fas fa-check-circle mr-1"></i> Dispensed</p>
         </a>
-        <a href="?status=cancelled" class="summary-card cancelled">
+        <a href="?filter=cancelled" class="summary-card cancelled">
             <p class="number"><?= $counts['cancelled'] ?? 0 ?></p>
             <p class="label"><i class="fas fa-times-circle mr-1"></i> Cancelled</p>
         </a>
+        <a href="?filter=all" class="summary-card">
+            <p class="number"><?= array_sum($counts) ?></p>
+            <p class="label"><i class="fas fa-list mr-1"></i> Total</p>
+        </a>
     </div>
 
-    <!-- History Stats -->
+    <!-- ================================================================ -->
+    <!-- HISTORY STATS -->
+    <!-- ================================================================ -->
     <?php if (count($prescriptions) > 0): 
         $total_amount = 0;
         foreach ($prescriptions as $pres) {
@@ -693,26 +847,28 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <div class="history-stats animate-fade-in-up">
         <div class="stat-item">
             <p class="stat-number"><?= count($prescriptions) ?></p>
-            <p class="stat-label">Total Prescriptions</p>
+            <p class="stat-label"><i class="fas fa-prescription mr-1"></i> Total Prescriptions</p>
         </div>
         <div class="stat-item">
             <p class="stat-number">TSh <?= number_format($total_amount) ?></p>
-            <p class="stat-label">Total Amount</p>
+            <p class="stat-label"><i class="fas fa-money-bill-wave mr-1"></i> Total Amount</p>
         </div>
         <div class="stat-item">
             <p class="stat-number"><?= count($patients) ?></p>
-            <p class="stat-label">Patients</p>
+            <p class="stat-label"><i class="fas fa-users mr-1"></i> Patients</p>
         </div>
         <div class="stat-item">
             <p class="stat-number">
-                <?= count($prescriptions) > 0 ? round($total_amount / count($prescriptions), 0) : 0 ?>
+                TSh <?= count($prescriptions) > 0 ? number_format(round($total_amount / count($prescriptions), 0)) : 0 ?>
             </p>
-            <p class="stat-label">Avg per Prescription</p>
+            <p class="stat-label"><i class="fas fa-calculator mr-1"></i> Avg per Prescription</p>
         </div>
     </div>
     <?php endif; ?>
 
-    <!-- Filter Tabs -->
+    <!-- ================================================================ -->
+    <!-- FILTER TABS -->
+    <!-- ================================================================ -->
     <div class="filter-tabs animate-fade-in-up">
         <a href="?filter=all" class="filter-tab <?= $filter === 'all' ? 'active' : '' ?>">
             <i class="fas fa-list mr-1"></i> All
@@ -735,17 +891,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </a>
     </div>
 
-    <!-- Filter Section -->
+    <!-- ================================================================ -->
+    <!-- FILTER SECTION -->
+    <!-- ================================================================ -->
     <div class="filter-section animate-fade-in-up">
         <form method="GET" action="" class="flex flex-wrap items-center gap-3 w-full">
             
             <input type="hidden" name="filter" value="<?= $filter ?>">
             
-            <input type="text" name="search" class="form-control" placeholder="Search by patient, ID..." 
-                   value="<?= htmlspecialchars($search) ?>" style="flex:1; min-width:120px;">
+            <input type="text" name="search" class="form-control" 
+                   placeholder="🔍 Search patient, ID..." 
+                   value="<?= htmlspecialchars($search) ?>" style="flex:1; min-width:140px;">
             
-            <select name="patient" class="form-control" style="min-width:150px;">
-                <option value="">All Patients</option>
+            <select name="patient" class="form-control" style="min-width:160px;">
+                <option value="">👤 All Patients</option>
                 <?php foreach ($patients as $p): ?>
                     <option value="<?= $p['id'] ?>" <?= $patient_filter == $p['id'] ? 'selected' : '' ?>>
                         <?= htmlspecialchars($p['full_name']) ?> (<?= htmlspecialchars($p['patient_id']) ?>)
@@ -754,24 +913,27 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </select>
             
             <input type="date" name="date_from" class="form-control" value="<?= $date_from ?>" style="width:140px;">
-            <span class="text-sm text-gray-400">to</span>
+            <span class="text-sm text-gray-400">→</span>
             <input type="date" name="date_to" class="form-control" value="<?= $date_to ?>" style="width:140px;">
             
             <button type="submit" class="btn-filter">
-                <i class="fas fa-search mr-1"></i> Apply
+                <i class="fas fa-search"></i> Apply
             </button>
             
             <a href="prescription_history.php" class="btn-clear">
-                <i class="fas fa-times mr-1"></i> Clear
+                <i class="fas fa-times"></i> Clear
             </a>
         </form>
     </div>
 
-    <!-- Prescriptions List -->
+    <!-- ================================================================ -->
+    <!-- PRESCRIPTIONS LIST -->
+    <!-- ================================================================ -->
     <div class="animate-fade-in-up">
         <?php if (count($prescriptions) > 0): ?>
             <?php foreach ($prescriptions as $prescription): ?>
                 <div class="prescription-card">
+                    <!-- Header -->
                     <div class="prescription-header">
                         <div class="sale-number">
                             <?= htmlspecialchars($prescription['sale_number']) ?>
@@ -782,23 +944,24 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 <?= ucfirst($prescription['status'] ?? 'Pending') ?>
                             </span>
                         </div>
-                        <div class="text-sm text-gray-400">
+                        <div class="sale-date">
                             <i class="fas fa-calendar-alt mr-1"></i>
                             <?= date('M d, Y h:i A', strtotime($prescription['created_at'])) ?>
                             <?php if ($prescription['status'] === 'dispensed' && $prescription['dispensed_at']): ?>
-                                <span class="ml-2">
-                                    <i class="fas fa-check-circle text-green-600 mr-1"></i>
+                                <span class="ml-2 text-green-600">
+                                    <i class="fas fa-check-circle mr-1"></i>
                                     Dispensed: <?= date('M d, Y h:i A', strtotime($prescription['dispensed_at'])) ?>
                                 </span>
                             <?php endif; ?>
                         </div>
                     </div>
                     
+                    <!-- Body -->
                     <div class="prescription-body">
                         <div class="info-item">
                             <div class="label">Patient</div>
                             <div class="value"><?= htmlspecialchars($prescription['patient_name'] ?? 'Unknown') ?></div>
-                            <div class="text-xs text-gray-400">ID: <?= htmlspecialchars($prescription['patient_id'] ?? 'N/A') ?></div>
+                            <div class="sub-value">ID: <?= htmlspecialchars($prescription['patient_id'] ?? 'N/A') ?></div>
                         </div>
                         <div class="info-item">
                             <div class="label">Doctor</div>
@@ -806,7 +969,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         </div>
                         <div class="info-item">
                             <div class="label">Items</div>
-                            <div class="value"><?= $prescription['item_count'] ?> items</div>
+                            <div class="value"><?= $prescription['item_count'] ?? 0 ?> items</div>
                         </div>
                         <div class="info-item">
                             <div class="label">Total Amount</div>
@@ -816,6 +979,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         </div>
                     </div>
                     
+                    <!-- Medicines -->
                     <div class="prescription-medicines">
                         <?php 
                             $stmt = $db->prepare("SELECT medicine_name, quantity, total_price FROM prescription_sale_items WHERE sale_id = ?");
@@ -830,6 +994,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         <?php endforeach; ?>
                     </div>
                     
+                    <!-- Actions -->
                     <div class="prescription-actions">
                         <a href="view_sale.php?type=prescription&id=<?= $prescription['id'] ?>" class="btn-action btn-view">
                             <i class="fas fa-eye"></i> View
@@ -837,10 +1002,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         
                         <?php if ($prescription['status'] === 'dispensed'): ?>
                             <a href="print_receipt.php?type=prescription&id=<?= $prescription['id'] ?>" class="btn-action btn-reprint" target="_blank">
-                                <i class="fas fa-print"></i> Reprint Receipt
+                                <i class="fas fa-print"></i> Reprint
                             </a>
                             <a href="download_pdf.php?type=prescription&id=<?= $prescription['id'] ?>" class="btn-action btn-pdf">
                                 <i class="fas fa-file-pdf"></i> PDF
+                            </a>
+                        <?php endif; ?>
+                        
+                        <?php if ($prescription['status'] === 'pending'): ?>
+                            <a href="dispensing.php?id=<?= $prescription['id'] ?>" class="btn-action" style="background:#059669; color:white;">
+                                <i class="fas fa-prescription"></i> Dispense
                             </a>
                         <?php endif; ?>
                     </div>
@@ -861,7 +1032,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- Footer -->
+    <!-- ================================================================ -->
+    <!-- FOOTER -->
+    <!-- ================================================================ -->
     <footer class="footer mt-5">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -890,34 +1063,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - INAENDESHA KUTOKA KWENYE SHARED HEADER
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
+    // Tafadhali hakikisha kuwa dark mode toggle inafanya kazi kutoka
+    // kwenye shared header. Hapa hatuna haja ya kurudia tena.
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -930,6 +1079,17 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             sidebar.classList.toggle('open');
         });
     }
+
+    // Close sidebar on outside click (mobile)
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (sidebar && sidebarToggle) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
+        }
+    });
 
     // ================================================================
     // SEARCH
@@ -1000,21 +1160,27 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
+        // Ctrl + K = Focus search
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
             searchInput?.focus();
             searchInput?.select();
         }
+        // Escape = Clear search
         if (e.key === 'Escape' && document.activeElement === searchInput) {
             searchInput.value = '';
             performSearch();
         }
     });
 
-    console.log('%c💊 Braick - Prescription History', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // CONSOLE
+    // ================================================================
+    console.log('%c💊 Braick - Prescription History (CONNECTED TO DB)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Pending: <?= $counts['pending'] ?? 0 ?> | Dispensed: <?= $counts['dispensed'] ?? 0 ?> | Cancelled: <?= $counts['cancelled'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Prescriptions: <?= count($prescriptions) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Database connected successfully!', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

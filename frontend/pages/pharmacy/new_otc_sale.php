@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
-// PHARMACY - NEW OTC SALE (FIXED - Uses patient_bills)
+// PHARMACY - NEW OTC SALE (WITH DISCOUNT - WIDE INPUT)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -37,7 +37,7 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $db = getDB();
 
 // ================================================================
-// GET MEDICINES INVENTORY
+// GET MEDICINES INVENTORY (Active & In Stock)
 // ================================================================
 $medicines = [];
 $stmt = $db->prepare("
@@ -60,8 +60,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $customer_name = trim($_POST['customer_name'] ?? 'Walk-in Customer');
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $payment_method = $_POST['payment_method'] ?? 'cash';
-    $items = json_decode($_POST['items_json'] ?? '[]', true);
     $discount_percent = (float)($_POST['discount_percent'] ?? 0);
+    $items = json_decode($_POST['items_json'] ?? '[]', true);
+    
+    // Calculate totals
+    $subtotal = 0;
+    foreach ($items as &$item) {
+        $item['total'] = $item['quantity'] * $item['price'];
+        $subtotal += $item['total'];
+    }
+    
+    $discount_amount = ($subtotal * $discount_percent) / 100;
+    $grand_total = $subtotal - $discount_amount;
     
     // Validation
     $errors = [];
@@ -69,20 +79,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $errors[] = 'Please add at least one medicine';
     }
     
-    // Calculate totals
-    $subtotal = 0;
-    foreach ($items as $item) {
-        $subtotal += $item['total'];
-    }
-    
-    $discount_amount = ($subtotal * $discount_percent) / 100;
-    $grand_total = $subtotal - $discount_amount;
-    
-    if ($grand_total <= 0) {
-        $errors[] = 'Total amount must be greater than zero';
-    }
-    
-    // Check stock for each item
+    // Check stock
     $stock_errors = [];
     foreach ($items as $item) {
         $stmt = $db->prepare("SELECT quantity FROM medications_inventory WHERE id = ? AND branch_id = ?");
@@ -101,13 +98,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         try {
             $db->beginTransaction();
             
-            // Generate sale number
             $sale_number = 'OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
             // Insert OTC sale
             $stmt = $db->prepare("
                 INSERT INTO otc_sales (
-                    sale_number, customer_name, customer_phone, total_amount, discount_amount, net_amount,
+                    sale_number, customer_name, customer_phone, 
+                    total_amount, discount_amount, net_amount,
                     payment_method, payment_status, sold_by, branch_id, notes, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, ?, NOW())
             ");
@@ -125,9 +122,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ]);
             $sale_id = $db->lastInsertId();
             
-            // Insert sale items and update stock
+            // Insert items and update stock
             foreach ($items as $item) {
-                // Insert sale item
                 $stmt = $db->prepare("
                     INSERT INTO otc_sale_items (sale_id, inventory_id, medicine_name, quantity, unit_price, total_price)
                     VALUES (?, ?, ?, ?, ?, ?)
@@ -141,7 +137,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $item['total']
                 ]);
                 
-                // Update stock
                 $stmt = $db->prepare("
                     UPDATE medications_inventory 
                     SET quantity = quantity - ? 
@@ -149,7 +144,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ");
                 $stmt->execute([$item['quantity'], $item['inventory_id'], $user_branch_id]);
                 
-                // Record stock movement
                 $stmt = $db->prepare("
                     INSERT INTO stock_movements 
                     (inventory_id, sale_type, sale_id, quantity, movement_type, performed_by, notes)
@@ -158,56 +152,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $stmt->execute([$item['inventory_id'], $sale_id, $item['quantity'], $user_id]);
             }
             
-            // ================================================================
-            // CREATE BILL - Using patient_bills (NOT bills)
-            // ================================================================
-            $bill_number = 'BILL-OTC-' . date('Ymd') . '-' . str_pad($sale_id, 4, '0', STR_PAD_LEFT);
-            
-            $stmt = $db->prepare("
-                INSERT INTO patient_bills (
-                    bill_number, patient_id, visit_id, branch_id, 
-                    subtotal, total_amount, paid_amount, balance, status, created_by, created_at
-                ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, 'pending', ?, NOW())
-            ");
-            $stmt->execute([
-                $bill_number,
-                $user_branch_id,
-                $subtotal,
-                $grand_total,
-                $grand_total,
-                0,
-                $user_id
-            ]);
-            $bill_id = $db->lastInsertId();
-            
-            // ================================================================
-            // ADD BILL ITEMS - With correct columns
-            // ================================================================
-            foreach ($items as $item) {
-                $stmt = $db->prepare("
-                    INSERT INTO bill_items (
-                        bill_id, item_type, item_name, quantity, unit_price, total_price, amount, description, department
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ");
-                $stmt->execute([
-                    $bill_id,
-                    'pharmacy_otc',
-                    $item['name'],
-                    $item['quantity'],
-                    $item['price'],
-                    $item['total'],
-                    $item['total'],
-                    $item['name'] . ' - OTC Sale',
-                    'Pharmacy'
-                ]);
-            }
-            
             $db->commit();
             
-            $message = "OTC Sale completed successfully! Sale #: $sale_number";
+            $message = "✅ OTC Sale completed successfully!";
             $message_type = 'success';
             
-            // Redirect to receipt
+            // Redirect to print receipt
             echo '<script>
                 setTimeout(function() {
                     window.location.href = "print_receipt.php?type=otc&id=' . $sale_id . '";
@@ -216,7 +166,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
         } catch (Exception $e) {
             $db->rollBack();
-            $message = "Error: " . $e->getMessage();
+            $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
         }
     } else {
@@ -250,9 +200,6 @@ try {
     $low_stock_count = 0;
 }
 
-// ================================================================
-// UNREAD NOTIFICATIONS
-// ================================================================
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
@@ -262,9 +209,6 @@ try {
     $unread_notifications = 0;
 }
 
-// ================================================================
-// PROFILE PICTURE
-// ================================================================
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
@@ -278,36 +222,109 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- STYLES (Same as before) -->
+<!-- STYLES -->
 <!-- ================================================================ -->
 <style>
+    :root {
+        --primary: #0B5ED7;
+        --primary-dark: #0A3D8A;
+        --primary-light: #E8F0FE;
+        --success: #059669;
+        --success-dark: #047857;
+        --success-light: #D1FAE5;
+        --warning: #D97706;
+        --warning-light: #FEF3C7;
+        --danger: #DC2626;
+        --danger-light: #FEE2E2;
+        --purple: #7C3AED;
+        --purple-light: #EDE9FE;
+        --otc-color: #7C3AED;
+        --otc-bg: #EDE9FE;
+        --gold: #F59E0B;
+        --gold-light: #FEF3C7;
+        
+        --bg-body: #F1F5F9;
+        --bg-card: #FFFFFF;
+        --border-color: #E2E8F0;
+        --text-primary: #0F172A;
+        --text-secondary: #475569;
+        --text-muted: #94A3B8;
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
+    }
+    
+    [data-theme="dark"] {
+        --bg-body: #0F172A;
+        --bg-card: #1E293B;
+        --border-color: #334155;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --text-muted: #64748B;
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
+    }
+    
     .sale-form-card {
         background: var(--bg-card);
         border-radius: 16px;
-        padding: 24px 28px;
+        padding: 28px 32px;
         border: 2px solid var(--border-color);
         margin-bottom: 20px;
+        transition: all 0.3s ease;
+        box-shadow: var(--shadow-sm);
     }
     
     .sale-form-card:hover {
         border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
+        box-shadow: var(--shadow-lg);
+    }
+    
+    .section-title {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        padding-bottom: 10px;
+        margin-bottom: 16px;
+        border-bottom: 2px solid var(--border-color);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    
+    .section-title i {
+        color: var(--primary);
+        font-size: 1.1rem;
+    }
+    
+    .section-title .badge-count {
+        background: var(--primary);
+        color: white;
+        font-size: 0.6rem;
+        padding: 1px 10px;
+        border-radius: 12px;
+        margin-left: auto;
     }
     
     .form-label {
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         font-weight: 600;
         color: var(--text-primary);
         margin-bottom: 4px;
         display: block;
     }
     
+    .form-label .required {
+        color: var(--danger);
+        margin-left: 2px;
+    }
+    
     .form-control {
         width: 100%;
-        padding: 8px 14px;
+        padding: 10px 16px;
         border: 2px solid var(--border-color);
         border-radius: 10px;
-        font-size: 0.85rem;
+        font-size: 0.88rem;
         transition: all 0.3s ease;
         outline: none;
         background: var(--bg-card);
@@ -316,7 +333,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .form-control:focus {
         border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
     }
     
     .form-control::placeholder {
@@ -324,8 +341,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         opacity: 0.5;
     }
     
+    .form-control:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+    
     .form-row {
-        margin-bottom: 14px;
+        margin-bottom: 16px;
     }
     
     .form-row:last-child {
@@ -339,51 +361,66 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .medicine-select-row {
         display: flex;
-        gap: 10px;
+        gap: 12px;
         flex-wrap: wrap;
         align-items: flex-end;
     }
     
     .medicine-select-row .form-group {
         flex: 1;
-        min-width: 150px;
+        min-width: 160px;
     }
     
     .medicine-select-row .form-group.qty-group {
-        max-width: 100px;
+        max-width: 120px;
     }
     
     .medicine-select-row .form-group.price-group {
-        max-width: 150px;
+        max-width: 160px;
     }
     
     .btn-add-medicine {
         background: var(--primary);
         color: white;
-        padding: 8px 20px;
-        border-radius: 8px;
+        padding: 10px 24px;
+        border-radius: 10px;
         font-weight: 600;
-        font-size: 0.85rem;
+        font-size: 0.88rem;
         border: none;
         cursor: pointer;
         transition: all 0.3s ease;
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        height: 42px;
+        gap: 8px;
+        height: 44px;
+        white-space: nowrap;
     }
     
     .btn-add-medicine:hover {
         background: var(--primary-dark);
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        box-shadow: 0 4px 15px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-add-medicine:active {
+        transform: scale(0.97);
+    }
+    
+    /* ================================================================
+       CART ITEMS
+       ================================================================ */
+    .cart-container {
+        border: 2px solid var(--border-color);
+        border-radius: 12px;
+        overflow: hidden;
+        min-height: 80px;
     }
     
     .cart-item {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 8px 12px;
+        padding: 10px 16px;
         border-bottom: 1px solid var(--border-color);
         transition: background 0.2s ease;
         flex-wrap: wrap;
@@ -392,49 +429,278 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .cart-item:hover {
         background: var(--primary-bg);
-        border-radius: 8px;
     }
     
     .cart-item:last-child {
         border-bottom: none;
     }
     
+    .cart-item .item-info {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    
     .cart-item .item-info .item-name {
         font-weight: 500;
-        font-size: 0.85rem;
+        font-size: 0.9rem;
         color: var(--text-primary);
     }
     
     .cart-item .item-info .item-meta {
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         color: var(--text-secondary);
+        background: var(--bg-body);
+        padding: 2px 10px;
+        border-radius: 6px;
+    }
+    
+    .cart-item .item-info .item-price {
+        font-weight: 600;
+        color: var(--primary);
+        font-size: 0.85rem;
     }
     
     .cart-item .item-total {
-        font-weight: 600;
-        color: var(--primary);
+        font-weight: 700;
+        color: var(--success);
         font-size: 0.95rem;
+        min-width: 80px;
+        text-align: right;
     }
     
     .cart-item .btn-remove {
-        background: #EF4444;
+        background: var(--danger);
         color: white;
         border: none;
-        border-radius: 4px;
-        padding: 2px 8px;
+        border-radius: 6px;
+        padding: 4px 12px;
         cursor: pointer;
         font-size: 0.7rem;
+        font-weight: 600;
         transition: all 0.3s ease;
     }
     
     .cart-item .btn-remove:hover {
-        background: #DC2626;
+        background: var(--danger-dark);
         transform: scale(1.05);
     }
     
+    .empty-cart {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--text-secondary);
+    }
+    
+    .empty-cart i {
+        font-size: 3rem;
+        color: var(--border-color);
+        display: block;
+        margin-bottom: 12px;
+    }
+    
+    .empty-cart p {
+        font-size: 0.95rem;
+    }
+    
+    .empty-cart .sub-text {
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        margin-top: 4px;
+    }
+    
+    /* ================================================================
+       DISCOUNT SECTION - WIDE INPUT
+       ================================================================ */
+    .discount-section {
+        background: var(--bg-body);
+        border-radius: 12px;
+        padding: 18px 22px;
+        border: 2px solid var(--border-color);
+        margin-top: 16px;
+        transition: all 0.3s ease;
+    }
+    
+    .discount-section:hover {
+        border-color: var(--gold);
+    }
+    
+    .discount-section .discount-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 14px;
+    }
+    
+    .discount-section .discount-label {
+        font-weight: 700;
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 120px;
+    }
+    
+    .discount-section .discount-label i {
+        color: var(--gold);
+        font-size: 1.1rem;
+    }
+    
+    .discount-section .discount-input-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        flex-wrap: wrap;
+    }
+    
+    /* ✅ DISCOUNT INPUT - WIDE & CLEAR */
+    .discount-section .discount-input-group .discount-input {
+        width: 160px;
+        max-width: 200px;
+        padding: 10px 16px;
+        font-size: 1.2rem;
+        font-weight: 700;
+        text-align: center;
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        outline: none;
+        transition: all 0.3s ease;
+        font-family: 'Courier New', monospace;
+        letter-spacing: 1px;
+    }
+    
+    .discount-section .discount-input-group .discount-input:focus {
+        border-color: var(--gold);
+        box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.15);
+        transform: scale(1.02);
+    }
+    
+    .discount-section .discount-input-group .discount-input::placeholder {
+        font-weight: 400;
+        font-size: 0.9rem;
+        color: var(--text-muted);
+    }
+    
+    .discount-section .discount-input-group .percent-sign {
+        font-weight: 700;
+        color: var(--text-secondary);
+        font-size: 1.2rem;
+        font-family: 'Courier New', monospace;
+    }
+    
+    .btn-apply-discount {
+        background: var(--gold);
+        color: white;
+        padding: 10px 24px;
+        border-radius: 10px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+    }
+    
+    .btn-apply-discount:hover {
+        background: #D97706;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(217, 119, 6, 0.35);
+    }
+    
+    .btn-apply-discount:active {
+        transform: scale(0.97);
+    }
+    
+    .btn-remove-discount {
+        background: var(--danger);
+        color: white;
+        padding: 10px 18px;
+        border-radius: 10px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+    }
+    
+    .btn-remove-discount:hover {
+        background: var(--danger-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(220, 38, 38, 0.3);
+    }
+    
+    /* Discount Display */
+    .discount-display {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 20px;
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 2px dashed var(--border-color);
+    }
+    
+    .discount-display .info-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.9rem;
+        background: var(--bg-card);
+        padding: 6px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+    }
+    
+    .discount-display .info-item .label {
+        color: var(--text-secondary);
+        font-weight: 500;
+    }
+    
+    .discount-display .info-item .value {
+        font-weight: 700;
+        color: var(--text-primary);
+        font-family: 'Courier New', monospace;
+        font-size: 1rem;
+    }
+    
+    .discount-display .info-item .value.subtotal-value {
+        color: var(--primary);
+    }
+    
+    .discount-display .info-item .value.discount-value {
+        color: var(--gold);
+    }
+    
+    .discount-display .info-item .value.grand-total {
+        color: var(--success);
+        font-size: 1.15rem;
+        font-weight: 800;
+    }
+    
+    .discount-display .info-item .discount-percent-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        font-weight: 600;
+    }
+    
+    /* ================================================================
+       CART SUMMARY
+       ================================================================ */
     .cart-summary {
         background: var(--bg-body);
-        border-radius: 10px;
+        border-radius: 12px;
         padding: 16px 20px;
         margin-top: 16px;
         border: 2px solid var(--border-color);
@@ -456,67 +722,103 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--text-primary);
     }
     
-    .cart-summary .summary-row.grand-total {
+    .cart-summary .summary-row.total-row {
         border-top: 2px solid var(--border-color);
         padding-top: 8px;
         margin-top: 4px;
-        font-size: 1.1rem;
+        font-size: 1.05rem;
     }
     
-    .cart-summary .summary-row.grand-total .value {
-        color: var(--primary);
+    .cart-summary .summary-row.total-row .value {
+        color: var(--success);
         font-weight: 700;
     }
     
-    .cart-summary .summary-row.discount .value {
-        color: #059669;
+    .cart-summary .summary-row.discount-row .value {
+        color: var(--gold);
     }
     
-    .empty-cart {
-        text-align: center;
-        padding: 30px 20px;
+    /* ================================================================
+       PAYMENT METHODS
+       ================================================================ */
+    .payment-methods {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    
+    .payment-methods .method-btn {
+        padding: 8px 18px;
+        border: 2px solid var(--border-color);
+        border-radius: 10px;
+        background: var(--bg-card);
         color: var(--text-secondary);
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-weight: 500;
+        font-size: 0.82rem;
+        display: flex;
+        align-items: center;
+        gap: 6px;
     }
     
-    .empty-cart i {
-        font-size: 2.5rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 10px;
+    .payment-methods .method-btn:hover {
+        border-color: var(--primary);
+        color: var(--primary);
+        transform: translateY(-2px);
+    }
+    
+    .payment-methods .method-btn.active {
+        border-color: var(--primary);
+        background: var(--primary-bg);
+        color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+    }
+    
+    /* ================================================================
+       ACTION BUTTONS
+       ================================================================ */
+    .action-buttons {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 2px solid var(--border-color);
     }
     
     .btn-complete-sale {
-        background: #059669;
+        background: var(--success);
         color: white;
-        padding: 10px 30px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.95rem;
+        padding: 12px 36px;
+        border-radius: 12px;
+        font-weight: 700;
+        font-size: 1rem;
         border: none;
         cursor: pointer;
         transition: all 0.3s ease;
         display: inline-flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
     }
     
-    .btn-complete-sale:hover {
-        background: #047857;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+    .btn-complete-sale:hover:not(:disabled) {
+        background: var(--success-dark);
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(5, 150, 105, 0.35);
     }
     
     .btn-complete-sale:disabled {
-        opacity: 0.5;
+        opacity: 0.4;
         cursor: not-allowed;
-        transform: none;
+        transform: none !important;
     }
     
     .btn-clear-cart {
-        background: #EF4444;
+        background: var(--danger);
         color: white;
-        padding: 10px 20px;
-        border-radius: 10px;
+        padding: 12px 24px;
+        border-radius: 12px;
         font-weight: 600;
         font-size: 0.9rem;
         border: none;
@@ -528,113 +830,106 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     .btn-clear-cart:hover {
-        background: #DC2626;
-        transform: translateY(-2px);
+        background: var(--danger-dark);
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(220, 38, 38, 0.3);
     }
     
-    .action-buttons {
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
-        margin-top: 16px;
-        padding-top: 16px;
-        border-top: 2px solid var(--border-color);
-    }
-    
-    .discount-section {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-        margin-top: 10px;
-        padding: 12px 16px;
-        background: var(--bg-body);
-        border-radius: 10px;
-        border: 2px solid var(--border-color);
-    }
-    
-    .discount-section .discount-label {
-        font-weight: 600;
+    .btn-outline {
+        background: transparent;
         color: var(--text-secondary);
-        font-size: 0.85rem;
-    }
-    
-    .discount-section .form-control {
-        max-width: 100px;
-        padding: 6px 10px;
-        font-size: 0.85rem;
-    }
-    
-    .btn-apply-discount {
-        background: #D97706;
-        color: white;
-        padding: 6px 16px;
-        border-radius: 8px;
+        border: 2px solid var(--border-color);
+        padding: 10px 24px;
+        border-radius: 12px;
         font-weight: 600;
-        font-size: 0.8rem;
-        border: none;
+        font-size: 0.9rem;
         cursor: pointer;
         transition: all 0.3s ease;
+        text-decoration: none;
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-    }
-    
-    .btn-apply-discount:hover {
-        background: #B45309;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-    }
-    
-    .btn-remove-discount {
-        background: #EF4444;
-        color: white;
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.8rem;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    
-    .btn-remove-discount:hover {
-        background: #DC2626;
-        transform: translateY(-2px);
-    }
-    
-    .payment-methods {
-        display: flex;
         gap: 8px;
-        flex-wrap: wrap;
     }
     
-    .payment-methods .method-btn {
-        padding: 6px 16px;
-        border: 2px solid var(--border-color);
-        border-radius: 8px;
-        background: var(--bg-card);
-        color: var(--text-secondary);
-        cursor: pointer;
-        transition: all 0.3s ease;
+    .btn-outline:hover {
+        border-color: var(--primary);
+        color: var(--primary);
+        transform: translateY(-2px);
+    }
+    
+    /* ================================================================
+       MESSAGE BOX
+       ================================================================ */
+    .message-box {
+        padding: 14px 20px;
+        border-radius: 12px;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
         font-weight: 500;
-        font-size: 0.8rem;
+        animation: slideDown 0.4s ease;
     }
     
-    .payment-methods .method-btn:hover {
-        border-color: var(--primary);
-        color: var(--primary);
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
     }
     
-    .payment-methods .method-btn.active {
-        border-color: var(--primary);
-        background: var(--primary-bg);
-        color: var(--primary);
+    .message-box.success {
+        background: var(--success-light);
+        color: #065F46;
+        border: 2px solid #6EE7B7;
     }
     
+    .message-box.error {
+        background: var(--danger-light);
+        color: #991B1B;
+        border: 2px solid #FCA5A5;
+    }
+    
+    .message-box i {
+        font-size: 1.3rem;
+    }
+    
+    [data-theme="dark"] .message-box.success {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #34D399;
+    }
+    
+    [data-theme="dark"] .message-box.error {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: #F87171;
+    }
+    
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    .animate-fade-in-up {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+    
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .animate-pulse-once {
+        animation: pulseOnce 0.5s ease;
+    }
+    
+    @keyframes pulseOnce {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.03); }
+        100% { transform: scale(1); }
+    }
+    
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
     @media (max-width: 768px) {
         .sale-form-card {
             padding: 16px 18px;
@@ -650,7 +945,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             align-items: stretch;
         }
         .action-buttons .btn-complete-sale,
-        .action-buttons .btn-clear-cart {
+        .action-buttons .btn-clear-cart,
+        .action-buttons .btn-outline {
             width: 100%;
             justify-content: center;
         }
@@ -658,18 +954,34 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             flex-direction: column;
             align-items: flex-start;
         }
-        .cart-summary .summary-row {
-            flex-direction: row;
+        .cart-item .item-total {
+            text-align: left;
+            width: 100%;
         }
-        .discount-section {
+        .discount-section .discount-row {
             flex-direction: column;
             align-items: stretch;
         }
-        .discount-section .form-control {
+        .discount-section .discount-input-group {
+            flex-wrap: wrap;
+        }
+        .discount-section .discount-input-group .discount-input {
+            width: 100%;
             max-width: 100%;
+        }
+        .discount-display {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+        }
+        .discount-display .info-item {
+            justify-content: space-between;
         }
         .payment-methods {
             justify-content: center;
+        }
+        .cart-summary .summary-row {
+            flex-direction: row;
         }
     }
     
@@ -678,50 +990,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             font-size: 0.7rem;
             padding: 4px 10px;
         }
+        .discount-section .discount-input-group .discount-input {
+            font-size: 1rem;
+            padding: 8px 12px;
+        }
+        .discount-display .info-item {
+            font-size: 0.8rem;
+            padding: 4px 12px;
+        }
+        .discount-display .info-item .value.grand-total {
+            font-size: 1rem;
+        }
     }
 </style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search medicines...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -732,10 +1013,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-plus-circle mr-2" style="color: #059669;"></i> New OTC Sale
+                <i class="fas fa-plus-circle mr-2" style="color: var(--otc-color);"></i> New OTC Sale
             </h1>
             <p class="page-subtitle">
-                Sell medicines over-the-counter
+                Sell medicines over-the-counter with discount
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
@@ -756,8 +1037,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
+        <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <?= $message ?>
         </div>
     <?php endif; ?>
@@ -771,62 +1052,66 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <input type="hidden" name="items_json" id="itemsJson" value="[]">
             <input type="hidden" name="discount_percent" id="discountPercentHidden" value="0">
             
+            <!-- ================================================================ -->
+            <!-- CUSTOMER INFORMATION -->
+            <!-- ================================================================ -->
+            <div class="section-title">
+                <i class="fas fa-user"></i>
+                Customer Information
+            </div>
+            
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                
-                <!-- Customer Name -->
                 <div class="form-row">
-                    <label class="form-label">Customer Name</label>
+                    <label class="form-label">Customer Name <span class="required">*</span></label>
                     <input type="text" name="customer_name" class="form-control" 
-                           placeholder="Walk-in Customer" value="Walk-in Customer">
+                           placeholder="Walk-in Customer" value="Walk-in Customer" required>
                 </div>
-                
-                <!-- Customer Phone -->
                 <div class="form-row">
                     <label class="form-label">Phone Number</label>
                     <input type="tel" name="customer_phone" class="form-control" 
                            placeholder="e.g. 0759 154 160">
                 </div>
-                
             </div>
             
             <!-- ================================================================ -->
             <!-- ADD MEDICINE SECTION -->
             <!-- ================================================================ -->
             <div class="mt-4 pt-4 border-t border-gray-200">
-                <h4 class="font-semibold text-gray-700 mb-3">
-                    <i class="fas fa-pills mr-2 text-blue-600"></i> Add Medicine
-                </h4>
+                <div class="section-title">
+                    <i class="fas fa-pills"></i>
+                    Add Medicine
+                    <span class="badge-count">Stock: <?= count($medicines) ?></span>
+                </div>
                 
                 <div class="medicine-select-row">
                     <div class="form-group">
-                        <label class="form-label">Medicine</label>
+                        <label class="form-label">Select Medicine <span class="required">*</span></label>
                         <select id="medicineSelect" class="form-control">
-                            <option value="">Select Medicine</option>
+                            <option value="">-- Select Medicine --</option>
                             <?php foreach ($medicines as $med): ?>
                                 <option value="<?= $med['id'] ?>" 
-                                        data-price="<?= $med['selling_price'] ?>" 
+                                        data-price="<?= $med['selling_price'] ?? 0 ?>"
                                         data-stock="<?= $med['quantity'] ?>"
                                         data-name="<?= htmlspecialchars($med['medication_name']) ?>">
                                     <?= htmlspecialchars($med['medication_name']) ?> 
-                                    (Stock: <?= $med['quantity'] ?>) - 
-                                    TSh <?= number_format($med['selling_price']) ?>
+                                    (Stock: <?= $med['quantity'] ?>) - TSh <?= number_format($med['selling_price'] ?? 0) ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
                     
                     <div class="form-group qty-group">
-                        <label class="form-label">Quantity</label>
+                        <label class="form-label">Qty <span class="required">*</span></label>
                         <input type="number" id="medicineQty" class="form-control" value="1" min="1">
                     </div>
                     
                     <div class="form-group price-group">
                         <label class="form-label">Price (TSh)</label>
-                        <input type="number" id="medicinePrice" class="form-control" value="0" step="100">
+                        <input type="number" id="medicinePrice" class="form-control" value="0" step="100" readonly>
                     </div>
                     
                     <button type="button" onclick="addToCart()" class="btn-add-medicine">
-                        <i class="fas fa-plus"></i> Add
+                        <i class="fas fa-plus"></i> Add to Cart
                     </button>
                 </div>
             </div>
@@ -835,46 +1120,57 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <!-- CART ITEMS -->
             <!-- ================================================================ -->
             <div class="mt-4">
-                <h4 class="font-semibold text-gray-700 mb-2">
-                    <i class="fas fa-shopping-cart mr-2 text-blue-600"></i> Cart
-                    <span class="text-sm font-normal text-gray-400" id="cartCount">(0 items)</span>
-                </h4>
+                <div class="section-title">
+                    <i class="fas fa-shopping-cart"></i>
+                    Cart
+                    <span class="badge-count" id="cartCount">0 items</span>
+                </div>
                 
-                <div id="cartItems" class="border rounded-lg overflow-hidden">
+                <div class="cart-container" id="cartContainer">
                     <div class="empty-cart" id="emptyCart">
                         <i class="fas fa-shopping-cart"></i>
                         <p>No items added yet</p>
-                        <p class="text-xs text-gray-400 mt-1">Select a medicine and click "Add"</p>
+                        <p class="sub-text">Select a medicine and click "Add to Cart"</p>
+                    </div>
+                    <div id="cartItems" style="display:none;"></div>
+                </div>
+            </div>
+            
+            <!-- ================================================================ -->
+            <!-- DISCOUNT SECTION - WIDE INPUT -->
+            <!-- ================================================================ -->
+            <div class="discount-section">
+                <div class="discount-row">
+                    <span class="discount-label">
+                        <i class="fas fa-percent"></i> Discount (%)
+                    </span>
+                    <div class="discount-input-group">
+                        <input type="number" id="discountPercentInput" class="form-control discount-input" 
+                               placeholder="0" min="0" max="100" value="0" step="0.5">
+                        <span class="percent-sign">%</span>
+                        <button type="button" class="btn-apply-discount" onclick="applyDiscount()">
+                            <i class="fas fa-check"></i> Apply
+                        </button>
+                        <button type="button" class="btn-remove-discount" onclick="removeDiscount()">
+                            <i class="fas fa-times"></i> Remove
+                        </button>
                     </div>
                 </div>
                 
-                <!-- ================================================================ -->
-                <!-- DISCOUNT SECTION - WITH APPLY BUTTON -->
-                <!-- ================================================================ -->
-                <div class="discount-section mt-3">
-                    <span class="discount-label"><i class="fas fa-percent mr-1"></i> Discount:</span>
-                    <input type="number" id="discountPercentInput" class="form-control" placeholder="%" min="0" max="100" value="0">
-                    <button type="button" class="btn-apply-discount" onclick="applyDiscount()">
-                        <i class="fas fa-check"></i> Apply Discount
-                    </button>
-                    <button type="button" class="btn-remove-discount" onclick="removeDiscount()">
-                        <i class="fas fa-times"></i> Remove
-                    </button>
-                </div>
-                
-                <!-- Cart Summary -->
-                <div class="cart-summary" id="cartSummary">
-                    <div class="summary-row">
-                        <span class="label">Subtotal</span>
-                        <span class="value" id="subtotalAmount">TSh 0</span>
+                <!-- Discount Display -->
+                <div class="discount-display" id="discountDisplay">
+                    <div class="info-item">
+                        <span class="label">Subtotal:</span>
+                        <span class="value subtotal-value" id="displaySubtotal">TSh 0</span>
                     </div>
-                    <div class="summary-row discount">
-                        <span class="label">Discount</span>
-                        <span class="value" id="discountAmount">TSh 0</span>
+                    <div class="info-item">
+                        <span class="label">Discount:</span>
+                        <span class="value discount-value" id="displayDiscount">TSh 0</span>
+                        <span class="discount-percent-label" id="displayDiscountPercent">(0%)</span>
                     </div>
-                    <div class="summary-row grand-total">
-                        <span class="label">Grand Total</span>
-                        <span class="value" id="grandTotalAmount">TSh 0</span>
+                    <div class="info-item" style="border-color: var(--success); background: var(--success-light);">
+                        <span class="label" style="font-weight:700;">Grand Total:</span>
+                        <span class="value grand-total" id="displayGrandTotal">TSh 0</span>
                     </div>
                 </div>
             </div>
@@ -883,28 +1179,32 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <!-- PAYMENT METHOD -->
             <!-- ================================================================ -->
             <div class="mt-4 pt-4 border-t border-gray-200">
-                <label class="form-label">Payment Method</label>
+                <div class="section-title">
+                    <i class="fas fa-credit-card"></i>
+                    Payment Method
+                </div>
+                
                 <div class="payment-methods">
                     <button type="button" class="method-btn active" data-method="cash" onclick="selectPaymentMethod('cash')">
-                        <i class="fas fa-money-bill-wave mr-1"></i> Cash
+                        <i class="fas fa-money-bill-wave"></i> Cash
                     </button>
                     <button type="button" class="method-btn" data-method="m-pesa" onclick="selectPaymentMethod('m-pesa')">
-                        <i class="fas fa-mobile-alt mr-1"></i> M-Pesa
+                        <i class="fas fa-mobile-alt"></i> M-Pesa
                     </button>
                     <button type="button" class="method-btn" data-method="airtel_money" onclick="selectPaymentMethod('airtel_money')">
-                        <i class="fas fa-mobile-alt mr-1"></i> Airtel Money
+                        <i class="fas fa-mobile-alt"></i> Airtel Money
                     </button>
                     <button type="button" class="method-btn" data-method="tigo_pesa" onclick="selectPaymentMethod('tigo_pesa')">
-                        <i class="fas fa-mobile-alt mr-1"></i> Tigo Pesa
+                        <i class="fas fa-mobile-alt"></i> Tigo Pesa
                     </button>
                     <button type="button" class="method-btn" data-method="halopesa" onclick="selectPaymentMethod('halopesa')">
-                        <i class="fas fa-mobile-alt mr-1"></i> Halopesa
+                        <i class="fas fa-mobile-alt"></i> Halopesa
                     </button>
                     <button type="button" class="method-btn" data-method="bank" onclick="selectPaymentMethod('bank')">
-                        <i class="fas fa-university mr-1"></i> Bank
+                        <i class="fas fa-university"></i> Bank
                     </button>
                     <button type="button" class="method-btn" data-method="card" onclick="selectPaymentMethod('card')">
-                        <i class="fas fa-credit-card mr-1"></i> Card
+                        <i class="fas fa-credit-card"></i> Card
                     </button>
                 </div>
                 <input type="hidden" name="payment_method" id="selectedPaymentMethod" value="cash">
@@ -920,7 +1220,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <button type="button" class="btn-clear-cart" onclick="clearCart()">
                     <i class="fas fa-trash"></i> Clear Cart
                 </button>
-                <a href="dashboard.php" class="btn btn-outline" style="padding:10px 24px;">
+                <a href="dashboard.php" class="btn-outline">
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
@@ -964,6 +1264,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     var cart = [];
     var itemIdCounter = 0;
     var currentDiscountPercent = 0;
+    var subtotal = 0;
+    var grandTotal = 0;
+
+    // ================================================================
+    // MEDICINE SELECT - UPDATE PRICE
+    // ================================================================
+    document.getElementById('medicineSelect')?.addEventListener('change', function() {
+        var option = this.options[this.selectedIndex];
+        if (option.value) {
+            var price = parseFloat(option.dataset.price) || 0;
+            document.getElementById('medicinePrice').value = price;
+        }
+    });
 
     // ================================================================
     // ADD TO CART
@@ -1000,6 +1313,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         var name = option.dataset.name;
         var inventory_id = parseInt(option.value);
+        var total = price * qty;
         
         // Check if item already in cart
         var existing = cart.find(function(item) { return item.inventory_id === inventory_id; });
@@ -1013,7 +1327,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 name: name,
                 price: price,
                 quantity: qty,
-                total: price * qty
+                total: total
             });
         }
         
@@ -1023,7 +1337,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         option.text = option.text.replace(/\(Stock: \d+\)/, '(Stock: ' + newStock + ')');
         
         renderCart();
-        updateCartSummary();
+        updateTotals();
         
         showToast('Success', name + ' added to cart', 'success');
     }
@@ -1034,7 +1348,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     function removeFromCart(id) {
         cart = cart.filter(function(item) { return item.id !== id; });
         renderCart();
-        updateCartSummary();
+        updateTotals();
     }
 
     // ================================================================
@@ -1048,8 +1362,80 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         document.getElementById('discountPercentInput').value = 0;
         document.getElementById('discountPercentHidden').value = 0;
         renderCart();
-        updateCartSummary();
+        updateTotals();
         showToast('Info', 'Cart cleared', 'info');
+    }
+
+    // ================================================================
+    // RENDER CART
+    // ================================================================
+    function renderCart() {
+        var container = document.getElementById('cartContainer');
+        var itemsDiv = document.getElementById('cartItems');
+        var emptyDiv = document.getElementById('emptyCart');
+        var countEl = document.getElementById('cartCount');
+        var btn = document.getElementById('completeSaleBtn');
+        
+        countEl.textContent = cart.length + ' items';
+        
+        if (cart.length === 0) {
+            emptyDiv.style.display = 'block';
+            itemsDiv.style.display = 'none';
+            btn.disabled = true;
+            return;
+        }
+        
+        emptyDiv.style.display = 'none';
+        itemsDiv.style.display = 'block';
+        
+        var html = '';
+        cart.forEach(function(item) {
+            html += `
+                <div class="cart-item">
+                    <div class="item-info">
+                        <span class="item-name">${item.name}</span>
+                        <span class="item-meta">Qty: ${item.quantity}</span>
+                        <span class="item-price">TSh ${item.price.toLocaleString()}</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="item-total">TSh ${item.total.toLocaleString()}</span>
+                        <button class="btn-remove" onclick="removeFromCart(${item.id})">
+                            <i class="fas fa-times"></i> Remove
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+        itemsDiv.innerHTML = html;
+        btn.disabled = false;
+    }
+
+    // ================================================================
+    // UPDATE TOTALS (Subtotal, Discount, Grand Total)
+    // ================================================================
+    function updateTotals() {
+        // Calculate subtotal
+        subtotal = 0;
+        cart.forEach(function(item) {
+            subtotal += item.total;
+        });
+        
+        // Calculate discount
+        var discountPercent = currentDiscountPercent;
+        var discountAmount = (subtotal * discountPercent) / 100;
+        grandTotal = subtotal - discountAmount;
+        
+        // Update display
+        document.getElementById('displaySubtotal').textContent = 'TSh ' + subtotal.toLocaleString();
+        document.getElementById('displayDiscount').textContent = 'TSh ' + discountAmount.toLocaleString();
+        document.getElementById('displayDiscountPercent').textContent = '(' + discountPercent + '%)';
+        document.getElementById('displayGrandTotal').textContent = 'TSh ' + grandTotal.toLocaleString();
+        
+        // Update items_json
+        document.getElementById('itemsJson').value = JSON.stringify(cart);
+        
+        // Update discount hidden
+        document.getElementById('discountPercentHidden').value = discountPercent;
     }
 
     // ================================================================
@@ -1076,7 +1462,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         currentDiscountPercent = discount;
         document.getElementById('discountPercentHidden').value = discount;
-        updateCartSummary();
+        updateTotals();
+        
+        // Highlight the grand total
+        var grandTotalEl = document.getElementById('displayGrandTotal');
+        grandTotalEl.parentElement.classList.add('animate-pulse-once');
+        
         showToast('Success', discount + '% discount applied!', 'success');
     }
 
@@ -1087,75 +1478,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         currentDiscountPercent = 0;
         document.getElementById('discountPercentInput').value = 0;
         document.getElementById('discountPercentHidden').value = 0;
-        updateCartSummary();
+        updateTotals();
         showToast('Info', 'Discount removed', 'info');
-    }
-
-    // ================================================================
-    // RENDER CART
-    // ================================================================
-    function renderCart() {
-        var container = document.getElementById('cartItems');
-        var countEl = document.getElementById('cartCount');
-        var btn = document.getElementById('completeSaleBtn');
-        
-        countEl.textContent = '(' + cart.length + ' items)';
-        
-        if (cart.length === 0) {
-            container.innerHTML = `
-                <div class="empty-cart" id="emptyCart">
-                    <i class="fas fa-shopping-cart"></i>
-                    <p>No items added yet</p>
-                    <p class="text-xs text-gray-400 mt-1">Select a medicine and click "Add"</p>
-                </div>
-            `;
-            btn.disabled = true;
-            return;
-        }
-        
-        var html = '<div class="divide-y">';
-        cart.forEach(function(item) {
-            html += `
-                <div class="cart-item">
-                    <div class="item-info">
-                        <div class="item-name">${item.name}</div>
-                        <div class="item-meta">
-                            Qty: ${item.quantity} × TSh ${item.price.toLocaleString()}
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <span class="item-total">TSh ${item.total.toLocaleString()}</span>
-                        <button class="btn-remove" onclick="removeFromCart(${item.id})">
-                            <i class="fas fa-times"></i>
-                        </button>
-                    </div>
-                </div>
-            `;
-        });
-        html += '</div>';
-        container.innerHTML = html;
-        btn.disabled = false;
-    }
-
-    // ================================================================
-    // UPDATE CART SUMMARY
-    // ================================================================
-    function updateCartSummary() {
-        var subtotal = 0;
-        cart.forEach(function(item) {
-            subtotal += item.total;
-        });
-        
-        var discountPercent = currentDiscountPercent;
-        var discountAmount = (subtotal * discountPercent) / 100;
-        var grandTotal = subtotal - discountAmount;
-        
-        document.getElementById('subtotalAmount').textContent = 'TSh ' + subtotal.toLocaleString();
-        document.getElementById('discountAmount').textContent = 'TSh ' + discountAmount.toLocaleString();
-        document.getElementById('grandTotalAmount').textContent = 'TSh ' + grandTotal.toLocaleString();
-        
-        // Update items_json hidden input
-        document.getElementById('itemsJson').value = JSON.stringify(cart);
     }
 
     // ================================================================
@@ -1169,17 +1493,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (btn) btn.classList.add('active');
         document.getElementById('selectedPaymentMethod').value = method;
     }
-
-    // ================================================================
-    // MEDICINE SELECT - UPDATE PRICE
-    // ================================================================
-    document.getElementById('medicineSelect')?.addEventListener('change', function() {
-        var option = this.options[this.selectedIndex];
-        if (option.value) {
-            var price = parseFloat(option.dataset.price) || 0;
-            document.getElementById('medicinePrice').value = price;
-        }
-    });
 
     // ================================================================
     // DARK MODE
@@ -1271,22 +1584,22 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
+            var searchInput = document.querySelector('.search-wrapper input');
             searchInput?.focus();
             searchInput?.select();
         }
-        if (e.key === 'Enter') {
-            var active = document.activeElement;
-            if (active && active.id === 'discountPercentInput') {
-                applyDiscount();
-            }
+        if (e.key === 'Enter' && document.activeElement?.id === 'discountPercentInput') {
+            applyDiscount();
         }
     });
 
-    console.log('%c💊 Braick - New OTC Sale (FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+    // ================================================================
+    // CONSOLE
+    // ================================================================
+    console.log('%c💊 Braick - New OTC Sale (With Discount - Wide Input)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Medicines in stock: <?= count($medicines) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Using patient_bills table (NOT bills)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Foreign key constraint fixed', 'font-size:13px; color:#34D399;');
+    console.log('%c💰 Discount input width: 160px (clear and readable)', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>
