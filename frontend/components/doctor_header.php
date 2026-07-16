@@ -1,28 +1,97 @@
 <?php
 // ================================================================
 // FILE: frontend/components/doctor_header.php
-// DOCTOR - SHARED HEADER (SEARCH BAR REMOVED)
+// DOCTOR - SHARED HEADER WITH SEARCH BAR & ONLINE STATUS
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION DATA
+// SESSION DATA - ENSURE DOCTOR SESSION IS SET
+// DEFAULT: Dr. John Mushi (ID: 5)
 // ================================================================
-if (!isset($_SESSION['doctor_id'])) {
-    $_SESSION['doctor_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
+
+// Check if session exists, if not set default doctor
+if (!isset($_SESSION['user_id']) || $_SESSION['user_id'] <= 0) {
+    // Set default doctor - Dr. John Mushi (ID: 5)
+    $_SESSION['user_id'] = 5;
+    $_SESSION['doctor_id'] = 5;
+    $_SESSION['full_name'] = 'Dr. John Mushi';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+    $_SESSION['specialty'] = 'General Medicine';
+    $_SESSION['username'] = 'dr.john';
+    $_SESSION['email'] = 'john@braick.com';
+    $_SESSION['is_online'] = 1;
+}
+
+// If doctor_id is set but user_id is not, sync them
+if (isset($_SESSION['doctor_id']) && $_SESSION['doctor_id'] > 0 && !isset($_SESSION['user_id'])) {
+    $_SESSION['user_id'] = $_SESSION['doctor_id'];
+}
+
+// If user_id is set but doctor_id is not, sync them
+if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0 && !isset($_SESSION['doctor_id'])) {
+    $_SESSION['doctor_id'] = $_SESSION['user_id'];
 }
 
 // ================================================================
-// GET PROFILE PICTURE
+// INCLUDE DATABASE
 // ================================================================
-$doctor_id = $_SESSION['doctor_id'] ?? 2;
-$full_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
+require_once __DIR__ . '/../../backend/config/config.php';
+
+// ================================================================
+// GET DOCTOR DETAILS FROM SESSION OR DATABASE
+// ================================================================
+$doctor_id = $_SESSION['doctor_id'] ?? $_SESSION['user_id'] ?? 5;
+$full_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 1;
+
+// Try to get latest doctor data from database
+try {
+    $db = getDB();
+    $stmt = $db->prepare("SELECT id, full_name, is_online, profile_pic, branch_id, specialty FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $user_data = $stmt->fetch();
+    
+    if ($user_data) {
+        $doctor_id = (int)$user_data['id'];
+        $full_name = $user_data['full_name'];
+        $is_online = (int)$user_data['is_online'];
+        $profile_pic = $user_data['profile_pic'] ?? '';
+        
+        // Update session with latest data
+        $_SESSION['user_id'] = $doctor_id;
+        $_SESSION['doctor_id'] = $doctor_id;
+        $_SESSION['full_name'] = $full_name;
+        $_SESSION['is_online'] = $is_online;
+        $_SESSION['branch_id'] = $user_data['branch_id'] ?? 1;
+        $_SESSION['specialty'] = $user_data['specialty'] ?? 'General Practitioner';
+    } else {
+        // If doctor not found in database, use default
+        error_log("Doctor ID $doctor_id not found in database, using default Dr. John Mushi");
+        $doctor_id = 5;
+        $full_name = 'Dr. John Mushi';
+        $is_online = 1;
+        
+        $_SESSION['user_id'] = 5;
+        $_SESSION['doctor_id'] = 5;
+        $_SESSION['full_name'] = 'Dr. John Mushi';
+        $_SESSION['is_online'] = 1;
+        $_SESSION['branch_id'] = 1;
+        $_SESSION['specialty'] = 'General Medicine';
+    }
+} catch (Exception $e) {
+    // Use session values if database fails
+    error_log("Database error in doctor_header: " . $e->getMessage());
+    $doctor_id = $_SESSION['doctor_id'] ?? 5;
+    $full_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+    $is_online = $_SESSION['is_online'] ?? 1;
+}
+
+// Make sure doctor_id is in session
+$_SESSION['user_id'] = $doctor_id;
+$_SESSION['doctor_id'] = $doctor_id;
 
 $avatar_url = '';
 $show_initial = true;
@@ -133,7 +202,7 @@ $is_dark = $dark_mode === 'true';
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAVIGATION - NO SEARCH BAR
+           TOP NAVIGATION - WITH SEARCH BAR
            ================================================================ */
         .top-nav {
             position: fixed;
@@ -149,8 +218,66 @@ $is_dark = $dark_mode === 'true';
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
+            gap: 12px;
         }
         
+        /* ================================================================
+           SEARCH BAR
+           ================================================================ */
+        .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
+            min-width: 150px;
+        }
+        
+        .search-wrapper:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
+        
+        .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .search-wrapper .search-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .search-wrapper .search-btn:hover {
+            background: var(--primary-dark);
+        }
+        
+        .search-wrapper .search-btn i {
+            margin-right: 4px;
+        }
+        
+        /* ================================================================
+           TOP NAV RIGHT ELEMENTS
+           ================================================================ */
         .top-nav .datetime {
             font-size: 0.78rem;
             color: var(--text-secondary);
@@ -271,6 +398,9 @@ $is_dark = $dark_mode === 'true';
             50% { transform: scale(1.2); }
         }
         
+        /* ================================================================
+           STATUS TOGGLE BUTTON
+           ================================================================ */
         .status-toggle {
             display: flex;
             align-items: center;
@@ -284,6 +414,7 @@ $is_dark = $dark_mode === 'true';
             font-size: 0.78rem;
             font-weight: 500;
             color: var(--text-primary);
+            white-space: nowrap;
         }
         
         .status-toggle:hover {
@@ -306,6 +437,32 @@ $is_dark = $dark_mode === 'true';
             background: var(--text-muted);
         }
         
+        .status-toggle .status-spinner {
+            display: none;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        
+        .status-toggle.updating .status-spinner {
+            display: inline-block;
+        }
+        
+        .status-toggle.updating .status-dot,
+        .status-toggle.updating .status-text {
+            display: none;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* ================================================================
+           DARK MODE TOGGLE
+           ================================================================ */
         .dark-toggle-btn {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
@@ -409,17 +566,23 @@ $is_dark = $dark_mode === 'true';
             .top-nav { left: 0; }
             .sidebar-toggle-btn { display: block; }
             .main-content { margin-left: 0; }
+            .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
             .top-nav .datetime { display: none; }
             .top-nav .status-toggle { display: none; }
             .main-content { padding: 16px; }
+            .search-wrapper { max-width: 180px; }
             .stat-card .stat-number { font-size: 1.4rem; }
         }
         
         @media (max-width: 640px) {
-            .top-nav { padding: 0 12px; }
+            .top-nav { padding: 0 12px; gap: 8px; }
+            .search-wrapper { max-width: 120px; }
+            .search-wrapper .search-btn { padding: 6px 10px; font-size: 0.7rem; }
+            .search-wrapper .search-btn span { display: none; }
+            .search-wrapper .search-btn i { margin-right: 0; }
             .dark-toggle-btn { padding: 4px 8px; font-size: 0.7rem; }
             .dark-toggle-btn span { display: none; }
             .main-content { padding: 10px; }
@@ -442,33 +605,40 @@ $is_dark = $dark_mode === 'true';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - NO SEARCH BAR -->
+<!-- TOP NAVIGATION - WITH SEARCH BAR -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     
-    <!-- Left Side - Brand -->
-    <div class="flex items-center gap-3 flex-1">
+    <!-- Left Side -->
+    <div class="flex items-center gap-3 flex-1 min-w-0">
         <button id="sidebarToggle" class="sidebar-toggle-btn" aria-label="Toggle Sidebar">
             <i class="fas fa-bars"></i>
         </button>
         
-        <a href="dashboard.php" class="flex items-center gap-2 text-gray-700 hover:text-primary transition">
+        <a href="dashboard.php" class="flex items-center gap-2 text-gray-700 hover:text-primary transition shrink-0">
             <i class="fas fa-home text-primary"></i>
             <span class="font-semibold text-sm hidden sm:inline">Dashboard</span>
         </a>
-        
-        <span class="text-gray-300 text-sm hidden md:inline">|</span>
-        <span class="text-sm text-gray-500 hidden md:inline"><?= htmlspecialchars($full_name) ?></span>
+    </div>
+    
+    <!-- Search Bar -->
+    <div class="search-wrapper">
+        <i class="fas fa-search text-gray-400 ml-3"></i>
+        <input type="text" id="searchInput" placeholder="Search patients by name, ID or phone...">
+        <button id="searchBtn" class="search-btn">
+            <i class="fas fa-search mr-1"></i><span>Search</span>
+        </button>
     </div>
     
     <!-- Right Side -->
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-3 shrink-0">
         
         <span class="datetime" id="currentDateTime"></span>
         
-        <button id="statusToggle" class="status-toggle" title="Toggle Status">
-            <span class="status-dot online" id="statusDot"></span>
-            <span id="statusText">Online</span>
+        <button id="statusToggle" class="status-toggle <?= $is_online ? '' : 'offline' ?>" title="Toggle Online Status">
+            <span class="status-dot <?= $is_online ? 'online' : 'offline' ?>" id="statusDot"></span>
+            <span class="status-text" id="statusText"><?= $is_online ? 'Online' : 'Offline' ?></span>
+            <span class="status-spinner"></span>
         </button>
         
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
@@ -489,14 +659,14 @@ $is_dark = $dark_mode === 'true';
             <?php else: ?>
                 <img src="<?= $avatar_url ?>" alt="Profile" class="avatar-img">
             <?php endif; ?>
-            <span class="status-ring" id="avatarStatusRing"></span>
+            <span class="status-ring <?= $is_online ? '' : 'offline' ?>" id="avatarStatusRing"></span>
         </a>
         
     </div>
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - DARK MODE, STATUS, DATE/TIME -->
+<!-- JAVASCRIPT - DARK MODE, STATUS (UPDATES DATABASE), SEARCH, DATE/TIME -->
 <!-- ================================================================ -->
 <script>
 // ================================================================
@@ -613,40 +783,239 @@ updateDateTime();
 setInterval(updateDateTime, 1000);
 
 // ================================================================
-// ONLINE STATUS TOGGLE
+// ONLINE STATUS TOGGLE - UPDATES DATABASE
 // ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var statusToggle = document.getElementById('statusToggle');
     var statusDot = document.getElementById('statusDot');
     var statusText = document.getElementById('statusText');
     var avatarStatusRing = document.getElementById('avatarStatusRing');
+    var isUpdating = false;
+    
+    // Get doctor_id from PHP
+    var doctorId = <?= json_encode($doctor_id) ?>;
+    console.log('Doctor ID for status toggle:', doctorId);
+    console.log('Current status:', <?= json_encode($is_online ? 'Online' : 'Offline') ?>);
     
     if (statusToggle) {
         statusToggle.addEventListener('click', function() {
-            var isOnline = statusDot.classList.contains('online');
-            if (isOnline) {
-                statusDot.classList.remove('online');
-                statusDot.classList.add('offline');
-                statusText.textContent = 'Offline';
-                if (avatarStatusRing) {
-                    avatarStatusRing.classList.add('offline');
-                }
-            } else {
+            if (isUpdating) return;
+            
+            var currentIsOnline = statusDot.classList.contains('online');
+            var newStatus = currentIsOnline ? 0 : 1;
+            
+            console.log('Changing status to:', newStatus ? 'ONLINE' : 'OFFLINE');
+            console.log('Doctor ID:', doctorId);
+            
+            // Update UI immediately (optimistic)
+            if (newStatus === 1) {
                 statusDot.classList.remove('offline');
                 statusDot.classList.add('online');
                 statusText.textContent = 'Online';
                 if (avatarStatusRing) {
                     avatarStatusRing.classList.remove('offline');
                 }
+            } else {
+                statusDot.classList.remove('online');
+                statusDot.classList.add('offline');
+                statusText.textContent = 'Offline';
+                if (avatarStatusRing) {
+                    avatarStatusRing.classList.add('offline');
+                }
             }
+            
+            // Show loading state
+            isUpdating = true;
+            statusToggle.classList.add('updating');
+            
+            // Send AJAX request to update status
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/dispensary_system/frontend/pages/doctor/update_doctor_status.php', true);
+            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    isUpdating = false;
+                    statusToggle.classList.remove('updating');
+                    
+                    console.log('Response status:', xhr.status);
+                    console.log('Response text:', xhr.responseText);
+                    
+                    if (xhr.status === 200) {
+                        try {
+                            var response = JSON.parse(xhr.responseText);
+                            console.log('Parsed response:', response);
+                            
+                            if (response.success) {
+                                showToast('✅ ' + (newStatus === 1 ? 'Online' : 'Offline'), 
+                                    'You are now ' + (newStatus === 1 ? 'online' : 'offline') + '.', 
+                                    'success');
+                            } else {
+                                showToast('❌ Error', response.message || 'Failed to update status', 'error');
+                                // Revert UI
+                                if (newStatus === 1) {
+                                    statusDot.classList.remove('online');
+                                    statusDot.classList.add('offline');
+                                    statusText.textContent = 'Offline';
+                                    if (avatarStatusRing) {
+                                        avatarStatusRing.classList.add('offline');
+                                    }
+                                } else {
+                                    statusDot.classList.remove('offline');
+                                    statusDot.classList.add('online');
+                                    statusText.textContent = 'Online';
+                                    if (avatarStatusRing) {
+                                        avatarStatusRing.classList.remove('offline');
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error('JSON parse error:', e);
+                            showToast('❌ Error', 'Server error: ' + e.message, 'error');
+                            // Revert UI
+                            if (newStatus === 1) {
+                                statusDot.classList.remove('online');
+                                statusDot.classList.add('offline');
+                                statusText.textContent = 'Offline';
+                                if (avatarStatusRing) {
+                                    avatarStatusRing.classList.add('offline');
+                                }
+                            } else {
+                                statusDot.classList.remove('offline');
+                                statusDot.classList.add('online');
+                                statusText.textContent = 'Online';
+                                if (avatarStatusRing) {
+                                    avatarStatusRing.classList.remove('offline');
+                                }
+                            }
+                        }
+                    } else {
+                        console.error('HTTP error:', xhr.status, xhr.responseText);
+                        showToast('❌ Error', 'Network error: ' + xhr.status, 'error');
+                        // Revert UI
+                        if (newStatus === 1) {
+                            statusDot.classList.remove('online');
+                            statusDot.classList.add('offline');
+                            statusText.textContent = 'Offline';
+                            if (avatarStatusRing) {
+                                avatarStatusRing.classList.add('offline');
+                            }
+                        } else {
+                            statusDot.classList.remove('offline');
+                            statusDot.classList.add('online');
+                            statusText.textContent = 'Online';
+                            if (avatarStatusRing) {
+                                avatarStatusRing.classList.remove('offline');
+                            }
+                        }
+                    }
+                }
+            };
+            // Send doctor_id along with status
+            xhr.send('status=' + newStatus + '&doctor_id=' + doctorId);
         });
     }
 });
 
 // ================================================================
+// SEARCH
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            window.location.href = 'search.php?q=' + encodeURIComponent(query);
+        }
+    }
+    
+    if (searchBtn) {
+        searchBtn.addEventListener('click', performSearch);
+    }
+    
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+    }
+});
+
+// ================================================================
+// TOAST NOTIFICATION
+// ================================================================
+function showToast(title, message, type) {
+    var existingToast = document.querySelector('.toast-custom');
+    if (existingToast) {
+        existingToast.remove();
+    }
+    
+    var toast = document.createElement('div');
+    toast.className = 'toast-custom';
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 14px 20px;
+        border-radius: 12px;
+        z-index: 9999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: white;
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    `;
+    
+    if (type === 'success') {
+        toast.style.background = '#059669';
+    } else if (type === 'error') {
+        toast.style.background = '#DC2626';
+    } else {
+        toast.style.background = '#0B5ED7';
+    }
+    
+    var icon = document.createElement('i');
+    icon.className = 'fas ' + (type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle');
+    icon.style.fontSize = '1.2rem';
+    
+    var content = document.createElement('div');
+    content.innerHTML = `
+        <p style="font-weight:600;font-size:0.9rem;margin:0;">${title}</p>
+        <p style="font-size:0.78rem;opacity:0.9;margin:0;">${message}</p>
+    `;
+    
+    toast.appendChild(icon);
+    toast.appendChild(content);
+    document.body.appendChild(toast);
+    
+    // Show with animation
+    setTimeout(function() {
+        toast.style.transform = 'translateY(0)';
+        toast.style.opacity = '1';
+    }, 50);
+    
+    // Auto hide after 4 seconds
+    setTimeout(function() {
+        toast.style.transform = 'translateY(100px)';
+        toast.style.opacity = '0';
+        setTimeout(function() {
+            if (toast.parentNode) {
+                toast.remove();
+            }
+        }, 400);
+    }, 4000);
+}
+
+// ================================================================
 // KEYBOARD SHORTCUTS
 // ================================================================
 document.addEventListener('keydown', function(e) {
+    // Ctrl+D = Toggle Dark Mode
     if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
         e.preventDefault();
         var darkBtn = document.getElementById('darkModeToggle');
@@ -654,12 +1023,42 @@ document.addEventListener('keydown', function(e) {
             darkBtn.click();
         }
     }
+    // Ctrl+Shift+S = Toggle Status
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+        e.preventDefault();
+        var statusBtn = document.getElementById('statusToggle');
+        if (statusBtn) {
+            statusBtn.click();
+        }
+    }
+    // Ctrl+K = Focus Search
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        var searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+            searchInput.focus();
+            searchInput.select();
+        }
+    }
+    // Escape = Clear Search
+    if (e.key === 'Escape') {
+        var searchInput = document.getElementById('searchInput');
+        if (searchInput && document.activeElement === searchInput) {
+            searchInput.value = '';
+            searchInput.blur();
+        }
+    }
 });
 
-console.log('%c👨‍⚕️ Braick - Doctor Header (NO SEARCH BAR)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:12px; color:#059669;');
+console.log('%c👨‍⚕️ Braick - Doctor Header (WITH SEARCH BAR)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c🟢 Status: <?= $is_online ? 'Online ✅' : 'Offline ❌' ?>', 'font-size:12px; color:#059669;');
+console.log('%c🆔 Doctor ID: <?= $doctor_id ?>', 'font-size:12px; color:#64748B;');
+console.log('%c👤 Doctor Name: <?= $full_name ?>', 'font-size:12px; color:#64748B;');
+console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:12px; color:#64748B;');
 console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
-console.log('%c🔍 Search: Use search bar on each page', 'font-size:12px; color:#64748B;');
+console.log('%c🔍 Search: Ctrl+K to focus search', 'font-size:12px; color:#64748B;');
+console.log('%c🔄 Status: Ctrl+Shift+S to toggle online/offline', 'font-size:12px; color:#64748B;');
+console.log('%c✅ Default Doctor: Dr. John Mushi (ID: 5)', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

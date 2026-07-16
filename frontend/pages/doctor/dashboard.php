@@ -9,39 +9,56 @@
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
+    // Set default doctor - Dr. John Mushi (ID: 5)
+    $_SESSION['user_id'] = 5;
+    $_SESSION['doctor_id'] = 5;
+    $_SESSION['full_name'] = 'Dr. John Mushi';
+    $_SESSION['username'] = 'dr.john';
+    $_SESSION['email'] = 'john@braick.com';
+    $_SESSION['phone'] = '+255 700 000 011';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
+    $_SESSION['specialty'] = 'General Medicine';
     $_SESSION['profile_pic'] = '';
+    $_SESSION['is_online'] = 1;
 }
 
-$doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+// Make sure doctor_id and user_id are in sync
+if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+    $_SESSION['doctor_id'] = $_SESSION['user_id'];
+}
+if (isset($_SESSION['doctor_id']) && $_SESSION['doctor_id'] > 0) {
+    $_SESSION['user_id'] = $_SESSION['doctor_id'];
+}
+
+$doctor_id = $_SESSION['user_id'] ?? $_SESSION['doctor_id'] ?? 5;
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
-$doctor_specialty = $_SESSION['specialty'] ?? 'General Practitioner';
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 
 // ================================================================
-// FUNCTIONS
+// FUNCTIONS - Check if already defined to avoid duplication
 // ================================================================
-function time_ago($timestamp) {
-    if (empty($timestamp)) return 'N/A';
-    $time = strtotime($timestamp);
-    if ($time === false) return 'N/A';
-    $diff = time() - $time;
-    if ($diff < 60) return 'Just now';
-    if ($diff < 3600) return floor($diff / 60) . 'm ago';
-    if ($diff < 86400) return floor($diff / 3600) . 'h ago';
-    if ($diff < 604800) return floor($diff / 86400) . 'd ago';
-    if ($diff < 2592000) return floor($diff / 604800) . 'w ago';
-    return date('M d, Y', $time);
+if (!function_exists('time_ago')) {
+    function time_ago($timestamp) {
+        if (empty($timestamp)) return 'N/A';
+        try {
+            $time = strtotime($timestamp);
+            if ($time === false) return 'N/A';
+            $diff = time() - $time;
+            if ($diff < 60) return 'Just now';
+            if ($diff < 3600) return floor($diff / 60) . 'm ago';
+            if ($diff < 86400) return floor($diff / 3600) . 'h ago';
+            if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+            if ($diff < 2592000) return floor($diff / 604800) . 'w ago';
+            return date('M d, Y', $time);
+        } catch (Exception $e) {
+            return 'N/A';
+        }
+    }
 }
 
 // ================================================================
@@ -49,6 +66,44 @@ function time_ago($timestamp) {
 // ================================================================
 require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// GET DOCTOR DATA FROM DATABASE (OVERRIDE SESSION IF NEEDED)
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, is_online, profile_pic FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($doctor_data) {
+        $doctor_id = $doctor_data['id'];
+        $doctor_name = $doctor_data['full_name'];
+        $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+        $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+        $_SESSION['is_online'] = $doctor_data['is_online'] ?? 0;
+        $_SESSION['profile_pic'] = $doctor_data['profile_pic'] ?? '';
+        $_SESSION['full_name'] = $doctor_name;
+        $_SESSION['user_id'] = $doctor_id;
+        $_SESSION['doctor_id'] = $doctor_id;
+    } else {
+        // If doctor not found, use Dr. John Mushi
+        $doctor_id = 5;
+        $doctor_name = 'Dr. John Mushi';
+        $doctor_branch_id = 1;
+        $doctor_specialty = 'General Medicine';
+        $_SESSION['user_id'] = 5;
+        $_SESSION['doctor_id'] = 5;
+        $_SESSION['full_name'] = 'Dr. John Mushi';
+        $_SESSION['is_online'] = 1;
+    }
+} catch (Exception $e) {
+    // Use session values if database fails
+    error_log("Dashboard database error: " . $e->getMessage());
+    $doctor_id = $_SESSION['user_id'] ?? 5;
+    $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+    $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+    $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+}
 
 // ================================================================
 // TODAY'S DATE
@@ -251,6 +306,11 @@ $pending_prescriptions_sidebar = 0;
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
 ?>
+
+<!-- ================================================================ -->
+<!-- MAIN CONTENT - REST OF THE FILE STAYS THE SAME -->
+<!-- ================================================================ -->
+<!-- ... (the rest of the HTML stays exactly as it was) ... -->
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->

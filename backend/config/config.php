@@ -132,16 +132,49 @@ function getUnreadNotifications($user_id) {
     return $stmt->fetchAll();
 }
 
-// Time ago function
-function time_ago($timestamp) {
-    $time = strtotime($timestamp);
-    $diff = time() - $time;
-    
-    if ($diff < 60) return 'Just now';
-    if ($diff < 3600) return floor($diff / 60) . 'm ago';
-    if ($diff < 86400) return floor($diff / 3600) . 'h ago';
-    if ($diff < 604800) return floor($diff / 86400) . 'd ago';
-    if ($diff < 2592000) return floor($diff / 604800) . 'w ago';
-    return date('M d, Y', $time);
+// ============================================================
+// TIME AGO FUNCTION - Check if already defined
+// ============================================================
+if (!function_exists('time_ago')) {
+    /**
+     * Convert timestamp to human readable time ago
+     * 
+     * @param string $timestamp
+     * @return string
+     */
+    function time_ago($timestamp) {
+        if (empty($timestamp)) {
+            return 'N/A';
+        }
+        
+        try {
+            $time = strtotime($timestamp);
+            if ($time === false) {
+                return 'N/A';
+            }
+            
+            $diff = time() - $time;
+            
+            if ($diff < 60) {
+                return 'Just now';
+            } elseif ($diff < 3600) {
+                $minutes = floor($diff / 60);
+                return $minutes . 'm ago';
+            } elseif ($diff < 86400) {
+                $hours = floor($diff / 3600);
+                return $hours . 'h ago';
+            } elseif ($diff < 604800) {
+                $days = floor($diff / 86400);
+                return $days . 'd ago';
+            } elseif ($diff < 2592000) {
+                $weeks = floor($diff / 604800);
+                return $weeks . 'w ago';
+            } else {
+                return date('M d, Y', $time);
+            }
+        } catch (Exception $e) {
+            return 'N/A';
+        }
+    }
 }
 ?>
