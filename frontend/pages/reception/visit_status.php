@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/reception/view_patient.php
-// RECEPTION - VIEW PATIENT DETAILS (DATABASE CONNECTED)
+// FILE: frontend/pages/reception/visit_status.php
+// RECEPTION - UPDATE VISIT STATUS
 // WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
 // BRAICK DISPENSARY
 // ================================================================
@@ -26,90 +26,82 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 
-$selected_branch_id = $_SESSION['branch_id'] ?? 1;
-$patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$visit_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$new_status = isset($_GET['status']) ? $_GET['status'] : '';
+$redirect = isset($_GET['redirect']) ? $_GET['redirect'] : 'visits.php';
+$message = '';
+$message_type = '';
 
-if ($patient_id <= 0) {
-    header('Location: patients.php');
+if ($visit_id <= 0) {
+    header('Location: ' . $redirect);
     exit;
 }
 
 try {
     $db = getDB();
     
-    // Get patient details
+    // Get visit details first
     $stmt = $db->prepare("
-        SELECT p.*, b.name as branch_name 
-        FROM patients p
-        LEFT JOIN branches b ON p.branch_id = b.id
-        WHERE p.id = ? AND p.branch_id = ?
+        SELECT v.*, p.full_name as patient_name, p.patient_id, u.full_name as doctor_name 
+        FROM visits v
+        JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE v.id = ? AND v.branch_id = ?
     ");
-    $stmt->execute([$patient_id, $selected_branch_id]);
-    $patient = $stmt->fetch();
+    $stmt->execute([$visit_id, $_SESSION['branch_id']]);
+    $visit = $stmt->fetch();
     
-    if (!$patient) {
-        header('Location: patients.php');
+    if (!$visit) {
+        header('Location: ' . $redirect);
         exit;
     }
     
-    // Get patient visits
-    $stmt = $db->prepare("
-        SELECT v.*, u.full_name as doctor_name 
-        FROM visits v
-        LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE v.patient_id = ?
-        ORDER BY v.created_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$patient_id]);
-    $visits = $stmt->fetchAll();
+    // Validate status
+    $valid_statuses = ['pending', 'assigned', 'with_doctor', 'completed', 'cancelled'];
+    if (!in_array($new_status, $valid_statuses)) {
+        header('Location: ' . $redirect);
+        exit;
+    }
     
-    // Get patient appointments
-    $stmt = $db->prepare("
-        SELECT a.*, u.full_name as doctor_name 
-        FROM appointments a
-        LEFT JOIN users u ON a.doctor_id = u.id
-        WHERE a.patient_id = ?
-        ORDER BY a.appointment_date DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$patient_id]);
-    $appointments = $stmt->fetchAll();
+    // Update visit status
+    $stmt = $db->prepare("UPDATE visits SET status = ?, updated_at = NOW() WHERE id = ?");
     
-    // Get total visits count
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?");
-    $stmt->execute([$patient_id]);
-    $total_visits = $stmt->fetch()['total'] ?? 0;
-    
-    // Get total prescriptions
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE patient_id = ?");
-    $stmt->execute([$patient_id]);
-    $total_prescriptions = $stmt->fetch()['total'] ?? 0;
-    
-    // Get total appointments
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE patient_id = ?");
-    $stmt->execute([$patient_id]);
-    $total_appointments = $stmt->fetch()['total'] ?? 0;
-    
-    // Get online doctors count
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND is_online = 1 AND status = 'active' AND branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
-    $online_doctors = $stmt->fetch()['total'] ?? 0;
-    
-    // Get total doctors
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
-    $total_doctors = $stmt->fetch()['total'] ?? 0;
+    if ($stmt->execute([$new_status, $visit_id])) {
+        $message = "Visit status updated to: " . ucfirst(str_replace('_', ' ', $new_status));
+        $message_type = 'success';
+        
+        // If status is completed, also update visit as completed
+        if ($new_status === 'completed') {
+            $stmt = $db->prepare("UPDATE visits SET is_completed = 1, completed_at = NOW() WHERE id = ?");
+            $stmt->execute([$visit_id]);
+            
+            // Update patient bill if exists
+            try {
+                $stmt = $db->prepare("UPDATE patient_bills SET status = 'paid' WHERE visit_id = ? AND status = 'pending'");
+                $stmt->execute([$visit_id]);
+            } catch (Exception $e) {}
+        }
+        
+        // If status is assigned, update doctor assignment
+        if ($new_status === 'assigned' && $visit['doctor_id']) {
+            $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
+            $stmt->execute([$visit['doctor_id'], $visit['patient_id']]);
+        }
+        
+        // Log activity
+        try {
+            $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'visit_status_updated', ?, NOW())");
+            $stmt->execute([$_SESSION['user_id'], "Visit ID: $visit_id status changed to $new_status"]);
+        } catch (Exception $e) {}
+        
+    } else {
+        $message = "Failed to update visit status!";
+        $message_type = 'error';
+    }
     
 } catch (Exception $e) {
-    $patient = null;
-    $visits = [];
-    $appointments = [];
-    $total_visits = 0;
-    $total_prescriptions = 0;
-    $total_appointments = 0;
-    $online_doctors = 0;
-    $total_doctors = 0;
+    $message = "Database error: " . $e->getMessage();
+    $message_type = 'error';
 }
 
 // ================================================================
@@ -123,7 +115,7 @@ include_once '../../components/reception_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Patient - Braick Dispensary</title>
+    <title>Visit Status - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
@@ -490,218 +482,103 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           PATIENT PROFILE
+           STATUS CARD
            ================================================================ */
-        .profile-card {
+        .status-card {
             background: var(--bg-card);
             border-radius: 18px;
+            padding: 32px 36px;
             border: 1px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s;
-        }
-        
-        .profile-card:hover {
-            border-color: var(--primary);
             box-shadow: var(--shadow-md);
+            max-width: 700px;
+            margin: 0 auto;
+            transition: all 0.3s ease;
         }
         
-        .profile-avatar {
-            width: 90px;
-            height: 90px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 2.2rem;
-            font-weight: 700;
-            color: white;
-            flex-shrink: 0;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+        .status-card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 8px 30px rgba(11, 94, 215, 0.08);
         }
         
-        .profile-name {
-            font-size: 1.4rem;
+        .status-card .status-icon {
+            font-size: 4rem;
+            margin-bottom: 12px;
+        }
+        
+        .status-card .status-icon.success { color: #059669; }
+        .status-card .status-icon.error { color: #DC2626; }
+        .status-card .status-icon.info { color: #0B5ED7; }
+        .status-card .status-icon.warning { color: #D97706; }
+        
+        .status-card .status-title {
+            font-size: 1.5rem;
             font-weight: 700;
             color: var(--text-primary);
         }
         
-        .profile-id {
-            font-size: 0.85rem;
+        .status-card .status-message {
+            font-size: 0.95rem;
             color: var(--text-secondary);
+            margin: 8px 0 16px;
         }
         
-        .profile-badge {
-            display: inline-block;
-            font-size: 0.65rem;
-            font-weight: 600;
-            padding: 2px 12px;
-            border-radius: 20px;
+        .status-card .status-details {
+            background: var(--bg-body);
+            border-radius: 12px;
+            padding: 16px 20px;
+            text-align: left;
+            margin: 16px 0;
         }
         
-        .profile-badge.blue { background: var(--primary-bg); color: var(--primary); }
-        .profile-badge.green { background: var(--success-bg); color: var(--success); }
-        
-        [data-theme="dark"] .profile-badge.blue { background: #1E3A5F; color: #6EA8FE; }
-        [data-theme="dark"] .profile-badge.green { background: #1A3A2A; color: #34D399; }
-        
-        /* ================================================================
-           INFO ROWS
-           ================================================================ */
-        .info-row {
+        .status-card .status-details .detail-row {
             display: flex;
             justify-content: space-between;
-            padding: 8px 0;
+            padding: 6px 0;
             border-bottom: 1px solid var(--border-color);
+            font-size: 0.85rem;
         }
         
-        .info-row:last-child {
+        .status-card .status-details .detail-row:last-child {
             border-bottom: none;
         }
         
-        .info-label {
-            font-size: 0.78rem;
+        .status-card .status-details .detail-label {
             color: var(--text-secondary);
             font-weight: 500;
         }
         
-        .info-value {
-            font-size: 0.85rem;
-            font-weight: 600;
+        .status-card .status-details .detail-value {
             color: var(--text-primary);
-            text-align: right;
+            font-weight: 600;
         }
         
-        .info-value .text-muted {
+        .status-card .status-details .detail-value .text-muted {
             color: var(--text-secondary);
             font-weight: 400;
         }
         
         /* ================================================================
-           STATS BOXES
+           STATUS BADGE DISPLAY
            ================================================================ */
-        .stat-box {
-            text-align: center;
-            padding: 14px 16px;
-            border-radius: 12px;
-            border: 1px solid var(--border-color);
-            background: var(--bg-card);
-            transition: all 0.3s ease;
-        }
-        
-        .stat-box:hover {
-            border-color: var(--primary);
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .stat-box .stat-number {
-            font-size: 1.6rem;
-            font-weight: 700;
-        }
-        
-        .stat-box .stat-number.primary { color: var(--primary); }
-        .stat-box .stat-number.green { color: var(--success); }
-        .stat-box .stat-number.purple { color: #7C3AED; }
-        .stat-box .stat-number.orange { color: #D97706; }
-        
-        .stat-box .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        /* ================================================================
-           CARDS
-           ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: 14px;
-            padding: 18px 20px;
-            border: 1px solid var(--border-color);
-            transition: all 0.3s;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .card-title {
-            font-size: 0.9rem;
+        .status-badge-display {
+            display: inline-block;
+            font-size: 0.75rem;
             font-weight: 600;
-            color: var(--text-primary);
+            padding: 4px 16px;
+            border-radius: 20px;
         }
         
-        .card-title .title-blue { color: var(--primary); }
-        .card-title .title-green { color: var(--success); }
+        .status-badge-display.pending { background: #FEF3C7; color: #D97706; }
+        .status-badge-display.assigned { background: #E8F0FE; color: #0B5ED7; }
+        .status-badge-display.with_doctor { background: #FEF3C7; color: #D97706; }
+        .status-badge-display.completed { background: #D1FAE5; color: #059669; }
+        .status-badge-display.cancelled { background: #FEE2E2; color: #DC2626; }
         
-        /* ================================================================
-           VISIT & APPOINTMENT ITEMS
-           ================================================================ */
-        .visit-item, .appointment-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .visit-item:hover, .appointment-item:hover {
-            background: var(--bg-body);
-        }
-        
-        .visit-item:last-child, .appointment-item:last-child {
-            border-bottom: none;
-        }
-        
-        .visit-item .visit-date, .appointment-item .appt-date {
-            font-weight: 500;
-            font-size: 0.8rem;
-            color: var(--text-primary);
-        }
-        
-        .visit-item .visit-doctor, .appointment-item .appt-doctor {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .badge {
-            padding: 2px 12px;
-            border-radius: 12px;
-            font-size: 0.6rem;
-            font-weight: 600;
-        }
-        
-        .badge-green { background: #D1FAE5; color: #059669; }
-        .badge-yellow { background: #FEF3C7; color: #D97706; }
-        .badge-red { background: #FEE2E2; color: #DC2626; }
-        .badge-blue { background: #E8F0FE; color: #0B5ED7; }
-        
-        [data-theme="dark"] .badge-green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .badge-yellow { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .badge-red { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .badge-blue { background: #1E3A5F; color: #6EA8FE; }
-        
-        .scroll-container {
-            max-height: 220px;
-            overflow-y: auto;
-        }
-        
-        .scroll-container::-webkit-scrollbar { width: 4px; }
-        .scroll-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
-        .scroll-container::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+        [data-theme="dark"] .status-badge-display.pending { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .status-badge-display.assigned { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .status-badge-display.with_doctor { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .status-badge-display.completed { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .status-badge-display.cancelled { background: #3A1A1A; color: #F87171; }
         
         /* ================================================================
            BUTTONS
@@ -709,35 +586,46 @@ include_once '../../components/reception_sidebar.php';
         .btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 7px 16px;
-            border-radius: 8px;
+            gap: 8px;
+            padding: 10px 24px;
+            border-radius: 10px;
             font-weight: 600;
-            font-size: 0.78rem;
+            font-size: 0.85rem;
             transition: all 0.3s;
             cursor: pointer;
             border: none;
             text-decoration: none;
         }
         
-        .btn-blue {
-            background: var(--primary);
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
-        }
-        .btn-blue:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
         }
         
-        .btn-green {
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35);
+        }
+        
+        .btn-success {
             background: var(--success);
             color: white;
         }
-        .btn-green:hover {
+        .btn-success:hover {
             background: var(--success-dark);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        .btn-danger:hover {
+            background: var(--danger-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
         }
         
         .btn-outline {
@@ -751,10 +639,18 @@ include_once '../../components/reception_sidebar.php';
             color: var(--primary);
         }
         
-        .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
+        .btn-sm { padding: 4px 12px; font-size: 0.72rem; border-radius: 8px; }
+        
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 16px;
+        }
         
         /* ================================================================
-           BADGES DISPLAY
+           BADGES
            ================================================================ */
         .role-badge-display {
             display: inline-block;
@@ -797,7 +693,7 @@ include_once '../../components/reception_sidebar.php';
             padding: 14px 20px;
             border-radius: 12px;
             z-index: 999;
-            max-width: 380px;
+            max-width: 400px;
             transform: translateY(100px);
             opacity: 0;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
@@ -854,6 +750,42 @@ include_once '../../components/reception_sidebar.php';
         @keyframes spin { to { transform: rotate(360deg); } }
         
         /* ================================================================
+           MESSAGE ALERT
+           ================================================================ */
+        .alert {
+            padding: 14px 18px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .alert-success {
+            background: var(--success-bg);
+            color: var(--success-dark);
+            border: 1px solid var(--success);
+        }
+        
+        .alert-error {
+            background: var(--danger-bg);
+            color: var(--danger-dark);
+            border: 1px solid var(--danger);
+        }
+        
+        .alert i {
+            font-size: 1.1rem;
+            margin-top: 2px;
+        }
+        
+        .alert .alert-content {
+            flex: 1;
+        }
+        
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
@@ -867,21 +799,20 @@ include_once '../../components/reception_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .profile-avatar { width: 70px; height: 70px; font-size: 1.8rem; }
-            .profile-name { font-size: 1.1rem; }
-            .info-row { flex-direction: column; gap: 2px; }
-            .info-value { text-align: left; }
-            .stat-box .stat-number { font-size: 1.3rem; }
+            .status-card { padding: 20px; }
+            .status-card .status-icon { font-size: 3rem; }
+            .status-card .status-title { font-size: 1.2rem; }
+            .btn { padding: 8px 16px; font-size: 0.78rem; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .profile-avatar { width: 60px; height: 60px; font-size: 1.5rem; }
-            .card { padding: 12px 14px; }
-            .visit-item, .appointment-item { flex-direction: column; align-items: flex-start; gap: 4px; }
-            .btn { padding: 6px 12px; font-size: 0.7rem; }
+            .status-card { padding: 14px; }
+            .status-card .status-details .detail-row { font-size: 0.75rem; flex-direction: column; gap: 2px; }
+            .btn-group { flex-direction: column; align-items: stretch; }
+            .btn-group .btn { width: 100%; justify-content: center; }
         }
     </style>
 </head>
@@ -898,7 +829,7 @@ include_once '../../components/reception_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patients...">
+            <input type="text" id="searchInput" placeholder="Search...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -934,298 +865,158 @@ include_once '../../components/reception_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <?php if ($patient): ?>
-    
     <!-- ================================================================ -->
     <!-- PAGE HEADER - IMPROVED -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-user-circle"></i>
-                Patient Details
+                <i class="fas fa-clinic-medical"></i>
+                Visit Status
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">RECEPTION</span>
                 <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-id-card"></i>
-                View complete patient information
+                <i class="fas fa-arrow-right"></i>
+                Update visit status
                 
                 <span class="header-badge" id="onlineDoctorBadge">
                     <i class="fas fa-user-md"></i>
-                    <span class="online-count" id="onlineDoctorCount"><?= $online_doctors ?></span> Online
+                    <span class="online-count" id="onlineDoctorCount">0</span> Online
                 </span>
                 
                 <span class="header-badge">
                     <i class="fas fa-hashtag"></i>
-                    <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
+                    Visit #<strong><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></strong>
                 </span>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="new_appointment.php?patient_id=<?= $patient_id ?>" class="btn-outline-light">
-                <i class="fas fa-calendar-plus"></i> New Appointment
-            </a>
-            <a href="patients.php" class="btn-outline-light">
+            <a href="<?= $redirect ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
+    <!-- Message -->
+    <?php if ($message): ?>
+        <div class="alert <?= $message_type === 'success' ? 'alert-success' : 'alert-error' ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <div class="alert-content"><?= $message ?></div>
+        </div>
+    <?php endif; ?>
+
     <!-- ================================================================ -->
-    <!-- PATIENT PROFILE -->
+    <!-- STATUS CARD -->
     <!-- ================================================================ -->
-    <div class="profile-card animate-fade-in-up mb-5">
-        <div class="p-5 flex flex-col md:flex-row items-center md:items-start gap-5">
-            <!-- Avatar -->
-            <div class="profile-avatar" style="background: <?= '#' . substr(md5($patient['full_name']), 0, 6) ?>;">
-                <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
+    <div class="status-card animate-fade-in-up">
+        <div class="text-center">
+            <div class="status-icon <?= $message_type === 'success' ? 'success' : ($message_type === 'error' ? 'error' : 'info') ?>">
+                <?php if ($message_type === 'success'): ?>
+                    <i class="fas fa-check-circle"></i>
+                <?php elseif ($message_type === 'error'): ?>
+                    <i class="fas fa-exclamation-circle"></i>
+                <?php else: ?>
+                    <i class="fas fa-clinic-medical"></i>
+                <?php endif; ?>
             </div>
             
-            <!-- Patient Info -->
-            <div class="flex-1 text-center md:text-left">
-                <h2 class="profile-name"><?= htmlspecialchars($patient['full_name']) ?></h2>
-                <p class="profile-id">
-                    <i class="fas fa-id-card mr-1"></i>
-                    <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
-                </p>
-                <div class="flex flex-wrap gap-2 justify-center md:justify-start mt-2">
-                    <span class="profile-badge blue">
-                        <i class="fas fa-venus-mars mr-1"></i>
-                        <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?>
-                    </span>
-                    <span class="profile-badge green">
-                        <i class="fas fa-tint mr-1"></i>
-                        <?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?>
-                    </span>
-                    <span class="profile-badge blue">
-                        <i class="fas fa-store-alt mr-1"></i>
-                        <?= htmlspecialchars($patient['branch_name'] ?? 'Not Assigned') ?>
-                    </span>
-                </div>
-            </div>
+            <h2 class="status-title">
+                <?php if ($message_type === 'success'): ?>
+                    Status Updated Successfully!
+                <?php elseif ($message_type === 'error'): ?>
+                    Update Failed
+                <?php else: ?>
+                    Visit Details
+                <?php endif; ?>
+            </h2>
             
-            <!-- Quick Actions -->
-            <div class="flex flex-col gap-2 w-full md:w-auto">
-                <a href="new_appointment.php?patient_id=<?= $patient_id ?>" class="btn btn-blue btn-sm w-full justify-center">
-                    <i class="fas fa-calendar-plus"></i> New Appointment
-                </a>
-                <a href="assign_doctor.php?patient_id=<?= $patient_id ?>" class="btn btn-green btn-sm w-full justify-center">
-                    <i class="fas fa-user-md"></i> Assign Doctor
-                </a>
-            </div>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PATIENT INFORMATION -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
-        
-        <!-- Personal Information -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-info-circle title-blue mr-2"></i> Personal Information
-                </h3>
-            </div>
-            <div class="space-y-1">
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-user mr-1"></i> Full Name</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['full_name']) ?></span>
+            <p class="status-message"><?= htmlspecialchars($message) ?></p>
+            
+            <!-- Visit Details -->
+            <?php if (isset($visit)): ?>
+            <div class="status-details">
+                <div class="detail-row">
+                    <span class="detail-label">Visit Number</span>
+                    <span class="detail-value"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span>
                 </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-id-card mr-1"></i> Patient ID</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+                <div class="detail-row">
+                    <span class="detail-label">Patient</span>
+                    <span class="detail-value"><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></span>
                 </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-calendar mr-1"></i> Date of Birth</span>
-                    <span class="info-value"><?= !empty($patient['date_of_birth']) ? date('F d, Y', strtotime($patient['date_of_birth'])) : 'N/A' ?></span>
+                <div class="detail-row">
+                    <span class="detail-label">Patient ID</span>
+                    <span class="detail-value"><?= htmlspecialchars($visit['patient_id'] ?? 'N/A') ?></span>
                 </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-venus-mars mr-1"></i> Gender</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-phone mr-1"></i> Phone</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-envelope mr-1"></i> Email</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-home mr-1"></i> Address</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['address'] ?? 'N/A') ?></span>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Medical Information -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-notes-medical title-green mr-2"></i> Medical Information
-                </h3>
-            </div>
-            <div class="space-y-1">
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-phone-alt mr-1"></i> Emergency Contact</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-tint mr-1"></i> Blood Group</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-allergies mr-1"></i> Allergies</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['allergies'] ?? 'None') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-calendar-alt mr-1"></i> Registered</span>
-                    <span class="info-value"><?= date('F d, Y h:i A', strtotime($patient['created_at'])) ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-store-alt mr-1"></i> Branch</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['branch_name'] ?? 'Not Assigned') ?></span>
-                </div>
-                <?php if (!empty($patient['assigned_doctor_id'])): ?>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-user-md mr-1"></i> Assigned Doctor</span>
-                    <span class="info-value">
-                        <?php
-                        $stmt = $db->prepare("SELECT full_name FROM users WHERE id = ?");
-                        $stmt->execute([$patient['assigned_doctor_id']]);
-                        $doc = $stmt->fetch();
-                        echo htmlspecialchars($doc['full_name'] ?? 'N/A');
-                        ?>
+                <div class="detail-row">
+                    <span class="detail-label">Doctor</span>
+                    <span class="detail-value">
+                        <?php if ($visit['doctor_name']): ?>
+                            Dr. <?= htmlspecialchars($visit['doctor_name']) ?>
+                        <?php else: ?>
+                            <span class="text-muted">Not assigned</span>
+                        <?php endif; ?>
                     </span>
                 </div>
+                <div class="detail-row">
+                    <span class="detail-label">Visit Type</span>
+                    <span class="detail-value capitalize"><?= htmlspecialchars($visit['visit_type'] ?? 'N/A') ?></span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Date & Time</span>
+                    <span class="detail-value"><?= isset($visit['created_at']) ? date('F d, Y h:i A', strtotime($visit['created_at'])) : 'N/A' ?></span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Status</span>
+                    <span class="detail-value">
+                        <span class="status-badge-display <?= $new_status ?? $visit['status'] ?>">
+                            <?= ucfirst(str_replace('_', ' ', $new_status ?? $visit['status'])) ?>
+                        </span>
+                    </span>
+                </div>
+            </div>
+            <?php endif; ?>
+            
+            <!-- Action Buttons -->
+            <div class="btn-group">
+                <a href="<?= $redirect ?>" class="btn btn-primary">
+                    <i class="fas fa-arrow-left"></i> Back to List
+                </a>
+                <a href="visits.php" class="btn btn-outline">
+                    <i class="fas fa-clinic-medical"></i> View All Visits
+                </a>
+                <?php if ($message_type === 'success' && isset($visit)): ?>
+                    <a href="view_patient.php?id=<?= $visit['patient_id'] ?>" class="btn btn-success">
+                        <i class="fas fa-user"></i> View Patient
+                    </a>
                 <?php endif; ?>
             </div>
         </div>
-        
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS BOXES -->
+    <!-- QUICK ACTIONS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-        <div class="stat-box">
-            <p class="stat-number primary"><?= $total_visits ?></p>
-            <p class="stat-label">Total Visits</p>
-        </div>
-        <div class="stat-box">
-            <p class="stat-number green"><?= $total_prescriptions ?></p>
-            <p class="stat-label">Prescriptions</p>
-        </div>
-        <div class="stat-box">
-            <p class="stat-number purple"><?= $total_appointments ?></p>
-            <p class="stat-label">Appointments</p>
-        </div>
-        <div class="stat-box">
-            <p class="stat-number orange"><?= date('d/m/Y', strtotime($patient['created_at'])) ?></p>
-            <p class="stat-label">Registered Date</p>
-        </div>
+    <?php if (isset($visit) && $visit['status'] !== 'completed' && $visit['status'] !== 'cancelled'): ?>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5" style="max-width:700px;margin:20px auto 0;">
+        <a href="visit_status.php?id=<?= $visit_id ?>&status=assigned&redirect=<?= urlencode($redirect) ?>" 
+           class="card text-center hover:border-primary transition p-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-md">
+            <i class="fas fa-user-md text-blue-500 text-2xl block mb-2"></i>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assign Doctor</span>
+        </a>
+        <a href="visit_status.php?id=<?= $visit_id ?>&status=with_doctor&redirect=<?= urlencode($redirect) ?>" 
+           class="card text-center hover:border-primary transition p-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-md">
+            <i class="fas fa-stethoscope text-yellow-500 text-2xl block mb-2"></i>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">With Doctor</span>
+        </a>
+        <a href="visit_status.php?id=<?= $visit_id ?>&status=completed&redirect=<?= urlencode($redirect) ?>" 
+           class="card text-center hover:border-primary transition p-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-md">
+            <i class="fas fa-check-circle text-green-500 text-2xl block mb-2"></i>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Complete Visit</span>
+        </a>
     </div>
-
-    <!-- ================================================================ -->
-    <!-- VISITS & APPOINTMENTS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-        
-        <!-- Recent Visits -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-clinic-medical title-blue mr-2"></i> Recent Visits
-                    <span class="text-sm font-normal text-gray-400">(<?= count($visits) ?>)</span>
-                </h3>
-                <a href="visits.php?patient_id=<?= $patient_id ?>" class="text-primary text-sm hover:underline">View All →</a>
-            </div>
-            <div class="scroll-container">
-                <?php if (count($visits) > 0): ?>
-                    <?php foreach ($visits as $visit): ?>
-                        <div class="visit-item">
-                            <div>
-                                <p class="visit-date"><?= date('M d, Y', strtotime($visit['created_at'])) ?></p>
-                                <p class="visit-doctor">
-                                    <i class="fas fa-user-md mr-1"></i>
-                                    Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'Not assigned') ?>
-                                </p>
-                            </div>
-                            <div class="text-right">
-                                <span class="badge <?= $visit['status'] === 'completed' ? 'badge-green' : 'badge-yellow' ?>">
-                                    <?= ucfirst($visit['status']) ?>
-                                </span>
-                                <div class="mt-1">
-                                    <a href="visit_details.php?id=<?= $visit['id'] ?>" class="text-primary text-xs hover:underline">
-                                        <i class="fas fa-eye mr-1"></i> View
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-clinic-medical text-2xl block mb-2"></i>
-                        <p class="text-sm">No visits recorded</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-        <!-- Appointments -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-calendar-check title-green mr-2"></i> Appointments
-                    <span class="text-sm font-normal text-gray-400">(<?= count($appointments) ?>)</span>
-                </h3>
-                <a href="appointments.php?patient_id=<?= $patient_id ?>" class="text-primary text-sm hover:underline">View All →</a>
-            </div>
-            <div class="scroll-container">
-                <?php if (count($appointments) > 0): ?>
-                    <?php foreach ($appointments as $appt): ?>
-                        <div class="appointment-item">
-                            <div>
-                                <p class="appt-date"><?= date('M d, Y h:i A', strtotime($appt['appointment_date'])) ?></p>
-                                <p class="appt-doctor">
-                                    <i class="fas fa-user-md mr-1"></i>
-                                    Dr. <?= htmlspecialchars($appt['doctor_name'] ?? 'Not assigned') ?>
-                                </p>
-                            </div>
-                            <div class="text-right">
-                                <span class="badge <?= $appt['status'] === 'confirmed' || $appt['status'] === 'completed' ? 'badge-green' : 'badge-yellow' ?>">
-                                    <?= ucfirst($appt['status']) ?>
-                                </span>
-                                <div class="mt-1">
-                                    <a href="view_appointment.php?id=<?= $appt['id'] ?>" class="text-primary text-xs hover:underline">
-                                        <i class="fas fa-eye mr-1"></i> View
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-calendar-check text-2xl block mb-2"></i>
-                        <p class="text-sm">No appointments scheduled</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-    </div>
-
-    <?php else: ?>
-        <div class="text-center py-12 text-gray-400">
-            <i class="fas fa-user-circle text-5xl block mb-3"></i>
-            <p class="text-lg">Patient not found</p>
-            <a href="patients.php" class="text-primary hover:underline">Back to patients</a>
-        </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
@@ -1235,7 +1026,7 @@ include_once '../../components/reception_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Patient Details
+            Visit Status
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1457,9 +1248,9 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c👤 Braick - View Patient', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Total Visits: <?= $total_visits ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🏥 Braick - Visit Status', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Visit ID: <?= $visit_id ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📊 New Status: <?= ucfirst(str_replace('_', ' ', $new_status ?? 'N/A')) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');
 </script>
 
