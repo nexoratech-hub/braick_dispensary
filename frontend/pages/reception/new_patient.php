@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/new_patient.php
-// RECEPTION - REGISTER NEW PATIENT (WITH AUTO CONSULTATION FEE)
-// CONSULTATION FEE VALID FOR 7 DAYS - HIDDEN FROM RECEPTION
-// FEE GOES TO CASHIER IN BACKGROUND
+// RECEPTION - REGISTER NEW PATIENT (SIMPLE)
+// NO DOCTOR ASSIGNMENT - NO FEE SYSTEM
+// JUST PATIENT REGISTRATION
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -35,93 +35,12 @@ $message_type = '';
 try {
     $db = getDB();
     
-    // ================================================================
-    // GET CONSULTATION FEE FROM SERVICES (HIDDEN - BACKGROUND)
-    // ================================================================
-    $consultation_fee = 0;
-    $consultation_service_name = 'Consultation Fee';
-    $consultation_service_id = null;
-    
-    try {
-        // First get the consultation category ID
-        $stmt = $db->prepare("SELECT id FROM service_categories WHERE category_name = 'Consultation' LIMIT 1");
-        $stmt->execute();
-        $cons_category = $stmt->fetch();
-        
-        if ($cons_category) {
-            // Then get the service under that category
-            $stmt = $db->prepare("
-                SELECT id, service_name, price 
-                FROM services 
-                WHERE category_id = ? AND is_active = 1 
-                ORDER BY price ASC 
-                LIMIT 1
-            ");
-            $stmt->execute([$cons_category['id']]);
-            $consultation_service = $stmt->fetch();
-            
-            if ($consultation_service) {
-                $consultation_fee = $consultation_service['price'];
-                $consultation_service_name = $consultation_service['service_name'];
-                $consultation_service_id = $consultation_service['id'];
-            }
-        }
-        
-        // If no service found, check system_settings for consultation_fee
-        if ($consultation_fee == 0) {
-            $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'consultation_fee' LIMIT 1");
-            $stmt->execute();
-            $setting = $stmt->fetch();
-            if ($setting) {
-                $consultation_fee = (float)$setting['setting_value'];
-            }
-        }
-        
-    } catch (Exception $e) {
-        error_log("Consultation fee fetch error: " . $e->getMessage());
-    }
-    
-    // Get branches (only user's branch)
-    $branches = [];
-    $branch = getBranch($selected_branch_id);
-    if ($branch) {
-        $branches[] = $branch;
-    }
-    
     // Generate patient ID
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE branch_id = ?");
     $stmt->execute([$selected_branch_id]);
     $count = $stmt->fetch()['total'] ?? 0;
     $next_id = str_pad($count + 1, 4, '0', STR_PAD_LEFT);
     $patient_id_number = 'P-' . date('Y') . '-' . $next_id;
-    
-    // ================================================================
-    // GET ALL DOCTORS IN THIS BRANCH (SHOW ONLINE FIRST)
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT id, full_name, specialty, is_online, last_online
-        FROM users 
-        WHERE role = 'doctor' 
-        AND status = 'active' 
-        AND branch_id = ?
-        ORDER BY is_online DESC, full_name
-    ");
-    $stmt->execute([$selected_branch_id]);
-    $all_doctors = $stmt->fetchAll();
-    
-    // Separate online and offline doctors
-    $online_doctors = [];
-    $offline_doctors = [];
-    foreach ($all_doctors as $doc) {
-        if ($doc['is_online'] == 1) {
-            $online_doctors[] = $doc;
-        } else {
-            $offline_doctors[] = $doc;
-        }
-    }
-    
-    $online_doctors_count = count($online_doctors);
-    $total_doctors = count($all_doctors);
     
     // Handle form submission
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -135,8 +54,6 @@ try {
         $blood_group = $_POST['blood_group'] ?? null;
         $allergies = trim($_POST['allergies'] ?? '');
         $branch_id = $selected_branch_id;
-        $doctor_id = isset($_POST['doctor_id']) ? (int)$_POST['doctor_id'] : 0;
-        $patient_type = $_POST['patient_type'] ?? 'new';
         
         // Validation
         $errors = [];
@@ -144,184 +61,58 @@ try {
         if (empty($gender)) $errors[] = 'Gender is required';
         if (empty($phone)) $errors[] = 'Phone number is required';
         
-        // Verify doctor exists and is active (even if offline)
-        if ($doctor_id > 0) {
-            $stmt = $db->prepare("SELECT id, is_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active' AND branch_id = ?");
-            $stmt->execute([$doctor_id, $selected_branch_id]);
-            $doctor_check = $stmt->fetch();
-            if (!$doctor_check) {
-                $errors[] = 'Selected doctor is not available. Please select another doctor.';
-                $doctor_id = 0;
-            }
-        }
-        
         if (empty($errors)) {
             // ================================================================
-            // 1. INSERT PATIENT
+            // INSERT PATIENT
             // ================================================================
             $stmt = $db->prepare("
                 INSERT INTO patients (
                     patient_id, full_name, date_of_birth, gender, phone, email, 
                     address, emergency_contact, blood_group, allergies, branch_id, 
-                    assigned_doctor_id, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            
-            $assigned_doctor = $doctor_id > 0 ? $doctor_id : null;
             
             if ($stmt->execute([
                 $patient_id_number, $full_name, $date_of_birth, $gender, $phone, $email,
                 $address, $emergency_contact, $blood_group, $allergies, $branch_id,
-                $assigned_doctor, $_SESSION['user_id']
+                $_SESSION['user_id']
             ])) {
                 $patient_db_id = $db->lastInsertId();
                 
                 // ================================================================
-                // 2. CREATE VISIT
+                // CREATE VISIT (PENDING - NO DOCTOR ASSIGNED)
                 // ================================================================
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT);
-                $visit_status = ($doctor_id > 0) ? 'assigned' : 'pending';
                 
                 $stmt = $db->prepare("
                     INSERT INTO visits (
-                        visit_number, patient_id, doctor_id, receptionist_id, 
+                        visit_number, patient_id, receptionist_id, 
                         branch_id, visit_type, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                    ) VALUES (?, ?, ?, ?, 'new', 'pending', NOW(), NOW())
                 ");
                 $stmt->execute([
                     $visit_number, 
                     $patient_db_id, 
-                    ($doctor_id > 0 ? $doctor_id : null), 
                     $_SESSION['user_id'], 
-                    $branch_id, 
-                    $patient_type, 
-                    $visit_status
+                    $branch_id
                 ]);
                 $visit_id = $db->lastInsertId();
-                
-                // ================================================================
-                // 3. CHECK IF CONSULTATION FEE SHOULD BE CHARGED
-                // ================================================================
-                $charge_consultation = true;
-                $fee_amount = 0;
-                
-                // Check if patient has any previous visits
-                $stmt = $db->prepare("
-                    SELECT created_at, id 
-                    FROM visits 
-                    WHERE patient_id = ? 
-                    ORDER BY created_at DESC 
-                    LIMIT 1
-                ");
-                $stmt->execute([$patient_db_id]);
-                $last_visit = $stmt->fetch();
-                
-                if ($last_visit) {
-                    // Patient has previous visit - check if within 7 days
-                    $last_visit_date = new DateTime($last_visit['created_at']);
-                    $current_date = new DateTime();
-                    $days_diff = $last_visit_date->diff($current_date)->days;
-                    
-                    if ($days_diff < 7) {
-                        $charge_consultation = false; // FREE - within 7 days
-                    } else {
-                        $charge_consultation = true; // CHARGE - after 7 days
-                    }
-                } else {
-                    // First visit - always charge consultation fee
-                    $charge_consultation = true;
-                }
-                
-                // ================================================================
-                // 4. CREATE BILL WITH CONSULTATION FEE (BACKGROUND - HIDDEN)
-                // ================================================================
-                if ($charge_consultation && $consultation_fee > 0) {
-                    $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_db_id, 6, '0', STR_PAD_LEFT);
-                    
-                    try {
-                        $stmt = $db->prepare("
-                            INSERT INTO patient_bills (
-                                bill_number, patient_id, visit_id, 
-                                consultation_fee, subtotal, total_amount, balance, 
-                                status, created_by, branch_id, created_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
-                        ");
-                        $subtotal = $consultation_fee;
-                        $stmt->execute([
-                            $bill_number,
-                            $patient_db_id,
-                            $visit_id,
-                            $consultation_fee,
-                            $subtotal,
-                            $subtotal,
-                            $subtotal,
-                            $_SESSION['user_id'],
-                            $branch_id
-                        ]);
-                        $bill_id = $db->lastInsertId();
-                        
-                        // ================================================================
-                        // 5. ADD CONSULTATION FEE TO BILL ITEMS
-                        // ================================================================
-                        $stmt = $db->prepare("
-                            INSERT INTO bill_items (
-                                bill_id, item_type, item_id, item_name, 
-                                quantity, unit_price, total_price, created_at
-                            ) VALUES (?, 'consultation', ?, ?, 1, ?, ?, NOW())
-                        ");
-                        $stmt->execute([
-                            $bill_id,
-                            $consultation_service_id,
-                            $consultation_service_name,
-                            $consultation_fee,
-                            $consultation_fee
-                        ]);
-                        
-                        $_SESSION['current_bill_id'] = $bill_id;
-                        
-                    } catch (Exception $e) {
-                        error_log("Bill creation failed: " . $e->getMessage());
-                    }
-                }
                 
                 $_SESSION['current_patient_id'] = $patient_db_id;
                 $_SESSION['current_visit_id'] = $visit_id;
                 
-                // Get doctor name for message
-                $doctor_name = 'Not Assigned';
-                foreach ($all_doctors as $doc) {
-                    if ($doc['id'] == $doctor_id) {
-                        $doctor_name = $doc['full_name'] . ($doc['is_online'] ? ' 🟢' : ' ⚪');
-                        break;
-                    }
-                }
-                
                 // Log activity
                 try {
                     $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'patient_registered', ?, NOW())");
-                    $stmt->execute([$_SESSION['user_id'], "New patient registered: $full_name (ID: $patient_id_number) assigned to $doctor_name in $branch_name"]);
+                    $stmt->execute([$_SESSION['user_id'], "New patient registered: $full_name (ID: $patient_id_number) in $branch_name"]);
                 } catch (Exception $e) {}
                 
-                // ================================================================
-                // SUCCESS MESSAGE - FEE HIDDEN FROM RECEPTION
-                // ================================================================
                 $message = "✅ Patient registered successfully!";
                 $message .= "<br>📋 Patient ID: <strong>$patient_id_number</strong>";
-                $message .= "<br>👨‍⚕️ Assigned to: <strong>" . htmlspecialchars($doctor_name) . "</strong>";
-                if ($doctor_id > 0) {
-                    $message .= " <span class='text-green-600'>🟢 Online</span>";
-                } else {
-                    $message .= " <span class='text-gray-400'>⏳ Waiting for assignment</span>";
-                }
-                
-                // Fee message is NOT shown to reception
-                // Consultation fee is added silently to the bill
-                
+                $message .= "<br>⏳ Visit status: <strong>Pending</strong> - Waiting for doctor assignment";
                 $message_type = 'success';
                 
-                // ================================================================
-                // REDIRECT TO PATIENTS LIST
-                // ================================================================
                 echo '<script>
                     setTimeout(function(){ 
                         window.location.href = "patients.php"; 
@@ -341,13 +132,6 @@ try {
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
-    $branches = [];
-    $all_doctors = [];
-    $online_doctors = [];
-    $offline_doctors = [];
-    $total_doctors = 0;
-    $online_doctors_count = 0;
-    $consultation_fee = 0;
 }
 
 // ================================================================
@@ -431,8 +215,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
         }
         
         [data-theme="dark"] {
@@ -445,8 +227,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -619,7 +399,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER - IMPROVED
+           PAGE HEADER
            ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
@@ -705,11 +485,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             align-items: center;
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .page-header .header-badge .online-count {
-            color: #34D399;
-            font-weight: 700;
         }
         
         .page-header .btn-outline-light {
@@ -1273,7 +1048,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER - IMPROVED -->
+    <!-- PAGE HEADER -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -1285,12 +1060,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
                 Create a new patient record in <strong><?= htmlspecialchars($branch_name) ?></strong>
-                
-                <span class="header-badge" id="onlineDoctorBadge">
-                    <i class="fas fa-user-md"></i>
-                    <span class="online-count" id="onlineDoctorCount"><?= $online_doctors_count ?></span> Online 
-                    / <?= $total_doctors ?> Total
-                </span>
                 
                 <span class="header-badge">
                     <i class="fas fa-id-card"></i>
@@ -1308,10 +1077,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </a>
         </div>
     </div>
-
-    <!-- ================================================================ -->
-    <!-- CONSULTATION FEE - HIDDEN FROM UI (NO DISPLAY) -->
-    <!-- ================================================================ -->
 
     <!-- Message -->
     <?php if ($message): ?>
@@ -1432,70 +1197,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 6: Emergency Contact + Assign Doctor -->
+            <!-- ROW 6: Emergency Contact (Full Width - No Doctor) -->
             <!-- ============================================================ -->
-            <div class="grid-2">
-                <div class="form-row">
-                    <label class="form-label">
-                        <i class="fas fa-phone-alt label-icon"></i> Emergency Contact
-                    </label>
-                    <input type="tel" name="emergency_contact" class="form-control" placeholder="e.g. 0755 123 456" 
-                           value="<?= htmlspecialchars($_POST['emergency_contact'] ?? '') ?>">
-                </div>
-                
-                <div class="form-row" id="doctorSelectContainer">
-                    <label class="form-label">
-                        <i class="fas fa-user-md label-icon"></i> Assign Doctor
-                        <span class="text-xs font-normal text-gray-400">(Optional)</span>
-                    </label>
-                    <select name="doctor_id" class="form-control" id="doctorSelect">
-                        <option value="">-- No Doctor Assigned --</option>
-                        
-                        <?php if (!empty($online_doctors)): ?>
-                            <optgroup label="🟢 Online Doctors">
-                                <?php foreach ($online_doctors as $doctor): ?>
-                                    <option value="<?= $doctor['id'] ?>" <?= ($_POST['doctor_id'] ?? '') == $doctor['id'] ? 'selected' : '' ?>>
-                                        Dr. <?= htmlspecialchars($doctor['full_name']) ?>
-                                        <?php if (!empty($doctor['specialty'])): ?>
-                                            (<?= htmlspecialchars($doctor['specialty']) ?>)
-                                        <?php endif; ?>
-                                        - 🟢 Online
-                                    </option>
-                                <?php endforeach; ?>
-                            </optgroup>
-                        <?php endif; ?>
-                        
-                        <?php if (!empty($offline_doctors)): ?>
-                            <optgroup label="⚪ Offline Doctors">
-                                <?php foreach ($offline_doctors as $doctor): ?>
-                                    <option value="<?= $doctor['id'] ?>" <?= ($_POST['doctor_id'] ?? '') == $doctor['id'] ? 'selected' : '' ?>>
-                                        Dr. <?= htmlspecialchars($doctor['full_name']) ?>
-                                        <?php if (!empty($doctor['specialty'])): ?>
-                                            (<?= htmlspecialchars($doctor['specialty']) ?>)
-                                        <?php endif; ?>
-                                        - ⚪ Offline
-                                    </option>
-                                <?php endforeach; ?>
-                            </optgroup>
-                        <?php endif; ?>
-                    </select>
-                    <div id="doctorStatusMessage" class="mt-1">
-                        <?php if ($online_doctors_count > 0): ?>
-                            <p class="text-xs text-green-500">
-                                <i class="fas fa-check-circle mr-1"></i> 
-                                <span id="onlineDoctorCountText"><?= $online_doctors_count ?></span> doctor(s) currently online
-                                <?php if (!empty($offline_doctors)): ?>
-                                    <span class="text-gray-400">| <?= count($offline_doctors) ?> offline</span>
-                                <?php endif; ?>
-                            </p>
-                        <?php else: ?>
-                            <p class="text-xs text-yellow-500">
-                                <i class="fas fa-exclamation-triangle mr-1"></i> 
-                                No doctors are currently online. You can still register without a doctor.
-                            </p>
-                        <?php endif; ?>
-                    </div>
-                </div>
+            <div class="form-row grid-full">
+                <label class="form-label">
+                    <i class="fas fa-phone-alt label-icon"></i> Emergency Contact
+                </label>
+                <input type="tel" name="emergency_contact" class="form-control" placeholder="e.g. 0755 123 456" 
+                       value="<?= htmlspecialchars($_POST['emergency_contact'] ?? '') ?>">
             </div>
             
             <!-- ============================================================ -->
@@ -1545,7 +1254,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <i class="fas fa-info-circle mr-1"></i>
                 Patient will be registered with ID: <strong><?= $patient_id_number ?></strong>
                 <span class="mx-2">|</span>
-                Visit status: <strong><?= ($_POST['doctor_id'] ?? 0) > 0 ? 'Assigned' : 'Pending' ?></strong>
+                Visit status: <strong>Pending</strong> - Waiting for doctor assignment
                 <span class="mx-2">|</span>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
             </div>
@@ -1556,12 +1265,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <!-- QUICK STATS -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5" style="max-width:950px;margin:24px auto 0;">
-        <div class="stat-card" id="onlineDoctorsCard">
-            <div class="stat-icon">🟢</div>
-            <p class="stat-number" id="onlineDoctorsStat"><?= $online_doctors_count ?></p>
-            <p class="stat-label">Online Doctors</p>
-            <p class="text-xs text-gray-400" id="onlineDoctorsStatTime">Updated now</p>
-        </div>
         <div class="stat-card">
             <div class="stat-icon">📋</div>
             <p class="stat-number text-purple-600"><?= $patient_id_number ?></p>
@@ -1571,6 +1274,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <div class="stat-icon">📅</div>
             <p class="stat-number text-green-600"><?= date('d M Y') ?></p>
             <p class="stat-label">Today's Date</p>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">⏳</div>
+            <p class="stat-number text-orange-500">Pending</p>
+            <p class="stat-label">Visit Status</p>
         </div>
     </div>
 
@@ -1774,86 +1482,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     
     syncAllergyChips();
 
-    // ================================================================
-    // GLOBAL STATS AUTO-UPDATE (3 SECONDS)
-    // ================================================================
-    var updateInterval = null;
-    
-    function fetchGlobalStats() {
-        fetch('/dispensary_system/frontend/api/get_global_stats.php?t=' + new Date().getTime())
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    var stats = data.stats || {};
-                    var onlineCount = stats.online_doctors || 0;
-                    
-                    document.getElementById('onlineDoctorCount').textContent = onlineCount;
-                    document.getElementById('onlineDoctorsStat').textContent = onlineCount;
-                    document.getElementById('onlineDoctorCountText').textContent = onlineCount;
-                    
-                    var statusMsg = document.getElementById('doctorStatusMessage');
-                    if (onlineCount > 0) {
-                        statusMsg.innerHTML = `
-                            <p class="text-xs text-green-500">
-                                <i class="fas fa-check-circle mr-1"></i> 
-                                <span id="onlineDoctorCountText">${onlineCount}</span> doctor(s) currently online
-                            </p>
-                        `;
-                    } else {
-                        statusMsg.innerHTML = `
-                            <p class="text-xs text-yellow-500">
-                                <i class="fas fa-exclamation-triangle mr-1"></i> 
-                                No doctors are currently online. You can still register without a doctor.
-                            </p>
-                        `;
-                    }
-                    
-                    var now = new Date();
-                    document.getElementById('onlineDoctorsStatTime').textContent = 'Updated ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-                    document.getElementById('updateBadge').innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-                }
-            })
-            .catch(function(error) {
-                console.error('Error fetching global stats:', error);
-            });
-    }
-
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        fetchGlobalStats();
-        updateInterval = setInterval(fetchGlobalStats, 3000);
-    }
-
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-        }
-    }
-
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
-    });
-
-    document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 1000);
-    });
-
-    console.log('%c👤 Braick - New Patient Registration', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick - New Patient Registration (Simple)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Next Patient ID: <?= $patient_id_number ?>', 'font-size:13px; color:#64748B;');
-    // Consultation fee is added silently - not shown in console
-    console.log('%c✅ First visit: Charged | Within 7 days: Free | After 7 days: Charged again', 'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Consultation fee hidden from reception - goes to cashier in background', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ No doctor assignment - No fee system', 'font-size:13px; color:#34D399;');
+    console.log('%c⏳ Visit status: Pending - Waiting for doctor assignment', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>

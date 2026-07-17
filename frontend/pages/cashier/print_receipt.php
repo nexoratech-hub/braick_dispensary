@@ -1,9 +1,8 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/cashier/pending_bills.php
-// CASHIER - PENDING BILLS LIST
-// WITH AUTO-UPDATE (3 SECONDS) - NO REFRESH NEEDED
-// WITH CLICKABLE STAT CARDS - NAVIGATE TO RELEVANT PAGES
+// FILE: frontend/pages/cashier/print_receipt.php
+// CASHIER - PRINT RECEIPT
+// DISPLAYS PAID BILL RECEIPT FOR PRINTING
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -31,7 +30,11 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
+$receipt_id = isset($_GET['receipt_id']) ? (int)$_GET['receipt_id'] : 0;
 $unread_notifications = 0;
+$message = '';
+$message_type = '';
 
 try {
     $db = getDB();
@@ -47,113 +50,144 @@ try {
     }
     
     // ================================================================
-    // GET STATS FOR INITIAL LOAD
+    // IF BILL_ID IS PROVIDED, GET THE LATEST RECEIPT FOR THIS BILL
     // ================================================================
-    
-    // Pending Bills
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM patient_bills 
-        WHERE branch_id = ? AND status IN ('pending', 'partial')
-    ");
-    $stmt->execute([$user_branch_id]);
-    $pending_bills = $stmt->fetch()['count'] ?? 0;
-    
-    // Total Patients
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-    $stmt->execute([$user_branch_id]);
-    $total_patients = $stmt->fetch()['count'] ?? 0;
-    
-    // Total Bills
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ?");
-    $stmt->execute([$user_branch_id]);
-    $total_bills = $stmt->fetch()['count'] ?? 0;
-    
-    // Paid Bills
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM patient_bills 
-        WHERE branch_id = ? AND status = 'paid'
-    ");
-    $stmt->execute([$user_branch_id]);
-    $paid_bills = $stmt->fetch()['count'] ?? 0;
-    
-    // Today's Revenue
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as total 
-        FROM patient_bills 
-        WHERE branch_id = ? AND DATE(created_at) = ? AND status = 'paid'
-    ");
-    $stmt->execute([$user_branch_id, $today]);
-    $today_revenue = $stmt->fetch()['total'] ?? 0;
-    
-    // Today's Payments
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM payments 
-        WHERE branch_id = ? AND DATE(received_at) = ?
-    ");
-    $stmt->execute([$user_branch_id, $today]);
-    $today_payments = $stmt->fetch()['count'] ?? 0;
+    if ($bill_id > 0) {
+        $stmt = $db->prepare("
+            SELECT id FROM receipts 
+            WHERE bill_id = ? 
+            ORDER BY printed_at DESC 
+            LIMIT 1
+        ");
+        $stmt->execute([$bill_id]);
+        $receipt = $stmt->fetch();
+        if ($receipt) {
+            $receipt_id = $receipt['id'];
+        }
+    }
     
     // ================================================================
-    // GET PENDING BILLS LIST
+    // GET RECEIPT DETAILS
+    // ================================================================
+    if ($receipt_id > 0) {
+        $stmt = $db->prepare("
+            SELECT r.*, 
+                   pb.bill_number, pb.total_amount, pb.paid_amount, pb.balance, pb.status,
+                   p.full_name as patient_name, p.patient_id, p.phone, p.email, p.address,
+                   v.visit_number, v.visit_type, v.created_at as visit_date,
+                   u.full_name as doctor_name,
+                   c.full_name as cashier_name
+            FROM receipts r
+            JOIN patient_bills pb ON r.bill_id = pb.id
+            JOIN patients p ON pb.patient_id = p.id
+            LEFT JOIN visits v ON pb.visit_id = v.id
+            LEFT JOIN users u ON v.doctor_id = u.id
+            LEFT JOIN users c ON r.printed_by = c.id
+            WHERE r.id = ? AND pb.branch_id = ?
+        ");
+        $stmt->execute([$receipt_id, $user_branch_id]);
+        $receipt_data = $stmt->fetch();
+    }
+    
+    // ================================================================
+    // IF NO RECEIPT FOUND, TRY TO GET THE LATEST PAID BILL
+    // ================================================================
+    if (empty($receipt_data) && $bill_id > 0) {
+        $stmt = $db->prepare("
+            SELECT pb.*, 
+                   p.full_name as patient_name, p.patient_id, p.phone, p.email, p.address,
+                   v.visit_number, v.visit_type, v.created_at as visit_date,
+                   u.full_name as doctor_name
+            FROM patient_bills pb
+            JOIN patients p ON pb.patient_id = p.id
+            LEFT JOIN visits v ON pb.visit_id = v.id
+            LEFT JOIN users u ON v.doctor_id = u.id
+            WHERE pb.id = ? AND pb.branch_id = ? AND pb.status = 'paid'
+        ");
+        $stmt->execute([$bill_id, $user_branch_id]);
+        $bill_data = $stmt->fetch();
+        
+        if ($bill_data) {
+            // Create a virtual receipt from bill data
+            $receipt_data = [
+                'receipt_number' => 'RCP-' . date('Ymd') . '-' . str_pad($bill_data['id'], 6, '0', STR_PAD_LEFT),
+                'bill_number' => $bill_data['bill_number'],
+                'total_amount' => $bill_data['total_amount'],
+                'paid_amount' => $bill_data['paid_amount'] ?? $bill_data['total_amount'],
+                'balance' => 0,
+                'status' => 'paid',
+                'patient_name' => $bill_data['patient_name'],
+                'patient_id' => $bill_data['patient_id'],
+                'phone' => $bill_data['phone'],
+                'email' => $bill_data['email'],
+                'address' => $bill_data['address'],
+                'visit_number' => $bill_data['visit_number'],
+                'visit_type' => $bill_data['visit_type'],
+                'visit_date' => $bill_data['visit_date'],
+                'doctor_name' => $bill_data['doctor_name'],
+                'cashier_name' => $user_full_name,
+                'printed_at' => date('Y-m-d H:i:s'),
+                'payment_method' => 'cash',
+                'created_at' => $bill_data['created_at']
+            ];
+        }
+    }
+    
+    // ================================================================
+    // GET BILL ITEMS
+    // ================================================================
+    $bill_items = [];
+    if (!empty($receipt_data)) {
+        $bill_id_to_use = $bill_id > 0 ? $bill_id : 0;
+        if ($bill_id_to_use > 0) {
+            $stmt = $db->prepare("
+                SELECT * FROM bill_items 
+                WHERE bill_id = ?
+                ORDER BY created_at
+            ");
+            $stmt->execute([$bill_id_to_use]);
+            $bill_items = $stmt->fetchAll();
+        }
+    }
+    
+    // ================================================================
+    // GET PAYMENT DETAILS
+    // ================================================================
+    $payment_details = [];
+    if (!empty($receipt_data) && $bill_id > 0) {
+        $stmt = $db->prepare("
+            SELECT * FROM payments 
+            WHERE bill_id = ?
+            ORDER BY received_at DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$bill_id]);
+        $payment_details = $stmt->fetch();
+    }
+    
+    // ================================================================
+    // GET RECENT RECEIPTS FOR DROPDOWN
     // ================================================================
     $stmt = $db->prepare("
-        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
-               v.visit_number, v.visit_type, v.created_at as visit_date,
-               u.full_name as doctor_name
-        FROM patient_bills pb
+        SELECT r.id, r.receipt_number, pb.bill_number, p.full_name as patient_name,
+               r.printed_at
+        FROM receipts r
+        JOIN patient_bills pb ON r.bill_id = pb.id
         JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE pb.branch_id = ? AND pb.status IN ('pending', 'partial')
-        ORDER BY pb.created_at DESC
-        LIMIT 50
+        WHERE pb.branch_id = ?
+        ORDER BY r.printed_at DESC
+        LIMIT 20
     ");
     $stmt->execute([$user_branch_id]);
-    $pending_bills_list = $stmt->fetchAll();
-    
-    // ================================================================
-    // GET RECENT PAYMENTS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT p.*, pb.bill_number, pb.total_amount,
-               pat.full_name as patient_name, pat.patient_id,
-               u.full_name as cashier_name
-        FROM payments p
-        JOIN patient_bills pb ON p.bill_id = pb.id
-        JOIN patients pat ON p.patient_id = pat.id
-        LEFT JOIN users u ON p.received_by = u.id
-        WHERE p.branch_id = ?
-        ORDER BY p.received_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$user_branch_id]);
-    $recent_payments = $stmt->fetchAll();
-    
-    // ================================================================
-    // GET PAYMENT METHODS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT payment_method, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
-        FROM payments 
-        WHERE branch_id = ? AND DATE(received_at) = ?
-        GROUP BY payment_method
-    ");
-    $stmt->execute([$user_branch_id, $today]);
-    $payment_methods = $stmt->fetchAll();
+    $recent_receipts = $stmt->fetchAll();
     
 } catch (Exception $e) {
-    $pending_bills = 0;
-    $today_revenue = 0;
-    $today_payments = 0;
-    $total_patients = 0;
-    $total_bills = 0;
-    $paid_bills = 0;
-    $pending_bills_list = [];
-    $recent_payments = [];
-    $payment_methods = [];
+    $receipt_data = null;
+    $bill_items = [];
+    $payment_details = [];
+    $recent_receipts = [];
+    $message = "Database error: " . $e->getMessage();
+    $message_type = 'error';
 }
 
 // ================================================================
@@ -167,9 +201,10 @@ include_once '../../components/cashier_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pending Bills - Braick Dispensary</title>
+    <title>Print Receipt - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -487,11 +522,6 @@ include_once '../../components/cashier_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        .page-header .header-badge .count {
-            color: #34D399;
-            font-weight: 700;
-        }
-        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -529,129 +559,107 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           STAT CARDS - CLICKABLE
+           RECEIPT STYLES
            ================================================================ */
-        .stat-card {
-            border-radius: 14px;
-            padding: 18px 20px;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            position: relative;
-            overflow: hidden;
-            color: white;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-            text-decoration: none;
-            display: block;
+        .receipt-container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: var(--shadow-lg);
+            border: 1px solid var(--border-color);
         }
         
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+        [data-theme="dark"] .receipt-container {
+            background: #1E293B;
+            border-color: #334155;
         }
         
-        .stat-card:active {
-            transform: scale(0.97);
+        .receipt-header {
+            text-align: center;
+            border-bottom: 2px dashed var(--border-color);
+            padding-bottom: 16px;
+            margin-bottom: 16px;
         }
         
-        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        .stat-card.red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        
-        .stat-card .stat-icon {
-            font-size: 1.6rem;
-            opacity: 0.9;
-            margin-bottom: 4px;
-            display: block;
-        }
-        
-        .stat-card .stat-number {
-            font-size: 2rem;
+        .receipt-header .clinic-name {
+            font-size: 1.4rem;
             font-weight: 700;
-            color: white;
-            line-height: 1.2;
+            color: var(--primary);
         }
         
-        .stat-card .stat-label {
+        .receipt-header .clinic-address {
             font-size: 0.7rem;
-            color: rgba(255,255,255,0.8);
-            font-weight: 500;
-            margin-top: 2px;
+            color: var(--text-secondary);
         }
         
-        .stat-card .stat-update {
-            font-size: 0.55rem;
-            color: rgba(255,255,255,0.5);
-            margin-top: 4px;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .stat-card .stat-update .live-dot {
-            display: inline-block;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #34D399;
-            animation: pulse-dot 1.5s infinite;
-        }
-        
-        .stat-card .stat-arrow {
-            position: absolute;
-            bottom: 12px;
-            right: 16px;
-            font-size: 0.7rem;
-            color: rgba(255,255,255,0.4);
-            transition: all 0.3s ease;
-        }
-        
-        .stat-card:hover .stat-arrow {
-            transform: translateX(4px);
-            color: rgba(255,255,255,0.8);
-        }
-        
-        /* ================================================================
-           TABLE STYLES
-           ================================================================ */
-        .table-wrap {
-            overflow-x: auto;
-        }
-        
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.82rem;
-            min-width: 900px;
-        }
-        
-        .data-table thead th {
-            text-align: left;
-            padding: 10px 14px;
-            font-weight: 700;
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: white;
-            background: var(--primary);
-            border-bottom: 3px solid var(--primary-dark);
-            white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-        
-        .data-table tbody td {
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border-color);
+        .receipt-header .receipt-title {
+            font-size: 1rem;
+            font-weight: 600;
             color: var(--text-primary);
-            vertical-align: middle;
+            margin-top: 8px;
         }
         
-        .data-table tbody tr:hover td {
-            background: var(--bg-body);
+        .receipt-header .receipt-number {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        
+        .receipt-divider {
+            border-top: 1px dashed var(--border-color);
+            margin: 12px 0;
+        }
+        
+        .receipt-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 0.8rem;
+        }
+        
+        .receipt-row .label {
+            color: var(--text-secondary);
+        }
+        
+        .receipt-row .value {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        
+        .receipt-items {
+            margin: 12px 0;
+        }
+        
+        .receipt-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .receipt-item:last-child {
+            border-bottom: none;
+        }
+        
+        .receipt-total {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            font-size: 1rem;
+            font-weight: 700;
+            border-top: 2px solid var(--border-color);
+            margin-top: 8px;
+        }
+        
+        .receipt-footer {
+            text-align: center;
+            border-top: 2px dashed var(--border-color);
+            padding-top: 16px;
+            margin-top: 16px;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
         }
         
         /* ================================================================
@@ -661,10 +669,10 @@ include_once '../../components/cashier_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 6px 14px;
+            padding: 8px 18px;
             border-radius: 8px;
             font-weight: 600;
-            font-size: 0.75rem;
+            font-size: 0.8rem;
             transition: all 0.3s ease;
             cursor: pointer;
             border: none;
@@ -689,6 +697,17 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--success-dark);
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
         }
         
         .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
@@ -725,9 +744,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
         }
         
-        .card-title .title-blue { color: var(--primary); }
-        .card-title .title-green { color: var(--success); }
-        
         /* ================================================================
            BADGES
            ================================================================ */
@@ -760,28 +776,6 @@ include_once '../../components/cashier_sidebar.php';
         [data-theme="dark"] .branch-badge-display {
             background: #1A3A2A;
             color: #34D399;
-        }
-        
-        /* ================================================================
-           SCROLL CONTAINER
-           ================================================================ */
-        .scroll-container {
-            max-height: 250px;
-            overflow-y: auto;
-        }
-        
-        .scroll-container::-webkit-scrollbar {
-            width: 4px;
-        }
-        
-        .scroll-container::-webkit-scrollbar-track {
-            background: var(--bg-body);
-            border-radius: 4px;
-        }
-        
-        .scroll-container::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 4px;
         }
         
         /* ================================================================
@@ -846,16 +840,14 @@ include_once '../../components/cashier_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stat-card .stat-number { font-size: 1.6rem; }
-            .stat-card { padding: 14px 16px; }
+            .receipt-container { padding: 16px; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .stat-card .stat-number { font-size: 1.3rem; }
-            .stat-card { padding: 12px 14px; }
+            .receipt-container { padding: 12px; }
         }
         
         /* ================================================================
@@ -887,6 +879,42 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         @keyframes spin { to { transform: rotate(360deg); } }
+        
+        /* ================================================================
+           PRINT STYLES
+           ================================================================ */
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            
+            .main-content {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            
+            .receipt-container {
+                box-shadow: none !important;
+                border: none !important;
+                padding: 20px !important;
+            }
+            
+            .page-header {
+                display: none !important;
+            }
+            
+            .footer {
+                display: none !important;
+            }
+            
+            .top-nav {
+                display: none !important;
+            }
+            
+            .sidebar {
+                display: none !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -902,7 +930,7 @@ include_once '../../components/cashier_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search bills by patient name or bill number...">
+            <input type="text" id="searchInput" placeholder="Search...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -941,35 +969,33 @@ include_once '../../components/cashier_sidebar.php';
     <!-- ================================================================ -->
     <!-- PAGE HEADER -->
     <!-- ================================================================ -->
-    <div class="page-header">
+    <div class="page-header no-print">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-receipt"></i>
-                Pending Bills
+                <i class="fas fa-print"></i>
+                Print Receipt
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
                 <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-money-bill"></i>
-                Manage and process pending bills in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                <i class="fas fa-receipt"></i>
+                Print receipt for paid bill
                 
                 <span class="header-badge">
-                    <i class="fas fa-clock"></i>
-                    <span class="count" id="pendingCount"><?= $pending_bills ?></span> Pending
-                </span>
-                
-                <span class="header-badge">
-                    <i class="fas fa-check-circle" style="color:#34D399;"></i>
-                    <span class="count" id="paidCount"><?= $paid_bills ?></span> Paid
+                    <i class="fas fa-user"></i>
+                    <?= htmlspecialchars($receipt_data['patient_name'] ?? 'N/A') ?>
                 </span>
             </p>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="dashboard.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back to Dashboard
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;" class="no-print">
+            <a href="pending_bills.php" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back
             </a>
+            <button onclick="window.print()" class="btn-outline-light" style="background:rgba(255,255,255,0.25);">
+                <i class="fas fa-print"></i> Print
+            </button>
             <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
@@ -977,207 +1003,173 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - CLICKABLE NAVIGATION -->
+    <!-- SELECT RECEIPT - Dropdown -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-        
-        <!-- Card 1: Pending Bills -> pending_bills.php -->
-        <a href="pending_bills.php" class="stat-card red">
-            <span class="stat-icon">⏳</span>
-            <div class="stat-number" id="pendingBills"><?= $pending_bills ?></div>
-            <div class="stat-label">Pending Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- Card 2: Total Patients -> patients.php -->
-        <a href="../reception/patients.php" class="stat-card purple">
-            <span class="stat-icon">👥</span>
-            <div class="stat-number" id="totalPatients"><?= number_format($total_patients) ?></div>
-            <div class="stat-label">Total Patients</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- Card 3: Total Bills -> pending_bills.php -->
-        <a href="pending_bills.php" class="stat-card orange">
-            <span class="stat-icon">📋</span>
-            <div class="stat-number" id="totalBills"><?= number_format($total_bills) ?></div>
-            <div class="stat-label">Total Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- Card 4: Paid Bills -> paid_bills.php -->
-        <a href="paid_bills.php" class="stat-card teal">
-            <span class="stat-icon">✅</span>
-            <div class="stat-number" id="paidBills"><?= number_format($paid_bills) ?></div>
-            <div class="stat-label">Paid Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PENDING BILLS TABLE -->
-    <!-- ================================================================ -->
-    <div class="card">
+    <div class="card no-print mb-5" style="max-width:600px;margin:0 auto 20px;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i> Pending Bills
-                <span class="text-sm font-normal text-gray-400" id="pendingBillsCount">(<?= count($pending_bills_list) ?>)</span>
+                <i class="fas fa-list title-blue mr-2"></i> Select Receipt
             </h3>
-            <span class="text-xs text-gray-400" id="lastUpdateTime">● Live</span>
         </div>
-        
-        <div class="table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th style="border-radius:8px 0 0 0;">Bill #</th>
-                        <th>Patient</th>
-                        <th>Visit Type</th>
-                        <th>Doctor</th>
-                        <th>Amount</th>
-                        <th>Status</th>
-                        <th>Date</th>
-                        <th style="border-radius:0 8px 0 0;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="pendingBillsList">
-                    <?php if (count($pending_bills_list) > 0): ?>
-                        <?php foreach ($pending_bills_list as $bill): ?>
-                            <tr>
-                                <td class="font-medium"><?= htmlspecialchars($bill['bill_number']) ?></td>
-                                <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name']) ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></div>
-                                </td>
-                                <td><?= htmlspecialchars($bill['visit_type'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($bill['doctor_name'] ?? 'N/A') ?></td>
-                                <td class="font-semibold"><?= number_format($bill['total_amount'] ?? 0) ?></td>
-                                <td>
-                                    <span class="px-2 py-1 text-xs rounded-full <?= $bill['status'] === 'pending' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400' ?>">
-                                        <?= $bill['status'] === 'pending' ? '⏳ Pending' : '🔶 Partial' ?>
-                                    </span>
-                                </td>
-                                <td class="text-sm text-gray-500"><?= date('M d, Y h:i A', strtotime($bill['created_at'])) ?></td>
-                                <td>
-                                    <div class="flex gap-1">
-                                        <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <a href="view_bill.php?id=<?= $bill['id'] ?>#payment" class="btn btn-success btn-sm" title="Process Payment">
-                                            <i class="fas fa-money-bill"></i>
-                                        </a>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <tr>
-                            <td colspan="8" class="text-center py-8 text-gray-400">
-                                <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
-                                <p>No pending bills found</p>
-                                <p class="text-sm mt-1">All bills have been processed</p>
-                            </td>
-                        </tr>
-                    <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
+        <form method="GET" action="">
+            <div class="flex gap-3">
+                <select name="receipt_id" class="form-control" style="flex:1;padding:8px 12px;border:2px solid var(--border-color);border-radius:8px;background:var(--bg-card);color:var(--text-primary);">
+                    <option value="">-- Select Receipt --</option>
+                    <?php foreach ($recent_receipts as $receipt): ?>
+                        <option value="<?= $receipt['id'] ?>" <?= ($receipt_id == $receipt['id']) ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($receipt['receipt_number']) ?> - <?= htmlspecialchars($receipt['patient_name']) ?> (<?= date('M d, Y', strtotime($receipt['printed_at'])) ?>)
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="submit" class="btn btn-primary">View</button>
+            </div>
+        </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PAYMENTS & PAYMENT METHODS -->
+    <!-- RECEIPT -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5">
+    <?php if (!empty($receipt_data)): ?>
+    <div class="receipt-container animate-fade-in-up" id="receiptContainer">
         
-        <!-- Recent Payments -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-history title-blue mr-2"></i> Recent Payments
-                </h3>
-            </div>
-            <div class="scroll-container" id="recentPaymentsList">
-                <?php if (count($recent_payments) > 0): ?>
-                    <?php foreach ($recent_payments as $payment): ?>
-                        <div class="flex items-center justify-between p-2 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg transition">
-                            <div>
-                                <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($payment['patient_name']) ?></p>
-                                <p class="text-xs text-gray-400"><?= htmlspecialchars($payment['bill_number']) ?></p>
-                            </div>
-                            <div class="text-right">
-                                <p class="font-semibold text-sm text-green-600 dark:text-green-400"><?= number_format($payment['amount'] ?? 0) ?></p>
-                                <p class="text-xs text-gray-400">
-                                    <?php 
-                                        $method = $payment['payment_method'] ?? 'cash';
-                                        $methodIcon = $method === 'cash' ? '💵' : ($method === 'm-pesa' ? '📱' : '💳');
-                                        echo $methodIcon . ' ' . strtoupper($method);
-                                    ?>
-                                    • <?= isset($payment['received_at']) ? time_ago($payment['received_at']) : 'N/A' ?>
-                                </p>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-clock text-2xl block mb-2"></i>
-                        <p class="text-sm">No recent payments</p>
-                    </div>
-                <?php endif; ?>
-            </div>
+        <!-- Receipt Header -->
+        <div class="receipt-header">
+            <div class="clinic-name">🏥 Braick Dispensary</div>
+            <div class="clinic-address"><?= htmlspecialchars($branch_name) ?>, Tanzania</div>
+            <div class="clinic-address"><?= date('Y') ?></div>
+            <div class="receipt-title">PATIENT RECEIPT</div>
+            <div class="receipt-number">#<?= htmlspecialchars($receipt_data['receipt_number'] ?? 'N/A') ?></div>
         </div>
         
-        <!-- Payment Methods -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-chart-pie title-green mr-2"></i> Today's Payment Methods
-                </h3>
+        <!-- Patient & Bill Info -->
+        <div class="receipt-row">
+            <span class="label">Bill Number</span>
+            <span class="value"><?= htmlspecialchars($receipt_data['bill_number'] ?? 'N/A') ?></span>
+        </div>
+        <div class="receipt-row">
+            <span class="label">Patient</span>
+            <span class="value"><?= htmlspecialchars($receipt_data['patient_name'] ?? 'N/A') ?></span>
+        </div>
+        <div class="receipt-row">
+            <span class="label">Patient ID</span>
+            <span class="value"><?= htmlspecialchars($receipt_data['patient_id'] ?? 'N/A') ?></span>
+        </div>
+        <div class="receipt-row">
+            <span class="label">Phone</span>
+            <span class="value"><?= htmlspecialchars($receipt_data['phone'] ?? 'N/A') ?></span>
+        </div>
+        <div class="receipt-row">
+            <span class="label">Visit Type</span>
+            <span class="value"><?= ucfirst(htmlspecialchars($receipt_data['visit_type'] ?? 'N/A')) ?></span>
+        </div>
+        <div class="receipt-row">
+            <span class="label">Doctor</span>
+            <span class="value">Dr. <?= htmlspecialchars($receipt_data['doctor_name'] ?? 'Not Assigned') ?></span>
+        </div>
+        <div class="receipt-row">
+            <span class="label">Date</span>
+            <span class="value"><?= isset($receipt_data['created_at']) ? date('F d, Y h:i A', strtotime($receipt_data['created_at'])) : 'N/A' ?></span>
+        </div>
+        
+        <div class="receipt-divider"></div>
+        
+        <!-- Items -->
+        <div class="receipt-items">
+            <div class="receipt-row" style="font-weight:600;border-bottom:1px solid var(--border-color);padding-bottom:4px;margin-bottom:4px;">
+                <span>Item</span>
+                <span>Amount</span>
             </div>
-            <div class="scroll-container" id="paymentMethods">
-                <?php if (count($payment_methods) > 0): ?>
-                    <?php 
-                        $methodIcons = [
-                            'cash' => '💵',
-                            'm-pesa' => '📱',
-                            'airtel_money' => '📱',
-                            'tigo_pesa' => '📱',
-                            'halopesa' => '📱',
-                            'card' => '💳',
-                            'bank' => '🏦',
-                            'insurance' => '🏥',
-                            'other' => '📦'
-                        ];
-                    ?>
-                    <?php foreach ($payment_methods as $method): ?>
-                        <div class="flex items-center justify-between p-2 border-b border-gray-100 dark:border-gray-700">
-                            <span class="text-sm"><?= $methodIcons[$method['payment_method']] ?? '💵' ?> <?= strtoupper($method['payment_method'] ?? 'CASH') ?></span>
-                            <span class="text-sm text-gray-500"><?= $method['count'] ?> payments</span>
-                            <span class="font-semibold text-sm text-green-600 dark:text-green-400"><?= number_format($method['total'] ?? 0) ?></span>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <p class="text-sm">No payments today</p>
+            <?php if (count($bill_items) > 0): ?>
+                <?php foreach ($bill_items as $item): ?>
+                    <div class="receipt-item">
+                        <span><?= htmlspecialchars($item['item_name']) ?></span>
+                        <span>TSh <?= number_format($item['total_price'] ?? 0) ?></span>
                     </div>
-                <?php endif; ?>
-            </div>
+                <?php endforeach; ?>
+            <?php else: ?>
+                <div class="receipt-item">
+                    <span>Consultation Fee</span>
+                    <span>TSh <?= number_format($receipt_data['total_amount'] ?? 0) ?></span>
+                </div>
+            <?php endif; ?>
+        </div>
+        
+        <div class="receipt-divider"></div>
+        
+        <!-- Totals -->
+        <div class="receipt-row">
+            <span class="label">Subtotal</span>
+            <span class="value">TSh <?= number_format($receipt_data['total_amount'] ?? 0) ?></span>
+        </div>
+        <div class="receipt-row">
+            <span class="label">Discount</span>
+            <span class="value">TSh 0</span>
+        </div>
+        <div class="receipt-total">
+            <span>TOTAL</span>
+            <span>TSh <?= number_format($receipt_data['total_amount'] ?? 0) ?></span>
+        </div>
+        
+        <!-- Payment Details -->
+        <div class="receipt-divider"></div>
+        <div class="receipt-row">
+            <span class="label">Payment Method</span>
+            <span class="value"><?= strtoupper($payment_details['payment_method'] ?? $receipt_data['payment_method'] ?? 'CASH') ?></span>
+        </div>
+        <?php if (!empty($payment_details['reference_number'])): ?>
+        <div class="receipt-row">
+            <span class="label">Reference</span>
+            <span class="value"><?= htmlspecialchars($payment_details['reference_number']) ?></span>
+        </div>
+        <?php endif; ?>
+        <div class="receipt-row">
+            <span class="label">Paid By</span>
+            <span class="value"><?= htmlspecialchars($receipt_data['cashier_name'] ?? $user_full_name) ?></span>
+        </div>
+        <div class="receipt-row">
+            <span class="label">Payment Date</span>
+            <span class="value"><?= isset($receipt_data['printed_at']) ? date('F d, Y h:i A', strtotime($receipt_data['printed_at'])) : date('F d, Y h:i A') ?></span>
+        </div>
+        
+        <!-- Footer -->
+        <div class="receipt-footer">
+            <p>Thank you for choosing Braick Dispensary</p>
+            <p style="margin-top:4px;">This is a computer-generated receipt</p>
+            <p style="margin-top:4px;font-size:0.6rem;">Receipt #<?= htmlspecialchars($receipt_data['receipt_number'] ?? 'N/A') ?></p>
         </div>
         
     </div>
+    
+    <!-- Print Actions -->
+    <div class="text-center mt-4 no-print">
+        <button onclick="window.print()" class="btn btn-success" style="padding:12px 32px;font-size:1rem;">
+            <i class="fas fa-print"></i> Print Receipt
+        </button>
+        <a href="pending_bills.php" class="btn btn-outline" style="padding:12px 32px;font-size:1rem;">
+            <i class="fas fa-arrow-left"></i> Back
+        </a>
+    </div>
+    
+    <?php else: ?>
+    
+    <!-- No Receipt Found -->
+    <div class="text-center py-8 text-gray-400" style="max-width:600px;margin:0 auto;">
+        <i class="fas fa-receipt text-4xl block mb-3"></i>
+        <p class="text-lg">No receipt found</p>
+        <p class="text-sm mt-1">Select a receipt from the dropdown above or process a payment first</p>
+        <a href="pending_bills.php" class="text-primary hover:underline mt-2 block">Go to Pending Bills</a>
+    </div>
+    
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer">
+    <footer class="footer no-print">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Pending Bills
+            Print Receipt
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">● Live</span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1280,7 +1272,7 @@ include_once '../../components/cashier_sidebar.php';
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            window.location.href = 'pending_bills.php?search=' + encodeURIComponent(query);
+            window.location.href = 'search.php?q=' + encodeURIComponent(query);
         }
     }
     
@@ -1332,20 +1324,6 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // TIME AGO FUNCTION
-    // ================================================================
-    function time_ago(timestamp) {
-        if (!timestamp) return 'N/A';
-        var now = new Date();
-        var past = new Date(timestamp);
-        var diff = Math.floor((now - past) / 1000);
-        if (diff < 60) return 'Just now';
-        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-        return past.toLocaleDateString();
-    }
-
-    // ================================================================
     // MONITOR CASHIER STATS
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
@@ -1358,14 +1336,13 @@ include_once '../../components/cashier_sidebar.php';
         }, 500);
     });
 
-    console.log('%c💰 Braick - Pending Bills (Cashier)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🧾 Braick - Print Receipt', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c⏳ Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c👥 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Paid Bills: <?= number_format($paid_bills) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🧾 Receipt: <?= htmlspecialchars($receipt_data['receipt_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($receipt_data['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Amount: TSh <?= number_format($receipt_data['total_amount'] ?? 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click any stat card to navigate to relevant page', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Click Print button to print receipt', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -1,456 +1,927 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/paid_bills.php
-// CASHIER - PAID BILLS
+// CASHIER - PAID BILLS LIST
+// WITH AUTO-UPDATE (3 SECONDS) - NO REFRESH NEEDED
+// WITH 2 CLICKABLE STAT CARDS
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// INCLUDE CONFIG
+// FORCE SESSION - Cashier Dodoma
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
+    $_SESSION['user_id'] = 10;
+    $_SESSION['full_name'] = 'Cashier Dodoma';
+    $_SESSION['role'] = 'cashier';
+    $_SESSION['branch_id'] = 1;
+    $_SESSION['branch_name'] = 'Dodoma';
+    $_SESSION['username'] = 'cashier.dodoma';
+    $_SESSION['is_admin'] = false;
+}
+
+// ================================================================
+// PATH SAHIHI
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-// ================================================================
-// SESSION - Default to reception.rose (Cashier)
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
-}
-
-$user_id = $_SESSION['user_id'] ?? 6;
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-
-$db = getDB();
-
-// ================================================================
-// GET FILTERS
-// ================================================================
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
-$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
-$payment_method = isset($_GET['payment_method']) ? $_GET['payment_method'] : '';
-
-// ================================================================
-// GET PAID BILLS
-// ================================================================
-$query = "
-    SELECT 
-        b.*,
-        p.full_name as patient_name,
-        p.patient_id,
-        v.visit_number,
-        pay.receipt_number,
-        pay.payment_method,
-        pay.amount as payment_amount,
-        pay.received_at as payment_date,
-        pay.reference_number,
-        u.full_name as cashier_name
-    FROM bills b
-    JOIN patients p ON b.patient_id = p.id
-    LEFT JOIN visits v ON b.visit_id = v.id
-    LEFT JOIN (
-        SELECT * FROM payments ORDER BY received_at DESC LIMIT 1
-    ) pay ON b.id = pay.bill_id
-    LEFT JOIN users u ON pay.received_by = u.id
-    WHERE b.branch_id = ? AND b.status = 'paid'
-";
-
-if (!empty($search)) {
-    $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR b.bill_number LIKE ?)";
-}
-
-if (!empty($date_from) && !empty($date_to)) {
-    $query .= " AND DATE(b.updated_at) BETWEEN ? AND ?";
-}
-
-if (!empty($payment_method)) {
-    $query .= " AND pay.payment_method = ?";
-}
-
-$query .= " ORDER BY b.updated_at DESC";
-
-$stmt = $db->prepare($query);
-
-$params = [$user_branch_id];
-
-if (!empty($search)) {
-    $search_term = "%$search%";
-    $params[] = $search_term;
-    $params[] = $search_term;
-    $params[] = $search_term;
-}
-
-if (!empty($date_from) && !empty($date_to)) {
-    $params[] = $date_from;
-    $params[] = $date_to;
-}
-
-if (!empty($payment_method)) {
-    $params[] = $payment_method;
-}
-
-$stmt->execute($params);
-$paid_bills = $stmt->fetchAll();
-
-// ================================================================
-// GET STATISTICS
-// ================================================================
-$total_paid = count($paid_bills);
-$total_amount = 0;
-foreach ($paid_bills as $bill) {
-    $total_amount += $bill['grand_total'];
-}
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
 $unread_notifications = 0;
+$search = $_GET['search'] ?? '';
+$date_from = $_GET['date_from'] ?? '';
+$date_to = $_GET['date_to'] ?? '';
+
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $db = getDB();
+    $today = date('Y-m-d');
+    
+    // ================================================================
+    // GET UNREAD NOTIFICATIONS
+    // ================================================================
+    if (isset($_SESSION['user_id'])) {
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$_SESSION['user_id']]);
+        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    }
+    
+    // ================================================================
+    // GET STATS FOR CARDS
+    // ================================================================
+    
+    // 1. Paid Bills Count
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM patient_bills 
+        WHERE branch_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $paid_bills = $stmt->fetch()['count'] ?? 0;
+    
+    // 2. Total Patients with Paid Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT patient_id) as count 
+        FROM patient_bills 
+        WHERE branch_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $patients_paid = $stmt->fetch()['count'] ?? 0;
+    
+    // ================================================================
+    // GET PAID BILLS LIST
+    // ================================================================
+    $query = "
+        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
+               v.visit_number, v.visit_type, v.created_at as visit_date,
+               u.full_name as doctor_name,
+               (SELECT COUNT(*) FROM payments WHERE bill_id = pb.id) as payment_count,
+               (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = pb.id) as total_paid,
+               (SELECT payment_method FROM payments WHERE bill_id = pb.id ORDER BY received_at DESC LIMIT 1) as payment_method,
+               (SELECT received_at FROM payments WHERE bill_id = pb.id ORDER BY received_at DESC LIMIT 1) as paid_at
+        FROM patient_bills pb
+        JOIN patients p ON pb.patient_id = p.id
+        LEFT JOIN visits v ON pb.visit_id = v.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE pb.branch_id = ? AND pb.status = 'paid'
+    ";
+    $params = [$user_branch_id];
+    
+    if (!empty($search)) {
+        $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pb.bill_number LIKE ?)";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+    }
+    
+    if (!empty($date_from)) {
+        $query .= " AND DATE(pb.created_at) >= ?";
+        $params[] = $date_from;
+    }
+    
+    if (!empty($date_to)) {
+        $query .= " AND DATE(pb.created_at) <= ?";
+        $params[] = $date_to;
+    }
+    
+    $query .= " ORDER BY pb.created_at DESC LIMIT 100";
+    
+    $stmt = $db->prepare($query);
+    $stmt->execute($params);
+    $paid_bills_list = $stmt->fetchAll();
+    
+    // ================================================================
+    // GET RECENT PAYMENTS
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT p.*, pb.bill_number, pb.total_amount,
+               pat.full_name as patient_name, pat.patient_id,
+               u.full_name as cashier_name
+        FROM payments p
+        JOIN patient_bills pb ON p.bill_id = pb.id
+        JOIN patients pat ON p.patient_id = pat.id
+        LEFT JOIN users u ON p.received_by = u.id
+        WHERE p.branch_id = ?
+        ORDER BY p.received_at DESC
+        LIMIT 10
+    ");
+    $stmt->execute([$user_branch_id]);
+    $recent_payments = $stmt->fetchAll();
+    
 } catch (Exception $e) {
-    $unread_notifications = 0;
+    $paid_bills = 0;
+    $patients_paid = 0;
+    $paid_bills_list = [];
+    $recent_payments = [];
+    $message = "Database error: " . $e->getMessage();
 }
 
 // ================================================================
-// PROFILE PICTURE
+// INCLUDE CASHIER HEADER & SIDEBAR
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
-// ================================================================
-// INCLUDE HEADER & SIDEBAR
-// ================================================================
-include_once __DIR__ . '/../../components/cashier_header.php';
-include_once __DIR__ . '/../../components/cashier_sidebar.php';
+include_once '../../components/cashier_header.php';
+include_once '../../components/cashier_sidebar.php';
 ?>
-
-<style>
-    /* ================================================================
-       PAID BILLS STYLES
-       ================================================================ */
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paid Bills - Braick Dispensary</title>
     
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 16px;
-        margin-bottom: 24px;
-    }
+    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
     
-    .stat-box {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 14px 18px;
-        border: 2px solid var(--border-color);
-        text-align: center;
-        transition: all 0.3s ease;
-    }
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
-    .stat-box:hover {
-        border-color: var(--primary);
-        transform: translateY(-3px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
-    }
-    
-    .stat-box .stat-number {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--primary);
-    }
-    
-    .stat-box .stat-label {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        margin-top: 2px;
-    }
-    
-    .stat-box .stat-icon {
-        font-size: 1.2rem;
-        margin-bottom: 4px;
-        color: var(--primary);
-    }
-    
-    .filter-section {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 12px 16px;
-        border: 2px solid var(--border-color);
-        margin-bottom: 16px;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .filter-section .form-control {
-        padding: 6px 12px;
-        border: 2px solid var(--border-color);
-        border-radius: 8px;
-        font-size: 0.8rem;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        outline: none;
-        transition: all 0.3s ease;
-    }
-    
-    .filter-section .form-control:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-    }
-    
-    .filter-section .btn-filter {
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        background: var(--primary);
-        color: white;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    
-    .filter-section .btn-filter:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-    }
-    
-    .filter-section .btn-clear {
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-    }
-    
-    .filter-section .btn-clear:hover {
-        border-color: var(--primary);
-        color: var(--primary);
-    }
-    
-    .table-wrap {
-        overflow-x: auto;
-    }
-    
-    .data-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.82rem;
-    }
-    
-    .data-table th {
-        text-align: left;
-        padding: 10px 14px;
-        font-weight: 700;
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #fff;
-        background: var(--primary);
-        border-bottom: 3px solid var(--primary-dark);
-        white-space: nowrap;
-        position: sticky;
-        top: 0;
-        z-index: 10;
-    }
-    
-    .data-table th:first-child {
-        border-radius: 8px 0 0 0;
-    }
-    
-    .data-table th:last-child {
-        border-radius: 0 8px 0 0;
-    }
-    
-    .data-table tbody tr:nth-child(even) {
-        background: var(--primary-bg);
-    }
-    
-    .data-table tbody tr:nth-child(odd) {
-        background: var(--bg-card);
-    }
-    
-    .data-table tbody tr:hover {
-        background: #D1FAE5;
-    }
-    
-    [data-theme="dark"] .data-table tbody tr:hover {
-        background: #1A3A2A;
-    }
-    
-    .data-table td {
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-        vertical-align: middle;
-    }
-    
-    .badge-paid {
-        background: #059669;
-        color: white;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .badge-paid i {
-        font-size: 0.5rem;
-    }
-    
-    .btn-action {
-        padding: 3px 10px;
-        border-radius: 4px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .btn-action:hover {
-        transform: scale(1.05);
-    }
-    
-    .btn-view {
-        background: #0B5ED7;
-        color: white;
-    }
-    .btn-view:hover {
-        background: #0A4CA8;
-    }
-    
-    .btn-print {
-        background: #64748B;
-        color: white;
-    }
-    .btn-print:hover {
-        background: #475569;
-    }
-    
-    .btn-pdf {
-        background: #DC2626;
-        color: white;
-    }
-    .btn-pdf:hover {
-        background: #B91C1C;
-    }
-    
-    .btn-receipt {
-        background: #059669;
-        color: white;
-    }
-    .btn-receipt:hover {
-        background: #047857;
-    }
-    
-    .empty-state {
-        text-align: center;
-        padding: 50px 20px;
-        color: var(--text-secondary);
-    }
-    
-    .empty-state i {
-        font-size: 3rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 12px;
-    }
-    
-    .method-badge {
-        font-size: 0.6rem;
-        font-weight: 600;
-        padding: 2px 8px;
-        border-radius: 10px;
-        display: inline-block;
-    }
-    
-    .method-badge.cash { background: #E8F0FE; color: #0B5ED7; }
-    .method-badge.m-pesa { background: #D1FAE5; color: #059669; }
-    .method-badge.airtel_money { background: #FEF3C7; color: #D97706; }
-    .method-badge.tigo_pesa { background: #F3E8FF; color: #7C3AED; }
-    .method-badge.halopesa { background: #FCE4EC; color: #DB2777; }
-    .method-badge.bank { background: #E0F2FE; color: #0284C7; }
-    .method-badge.card { background: #F1F5F9; color: #475569; }
-    .method-badge.other { background: #F1F5F9; color: #64748B; }
-    
-    [data-theme="dark"] .method-badge.cash { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .method-badge.m-pesa { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .method-badge.airtel_money { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .method-badge.tigo_pesa { background: #2A1A3A; color: #9B4DCA; }
-    [data-theme="dark"] .method-badge.halopesa { background: #3A1A2A; color: #F472B6; }
-    [data-theme="dark"] .method-badge.bank { background: #1A2A3A; color: #38BDF8; }
-    [data-theme="dark"] .method-badge.card { background: #1E293B; color: #94A3B8; }
-    [data-theme="dark"] .method-badge.other { background: #1E293B; color: #94A3B8; }
-    
-    @media (max-width: 768px) {
-        .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
+    <style>
+        /* ================================================================
+           ROOT VARIABLES
+           ================================================================ */
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-dark: #047857;
+            --success-light: #34D399;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-dark: #B91C1C;
+            --danger-light: #F87171;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --white: #FFFFFF;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow: 0 1px 3px rgba(0,0,0,0.08);
+            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --bg-nav: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
         }
-        .filter-section {
-            flex-direction: column;
-            align-items: stretch;
+        
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --bg-nav: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+            --shadow: 0 1px 3px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
         }
-        .data-table {
-            font-size: 0.7rem;
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
         }
-        .data-table th,
-        .data-table td {
-            padding: 6px 10px;
+        
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        
+        /* ================================================================
+           TOP NAV
+           ================================================================ */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            transition: all 0.3s ease;
         }
-    }
-    
-    @media (max-width: 480px) {
-        .stats-grid {
-            grid-template-columns: 1fr 1fr;
+        
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
         }
-        .data-table th,
-        .data-table td {
-            padding: 4px 6px;
+        
+        .top-nav .search-wrapper:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
+        
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .top-nav .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .top-nav .search-wrapper .search-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .top-nav .search-wrapper .search-btn:hover {
+            background: var(--primary-dark);
+        }
+        
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .top-nav .avatar:hover {
+            border-color: var(--primary);
+            transform: scale(1.05);
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: var(--primary);
+        }
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .dark-toggle-btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-card);
+        }
+        
+        .dark-toggle-btn i { font-size: 0.9rem; }
+        
+        /* ================================================================
+           MAIN CONTENT
+           ================================================================ */
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+        
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 28px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .page-header .page-title {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .page-title i {
+            font-size: 2rem;
+            opacity: 0.9;
+        }
+        
+        .page-header .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .page-subtitle strong {
+            color: white;
+            font-weight: 600;
+        }
+        
+        .page-header .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
             font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            backdrop-filter: blur(4px);
         }
-        .btn-action {
+        
+        .page-header .header-badge {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .page-header .header-badge .count {
+            color: #34D399;
+            font-weight: 700;
+        }
+        
+        .page-header .btn-outline-light {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 18px;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        .update-badge-light {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.8);
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            backdrop-filter: blur(4px);
+        }
+        
+        /* ================================================================
+           STAT CARDS - CLICKABLE (2 CARDS ONLY)
+           ================================================================ */
+        .stat-card {
+            border-radius: 14px;
+            padding: 18px 20px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            color: white;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            text-decoration: none;
+            display: block;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+        }
+        
+        .stat-card:active {
+            transform: scale(0.97);
+        }
+        
+        .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
+        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+        
+        .stat-card .stat-icon {
+            font-size: 1.6rem;
+            opacity: 0.9;
+            margin-bottom: 4px;
+            display: block;
+        }
+        
+        .stat-card .stat-number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: white;
+            line-height: 1.2;
+        }
+        
+        .stat-card .stat-label {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.8);
+            font-weight: 500;
+            margin-top: 2px;
+        }
+        
+        .stat-card .stat-update {
             font-size: 0.55rem;
-            padding: 2px 6px;
+            color: rgba(255,255,255,0.5);
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
         }
-    }
-    
-    @media print {
-        .top-nav, .sidebar, .btn, .filter-section, .footer { display: none !important; }
-        .main-content { margin: 0 !important; padding: 20px !important; }
-        .stat-box { border: 1px solid #ddd !important; page-break-inside: avoid; }
-        .card { border: 1px solid #ddd !important; page-break-inside: avoid; }
-        .page-header { border-bottom: 2px solid #0B5ED7 !important; }
-        .data-table th { background: #0B5ED7 !important; color: white !important; }
-    }
-</style>
+        
+        .stat-card .stat-update .live-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #34D399;
+            animation: pulse-dot 1.5s infinite;
+        }
+        
+        .stat-card .stat-arrow {
+            position: absolute;
+            bottom: 12px;
+            right: 16px;
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.4);
+            transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover .stat-arrow {
+            transform: translateX(4px);
+            color: rgba(255,255,255,0.8);
+        }
+        
+        /* ================================================================
+           TABLE STYLES
+           ================================================================ */
+        .table-wrap {
+            overflow-x: auto;
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+            min-width: 1000px;
+        }
+        
+        .data-table thead th {
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 700;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: white;
+            background: var(--primary);
+            border-bottom: 3px solid var(--primary-dark);
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .data-table tbody td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        
+        .data-table tbody tr:hover td {
+            background: var(--bg-body);
+        }
+        
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        .btn-success:hover {
+            background: var(--success-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
+        
+        /* ================================================================
+           CARD
+           ================================================================ */
+        .card {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 18px 20px;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .card-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .card-title .title-blue { color: var(--primary); }
+        .card-title .title-green { color: var(--success); }
+        
+        /* ================================================================
+           BADGES
+           ================================================================ */
+        .role-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--primary-bg);
+            color: var(--primary);
+            text-transform: uppercase;
+        }
+        
+        [data-theme="dark"] .role-badge-display {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+        
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        [data-theme="dark"] .branch-badge-display {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        /* ================================================================
+           STATUS BADGE
+           ================================================================ */
+        .status-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 3px 12px;
+            border-radius: 12px;
+        }
+        
+        .status-badge.paid {
+            background: #D1FAE5;
+            color: #059669;
+        }
+        
+        [data-theme="dark"] .status-badge.paid {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        /* ================================================================
+           SCROLL CONTAINER
+           ================================================================ */
+        .scroll-container {
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        
+        .scroll-container::-webkit-scrollbar {
+            width: 4px;
+        }
+        
+        .scroll-container::-webkit-scrollbar-track {
+            background: var(--bg-body);
+            border-radius: 4px;
+        }
+        
+        .scroll-container::-webkit-scrollbar-thumb {
+            background: var(--primary);
+            border-radius: 4px;
+        }
+        
+        /* ================================================================
+           FORM
+           ================================================================ */
+        .form-control {
+            padding: 8px 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        
+        .form-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.08);
+        }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { 
+            color: var(--primary); 
+            font-weight: 600; 
+        }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav .search-wrapper { max-width: 300px; }
+        }
+        
+        @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .stat-card .stat-number { font-size: 1.6rem; }
+            .stat-card { padding: 14px 16px; }
+        }
+        
+        @media (max-width: 640px) {
+            .main-content { padding: 10px; }
+            .top-nav .search-wrapper { max-width: 120px; }
+            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
+            .stat-card .stat-number { font-size: 1.3rem; }
+            .stat-card { padding: 12px 14px; }
+            .data-table { font-size: 0.7rem; min-width: 700px; }
+        }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
 
 <!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
@@ -463,8 +934,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search bills, patients..." 
-                   value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search paid bills by patient or bill number..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -472,8 +942,8 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     </div>
     
     <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
+        <span class="branch-badge-display">
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime"></span>
@@ -489,8 +959,8 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -500,223 +970,240 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-check-circle mr-2" style="color: #059669;"></i> Paid Bills
+                <i class="fas fa-check-circle"></i>
+                Paid Bills
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <span class="update-badge-light" id="updateBadge">
+                    <i class="fas fa-sync-alt fa-spin"></i> Live
+                </span>
             </h1>
             <p class="page-subtitle">
-                View all fully paid bills
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                <i class="fas fa-money-bill"></i>
+                View all paid bills in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                
+                <span class="header-badge">
+                    <i class="fas fa-check-circle" style="color:#34D399;"></i>
+                    <span class="count" id="paidCount"><?= $paid_bills ?></span> Paid Bills
                 </span>
-                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
-                    <i class="fas fa-check-circle mr-1"></i> <?= $total_paid ?> paid bills
+                
+                <span class="header-badge">
+                    <i class="fas fa-users"></i>
+                    <span class="count" id="patientsPaidCount"><?= $patients_paid ?></span> Patients
                 </span>
             </p>
         </div>
-        <div>
-            <a href="dashboard.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="pending_bills.php" class="btn-outline-light">
+                <i class="fas fa-clock"></i> Pending Bills
             </a>
+            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS -->
+    <!-- STATS CARDS - 2 CARDS ONLY -->
     <!-- ================================================================ -->
-    <div class="stats-grid animate-fade-in-up">
-        <div class="stat-box">
-            <div class="stat-icon"><i class="fas fa-file-invoice"></i></div>
-            <p class="stat-number"><?= $total_paid ?></p>
-            <p class="stat-label">Total Paid Bills</p>
-        </div>
-        <div class="stat-box">
-            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
-            <p class="stat-number">TSh <?= number_format($total_amount) ?></p>
-            <p class="stat-label">Total Amount</p>
-        </div>
-        <div class="stat-box">
-            <div class="stat-icon"><i class="fas fa-receipt"></i></div>
-            <p class="stat-number"><?= $total_paid > 0 ? number_format($total_amount / $total_paid, 0) : 0 ?></p>
-            <p class="stat-label">Average Bill</p>
-        </div>
+    <div class="grid grid-cols-2 gap-3 mb-5">
+        
+        <!-- Card 1: Paid Bills -> paid_bills.php -->
+        <a href="paid_bills.php" class="stat-card green">
+            <span class="stat-icon">✅</span>
+            <div class="stat-number" id="paidBills"><?= number_format($paid_bills) ?></div>
+            <div class="stat-label">Paid Bills</div>
+            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <!-- Card 2: Patients with Paid Bills -> ../reception/patients.php -->
+        <a href="../reception/patients.php" class="stat-card blue">
+            <span class="stat-icon">👥</span>
+            <div class="stat-number" id="patientsPaid"><?= number_format($patients_paid) ?></div>
+            <div class="stat-label">Patients with Paid Bills</div>
+            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
     </div>
 
     <!-- ================================================================ -->
-    <!-- FILTER SECTION -->
+    <!-- FILTERS -->
     <!-- ================================================================ -->
-    <div class="filter-section animate-fade-in-up">
-        <form method="GET" action="" class="flex flex-wrap items-center gap-3 w-full">
+    <div class="card mb-5">
+        <form method="GET" action="" class="flex flex-wrap items-center gap-3">
+            <div class="flex items-center gap-2">
+                <label class="text-sm text-gray-500">Search:</label>
+                <input type="text" name="search" class="form-control" placeholder="Patient or Bill #" value="<?= htmlspecialchars($search) ?>" style="width:200px;">
+            </div>
             
-            <input type="text" name="search" class="form-control" placeholder="Search by patient, bill..." 
-                   value="<?= htmlspecialchars($search) ?>" style="flex:1; min-width:120px;">
+            <div class="flex items-center gap-2">
+                <label class="text-sm text-gray-500">From:</label>
+                <input type="date" name="date_from" class="form-control" value="<?= htmlspecialchars($date_from) ?>" style="width:150px;">
+            </div>
             
-            <select name="payment_method" class="form-control" style="min-width:130px;">
-                <option value="">All Methods</option>
-                <option value="cash" <?= $payment_method === 'cash' ? 'selected' : '' ?>>Cash</option>
-                <option value="m-pesa" <?= $payment_method === 'm-pesa' ? 'selected' : '' ?>>M-Pesa</option>
-                <option value="airtel_money" <?= $payment_method === 'airtel_money' ? 'selected' : '' ?>>Airtel Money</option>
-                <option value="tigo_pesa" <?= $payment_method === 'tigo_pesa' ? 'selected' : '' ?>>Tigo Pesa</option>
-                <option value="halopesa" <?= $payment_method === 'halopesa' ? 'selected' : '' ?>>Halopesa</option>
-                <option value="bank" <?= $payment_method === 'bank' ? 'selected' : '' ?>>Bank</option>
-                <option value="card" <?= $payment_method === 'card' ? 'selected' : '' ?>>Card</option>
-                <option value="other" <?= $payment_method === 'other' ? 'selected' : '' ?>>Other</option>
-            </select>
+            <div class="flex items-center gap-2">
+                <label class="text-sm text-gray-500">To:</label>
+                <input type="date" name="date_to" class="form-control" value="<?= htmlspecialchars($date_to) ?>" style="width:150px;">
+            </div>
             
-            <input type="date" name="date_from" class="form-control" value="<?= $date_from ?>" style="width:140px;">
-            <span class="text-sm text-gray-400">to</span>
-            <input type="date" name="date_to" class="form-control" value="<?= $date_to ?>" style="width:140px;">
-            
-            <button type="submit" class="btn-filter">
-                <i class="fas fa-search mr-1"></i> Apply
+            <button type="submit" class="btn btn-primary">
+                <i class="fas fa-search"></i> Filter
             </button>
             
-            <a href="paid_bills.php" class="btn-clear">
-                <i class="fas fa-times mr-1"></i> Clear
-            </a>
+            <?php if (!empty($search) || !empty($date_from) || !empty($date_to)): ?>
+                <a href="paid_bills.php" class="btn btn-outline">
+                    <i class="fas fa-times"></i> Clear
+                </a>
+            <?php endif; ?>
         </form>
     </div>
 
     <!-- ================================================================ -->
     <!-- PAID BILLS TABLE -->
     <!-- ================================================================ -->
-    <div class="card animate-fade-in-up">
+    <div class="card">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i>
-                Paid Bills List
-                <span class="text-sm font-normal text-gray-400">(<?= $total_paid ?> records)</span>
+                <i class="fas fa-list title-blue mr-2"></i> Paid Bills
+                <span class="text-sm font-normal text-gray-400" id="paidBillsCount">(<?= count($paid_bills_list) ?> paid bills)</span>
             </h3>
+            <span class="text-xs text-gray-400" id="lastUpdateTime">● Live</span>
         </div>
         
         <div class="table-wrap">
-            <?php if (count($paid_bills) > 0): ?>
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Bill #</th>
-                            <th>Patient</th>
-                            <th>Visit</th>
-                            <th>Amount</th>
-                            <th>Payment Method</th>
-                            <th>Receipt</th>
-                            <th>Cashier</th>
-                            <th>Date</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($paid_bills as $bill): ?>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="border-radius:8px 0 0 0;">Bill #</th>
+                        <th>Patient</th>
+                        <th>Visit Type</th>
+                        <th>Doctor</th>
+                        <th>Amount</th>
+                        <th>Paid</th>
+                        <th>Status</th>
+                        <th>Payment Method</th>
+                        <th>Date</th>
+                        <th style="border-radius:0 8px 0 0;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="paidBillsList">
+                    <?php if (count($paid_bills_list) > 0): ?>
+                        <?php foreach ($paid_bills_list as $bill): ?>
                             <tr>
-                                <td class="font-mono text-xs font-semibold">
-                                    <?= htmlspecialchars($bill['bill_number']) ?>
+                                <td class="font-medium"><?= htmlspecialchars($bill['bill_number']) ?></td>
+                                <td>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name']) ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></div>
+                                </td>
+                                <td><?= htmlspecialchars($bill['visit_type'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($bill['doctor_name'] ?? 'N/A') ?></td>
+                                <td class="font-semibold">TSh <?= number_format($bill['total_amount'] ?? 0) ?></td>
+                                <td class="font-semibold text-green-600">TSh <?= number_format($bill['total_paid'] ?? 0) ?></td>
+                                <td>
+                                    <span class="status-badge paid">✅ Paid</span>
                                 </td>
                                 <td>
-                                    <?= htmlspecialchars($bill['patient_name'] ?? 'Unknown') ?>
-                                    <div class="text-xs text-gray-400">ID: <?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></div>
-                                </td>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($bill['visit_number'] ?? 'N/A') ?></td>
-                                <td class="font-semibold">TSh <?= number_format($bill['grand_total']) ?></td>
-                                <td>
-                                    <span class="method-badge <?= $bill['payment_method'] ?? 'other' ?>">
-                                        <?= ucfirst(str_replace('_', ' ', $bill['payment_method'] ?? 'Other')) ?>
+                                    <span class="text-sm capitalize">
+                                        <?php 
+                                            $method = $bill['payment_method'] ?? 'cash';
+                                            $methodIcon = $method === 'cash' ? '💵' : ($method === 'm-pesa' ? '📱' : '💳');
+                                            echo $methodIcon . ' ' . strtoupper($method);
+                                        ?>
                                     </span>
                                 </td>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($bill['receipt_number'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></td>
-                                <td class="text-sm">
-                                    <?= date('M d, Y', strtotime($bill['payment_date'] ?? $bill['updated_at'])) ?>
-                                    <div class="text-xs text-gray-400">
-                                        <?= date('h:i A', strtotime($bill['payment_date'] ?? $bill['updated_at'])) ?>
-                                    </div>
-                                </td>
+                                <td class="text-sm text-gray-500"><?= date('M d, Y h:i A', strtotime($bill['created_at'])) ?></td>
                                 <td>
-                                    <div class="flex gap-1 flex-wrap">
-                                        <a href="view_bill.php?id=<?= $bill['bill_number'] ?>" class="btn-action btn-view" title="View">
+                                    <div class="flex gap-1">
+                                        <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <a href="print_receipt.php?receipt=<?= $bill['receipt_number'] ?>" class="btn-action btn-receipt" title="Receipt">
-                                            <i class="fas fa-receipt"></i>
-                                        </a>
-                                        <a href="#" class="btn-action btn-pdf" onclick="downloadPDF('<?= $bill['receipt_number'] ?>'); return false;" title="PDF">
-                                            <i class="fas fa-file-pdf"></i>
+                                        <a href="print_receipt.php?bill_id=<?= $bill['id'] ?>" class="btn btn-success btn-sm" title="Print Receipt">
+                                            <i class="fas fa-print"></i>
                                         </a>
                                     </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-check-circle" style="color: #D1FAE5;"></i>
-                    <p>No paid bills found</p>
-                    <p class="sub">
-                        <?php if (!empty($search) || !empty($date_from) || !empty($payment_method)): ?>
-                            Try adjusting your filters.
-                        <?php else: ?>
-                            No bills have been paid yet.
-                        <?php endif; ?>
-                    </p>
-                </div>
-            <?php endif; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="10" class="text-center py-8 text-gray-400">
+                                <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
+                                <p>No paid bills found</p>
+                                <?php if (!empty($search) || !empty($date_from) || !empty($date_to)): ?>
+                                    <p class="text-sm mt-1">Try adjusting your filters</p>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
         </div>
         
-        <!-- Total Records -->
-        <?php if (count($paid_bills) > 0): ?>
-            <div class="mt-3 text-sm text-gray-400 text-right">
-                Showing <?= count($paid_bills) ?> records
-                <?php if (!empty($search)): ?>
-                    (filtered by: "<?= htmlspecialchars($search) ?>")
-                <?php endif; ?>
+        <!-- Summary -->
+        <?php if (count($paid_bills_list) > 0): ?>
+            <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 flex justify-between text-sm text-gray-500">
+                <span>Showing <strong><?= count($paid_bills_list) ?></strong> paid bills</span>
+                <span>Total Amount: <strong class="text-green-600">TSh <?= number_format(array_sum(array_column($paid_bills_list, 'total_amount'))) ?></strong></span>
             </div>
         <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
-    <!-- QUICK SUMMARY -->
+    <!-- RECENT PAYMENTS -->
     <!-- ================================================================ -->
-    <?php if (count($paid_bills) > 0): ?>
-        <div class="card mt-4 animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-chart-pie title-green mr-2"></i>
-                    Payment Methods Summary
-                </h3>
-            </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <?php 
-                    $method_summary = [];
-                    foreach ($paid_bills as $bill) {
-                        $method = $bill['payment_method'] ?? 'other';
-                        if (!isset($method_summary[$method])) {
-                            $method_summary[$method] = ['count' => 0, 'total' => 0];
-                        }
-                        $method_summary[$method]['count']++;
-                        $method_summary[$method]['total'] += $bill['grand_total'];
-                    }
-                ?>
-                <?php foreach ($method_summary as $method => $data): ?>
-                    <div class="text-center p-3 border rounded-lg bg-gray-50">
-                        <p class="text-sm font-medium text-gray-600"><?= ucfirst(str_replace('_', ' ', $method)) ?></p>
-                        <p class="text-lg font-bold text-blue-600"><?= $data['count'] ?></p>
-                        <p class="text-xs text-gray-500">TSh <?= number_format($data['total']) ?></p>
+    <div class="card mt-5">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-history title-blue mr-2"></i> Recent Payments
+            </h3>
+        </div>
+        <div class="scroll-container" id="recentPaymentsList">
+            <?php if (count($recent_payments) > 0): ?>
+                <?php foreach ($recent_payments as $payment): ?>
+                    <div class="flex items-center justify-between p-2 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg transition">
+                        <div>
+                            <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($payment['patient_name']) ?></p>
+                            <p class="text-xs text-gray-400"><?= htmlspecialchars($payment['bill_number']) ?></p>
+                        </div>
+                        <div class="text-right">
+                            <p class="font-semibold text-sm text-green-600 dark:text-green-400">TSh <?= number_format($payment['amount'] ?? 0) ?></p>
+                            <p class="text-xs text-gray-400">
+                                <?php 
+                                    $method = $payment['payment_method'] ?? 'cash';
+                                    $methodIcon = $method === 'cash' ? '💵' : ($method === 'm-pesa' ? '📱' : '💳');
+                                    echo $methodIcon . ' ' . strtoupper($method);
+                                ?>
+                                • <?= isset($payment['received_at']) ? time_ago($payment['received_at']) : 'N/A' ?>
+                            </p>
+                        </div>
                     </div>
                 <?php endforeach; ?>
-            </div>
+            <?php else: ?>
+                <div class="text-center py-4 text-gray-400">
+                    <i class="fas fa-clock text-2xl block mb-2"></i>
+                    <p class="text-sm">No recent payments</p>
+                </div>
+            <?php endif; ?>
         </div>
-    <?php endif; ?>
+    </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Paid Bills
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">● Live</span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -728,15 +1215,20 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 <!-- TOAST -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle"></i>
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
-        <p id="toastTitle">Notification</p>
-        <p id="toastMessage"></p>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- CASHIER GLOBAL STATS AUTO-UPDATE -->
+<!-- ================================================================ -->
+<script src="/dispensary_system/frontend/assets/js/cashier_global_stats.js"></script>
+
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -775,44 +1267,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    if (sidebarToggle) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
-    }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
+    sidebarToggle?.addEventListener('click', function() {
+        sidebar.classList.toggle('open');
+    });
     
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var url = 'paid_bills.php';
-        var params = [];
-        if (query) params.push('search=' + encodeURIComponent(query));
-        var method = document.querySelector('select[name="payment_method"]')?.value;
-        if (method) params.push('payment_method=' + method);
-        var date_from = document.querySelector('input[name="date_from"]')?.value;
-        var date_to = document.querySelector('input[name="date_to"]')?.value;
-        if (date_from) params.push('date_from=' + date_from);
-        if (date_to) params.push('date_to=' + date_to);
-        if (params.length > 0) {
-            window.location.href = url + '?' + params.join('&');
-        } else {
-            window.location.href = url;
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                sidebar.classList.remove('open');
+            }
         }
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
+    });
 
     // ================================================================
     // DATE & TIME
@@ -825,13 +1290,30 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
+        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        var dateFrom = '<?= $date_from ?>';
+        var dateTo = '<?= $date_to ?>';
+        if (query.length > 0) {
+            window.location.href = 'paid_bills.php?search=' + encodeURIComponent(query) + '&date_from=' + dateFrom + '&date_to=' + dateTo;
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
 
     // ================================================================
     // TOAST
@@ -857,38 +1339,57 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // DOWNLOAD PDF
+    // MANUAL REFRESH
     // ================================================================
-    function downloadPDF(receiptNumber) {
-        if (!receiptNumber) {
-            showToast('Error', 'No receipt found!', 'error');
-            return;
-        }
-        showToast('Downloading PDF', 'Preparing receipt PDF...', 'info');
-        window.location.href = 'download_pdf.php?receipt=' + receiptNumber;
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        btn.innerHTML = '<span class="spinner"></span> Loading...';
+        btn.disabled = true;
+        
         setTimeout(function() {
-            showToast('Success', 'PDF downloaded successfully!', 'success');
-        }, 3000);
+            window.location.reload();
+        }, 1000);
+        
+        setTimeout(function() {
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+            btn.disabled = false;
+            showToast('✅ Refreshed', 'Page data updated manually', 'success');
+        }, 2000);
     }
 
     // ================================================================
-    // KEYBOARD SHORTCUTS
+    // TIME AGO FUNCTION
     // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
-        }
-        if (e.key === 'Escape' && document.activeElement === searchInput) {
-            searchInput.value = '';
-            performSearch();
-        }
+    function time_ago(timestamp) {
+        if (!timestamp) return 'N/A';
+        var now = new Date();
+        var past = new Date(timestamp);
+        var diff = Math.floor((now - past) / 1000);
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return past.toLocaleDateString();
+    }
+
+    // ================================================================
+    // MONITOR CASHIER STATS
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        var checkCashierStats = setInterval(function() {
+            if (window.CashierStats) {
+                console.log('%c💰 Cashier Stats System Connected', 'font-size:14px; font-weight:bold; color:#34D399;');
+                console.log('%c🔄 Auto-update every ' + window.CashierStats.config.updateInterval / 1000 + ' seconds', 'font-size:12px; color:#64748B;');
+                clearInterval(checkCashierStats);
+            }
+        }, 500);
     });
 
-    console.log('%c💰 Braick - Paid Bills', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Total Paid Bills: <?= $total_paid ?> | Amount: TSh <?= number_format($total_amount) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Braick - Paid Bills (2 Cards Only)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Paid Bills: <?= $paid_bills ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👥 Patients with Paid Bills: <?= $patients_paid ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ 2 Cards: Paid Bills and Patients with Paid Bills', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

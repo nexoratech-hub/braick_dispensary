@@ -7,6 +7,7 @@
 // WITH 7 DAYS FEE VALIDATION
 // BILLS GO TO CASHIER AUTOMATICALLY
 // AUTO-UPDATE DOCTOR DROPDOWN (3 SECONDS) - INSTANT STATUS CHANGE
+// FIXED: Dynamic fee mapping based on visit type
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -44,7 +45,7 @@ $assigned_patients = [];
 $doctors = [];
 $online_doctors_count = 0;
 $total_doctors = 0;
-$consultation_fees = [];
+$visit_type_mapping = [];
 $pending_count = 0;
 $assigned_count = 0;
 
@@ -52,37 +53,84 @@ try {
     $db = getDB();
     
     // ================================================================
-    // GET CONSULTATION FEES FROM DATABASE
+    // GET CONSULTATION FEES FROM DATABASE (DYNAMIC MAPPING)
     // ================================================================
-    $consultation_fees = [];
+    $visit_type_mapping = [];
     
+    // Get all consultation services
     $stmt = $db->prepare("
         SELECT s.id, s.service_name, s.price, sc.category_name
         FROM services s
         JOIN service_categories sc ON s.category_id = sc.id
-        WHERE sc.category_name IN ('Consultation', 'Emergency', 'Follow-up', 'Specialist')
+        WHERE sc.category_name = 'Consultation'
         AND s.is_active = 1
-        ORDER BY sc.category_name, s.price
+        ORDER BY s.service_name
     ");
     $stmt->execute();
     $services = $stmt->fetchAll();
     
+    // Map services to visit types based on service name
     foreach ($services as $service) {
-        $key = strtolower(str_replace(' ', '_', $service['category_name']));
-        $consultation_fees[$key] = [
-            'price' => $service['price'],
-            'id' => $service['id'],
-            'name' => $service['service_name']
-        ];
+        $service_name = strtolower($service['service_name']);
+        
+        // Map service names to visit types
+        if (strpos($service_name, 'general') !== false || strpos($service_name, 'new') !== false) {
+            $visit_type_mapping['new'] = [
+                'fee' => $service['price'],
+                'id' => $service['id'],
+                'name' => $service['service_name']
+            ];
+        } elseif (strpos($service_name, 'follow-up') !== false || strpos($service_name, 'followup') !== false) {
+            $visit_type_mapping['follow-up'] = [
+                'fee' => $service['price'],
+                'id' => $service['id'],
+                'name' => $service['service_name']
+            ];
+        } elseif (strpos($service_name, 'emergency') !== false) {
+            $visit_type_mapping['emergency'] = [
+                'fee' => $service['price'],
+                'id' => $service['id'],
+                'name' => $service['service_name']
+            ];
+        } elseif (strpos($service_name, 'specialist') !== false) {
+            $visit_type_mapping['specialist'] = [
+                'fee' => $service['price'],
+                'id' => $service['id'],
+                'name' => $service['service_name']
+            ];
+        }
     }
     
-    // Map visit types to fee keys
-    $visit_type_map = [
-        'new' => 'consultation',
-        'follow-up' => 'follow_up',
-        'emergency' => 'emergency',
-        'specialist' => 'specialist'
-    ];
+    // Fallback: if no mapping found, use default values
+    if (empty($visit_type_mapping)) {
+        // Try to get any consultation services
+        $stmt = $db->prepare("
+            SELECT id, service_name, price 
+            FROM services 
+            WHERE category_id = (SELECT id FROM service_categories WHERE category_name = 'Consultation' LIMIT 1)
+            AND is_active = 1
+            LIMIT 4
+        ");
+        $stmt->execute();
+        $fallback_services = $stmt->fetchAll();
+        
+        if (count($fallback_services) >= 4) {
+            $visit_type_mapping = [
+                'new' => ['fee' => $fallback_services[0]['price'], 'id' => $fallback_services[0]['id'], 'name' => $fallback_services[0]['service_name']],
+                'follow-up' => ['fee' => $fallback_services[1]['price'], 'id' => $fallback_services[1]['id'], 'name' => $fallback_services[1]['service_name']],
+                'emergency' => ['fee' => $fallback_services[2]['price'], 'id' => $fallback_services[2]['id'], 'name' => $fallback_services[2]['service_name']],
+                'specialist' => ['fee' => $fallback_services[3]['price'], 'id' => $fallback_services[3]['id'], 'name' => $fallback_services[3]['service_name']]
+            ];
+        } else {
+            // Ultimate fallback - hardcoded values
+            $visit_type_mapping = [
+                'new' => ['fee' => 15000, 'id' => null, 'name' => 'General Consultation'],
+                'follow-up' => ['fee' => 10000, 'id' => null, 'name' => 'Follow-up Consultation'],
+                'emergency' => ['fee' => 25000, 'id' => null, 'name' => 'Emergency Consultation'],
+                'specialist' => ['fee' => 30000, 'id' => null, 'name' => 'Specialist Consultation']
+            ];
+        }
+    }
     
     // ================================================================
     // GET ALL PATIENTS WITH ACTIVE VISIT
@@ -200,11 +248,13 @@ try {
         }
         
         if (empty($errors)) {
-            // Get fee from database based on visit type
-            $fee_key = $visit_type_map[$visit_type] ?? 'consultation';
-            $consultation_fee = $consultation_fees[$fee_key]['price'] ?? 0;
-            $consultation_service_id = $consultation_fees[$fee_key]['id'] ?? null;
-            $consultation_service_name = $consultation_fees[$fee_key]['name'] ?? 'Consultation Fee';
+            // ================================================================
+            // GET FEE BASED ON VISIT TYPE USING DYNAMIC MAPPING
+            // ================================================================
+            $fee_key = $visit_type;
+            $consultation_fee = $visit_type_mapping[$fee_key]['fee'] ?? 0;
+            $consultation_service_id = $visit_type_mapping[$fee_key]['id'] ?? null;
+            $consultation_service_name = $visit_type_mapping[$fee_key]['name'] ?? 'Consultation Fee';
             
             // ================================================================
             // CHECK 7 DAYS VALIDITY - WAIVE FEE IF PAID WITHIN 7 DAYS
@@ -259,8 +309,8 @@ try {
                 $visit = $stmt->fetch();
                 $visit_number = $visit['visit_number'] ?? '';
                 
-                if ($charge_fee) {
-                    $message = "✅ Doctor changed successfully! Visit #" . $visit_number . " - Fee: TSh " . number_format($consultation_fee);
+                if ($charge_fee && $consultation_fee > 0) {
+                    $message = "✅ Doctor changed successfully! Visit #" . $visit_number . " - Fee: TSh " . number_format($consultation_fee) . " (" . $consultation_service_name . ")";
                 } else {
                     $message = "✅ Doctor changed successfully! Visit #" . $visit_number . " - Fee WAIVED (valid paid visit within 7 days)";
                 }
@@ -283,8 +333,8 @@ try {
                     $visit_type, $symptoms, $notes, $consultation_fee])) {
                     $visit_id = $db->lastInsertId();
                     
-                    if ($charge_fee) {
-                        $message = "✅ Doctor assigned successfully! Visit #$visit_number - Fee: TSh " . number_format($consultation_fee);
+                    if ($charge_fee && $consultation_fee > 0) {
+                        $message = "✅ Doctor assigned successfully! Visit #$visit_number - Fee: TSh " . number_format($consultation_fee) . " (" . $consultation_service_name . ")";
                     } else {
                         $message = "✅ Doctor assigned successfully! Visit #$visit_number - Fee WAIVED (valid paid visit within 7 days)";
                     }
@@ -337,13 +387,13 @@ try {
                                 quantity, unit_price, total_price, created_at
                             ) VALUES (?, 'consultation', ?, ?, 1, ?, ?, NOW())
                         ");
-                        $visit_type_names = [
+                        $type_labels = [
                             'new' => 'New Patient',
                             'follow-up' => 'Follow-up',
                             'emergency' => 'Emergency',
                             'specialist' => 'Specialist'
                         ];
-                        $type_label = $visit_type_names[$visit_type] ?? ucfirst($visit_type);
+                        $type_label = $type_labels[$visit_type] ?? ucfirst($visit_type);
                         $item_name = $consultation_service_name . ' (' . $type_label . ')';
                         
                         $stmt->execute([
@@ -399,7 +449,7 @@ try {
     $pending_patients = [];
     $assigned_patients = [];
     $doctors = [];
-    $consultation_fees = [];
+    $visit_type_mapping = [];
     $pending_count = 0;
     $assigned_count = 0;
 }
@@ -1470,7 +1520,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 2: Visit Type + Symptoms Select -->
+            <!-- ROW 2: Visit Type (Updated with dynamic fee mapping) -->
             <!-- ============================================================ -->
             <div class="grid-2">
                 <div class="form-row">
@@ -1479,10 +1529,10 @@ include_once '../../components/reception_sidebar.php';
                         <span class="text-xs font-normal text-gray-400">(Fee valid for 7 days after payment)</span>
                     </label>
                     <select name="visit_type" class="form-control" required id="visitTypeSelect">
-                        <option value="new">🆕 New Patient</option>
-                        <option value="follow-up">🔄 Follow-up</option>
-                        <option value="emergency">🚨 Emergency</option>
-                        <option value="specialist">👨‍⚕️ Specialist</option>
+                        <option value="new">🆕 New Patient (General Consultation)</option>
+                        <option value="follow-up">🔄 Follow-up (Follow-up Consultation)</option>
+                        <option value="emergency">🚨 Emergency (Emergency Consultation)</option>
+                        <option value="specialist">👨‍⚕️ Specialist (Specialist Consultation)</option>
                     </select>
                 </div>
                 
@@ -1862,11 +1912,6 @@ include_once '../../components/reception_sidebar.php';
                         setTimeout(function() {
                             select.classList.remove('doctor-status-updated');
                         }, 600);
-                        
-                        // ================================================================
-                        // SHOW TOAST NOTIFICATION FOR STATUS CHANGE
-                        // ================================================================
-                        showToast('🔄 Doctors Updated', onlineCount + ' doctor(s) online, ' + (totalDoctors - onlineCount) + ' offline', 'info');
                     }
                 }
                 isDoctorUpdating = false;
@@ -1912,14 +1957,17 @@ include_once '../../components/reception_sidebar.php';
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign/Change Doctor', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Assign/Change Doctor (FIXED - Dynamic Fees)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c⏳ Pending Patients: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Assigned Patients: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors Available: <?= count($doctors) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Fee Mapping:', 'font-size:13px; color:#F59E0B;', <?= json_encode($visit_type_mapping) ?>);
+    console.log('%c✅ New Patient -> General Consultation', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Follow-up -> Follow-up Consultation', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Emergency -> Emergency Consultation', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Specialist -> Specialist Consultation', 'font-size:13px; color:#34D399;');
     console.log('%c🔄 Doctor dropdown auto-updates every 3 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Online/Offline status updates instantly without refresh', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Fees are hidden - taken from database automatically', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📅 7 Days Rule: Fee waived if paid within last 7 days', 'font-size:13px; color:#F59E0B;');
 </script>
 

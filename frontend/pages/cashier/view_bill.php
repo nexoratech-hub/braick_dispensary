@@ -1,9 +1,8 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/cashier/pending_bills.php
-// CASHIER - PENDING BILLS LIST
+// FILE: frontend/pages/cashier/view_bill.php
+// CASHIER - VIEW BILL DETAILS
 // WITH AUTO-UPDATE (3 SECONDS) - NO REFRESH NEEDED
-// WITH CLICKABLE STAT CARDS - NAVIGATE TO RELEVANT PAGES
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -31,7 +30,15 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$bill_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $unread_notifications = 0;
+$message = '';
+$message_type = '';
+
+if ($bill_id <= 0) {
+    header('Location: pending_bills.php');
+    exit;
+}
 
 try {
     $db = getDB();
@@ -47,10 +54,57 @@ try {
     }
     
     // ================================================================
+    // GET BILL DETAILS
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone, p.email, p.address,
+               v.visit_number, v.visit_type, v.created_at as visit_date, v.status as visit_status,
+               u.full_name as doctor_name, u.specialty,
+               (SELECT COUNT(*) FROM payments WHERE bill_id = pb.id) as payment_count,
+               (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = pb.id) as total_paid
+        FROM patient_bills pb
+        JOIN patients p ON pb.patient_id = p.id
+        LEFT JOIN visits v ON pb.visit_id = v.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE pb.id = ? AND pb.branch_id = ?
+    ");
+    $stmt->execute([$bill_id, $user_branch_id]);
+    $bill = $stmt->fetch();
+    
+    if (!$bill) {
+        header('Location: pending_bills.php');
+        exit;
+    }
+    
+    // ================================================================
+    // GET BILL ITEMS
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT * FROM bill_items 
+        WHERE bill_id = ?
+        ORDER BY created_at
+    ");
+    $stmt->execute([$bill_id]);
+    $bill_items = $stmt->fetchAll();
+    
+    // ================================================================
+    // GET PAYMENT HISTORY
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT p.*, u.full_name as cashier_name
+        FROM payments p
+        LEFT JOIN users u ON p.received_by = u.id
+        WHERE p.bill_id = ?
+        ORDER BY p.received_at DESC
+    ");
+    $stmt->execute([$bill_id]);
+    $payments = $stmt->fetchAll();
+    
+    // ================================================================
     // GET STATS FOR INITIAL LOAD
     // ================================================================
     
-    // Pending Bills
+    // Pending Bills Count
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
         FROM patient_bills 
@@ -58,25 +112,6 @@ try {
     ");
     $stmt->execute([$user_branch_id]);
     $pending_bills = $stmt->fetch()['count'] ?? 0;
-    
-    // Total Patients
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-    $stmt->execute([$user_branch_id]);
-    $total_patients = $stmt->fetch()['count'] ?? 0;
-    
-    // Total Bills
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ?");
-    $stmt->execute([$user_branch_id]);
-    $total_bills = $stmt->fetch()['count'] ?? 0;
-    
-    // Paid Bills
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM patient_bills 
-        WHERE branch_id = ? AND status = 'paid'
-    ");
-    $stmt->execute([$user_branch_id]);
-    $paid_bills = $stmt->fetch()['count'] ?? 0;
     
     // Today's Revenue
     $stmt = $db->prepare("
@@ -97,63 +132,125 @@ try {
     $today_payments = $stmt->fetch()['count'] ?? 0;
     
     // ================================================================
-    // GET PENDING BILLS LIST
+    // HANDLE PAYMENT PROCESSING
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
-               v.visit_number, v.visit_type, v.created_at as visit_date,
-               u.full_name as doctor_name
-        FROM patient_bills pb
-        JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE pb.branch_id = ? AND pb.status IN ('pending', 'partial')
-        ORDER BY pb.created_at DESC
-        LIMIT 50
-    ");
-    $stmt->execute([$user_branch_id]);
-    $pending_bills_list = $stmt->fetchAll();
-    
-    // ================================================================
-    // GET RECENT PAYMENTS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT p.*, pb.bill_number, pb.total_amount,
-               pat.full_name as patient_name, pat.patient_id,
-               u.full_name as cashier_name
-        FROM payments p
-        JOIN patient_bills pb ON p.bill_id = pb.id
-        JOIN patients pat ON p.patient_id = pat.id
-        LEFT JOIN users u ON p.received_by = u.id
-        WHERE p.branch_id = ?
-        ORDER BY p.received_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$user_branch_id]);
-    $recent_payments = $stmt->fetchAll();
-    
-    // ================================================================
-    // GET PAYMENT METHODS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT payment_method, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
-        FROM payments 
-        WHERE branch_id = ? AND DATE(received_at) = ?
-        GROUP BY payment_method
-    ");
-    $stmt->execute([$user_branch_id, $today]);
-    $payment_methods = $stmt->fetchAll();
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['process_payment'])) {
+        $amount = (float)($_POST['amount'] ?? 0);
+        $payment_method = $_POST['payment_method'] ?? 'cash';
+        $reference_number = trim($_POST['reference_number'] ?? '');
+        $notes = trim($_POST['notes'] ?? '');
+        
+        $errors = [];
+        if ($amount <= 0) $errors[] = 'Amount must be greater than 0';
+        if ($amount > ($bill['balance'] ?? 0)) $errors[] = 'Amount cannot exceed balance';
+        
+        if (empty($errors)) {
+            $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
+            
+            $stmt = $db->prepare("
+                INSERT INTO payments (
+                    receipt_number, bill_id, patient_id, amount, 
+                    payment_method, reference_number, notes, received_by, branch_id, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ");
+            
+            if ($stmt->execute([
+                $receipt_number,
+                $bill_id,
+                $bill['patient_id'],
+                $amount,
+                $payment_method,
+                $reference_number,
+                $notes,
+                $_SESSION['user_id'],
+                $user_branch_id
+            ])) {
+                // Update bill status
+                $remaining_balance = $bill['balance'] - $amount;
+                
+                if ($remaining_balance <= 0) {
+                    $new_status = 'paid';
+                    $remaining_balance = 0;
+                } else {
+                    $new_status = 'partial';
+                }
+                
+                $stmt = $db->prepare("
+                    UPDATE patient_bills 
+                    SET balance = ?, status = ?, paid_amount = paid_amount + ?, updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$remaining_balance, $new_status, $amount, $bill_id]);
+                
+                // Log activity
+                try {
+                    $stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, action, details, created_at) 
+                        VALUES (?, 'payment_processed', ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $_SESSION['user_id'],
+                        "Payment of TSh " . number_format($amount) . " processed for bill #" . $bill['bill_number']
+                    ]);
+                } catch (Exception $e) {}
+                
+                $message = "✅ Payment processed successfully!";
+                $message .= "<br>💰 Amount: <strong>TSh " . number_format($amount) . "</strong>";
+                $message .= "<br>📋 Receipt: <strong>$receipt_number</strong>";
+                $message .= "<br>📊 Remaining Balance: <strong>TSh " . number_format($remaining_balance) . "</strong>";
+                $message_type = 'success';
+                
+                // Refresh bill data
+                $stmt = $db->prepare("
+                    SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone, p.email, p.address,
+                           v.visit_number, v.visit_type, v.created_at as visit_date, v.status as visit_status,
+                           u.full_name as doctor_name, u.specialty,
+                           (SELECT COUNT(*) FROM payments WHERE bill_id = pb.id) as payment_count,
+                           (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = pb.id) as total_paid
+                    FROM patient_bills pb
+                    JOIN patients p ON pb.patient_id = p.id
+                    LEFT JOIN visits v ON pb.visit_id = v.id
+                    LEFT JOIN users u ON v.doctor_id = u.id
+                    WHERE pb.id = ? AND pb.branch_id = ?
+                ");
+                $stmt->execute([$bill_id, $user_branch_id]);
+                $bill = $stmt->fetch();
+                
+                // Refresh payments
+                $stmt = $db->prepare("
+                    SELECT p.*, u.full_name as cashier_name
+                    FROM payments p
+                    LEFT JOIN users u ON p.received_by = u.id
+                    WHERE p.bill_id = ?
+                    ORDER BY p.received_at DESC
+                ");
+                $stmt->execute([$bill_id]);
+                $payments = $stmt->fetchAll();
+                
+                echo '<script>
+                    setTimeout(function(){ 
+                        window.location.href = "view_bill.php?id=' . $bill_id . '&success=1"; 
+                    }, 2000);
+                </script>';
+            } else {
+                $message = "❌ Failed to process payment!";
+                $message_type = 'error';
+            }
+        } else {
+            $message = implode('<br>', $errors);
+            $message_type = 'error';
+        }
+    }
     
 } catch (Exception $e) {
+    $bill = null;
+    $bill_items = [];
+    $payments = [];
     $pending_bills = 0;
     $today_revenue = 0;
     $today_payments = 0;
-    $total_patients = 0;
-    $total_bills = 0;
-    $paid_bills = 0;
-    $pending_bills_list = [];
-    $recent_payments = [];
-    $payment_methods = [];
+    $message = "Database error: " . $e->getMessage();
+    $message_type = 'error';
 }
 
 // ================================================================
@@ -167,7 +264,7 @@ include_once '../../components/cashier_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pending Bills - Braick Dispensary</title>
+    <title>View Bill - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
     
@@ -529,89 +626,53 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           STAT CARDS - CLICKABLE
+           BILL DETAILS
            ================================================================ */
-        .stat-card {
+        .detail-card {
+            background: var(--bg-card);
             border-radius: 14px;
-            padding: 18px 20px;
+            padding: 20px 24px;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-sm);
             transition: all 0.3s ease;
-            cursor: pointer;
-            position: relative;
-            overflow: hidden;
-            color: white;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-            text-decoration: none;
-            display: block;
         }
         
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+        .detail-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
         }
         
-        .stat-card:active {
-            transform: scale(0.97);
-        }
-        
-        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        .stat-card.red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        
-        .stat-card .stat-icon {
-            font-size: 1.6rem;
-            opacity: 0.9;
-            margin-bottom: 4px;
-            display: block;
-        }
-        
-        .stat-card .stat-number {
-            font-size: 2rem;
-            font-weight: 700;
-            color: white;
-            line-height: 1.2;
-        }
-        
-        .stat-card .stat-label {
+        .detail-label {
             font-size: 0.7rem;
-            color: rgba(255,255,255,0.8);
+            color: var(--text-secondary);
             font-weight: 500;
-            margin-top: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
         }
         
-        .stat-card .stat-update {
-            font-size: 0.55rem;
-            color: rgba(255,255,255,0.5);
-            margin-top: 4px;
-            display: flex;
-            align-items: center;
-            gap: 4px;
+        .detail-value {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
         }
         
-        .stat-card .stat-update .live-dot {
+        .status-badge {
             display: inline-block;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #34D399;
-            animation: pulse-dot 1.5s infinite;
-        }
-        
-        .stat-card .stat-arrow {
-            position: absolute;
-            bottom: 12px;
-            right: 16px;
             font-size: 0.7rem;
-            color: rgba(255,255,255,0.4);
-            transition: all 0.3s ease;
+            font-weight: 600;
+            padding: 4px 16px;
+            border-radius: 20px;
         }
         
-        .stat-card:hover .stat-arrow {
-            transform: translateX(4px);
-            color: rgba(255,255,255,0.8);
-        }
+        .status-badge.pending { background: #FEF3C7; color: #D97706; }
+        .status-badge.partial { background: #E8F0FE; color: #0B5ED7; }
+        .status-badge.paid { background: #D1FAE5; color: #059669; }
+        .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
+        
+        [data-theme="dark"] .status-badge.pending { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .status-badge.partial { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .status-badge.paid { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .status-badge.cancelled { background: #3A1A1A; color: #F87171; }
         
         /* ================================================================
            TABLE STYLES
@@ -624,12 +685,12 @@ include_once '../../components/cashier_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.82rem;
-            min-width: 900px;
+            min-width: 600px;
         }
         
         .data-table thead th {
             text-align: left;
-            padding: 10px 14px;
+            padding: 8px 12px;
             font-weight: 700;
             font-size: 0.65rem;
             text-transform: uppercase;
@@ -638,13 +699,10 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--primary);
             border-bottom: 3px solid var(--primary-dark);
             white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 10;
         }
         
         .data-table tbody td {
-            padding: 10px 14px;
+            padding: 8px 12px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
@@ -661,10 +719,10 @@ include_once '../../components/cashier_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 6px 14px;
+            padding: 8px 18px;
             border-radius: 8px;
             font-weight: 600;
-            font-size: 0.75rem;
+            font-size: 0.8rem;
             transition: all 0.3s ease;
             cursor: pointer;
             border: none;
@@ -689,6 +747,27 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--success-dark);
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        .btn-danger:hover {
+            background: var(--danger-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
         }
         
         .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
@@ -763,10 +842,48 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
+           FORM
+           ================================================================ */
+        .form-control {
+            width: 100%;
+            padding: 8px 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            outline: none;
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+        
+        .form-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.08);
+        }
+        
+        .form-control::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.5;
+        }
+        
+        .form-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+            display: block;
+        }
+        
+        .form-label .required {
+            color: var(--danger);
+            margin-left: 2px;
+        }
+        
+        /* ================================================================
            SCROLL CONTAINER
            ================================================================ */
         .scroll-container {
-            max-height: 250px;
+            max-height: 200px;
             overflow-y: auto;
         }
         
@@ -846,16 +963,15 @@ include_once '../../components/cashier_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stat-card .stat-number { font-size: 1.6rem; }
-            .stat-card { padding: 14px 16px; }
+            .detail-card { padding: 14px 16px; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .stat-card .stat-number { font-size: 1.3rem; }
-            .stat-card { padding: 12px 14px; }
+            .detail-card { padding: 12px 14px; }
+            .data-table { font-size: 0.7rem; min-width: 500px; }
         }
         
         /* ================================================================
@@ -869,11 +985,6 @@ include_once '../../components/cashier_sidebar.php';
         .animate-fade-in-up {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
         }
         
         .spinner {
@@ -902,7 +1013,7 @@ include_once '../../components/cashier_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search bills by patient name or bill number...">
+            <input type="text" id="searchInput" placeholder="Search patients...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -938,6 +1049,8 @@ include_once '../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
+    <?php if ($bill): ?>
+    
     <!-- ================================================================ -->
     <!-- PAGE HEADER -->
     <!-- ================================================================ -->
@@ -945,30 +1058,30 @@ include_once '../../components/cashier_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-receipt"></i>
-                Pending Bills
+                Bill Details
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
                 <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-money-bill"></i>
-                Manage and process pending bills in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                <i class="fas fa-file-invoice"></i>
+                View and manage bill #<strong><?= htmlspecialchars($bill['bill_number']) ?></strong>
                 
                 <span class="header-badge">
-                    <i class="fas fa-clock"></i>
-                    <span class="count" id="pendingCount"><?= $pending_bills ?></span> Pending
+                    <i class="fas fa-user"></i>
+                    <?= htmlspecialchars($bill['patient_name']) ?>
                 </span>
                 
                 <span class="header-badge">
-                    <i class="fas fa-check-circle" style="color:#34D399;"></i>
-                    <span class="count" id="paidCount"><?= $paid_bills ?></span> Paid
+                    <i class="fas fa-money-bill"></i>
+                    TSh <span id="billTotal"><?= number_format($bill['total_amount'] ?? 0) ?></span>
                 </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="dashboard.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back to Dashboard
+            <a href="pending_bills.php" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back to Pending Bills
             </a>
             <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
@@ -976,112 +1089,141 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
+    <!-- Message -->
+    <?php if ($message): ?>
+        <div class="alert <?= $message_type === 'success' ? 'alert-success' : 'alert-error' ?>" style="max-width:1000px;margin:0 auto 16px;">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <div class="alert-content"><?= $message ?></div>
+        </div>
+    <?php endif; ?>
+
     <!-- ================================================================ -->
-    <!-- STATS CARDS - CLICKABLE NAVIGATION -->
+    <!-- BILL SUMMARY -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5" style="max-width:1000px;margin:0 auto;">
         
-        <!-- Card 1: Pending Bills -> pending_bills.php -->
-        <a href="pending_bills.php" class="stat-card red">
-            <span class="stat-icon">⏳</span>
-            <div class="stat-number" id="pendingBills"><?= $pending_bills ?></div>
-            <div class="stat-label">Pending Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
+        <div class="detail-card">
+            <p class="detail-label">Bill Number</p>
+            <p class="detail-value">#<?= htmlspecialchars($bill['bill_number']) ?></p>
+        </div>
         
-        <!-- Card 2: Total Patients -> patients.php -->
-        <a href="../reception/patients.php" class="stat-card purple">
-            <span class="stat-icon">👥</span>
-            <div class="stat-number" id="totalPatients"><?= number_format($total_patients) ?></div>
-            <div class="stat-label">Total Patients</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
+        <div class="detail-card">
+            <p class="detail-label">Status</p>
+            <p class="detail-value">
+                <span class="status-badge <?= $bill['status'] ?? 'pending' ?>">
+                    <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                </span>
+            </p>
+        </div>
         
-        <!-- Card 3: Total Bills -> pending_bills.php -->
-        <a href="pending_bills.php" class="stat-card orange">
-            <span class="stat-icon">📋</span>
-            <div class="stat-number" id="totalBills"><?= number_format($total_bills) ?></div>
-            <div class="stat-label">Total Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- Card 4: Paid Bills -> paid_bills.php -->
-        <a href="paid_bills.php" class="stat-card teal">
-            <span class="stat-icon">✅</span>
-            <div class="stat-number" id="paidBills"><?= number_format($paid_bills) ?></div>
-            <div class="stat-label">Paid Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
+        <div class="detail-card">
+            <p class="detail-label">Created At</p>
+            <p class="detail-value"><?= date('F d, Y h:i A', strtotime($bill['created_at'])) ?></p>
+        </div>
         
     </div>
 
     <!-- ================================================================ -->
-    <!-- PENDING BILLS TABLE -->
+    <!-- PATIENT & VISIT INFO -->
     <!-- ================================================================ -->
-    <div class="card">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5" style="max-width:1000px;margin:0 auto;">
+        
+        <div class="detail-card">
+            <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">
+                <i class="fas fa-user text-primary mr-2"></i> Patient Information
+            </h3>
+            <div class="space-y-2">
+                <div>
+                    <p class="detail-label">Name</p>
+                    <p class="detail-value"><?= htmlspecialchars($bill['patient_name']) ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Patient ID</p>
+                    <p class="detail-value"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Phone</p>
+                    <p class="detail-value"><?= htmlspecialchars($bill['phone'] ?? 'N/A') ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Email</p>
+                    <p class="detail-value"><?= htmlspecialchars($bill['email'] ?? 'N/A') ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Address</p>
+                    <p class="detail-value"><?= htmlspecialchars($bill['address'] ?? 'N/A') ?></p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="detail-card">
+            <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">
+                <i class="fas fa-clinic-medical text-primary mr-2"></i> Visit Information
+            </h3>
+            <div class="space-y-2">
+                <div>
+                    <p class="detail-label">Visit Number</p>
+                    <p class="detail-value"><?= htmlspecialchars($bill['visit_number'] ?? 'N/A') ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Visit Type</p>
+                    <p class="detail-value capitalize"><?= htmlspecialchars($bill['visit_type'] ?? 'N/A') ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Doctor</p>
+                    <p class="detail-value">Dr. <?= htmlspecialchars($bill['doctor_name'] ?? 'Not Assigned') ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Visit Date</p>
+                    <p class="detail-value"><?= isset($bill['visit_date']) ? date('F d, Y h:i A', strtotime($bill['visit_date'])) : 'N/A' ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Visit Status</p>
+                    <p class="detail-value capitalize"><?= htmlspecialchars($bill['visit_status'] ?? 'N/A') ?></p>
+                </div>
+            </div>
+        </div>
+        
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- BILL ITEMS -->
+    <!-- ================================================================ -->
+    <div class="card mb-5" style="max-width:1000px;margin:0 auto 20px;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i> Pending Bills
-                <span class="text-sm font-normal text-gray-400" id="pendingBillsCount">(<?= count($pending_bills_list) ?>)</span>
+                <i class="fas fa-list title-blue mr-2"></i> Bill Items
+                <span class="text-sm font-normal text-gray-400">(<?= count($bill_items) ?> items)</span>
             </h3>
-            <span class="text-xs text-gray-400" id="lastUpdateTime">● Live</span>
         </div>
         
         <div class="table-wrap">
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th style="border-radius:8px 0 0 0;">Bill #</th>
-                        <th>Patient</th>
-                        <th>Visit Type</th>
-                        <th>Doctor</th>
-                        <th>Amount</th>
-                        <th>Status</th>
-                        <th>Date</th>
-                        <th style="border-radius:0 8px 0 0;">Actions</th>
+                        <th style="border-radius:8px 0 0 0;">#</th>
+                        <th>Item</th>
+                        <th>Type</th>
+                        <th>Qty</th>
+                        <th>Unit Price</th>
+                        <th style="border-radius:0 8px 0 0;">Total</th>
                     </tr>
                 </thead>
-                <tbody id="pendingBillsList">
-                    <?php if (count($pending_bills_list) > 0): ?>
-                        <?php foreach ($pending_bills_list as $bill): ?>
+                <tbody>
+                    <?php if (count($bill_items) > 0): ?>
+                        <?php $i = 1; foreach ($bill_items as $item): ?>
                             <tr>
-                                <td class="font-medium"><?= htmlspecialchars($bill['bill_number']) ?></td>
-                                <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name']) ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></div>
-                                </td>
-                                <td><?= htmlspecialchars($bill['visit_type'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($bill['doctor_name'] ?? 'N/A') ?></td>
-                                <td class="font-semibold"><?= number_format($bill['total_amount'] ?? 0) ?></td>
-                                <td>
-                                    <span class="px-2 py-1 text-xs rounded-full <?= $bill['status'] === 'pending' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400' ?>">
-                                        <?= $bill['status'] === 'pending' ? '⏳ Pending' : '🔶 Partial' ?>
-                                    </span>
-                                </td>
-                                <td class="text-sm text-gray-500"><?= date('M d, Y h:i A', strtotime($bill['created_at'])) ?></td>
-                                <td>
-                                    <div class="flex gap-1">
-                                        <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <a href="view_bill.php?id=<?= $bill['id'] ?>#payment" class="btn btn-success btn-sm" title="Process Payment">
-                                            <i class="fas fa-money-bill"></i>
-                                        </a>
-                                    </div>
-                                </td>
+                                <td><?= $i++ ?></td>
+                                <td><?= htmlspecialchars($item['item_name']) ?></td>
+                                <td><span class="text-xs capitalize"><?= htmlspecialchars($item['item_type'] ?? 'N/A') ?></span></td>
+                                <td><?= $item['quantity'] ?? 1 ?></td>
+                                <td>TSh <?= number_format($item['unit_price'] ?? 0) ?></td>
+                                <td class="font-semibold">TSh <?= number_format($item['total_price'] ?? 0) ?></td>
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" class="text-center py-8 text-gray-400">
-                                <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
-                                <p>No pending bills found</p>
-                                <p class="text-sm mt-1">All bills have been processed</p>
-                            </td>
+                            <td colspan="6" class="text-center py-4 text-gray-400">No items found</td>
                         </tr>
                     <?php endif; ?>
                 </tbody>
@@ -1090,85 +1232,159 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PAYMENTS & PAYMENT METHODS -->
+    <!-- PAYMENT SUMMARY -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5" style="max-width:1000px;margin:0 auto;">
         
-        <!-- Recent Payments -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-history title-blue mr-2"></i> Recent Payments
-                </h3>
-            </div>
-            <div class="scroll-container" id="recentPaymentsList">
-                <?php if (count($recent_payments) > 0): ?>
-                    <?php foreach ($recent_payments as $payment): ?>
-                        <div class="flex items-center justify-between p-2 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg transition">
-                            <div>
-                                <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($payment['patient_name']) ?></p>
-                                <p class="text-xs text-gray-400"><?= htmlspecialchars($payment['bill_number']) ?></p>
-                            </div>
-                            <div class="text-right">
-                                <p class="font-semibold text-sm text-green-600 dark:text-green-400"><?= number_format($payment['amount'] ?? 0) ?></p>
-                                <p class="text-xs text-gray-400">
-                                    <?php 
-                                        $method = $payment['payment_method'] ?? 'cash';
-                                        $methodIcon = $method === 'cash' ? '💵' : ($method === 'm-pesa' ? '📱' : '💳');
-                                        echo $methodIcon . ' ' . strtoupper($method);
-                                    ?>
-                                    • <?= isset($payment['received_at']) ? time_ago($payment['received_at']) : 'N/A' ?>
-                                </p>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-clock text-2xl block mb-2"></i>
-                        <p class="text-sm">No recent payments</p>
-                    </div>
-                <?php endif; ?>
-            </div>
+        <div class="detail-card" style="border-left: 4px solid #0B5ED7;">
+            <p class="detail-label">Total Amount</p>
+            <p class="detail-value" style="font-size:1.2rem;color:#0B5ED7;">
+                TSh <?= number_format($bill['total_amount'] ?? 0) ?>
+            </p>
         </div>
         
-        <!-- Payment Methods -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-chart-pie title-green mr-2"></i> Today's Payment Methods
-                </h3>
-            </div>
-            <div class="scroll-container" id="paymentMethods">
-                <?php if (count($payment_methods) > 0): ?>
-                    <?php 
-                        $methodIcons = [
-                            'cash' => '💵',
-                            'm-pesa' => '📱',
-                            'airtel_money' => '📱',
-                            'tigo_pesa' => '📱',
-                            'halopesa' => '📱',
-                            'card' => '💳',
-                            'bank' => '🏦',
-                            'insurance' => '🏥',
-                            'other' => '📦'
-                        ];
-                    ?>
-                    <?php foreach ($payment_methods as $method): ?>
-                        <div class="flex items-center justify-between p-2 border-b border-gray-100 dark:border-gray-700">
-                            <span class="text-sm"><?= $methodIcons[$method['payment_method']] ?? '💵' ?> <?= strtoupper($method['payment_method'] ?? 'CASH') ?></span>
-                            <span class="text-sm text-gray-500"><?= $method['count'] ?> payments</span>
-                            <span class="font-semibold text-sm text-green-600 dark:text-green-400"><?= number_format($method['total'] ?? 0) ?></span>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <p class="text-sm">No payments today</p>
-                    </div>
-                <?php endif; ?>
-            </div>
+        <div class="detail-card" style="border-left: 4px solid #059669;">
+            <p class="detail-label">Paid Amount</p>
+            <p class="detail-value" style="font-size:1.2rem;color:#059669;">
+                TSh <?= number_format($bill['total_paid'] ?? 0) ?>
+            </p>
+        </div>
+        
+        <div class="detail-card" style="border-left: 4px solid <?= ($bill['balance'] ?? 0) > 0 ? '#DC2626' : '#059669' ?>;">
+            <p class="detail-label">Balance</p>
+            <p class="detail-value" style="font-size:1.2rem;color:<?= ($bill['balance'] ?? 0) > 0 ? '#DC2626' : '#059669' ?>;">
+                TSh <?= number_format($bill['balance'] ?? 0) ?>
+            </p>
         </div>
         
     </div>
+
+    <!-- ================================================================ -->
+    <!-- PAYMENT HISTORY -->
+    <!-- ================================================================ -->
+    <div class="card mb-5" style="max-width:1000px;margin:0 auto 20px;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-history title-blue mr-2"></i> Payment History
+                <span class="text-sm font-normal text-gray-400">(<?= count($payments) ?> payments)</span>
+            </h3>
+        </div>
+        
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="border-radius:8px 0 0 0;">Receipt #</th>
+                        <th>Amount</th>
+                        <th>Method</th>
+                        <th>Reference</th>
+                        <th>Cashier</th>
+                        <th style="border-radius:0 8px 0 0;">Date</th>
+                    </tr>
+                </thead>
+                <tbody id="paymentHistoryList">
+                    <?php if (count($payments) > 0): ?>
+                        <?php foreach ($payments as $payment): ?>
+                            <tr>
+                                <td class="font-medium"><?= htmlspecialchars($payment['receipt_number']) ?></td>
+                                <td class="font-semibold text-green-600">TSh <?= number_format($payment['amount'] ?? 0) ?></td>
+                                <td>
+                                    <span class="text-sm capitalize">
+                                        <?php 
+                                            $method = $payment['payment_method'] ?? 'cash';
+                                            $methodIcon = $method === 'cash' ? '💵' : ($method === 'm-pesa' ? '📱' : '💳');
+                                            echo $methodIcon . ' ' . strtoupper($method);
+                                        ?>
+                                    </span>
+                                </td>
+                                <td><?= htmlspecialchars($payment['reference_number'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($payment['cashier_name'] ?? 'N/A') ?></td>
+                                <td class="text-sm text-gray-500"><?= date('M d, Y h:i A', strtotime($payment['received_at'])) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="6" class="text-center py-4 text-gray-400">No payments recorded</td>
+                        </tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- PROCESS PAYMENT FORM -->
+    <!-- ================================================================ -->
+    <?php if (($bill['status'] ?? '') !== 'paid' && ($bill['balance'] ?? 0) > 0): ?>
+    <div class="card" style="max-width:1000px;margin:0 auto;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-money-bill-wave title-green mr-2"></i> Process Payment
+                <span class="text-sm font-normal text-gray-400">Balance: TSh <?= number_format($bill['balance'] ?? 0) ?></span>
+            </h3>
+        </div>
+        
+        <form method="POST" action="" id="paymentForm">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                
+                <div>
+                    <label class="form-label">Amount <span class="required">*</span></label>
+                    <input type="number" name="amount" class="form-control" 
+                           placeholder="Enter amount" 
+                           value="<?= $bill['balance'] ?? 0 ?>" 
+                           min="1" max="<?= $bill['balance'] ?? 0 ?>" required>
+                </div>
+                
+                <div>
+                    <label class="form-label">Payment Method <span class="required">*</span></label>
+                    <select name="payment_method" class="form-control" required>
+                        <option value="cash">💵 Cash</option>
+                        <option value="m-pesa">📱 M-Pesa</option>
+                        <option value="airtel_money">📱 Airtel Money</option>
+                        <option value="tigo_pesa">📱 Tigo Pesa</option>
+                        <option value="halopesa">📱 Halopesa</option>
+                        <option value="card">💳 Card</option>
+                        <option value="bank">🏦 Bank Transfer</option>
+                        <option value="insurance">🏥 Insurance</option>
+                        <option value="other">📦 Other</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label class="form-label">Reference Number</label>
+                    <input type="text" name="reference_number" class="form-control" 
+                           placeholder="e.g. Transaction ID">
+                </div>
+                
+                <div>
+                    <label class="form-label">Notes</label>
+                    <textarea name="notes" class="form-control" placeholder="Additional notes..." rows="1"></textarea>
+                </div>
+                
+            </div>
+            
+            <div class="mt-4 flex gap-3 flex-wrap">
+                <button type="submit" name="process_payment" class="btn btn-success" id="processPaymentBtn">
+                    <i class="fas fa-check"></i> Process Payment
+                </button>
+                <button type="reset" class="btn btn-outline">
+                    <i class="fas fa-undo"></i> Reset
+                </button>
+                <a href="pending_bills.php" class="btn btn-outline">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+    <?php endif; ?>
+
+    <?php else: ?>
+        <div class="text-center py-8 text-gray-400">
+            <i class="fas fa-receipt text-4xl block mb-3"></i>
+            <p class="text-lg">Bill not found</p>
+            <a href="pending_bills.php" class="text-primary hover:underline">Back to pending bills</a>
+        </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -1177,7 +1393,7 @@ include_once '../../components/cashier_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Pending Bills
+            View Bill
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">● Live</span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1280,7 +1496,7 @@ include_once '../../components/cashier_sidebar.php';
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            window.location.href = 'pending_bills.php?search=' + encodeURIComponent(query);
+            window.location.href = 'search.php?q=' + encodeURIComponent(query);
         }
     }
     
@@ -1332,20 +1548,6 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // TIME AGO FUNCTION
-    // ================================================================
-    function time_ago(timestamp) {
-        if (!timestamp) return 'N/A';
-        var now = new Date();
-        var past = new Date(timestamp);
-        var diff = Math.floor((now - past) / 1000);
-        if (diff < 60) return 'Just now';
-        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-        return past.toLocaleDateString();
-    }
-
-    // ================================================================
     // MONITOR CASHIER STATS
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
@@ -1358,14 +1560,13 @@ include_once '../../components/cashier_sidebar.php';
         }, 500);
     });
 
-    console.log('%c💰 Braick - Pending Bills (Cashier)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💰 Braick - View Bill (Cashier)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c⏳ Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c👥 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Paid Bills: <?= number_format($paid_bills) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Total: TSh <?= number_format($bill['total_amount'] ?? 0) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c💳 Balance: TSh <?= number_format($bill['balance'] ?? 0) ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click any stat card to navigate to relevant page', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
