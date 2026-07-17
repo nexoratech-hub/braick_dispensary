@@ -1,15 +1,16 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/print_receipt.php
-// CASHIER - PRINT RECEIPT
-// DISPLAYS PAID BILL RECEIPT FOR PRINTING
+// CASHIER - PRINT RECEIPT WITH BRAICK LOGO
+// AUTO OPENS PRINT DIALOG
+// BACK BUTTON GOES TO PAID_BILLS.PHP
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Cashier Dodoma
+// FORCE SESSION - Cashier
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
     $_SESSION['user_id'] = 10;
@@ -27,1322 +28,826 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+// ================================================================
+// GET BILL ID
+// ================================================================
 $bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
-$receipt_id = isset($_GET['receipt_id']) ? (int)$_GET['receipt_id'] : 0;
-$unread_notifications = 0;
-$message = '';
-$message_type = '';
+$payment_id = isset($_GET['payment_id']) ? (int)$_GET['payment_id'] : 0;
+$auto_print = isset($_GET['print']) && $_GET['print'] == 1;
+
+// Initialize variables
+$bill = null;
+$items = [];
+$payment = null;
+$settings = [];
+$logo_base64 = '';
+$logo_available = false;
+$error_message = '';
+$has_error = false;
 
 try {
     $db = getDB();
-    $today = date('Y-m-d');
     
     // ================================================================
-    // GET UNREAD NOTIFICATIONS
+    // GET SYSTEM SETTINGS
     // ================================================================
-    if (isset($_SESSION['user_id'])) {
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $settings[$row['setting_key']] = $row['setting_value'];
     }
     
+    $site_name = $settings['site_name'] ?? 'Braick Dispensary';
+    $currency = $settings['currency'] ?? 'TSh';
+    $site_phone = $settings['phone'] ?? '+255 700 000 000';
+    $site_email = $settings['email'] ?? 'info@braick.com';
+    
     // ================================================================
-    // IF BILL_ID IS PROVIDED, GET THE LATEST RECEIPT FOR THIS BILL
+    // GET BILL DETAILS
     // ================================================================
     if ($bill_id > 0) {
         $stmt = $db->prepare("
-            SELECT id FROM receipts 
-            WHERE bill_id = ? 
-            ORDER BY printed_at DESC 
-            LIMIT 1
-        ");
-        $stmt->execute([$bill_id]);
-        $receipt = $stmt->fetch();
-        if ($receipt) {
-            $receipt_id = $receipt['id'];
-        }
-    }
-    
-    // ================================================================
-    // GET RECEIPT DETAILS
-    // ================================================================
-    if ($receipt_id > 0) {
-        $stmt = $db->prepare("
-            SELECT r.*, 
-                   pb.bill_number, pb.total_amount, pb.paid_amount, pb.balance, pb.status,
-                   p.full_name as patient_name, p.patient_id, p.phone, p.email, p.address,
-                   v.visit_number, v.visit_type, v.created_at as visit_date,
-                   u.full_name as doctor_name,
-                   c.full_name as cashier_name
-            FROM receipts r
-            JOIN patient_bills pb ON r.bill_id = pb.id
-            JOIN patients p ON pb.patient_id = p.id
-            LEFT JOIN visits v ON pb.visit_id = v.id
-            LEFT JOIN users u ON v.doctor_id = u.id
-            LEFT JOIN users c ON r.printed_by = c.id
-            WHERE r.id = ? AND pb.branch_id = ?
-        ");
-        $stmt->execute([$receipt_id, $user_branch_id]);
-        $receipt_data = $stmt->fetch();
-    }
-    
-    // ================================================================
-    // IF NO RECEIPT FOUND, TRY TO GET THE LATEST PAID BILL
-    // ================================================================
-    if (empty($receipt_data) && $bill_id > 0) {
-        $stmt = $db->prepare("
-            SELECT pb.*, 
-                   p.full_name as patient_name, p.patient_id, p.phone, p.email, p.address,
-                   v.visit_number, v.visit_type, v.created_at as visit_date,
-                   u.full_name as doctor_name
+            SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone, p.address,
+                   u.full_name as cashier_name, b.name as branch_name, b.location as branch_location,
+                   v.visit_number, v.visit_type, v.created_at as visit_date
             FROM patient_bills pb
             JOIN patients p ON pb.patient_id = p.id
+            JOIN users u ON pb.created_by = u.id
+            JOIN branches b ON pb.branch_id = b.id
             LEFT JOIN visits v ON pb.visit_id = v.id
-            LEFT JOIN users u ON v.doctor_id = u.id
-            WHERE pb.id = ? AND pb.branch_id = ? AND pb.status = 'paid'
+            WHERE pb.id = ? AND pb.branch_id = ?
         ");
-        $stmt->execute([$bill_id, $user_branch_id]);
-        $bill_data = $stmt->fetch();
+        $stmt->execute([$bill_id, $_SESSION['branch_id']]);
+        $bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        if ($bill_data) {
-            // Create a virtual receipt from bill data
-            $receipt_data = [
-                'receipt_number' => 'RCP-' . date('Ymd') . '-' . str_pad($bill_data['id'], 6, '0', STR_PAD_LEFT),
-                'bill_number' => $bill_data['bill_number'],
-                'total_amount' => $bill_data['total_amount'],
-                'paid_amount' => $bill_data['paid_amount'] ?? $bill_data['total_amount'],
-                'balance' => 0,
-                'status' => 'paid',
-                'patient_name' => $bill_data['patient_name'],
-                'patient_id' => $bill_data['patient_id'],
-                'phone' => $bill_data['phone'],
-                'email' => $bill_data['email'],
-                'address' => $bill_data['address'],
-                'visit_number' => $bill_data['visit_number'],
-                'visit_type' => $bill_data['visit_type'],
-                'visit_date' => $bill_data['visit_date'],
-                'doctor_name' => $bill_data['doctor_name'],
-                'cashier_name' => $user_full_name,
-                'printed_at' => date('Y-m-d H:i:s'),
-                'payment_method' => 'cash',
-                'created_at' => $bill_data['created_at']
-            ];
-        }
-    }
-    
-    // ================================================================
-    // GET BILL ITEMS
-    // ================================================================
-    $bill_items = [];
-    if (!empty($receipt_data)) {
-        $bill_id_to_use = $bill_id > 0 ? $bill_id : 0;
-        if ($bill_id_to_use > 0) {
+        if ($bill) {
+            // ================================================================
+            // GET BILL ITEMS
+            // ================================================================
             $stmt = $db->prepare("
                 SELECT * FROM bill_items 
-                WHERE bill_id = ?
-                ORDER BY created_at
+                WHERE bill_id = ? 
+                ORDER BY id
             ");
-            $stmt->execute([$bill_id_to_use]);
-            $bill_items = $stmt->fetchAll();
+            $stmt->execute([$bill_id]);
+            $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // ================================================================
+            // GET PAYMENT DETAILS (if payment_id is provided)
+            // ================================================================
+            if ($payment_id > 0) {
+                $stmt = $db->prepare("
+                    SELECT * FROM payments WHERE id = ? AND bill_id = ?
+                ");
+                $stmt->execute([$payment_id, $bill_id]);
+                $payment = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+        } else {
+            $error_message = 'Bill not found. Please check the bill ID.';
+            $has_error = true;
         }
+    } else {
+        $error_message = 'Invalid bill ID. Please provide a valid bill_id.';
+        $has_error = true;
     }
-    
-    // ================================================================
-    // GET PAYMENT DETAILS
-    // ================================================================
-    $payment_details = [];
-    if (!empty($receipt_data) && $bill_id > 0) {
-        $stmt = $db->prepare("
-            SELECT * FROM payments 
-            WHERE bill_id = ?
-            ORDER BY received_at DESC
-            LIMIT 1
-        ");
-        $stmt->execute([$bill_id]);
-        $payment_details = $stmt->fetch();
-    }
-    
-    // ================================================================
-    // GET RECENT RECEIPTS FOR DROPDOWN
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT r.id, r.receipt_number, pb.bill_number, p.full_name as patient_name,
-               r.printed_at
-        FROM receipts r
-        JOIN patient_bills pb ON r.bill_id = pb.id
-        JOIN patients p ON pb.patient_id = p.id
-        WHERE pb.branch_id = ?
-        ORDER BY r.printed_at DESC
-        LIMIT 20
-    ");
-    $stmt->execute([$user_branch_id]);
-    $recent_receipts = $stmt->fetchAll();
     
 } catch (Exception $e) {
-    $receipt_data = null;
-    $bill_items = [];
-    $payment_details = [];
-    $recent_receipts = [];
-    $message = "Database error: " . $e->getMessage();
-    $message_type = 'error';
+    $error_message = 'Database error: ' . $e->getMessage();
+    $has_error = true;
 }
 
 // ================================================================
-// INCLUDE CASHIER HEADER & SIDEBAR
+// LOGO PATH
 // ================================================================
-include_once '../../components/cashier_header.php';
-include_once '../../components/cashier_sidebar.php';
+$logo_paths = [
+    $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
+    $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.jpg',
+    $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.jpeg',
+    $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/logo.png',
+    $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/logo.jpg',
+];
+
+foreach ($logo_paths as $path) {
+    if (file_exists($path)) {
+        $logo_data = file_get_contents($path);
+        $mime_type = mime_content_type($path);
+        $logo_base64 = 'data:' . $mime_type . ';base64,' . base64_encode($logo_data);
+        break;
+    }
+}
+
+$logo_available = !empty($logo_base64);
 ?>
 <!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Print Receipt - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Receipt - <?= htmlspecialchars($site_name) ?></title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
     <style>
         /* ================================================================
-           ROOT VARIABLES
+           RESET
            ================================================================ */
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
-            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
+            font-family: 'Courier New', Courier, monospace;
+            background: #f0f2f5;
+            min-height: 100vh;
+            padding: 20px;
         }
         
         /* ================================================================
-           PAGE HEADER
+           PAGE HEADER - HIDDEN DURING PRINT
            ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            border-radius: 16px;
-            padding: 24px 32px;
-            margin-bottom: 28px;
+            max-width: 420px;
+            margin: 0 auto 16px auto;
             display: flex;
-            flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            gap: 16px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
-            position: relative;
-            overflow: hidden;
+            padding: 0 4px;
         }
         
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: 10px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
+        .page-header .back-link {
+            color: #64748B;
             text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
+            font-size: 0.85rem;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: 2px solid #E2E8F0;
+            transition: all 0.3s ease;
+            background: white;
         }
         
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
+        .page-header .back-link:hover {
+            border-color: #0B5ED7;
+            color: #0B5ED7;
+            background: #F8FAFC;
+        }
+        
+        .page-header .back-link i {
+            margin-right: 6px;
+        }
+        
+        .page-header .print-link {
+            color: white;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            padding: 8px 20px;
+            border-radius: 8px;
+            background: #0B5ED7;
+            border: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .page-header .print-link:hover {
+            background: #0A4CA8;
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
         }
         
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.8);
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(4px);
+        .page-header .print-link i {
+            margin-right: 6px;
         }
         
         /* ================================================================
-           RECEIPT STYLES
+           RECEIPT CONTAINER
            ================================================================ */
-        .receipt-container {
-            max-width: 400px;
+        .receipt-wrapper {
+            max-width: 420px;
             margin: 0 auto;
+        }
+        
+        .receipt {
             background: white;
+            padding: 24px 26px;
             border-radius: 12px;
-            padding: 24px;
-            box-shadow: var(--shadow-lg);
-            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+            position: relative;
         }
         
-        [data-theme="dark"] .receipt-container {
-            background: #1E293B;
-            border-color: #334155;
-        }
-        
+        /* ================================================================
+           RECEIPT HEADER WITH LOGO
+           ================================================================ */
         .receipt-header {
             text-align: center;
-            border-bottom: 2px dashed var(--border-color);
-            padding-bottom: 16px;
-            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 2px dashed #333;
+            margin-bottom: 14px;
         }
         
-        .receipt-header .clinic-name {
-            font-size: 1.4rem;
+        .receipt-logo {
+            display: block;
+            margin: 0 auto 10px auto;
+            max-width: 120px;
+            max-height: 80px;
+            object-fit: contain;
+        }
+        
+        .receipt-logo-text {
+            font-size: 1.6rem;
             font-weight: 700;
-            color: var(--primary);
+            color: #0B5ED7;
+            letter-spacing: 1px;
+            margin-bottom: 2px;
         }
         
-        .receipt-header .clinic-address {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
+        .receipt-logo-text span {
+            color: #059669;
         }
         
-        .receipt-header .receipt-title {
+        .receipt-title {
             font-size: 1rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-top: 8px;
+            font-weight: 700;
+            color: #1E293B;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-top: 2px;
         }
         
-        .receipt-header .receipt-number {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
+        .receipt-subtitle {
+            font-size: 0.65rem;
+            color: #64748B;
+            margin-top: 2px;
+            line-height: 1.4;
         }
         
         .receipt-divider {
-            border-top: 1px dashed var(--border-color);
-            margin: 12px 0;
+            border: none;
+            border-top: 1px dashed #94A3B8;
+            margin: 8px 0;
+        }
+        
+        /* ================================================================
+           RECEIPT BODY
+           ================================================================ */
+        .receipt-body {
+            font-size: 0.75rem;
+            color: #1E293B;
         }
         
         .receipt-row {
             display: flex;
             justify-content: space-between;
-            padding: 4px 0;
-            font-size: 0.8rem;
+            padding: 3px 0;
         }
         
         .receipt-row .label {
-            color: var(--text-secondary);
+            color: #64748B;
         }
         
         .receipt-row .value {
-            color: var(--text-primary);
-            font-weight: 500;
+            font-weight: 600;
+            color: #0F172A;
+        }
+        
+        .receipt-row .value.bold {
+            font-weight: 700;
         }
         
         .receipt-items {
-            margin: 12px 0;
+            margin: 10px 0;
+            border-top: 1px dashed #94A3B8;
+            border-bottom: 1px dashed #94A3B8;
+            padding: 8px 0;
         }
         
         .receipt-item {
             display: flex;
             justify-content: space-between;
-            padding: 4px 0;
-            font-size: 0.75rem;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .receipt-item:last-child {
-            border-bottom: none;
-        }
-        
-        .receipt-total {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            font-size: 1rem;
-            font-weight: 700;
-            border-top: 2px solid var(--border-color);
-            margin-top: 8px;
-        }
-        
-        .receipt-footer {
-            text-align: center;
-            border-top: 2px dashed var(--border-color);
-            padding-top: 16px;
-            margin-top: 16px;
+            padding: 3px 0;
             font-size: 0.7rem;
-            color: var(--text-secondary);
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 18px;
-            border-radius: 8px;
+        .receipt-item .item-name {
+            flex: 1;
+        }
+        
+        .receipt-item .item-price {
             font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
+            white-space: nowrap;
+            margin-left: 10px;
         }
         
-        .btn-primary {
-            background: var(--primary);
-            color: white;
+        .receipt-item .item-qty {
+            color: #64748B;
+            margin-right: 8px;
         }
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 1px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
         
         /* ================================================================
-           CARD
+           RECEIPT TOTALS
            ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: 14px;
-            padding: 18px 20px;
-            border: 1px solid var(--border-color);
-            transition: all 0.3s;
-            box-shadow: var(--shadow-sm);
+        .receipt-totals {
+            margin: 8px 0;
         }
         
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .card-header {
+        .receipt-total-row {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
+            padding: 3px 0;
+            font-size: 0.75rem;
         }
         
-        .card-title {
-            font-size: 0.9rem;
+        .receipt-total-row .label {
+            color: #64748B;
+        }
+        
+        .receipt-total-row .value {
             font-weight: 600;
-            color: var(--text-primary);
+        }
+        
+        .receipt-grand-total {
+            border-top: 2px solid #333;
+            padding-top: 6px;
+            margin-top: 4px;
+            font-size: 0.9rem;
+            font-weight: 700;
+        }
+        
+        .receipt-grand-total .value {
+            color: #0B5ED7;
         }
         
         /* ================================================================
-           BADGES
+           PAYMENT STATUS BADGE
            ================================================================ */
-        .role-badge-display {
+        .payment-status {
             display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
             padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
+            border-radius: 4px;
+            font-size: 0.6rem;
+            font-weight: 700;
             text-transform: uppercase;
         }
         
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
+        .payment-status.paid {
+            background: #D1FAE5;
+            color: #059669;
         }
         
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
+        .payment-status.pending {
+            background: #FEF3C7;
+            color: #D97706;
         }
         
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
+        .payment-status.partial {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        .payment-status.cancelled {
+            background: #FEE2E2;
+            color: #DC2626;
         }
         
         /* ================================================================
-           TOAST
+           RECEIPT FOOTER
            ================================================================ */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
+        .receipt-footer {
             text-align: center;
+            font-size: 0.6rem;
+            color: #94A3B8;
+            padding-top: 12px;
+            border-top: 2px dashed #333;
+            margin-top: 12px;
+        }
+        
+        .receipt-footer .footer-brand {
+            color: #0B5ED7;
+            font-weight: 700;
             font-size: 0.7rem;
-            color: var(--text-secondary);
         }
         
-        .footer .footer-brand { 
-            color: var(--primary); 
-            font-weight: 600; 
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .receipt-container { padding: 16px; }
-        }
-        
-        @media (max-width: 640px) {
-            .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .receipt-container { padding: 12px; }
+        .receipt-footer .footer-divider {
+            margin: 4px 0;
+            border: none;
+            border-top: 1px dashed #E2E8F0;
         }
         
         /* ================================================================
-           ANIMATIONS
+           ERROR MESSAGE - CLEAN DESIGN
            ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+        .error-box {
+            max-width: 420px;
+            margin: 0 auto;
+            background: #FEF2F2;
+            border: 2px solid #FCA5A5;
+            border-radius: 12px;
+            padding: 24px 28px;
+            text-align: center;
+            color: #991B1B;
         }
         
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
+        .error-box i {
+            font-size: 2.5rem;
+            display: block;
+            margin-bottom: 10px;
+            color: #DC2626;
         }
         
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+        .error-box h3 {
+            font-size: 1.1rem;
+            margin-bottom: 6px;
+            color: #991B1B;
         }
         
-        .spinner {
+        .error-box p {
+            font-size: 0.85rem;
+            color: #7F1D1D;
+        }
+        
+        .error-box .back-btn {
             display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
+            margin-top: 14px;
+            padding: 10px 24px;
+            background: #DC2626;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            font-family: 'Inter', sans-serif;
         }
         
-        @keyframes spin { to { transform: rotate(360deg); } }
+        .error-box .back-btn:hover {
+            background: #B91C1C;
+            transform: translateY(-2px);
+        }
+        
+        .error-box .back-btn i {
+            font-size: 0.85rem;
+            display: inline;
+            margin-bottom: 0;
+            color: white;
+        }
         
         /* ================================================================
            PRINT STYLES
            ================================================================ */
         @media print {
-            .no-print {
-                display: none !important;
+            body {
+                background: white;
+                padding: 0;
+                margin: 0;
             }
             
-            .main-content {
-                margin: 0 !important;
-                padding: 0 !important;
+            .receipt-wrapper {
+                max-width: 100%;
+                margin: 0;
             }
             
-            .receipt-container {
-                box-shadow: none !important;
-                border: none !important;
-                padding: 20px !important;
+            .receipt {
+                border-radius: 0;
+                box-shadow: none;
+                padding: 15px 18px;
             }
             
             .page-header {
                 display: none !important;
             }
             
-            .footer {
+            .receipt-logo {
+                max-width: 100px;
+                max-height: 60px;
+            }
+            
+            .receipt-logo-text {
+                font-size: 1.4rem;
+            }
+            
+            .no-print {
                 display: none !important;
             }
             
-            .top-nav {
+            .error-box {
                 display: none !important;
             }
+        }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 480px) {
+            .receipt {
+                padding: 16px 18px;
+            }
             
-            .sidebar {
-                display: none !important;
+            .receipt-logo-text {
+                font-size: 1.3rem;
+            }
+            
+            .page-header {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            
+            .page-header .back-link,
+            .page-header .print-link {
+                flex: 1;
+                text-align: center;
+                font-size: 0.75rem;
+                padding: 6px 12px;
             }
         }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+<div class="receipt-wrapper">
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
-<main class="main-content">
-
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
+    <!-- ============================================================ -->
+    <!-- PAGE HEADER - HIDDEN WHEN PRINTING -->
+    <!-- BACK BUTTON GOES TO PAID_BILLS.PHP -->
+    <!-- ============================================================ -->
     <div class="page-header no-print">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-print"></i>
-                Print Receipt
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
-                <span class="update-badge-light" id="updateBadge">
-                    <i class="fas fa-sync-alt fa-spin"></i> Live
-                </span>
-            </h1>
-            <p class="page-subtitle">
-                <i class="fas fa-receipt"></i>
-                Print receipt for paid bill
-                
-                <span class="header-badge">
-                    <i class="fas fa-user"></i>
-                    <?= htmlspecialchars($receipt_data['patient_name'] ?? 'N/A') ?>
-                </span>
-            </p>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;" class="no-print">
-            <a href="pending_bills.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back
-            </a>
-            <button onclick="window.print()" class="btn-outline-light" style="background:rgba(255,255,255,0.25);">
-                <i class="fas fa-print"></i> Print
-            </button>
-            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
-                <i class="fas fa-sync-alt"></i> Refresh
-            </button>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- SELECT RECEIPT - Dropdown -->
-    <!-- ================================================================ -->
-    <div class="card no-print mb-5" style="max-width:600px;margin:0 auto 20px;">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i> Select Receipt
-            </h3>
-        </div>
-        <form method="GET" action="">
-            <div class="flex gap-3">
-                <select name="receipt_id" class="form-control" style="flex:1;padding:8px 12px;border:2px solid var(--border-color);border-radius:8px;background:var(--bg-card);color:var(--text-primary);">
-                    <option value="">-- Select Receipt --</option>
-                    <?php foreach ($recent_receipts as $receipt): ?>
-                        <option value="<?= $receipt['id'] ?>" <?= ($receipt_id == $receipt['id']) ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($receipt['receipt_number']) ?> - <?= htmlspecialchars($receipt['patient_name']) ?> (<?= date('M d, Y', strtotime($receipt['printed_at'])) ?>)
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <button type="submit" class="btn btn-primary">View</button>
-            </div>
-        </form>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- RECEIPT -->
-    <!-- ================================================================ -->
-    <?php if (!empty($receipt_data)): ?>
-    <div class="receipt-container animate-fade-in-up" id="receiptContainer">
-        
-        <!-- Receipt Header -->
-        <div class="receipt-header">
-            <div class="clinic-name">🏥 Braick Dispensary</div>
-            <div class="clinic-address"><?= htmlspecialchars($branch_name) ?>, Tanzania</div>
-            <div class="clinic-address"><?= date('Y') ?></div>
-            <div class="receipt-title">PATIENT RECEIPT</div>
-            <div class="receipt-number">#<?= htmlspecialchars($receipt_data['receipt_number'] ?? 'N/A') ?></div>
-        </div>
-        
-        <!-- Patient & Bill Info -->
-        <div class="receipt-row">
-            <span class="label">Bill Number</span>
-            <span class="value"><?= htmlspecialchars($receipt_data['bill_number'] ?? 'N/A') ?></span>
-        </div>
-        <div class="receipt-row">
-            <span class="label">Patient</span>
-            <span class="value"><?= htmlspecialchars($receipt_data['patient_name'] ?? 'N/A') ?></span>
-        </div>
-        <div class="receipt-row">
-            <span class="label">Patient ID</span>
-            <span class="value"><?= htmlspecialchars($receipt_data['patient_id'] ?? 'N/A') ?></span>
-        </div>
-        <div class="receipt-row">
-            <span class="label">Phone</span>
-            <span class="value"><?= htmlspecialchars($receipt_data['phone'] ?? 'N/A') ?></span>
-        </div>
-        <div class="receipt-row">
-            <span class="label">Visit Type</span>
-            <span class="value"><?= ucfirst(htmlspecialchars($receipt_data['visit_type'] ?? 'N/A')) ?></span>
-        </div>
-        <div class="receipt-row">
-            <span class="label">Doctor</span>
-            <span class="value">Dr. <?= htmlspecialchars($receipt_data['doctor_name'] ?? 'Not Assigned') ?></span>
-        </div>
-        <div class="receipt-row">
-            <span class="label">Date</span>
-            <span class="value"><?= isset($receipt_data['created_at']) ? date('F d, Y h:i A', strtotime($receipt_data['created_at'])) : 'N/A' ?></span>
-        </div>
-        
-        <div class="receipt-divider"></div>
-        
-        <!-- Items -->
-        <div class="receipt-items">
-            <div class="receipt-row" style="font-weight:600;border-bottom:1px solid var(--border-color);padding-bottom:4px;margin-bottom:4px;">
-                <span>Item</span>
-                <span>Amount</span>
-            </div>
-            <?php if (count($bill_items) > 0): ?>
-                <?php foreach ($bill_items as $item): ?>
-                    <div class="receipt-item">
-                        <span><?= htmlspecialchars($item['item_name']) ?></span>
-                        <span>TSh <?= number_format($item['total_price'] ?? 0) ?></span>
-                    </div>
-                <?php endforeach; ?>
-            <?php else: ?>
-                <div class="receipt-item">
-                    <span>Consultation Fee</span>
-                    <span>TSh <?= number_format($receipt_data['total_amount'] ?? 0) ?></span>
-                </div>
-            <?php endif; ?>
-        </div>
-        
-        <div class="receipt-divider"></div>
-        
-        <!-- Totals -->
-        <div class="receipt-row">
-            <span class="label">Subtotal</span>
-            <span class="value">TSh <?= number_format($receipt_data['total_amount'] ?? 0) ?></span>
-        </div>
-        <div class="receipt-row">
-            <span class="label">Discount</span>
-            <span class="value">TSh 0</span>
-        </div>
-        <div class="receipt-total">
-            <span>TOTAL</span>
-            <span>TSh <?= number_format($receipt_data['total_amount'] ?? 0) ?></span>
-        </div>
-        
-        <!-- Payment Details -->
-        <div class="receipt-divider"></div>
-        <div class="receipt-row">
-            <span class="label">Payment Method</span>
-            <span class="value"><?= strtoupper($payment_details['payment_method'] ?? $receipt_data['payment_method'] ?? 'CASH') ?></span>
-        </div>
-        <?php if (!empty($payment_details['reference_number'])): ?>
-        <div class="receipt-row">
-            <span class="label">Reference</span>
-            <span class="value"><?= htmlspecialchars($payment_details['reference_number']) ?></span>
-        </div>
-        <?php endif; ?>
-        <div class="receipt-row">
-            <span class="label">Paid By</span>
-            <span class="value"><?= htmlspecialchars($receipt_data['cashier_name'] ?? $user_full_name) ?></span>
-        </div>
-        <div class="receipt-row">
-            <span class="label">Payment Date</span>
-            <span class="value"><?= isset($receipt_data['printed_at']) ? date('F d, Y h:i A', strtotime($receipt_data['printed_at'])) : date('F d, Y h:i A') ?></span>
-        </div>
-        
-        <!-- Footer -->
-        <div class="receipt-footer">
-            <p>Thank you for choosing Braick Dispensary</p>
-            <p style="margin-top:4px;">This is a computer-generated receipt</p>
-            <p style="margin-top:4px;font-size:0.6rem;">Receipt #<?= htmlspecialchars($receipt_data['receipt_number'] ?? 'N/A') ?></p>
-        </div>
-        
-    </div>
-    
-    <!-- Print Actions -->
-    <div class="text-center mt-4 no-print">
-        <button onclick="window.print()" class="btn btn-success" style="padding:12px 32px;font-size:1rem;">
-            <i class="fas fa-print"></i> Print Receipt
-        </button>
-        <a href="pending_bills.php" class="btn btn-outline" style="padding:12px 32px;font-size:1rem;">
+        <a href="paid_bills.php" class="back-link">
             <i class="fas fa-arrow-left"></i> Back
         </a>
+        <button onclick="window.print()" class="print-link">
+            <i class="fas fa-print"></i> Print
+        </button>
     </div>
-    
+
+    <!-- ============================================================ -->
+    <!-- ERROR MESSAGE - CLEAN AND PROFESSIONAL -->
+    <!-- ============================================================ -->
+    <?php if ($has_error): ?>
+    <div class="error-box">
+        <i class="fas fa-exclamation-circle"></i>
+        <h3>Oops! Something went wrong</h3>
+        <p><?= htmlspecialchars($error_message) ?></p>
+        <a href="paid_bills.php" class="back-btn">
+            <i class="fas fa-arrow-left"></i> Back to Bills
+        </a>
+    </div>
     <?php else: ?>
-    
-    <!-- No Receipt Found -->
-    <div class="text-center py-8 text-gray-400" style="max-width:600px;margin:0 auto;">
-        <i class="fas fa-receipt text-4xl block mb-3"></i>
-        <p class="text-lg">No receipt found</p>
-        <p class="text-sm mt-1">Select a receipt from the dropdown above or process a payment first</p>
-        <a href="pending_bills.php" class="text-primary hover:underline mt-2 block">Go to Pending Bills</a>
+
+    <!-- ============================================================ -->
+    <!-- RECEIPT -->
+    <!-- ============================================================ -->
+    <div class="receipt" id="receipt">
+        
+        <!-- ============================================================ -->
+        <!-- RECEIPT HEADER WITH LOGO -->
+        <!-- ============================================================ -->
+        <div class="receipt-header">
+            <?php if ($logo_available): ?>
+                <img src="<?= $logo_base64 ?>" alt="Braick Dispensary Logo" class="receipt-logo">
+            <?php else: ?>
+                <div class="receipt-logo-text">
+                    Braick <span>Dispensary</span>
+                </div>
+            <?php endif; ?>
+            
+            <div class="receipt-title">Official Receipt</div>
+            <div class="receipt-subtitle">
+                <?= htmlspecialchars($bill['branch_name'] ?? $site_name) ?>
+                <?php if (!empty($bill['branch_location'])): ?>
+                    <br><?= htmlspecialchars($bill['branch_location']) ?>
+                <?php endif; ?>
+            </div>
+            <hr class="receipt-divider">
+            <div class="receipt-row" style="justify-content:center;gap:12px;font-size:0.6rem;color:#64748B;">
+                <span>Tel: <?= htmlspecialchars($site_phone) ?></span>
+                <span>Email: <?= htmlspecialchars($site_email) ?></span>
+            </div>
+        </div>
+        
+        <!-- ============================================================ -->
+        <!-- RECEIPT BODY -->
+        <!-- ============================================================ -->
+        <div class="receipt-body">
+            
+            <!-- Bill Info -->
+            <div class="receipt-row">
+                <span class="label">Receipt #</span>
+                <span class="value bold"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></span>
+            </div>
+            <div class="receipt-row">
+                <span class="label">Date</span>
+                <span class="value"><?= isset($bill['created_at']) ? date('d/m/Y h:i A', strtotime($bill['created_at'])) : 'N/A' ?></span>
+            </div>
+            <div class="receipt-row">
+                <span class="label">Status</span>
+                <span class="value">
+                    <span class="payment-status <?= $bill['status'] ?? 'pending' ?>">
+                        <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                    </span>
+                </span>
+            </div>
+            
+            <hr class="receipt-divider">
+            
+            <!-- Patient Info -->
+            <div class="receipt-row">
+                <span class="label">Patient</span>
+                <span class="value"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></span>
+            </div>
+            <div class="receipt-row">
+                <span class="label">Patient ID</span>
+                <span class="value"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></span>
+            </div>
+            <?php if (!empty($bill['phone'])): ?>
+            <div class="receipt-row">
+                <span class="label">Phone</span>
+                <span class="value"><?= htmlspecialchars($bill['phone']) ?></span>
+            </div>
+            <?php endif; ?>
+            
+            <?php if (!empty($bill['visit_number'])): ?>
+            <div class="receipt-row">
+                <span class="label">Visit #</span>
+                <span class="value"><?= htmlspecialchars($bill['visit_number']) ?></span>
+            </div>
+            <?php endif; ?>
+            
+            <?php if (!empty($bill['visit_type'])): ?>
+            <div class="receipt-row">
+                <span class="label">Visit Type</span>
+                <span class="value capitalize"><?= htmlspecialchars($bill['visit_type']) ?></span>
+            </div>
+            <?php endif; ?>
+            
+            <!-- ============================================================ -->
+            <!-- BILL ITEMS -->
+            <!-- ============================================================ -->
+            <div class="receipt-items">
+                <div class="receipt-row" style="font-weight:700;border-bottom:1px solid #E2E8F0;padding-bottom:4px;margin-bottom:4px;">
+                    <span>Item</span>
+                    <span>Amount</span>
+                </div>
+                
+                <?php if (!empty($items) && count($items) > 0): ?>
+                    <?php foreach ($items as $item): ?>
+                        <div class="receipt-item">
+                            <span class="item-name">
+                                <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?>
+                                <?php if (isset($item['quantity']) && $item['quantity'] > 1): ?>
+                                    <span class="item-qty">x<?= $item['quantity'] ?></span>
+                                <?php endif; ?>
+                            </span>
+                            <span class="item-price">
+                                <?= $currency ?> <?= number_format($item['total_price'] ?? $item['unit_price'] ?? 0, 0) ?>
+                            </span>
+                        </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <div class="receipt-item">
+                        <span class="item-name" style="color:#94A3B8;">No items</span>
+                        <span class="item-price" style="color:#94A3B8;"><?= $currency ?> 0</span>
+                    </div>
+                <?php endif; ?>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- TOTALS -->
+            <!-- ============================================================ -->
+            <div class="receipt-totals">
+                <div class="receipt-total-row">
+                    <span class="label">Subtotal</span>
+                    <span class="value"><?= $currency ?> <?= number_format($bill['subtotal'] ?? 0, 0) ?></span>
+                </div>
+                
+                <?php if (($bill['discount_amount'] ?? 0) > 0): ?>
+                <div class="receipt-total-row">
+                    <span class="label">Discount (<?= $bill['discount_percent'] ?? 0 ?>%)</span>
+                    <span class="value" style="color:#DC2626;">-<?= $currency ?> <?= number_format($bill['discount_amount'] ?? 0, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if (($bill['tax_amount'] ?? 0) > 0): ?>
+                <div class="receipt-total-row">
+                    <span class="label">Tax</span>
+                    <span class="value"><?= $currency ?> <?= number_format($bill['tax_amount'] ?? 0, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <div class="receipt-total-row receipt-grand-total">
+                    <span class="label">Total</span>
+                    <span class="value"><?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?></span>
+                </div>
+                
+                <?php if (($bill['amount_paid'] ?? 0) > 0): ?>
+                <div class="receipt-total-row" style="border-top:1px dashed #E2E8F0;padding-top:4px;margin-top:4px;">
+                    <span class="label">Amount Paid</span>
+                    <span class="value" style="color:#059669;"><?= $currency ?> <?= number_format($bill['amount_paid'] ?? 0, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if (($bill['balance'] ?? 0) > 0): ?>
+                <div class="receipt-total-row" style="border-top:1px dashed #E2E8F0;padding-top:4px;">
+                    <span class="label">Balance</span>
+                    <span class="value" style="color:#DC2626;"><?= $currency ?> <?= number_format($bill['balance'] ?? 0, 0) ?></span>
+                </div>
+                <?php endif; ?>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- PAYMENT INFO -->
+            <!-- ============================================================ -->
+            <?php if ($payment): ?>
+            <hr class="receipt-divider">
+            <div class="receipt-row">
+                <span class="label">Payment Method</span>
+                <span class="value capitalize"><?= htmlspecialchars($payment['payment_method'] ?? 'N/A') ?></span>
+            </div>
+            <?php if (!empty($payment['reference_number'])): ?>
+            <div class="receipt-row">
+                <span class="label">Reference #</span>
+                <span class="value"><?= htmlspecialchars($payment['reference_number']) ?></span>
+            </div>
+            <?php endif; ?>
+            <div class="receipt-row">
+                <span class="label">Received By</span>
+                <span class="value"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></span>
+            </div>
+            <div class="receipt-row">
+                <span class="label">Received At</span>
+                <span class="value"><?= isset($payment['received_at']) ? date('d/m/Y h:i A', strtotime($payment['received_at'])) : 'N/A' ?></span>
+            </div>
+            <?php endif; ?>
+            
+            <!-- ============================================================ -->
+            <!-- RECEIPT FOOTER -->
+            <!-- ============================================================ -->
+            <div class="receipt-footer">
+                <div class="footer-brand"><?= htmlspecialchars($site_name) ?></div>
+                <hr class="footer-divider">
+                <p style="margin:2px 0;">
+                    <?= htmlspecialchars($bill['branch_name'] ?? '') ?>
+                    <?php if (!empty($bill['branch_location'])): ?>
+                        <br><?= htmlspecialchars($bill['branch_location']) ?>
+                    <?php endif; ?>
+                </p>
+                <p style="margin:2px 0;font-size:0.55rem;">
+                    Tel: <?= htmlspecialchars($site_phone) ?>
+                    | Email: <?= htmlspecialchars($site_email) ?>
+                </p>
+                <hr class="footer-divider">
+                <p style="margin:2px 0;font-size:0.5rem;color:#94A3B8;">
+                    <?= date('d/m/Y h:i A') ?>
+                </p>
+                <p style="margin:2px 0;font-size:0.5rem;color:#94A3B8;">
+                    Thank you for choosing <?= htmlspecialchars($site_name) ?>
+                </p>
+                <p style="margin:2px 0;font-size:0.45rem;color:#CBD5E1;">
+                    This is a computer generated receipt
+                </p>
+            </div>
+            
+        </div>
+        
     </div>
-    
     <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer no-print">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Print Receipt
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTimestamp">● Live</span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
-
-</main>
-
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
+    
 </div>
 
 <!-- ================================================================ -->
-<!-- CASHIER GLOBAL STATS AUTO-UPDATE -->
-<!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/cashier_global_stats.js"></script>
-
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // AUTO OPEN PRINT DIALOG - 500ms after page load
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
+    (function() {
+        // Check if there is no error
+        var hasError = <?= $has_error ? 'true' : 'false' ?>;
+        var autoPrint = <?= $auto_print ? 'true' : 'false' ?>;
         
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
+        if (!hasError && autoPrint) {
             setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
+                window.print();
+            }, 500);
+        }
+    })();
 
     // ================================================================
-    // MANUAL REFRESH
+    // KEYBOARD SHORTCUT - Ctrl+P works normally
     // ================================================================
-    function manualRefresh() {
-        var btn = document.getElementById('refreshBtn');
-        btn.innerHTML = '<span class="spinner"></span> Loading...';
-        btn.disabled = true;
-        
-        setTimeout(function() {
-            window.location.reload();
-        }, 1000);
-        
-        setTimeout(function() {
-            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
-            btn.disabled = false;
-            showToast('✅ Refreshed', 'Page data updated manually', 'success');
-        }, 2000);
-    }
-
-    // ================================================================
-    // MONITOR CASHIER STATS
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var checkCashierStats = setInterval(function() {
-            if (window.CashierStats) {
-                console.log('%c💰 Cashier Stats System Connected', 'font-size:14px; font-weight:bold; color:#34D399;');
-                console.log('%c🔄 Auto-update every ' + window.CashierStats.config.updateInterval / 1000 + ' seconds', 'font-size:12px; color:#64748B;');
-                clearInterval(checkCashierStats);
-            }
-        }, 500);
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+            // Allow default print behavior
+        }
     });
 
-    console.log('%c🧾 Braick - Print Receipt', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🧾 Receipt: <?= htmlspecialchars($receipt_data['receipt_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c👤 Patient: <?= htmlspecialchars($receipt_data['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Amount: TSh <?= number_format($receipt_data['total_amount'] ?? 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click Print button to print receipt', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🧾 Braick - Receipt Print', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔙 Back button goes to paid_bills.php', 'font-size:13px; color:#34D399;');
+    console.log('%c🖨️ Auto-print: <?= $auto_print ? '✅ Enabled' : '❌ Disabled (click Print button)' ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c💡 Add ?print=1 to URL for auto-print', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>
