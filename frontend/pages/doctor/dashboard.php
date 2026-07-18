@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/dashboard.php
-// DOCTOR DASHBOARD - FULL VERSION
+// DOCTOR DASHBOARD - FULL VERSION WITH AUTO-UPDATE
 // 8 CLICKABLE CARDS - SMART AUTO-UPDATE (3 SECONDS)
 // BRAICK DISPENSARY
 // ================================================================
@@ -12,7 +12,6 @@ session_start();
 // IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    // Set default doctor - Dr. John Mushi (ID: 5)
     $_SESSION['user_id'] = 5;
     $_SESSION['doctor_id'] = 5;
     $_SESSION['full_name'] = 'Dr. John Mushi';
@@ -38,28 +37,7 @@ $doctor_id = $_SESSION['user_id'] ?? $_SESSION['doctor_id'] ?? 5;
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
-
-// ================================================================
-// FUNCTIONS - Check if already defined to avoid duplication
-// ================================================================
-if (!function_exists('time_ago')) {
-    function time_ago($timestamp) {
-        if (empty($timestamp)) return 'N/A';
-        try {
-            $time = strtotime($timestamp);
-            if ($time === false) return 'N/A';
-            $diff = time() - $time;
-            if ($diff < 60) return 'Just now';
-            if ($diff < 3600) return floor($diff / 60) . 'm ago';
-            if ($diff < 86400) return floor($diff / 3600) . 'h ago';
-            if ($diff < 604800) return floor($diff / 86400) . 'd ago';
-            if ($diff < 2592000) return floor($diff / 604800) . 'w ago';
-            return date('M d, Y', $time);
-        } catch (Exception $e) {
-            return 'N/A';
-        }
-    }
-}
+$doctor_branch_name = 'Dodoma';
 
 // ================================================================
 // INCLUDE DATABASE
@@ -68,7 +46,7 @@ require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET DOCTOR DATA FROM DATABASE (OVERRIDE SESSION IF NEEDED)
+// GET DOCTOR DATA FROM DATABASE
 // ================================================================
 try {
     $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, is_online, profile_pic FROM users WHERE id = ? AND role = 'doctor'");
@@ -85,24 +63,21 @@ try {
         $_SESSION['full_name'] = $doctor_name;
         $_SESSION['user_id'] = $doctor_id;
         $_SESSION['doctor_id'] = $doctor_id;
-    } else {
-        // If doctor not found, use Dr. John Mushi
-        $doctor_id = 5;
-        $doctor_name = 'Dr. John Mushi';
-        $doctor_branch_id = 1;
-        $doctor_specialty = 'General Medicine';
-        $_SESSION['user_id'] = 5;
-        $_SESSION['doctor_id'] = 5;
-        $_SESSION['full_name'] = 'Dr. John Mushi';
-        $_SESSION['is_online'] = 1;
     }
 } catch (Exception $e) {
-    // Use session values if database fails
     error_log("Dashboard database error: " . $e->getMessage());
-    $doctor_id = $_SESSION['user_id'] ?? 5;
-    $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
-    $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
-    $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+}
+
+// Get branch name
+try {
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([$doctor_branch_id]);
+    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch_data) {
+        $doctor_branch_name = $branch_data['name'];
+    }
+} catch (Exception $e) {
+    $doctor_branch_name = 'Branch';
 }
 
 // ================================================================
@@ -111,7 +86,7 @@ try {
 $today = date('Y-m-d');
 
 // ================================================================
-// GET INITIAL STATISTICS
+// GET INITIAL STATISTICS FOR RENDERING
 // ================================================================
 
 // 1. Today's Patients
@@ -192,11 +167,7 @@ $lab_tests_pending = $lab_tests['pending'] ?? 0;
 $lab_tests_completed = $lab_tests['completed'] ?? 0;
 
 // 9. Pending Visits Count
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? AND status IN ('pending', 'assigned')
-");
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned')");
 $stmt->execute([$doctor_id]);
 $pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
@@ -277,40 +248,12 @@ $stmt = $db->prepare("
 $stmt->execute([$doctor_id, $doctor_id]);
 $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 14. Get Doctor's Branch Name
-$doctor_branch_name = 'Not Assigned';
-try {
-    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
-    $stmt->execute([$doctor_branch_id]);
-    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($branch_data) {
-        $doctor_branch_name = $branch_data['name'];
-    }
-} catch (Exception $e) {
-    $doctor_branch_name = 'Branch';
-}
-
-// ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests_sidebar = $lab_tests_pending;
-$pending_prescriptions_sidebar = 0;
-
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
 ?>
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT - REST OF THE FILE STAYS THE SAME -->
-<!-- ================================================================ -->
-<!-- ... (the rest of the HTML stays exactly as it was) ... -->
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -374,7 +317,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <span class="pulse-dot"></span>
                     </a>
                 <?php endif; ?>
-                <button onclick="manualRefresh()" class="btn-refresh" id="refreshBtn">
+                <button onclick="DoctorStats.refresh()" class="btn-refresh" id="refreshBtn">
                     <i class="fas fa-sync-alt"></i>
                     <span>Refresh</span>
                 </button>
@@ -794,52 +737,91 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <style>
     /* ================================================================
-       CLICKABLE CARDS
+       FULL STYLES - Same as before
        ================================================================ */
-    .card-clickable {
-        text-decoration: none;
-        color: inherit;
-        display: block;
-        cursor: pointer;
+    
+    /* Reset & Base */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    :root {
+        --primary: #0B5ED7;
+        --primary-dark: #0A4CA8;
+        --primary-light: #6EA8FE;
+        --primary-bg: #E8F0FE;
+        --success: #059669;
+        --success-dark: #047857;
+        --success-light: #34D399;
+        --success-bg: #D1FAE5;
+        --danger: #DC2626;
+        --danger-dark: #B91C1C;
+        --danger-light: #F87171;
+        --danger-bg: #FEE2E2;
+        --warning: #D97706;
+        --warning-bg: #FEF3C7;
+        --white: #FFFFFF;
+        --gray-50: #F8FAFC;
+        --gray-100: #F1F5F9;
+        --gray-200: #E2E8F0;
+        --gray-300: #CBD5E1;
+        --gray-400: #94A3B8;
+        --gray-500: #64748B;
+        --gray-600: #475569;
+        --gray-700: #334155;
+        --gray-800: #1E293B;
+        --gray-900: #0F172A;
+        --bg-body: #F1F5F9;
+        --bg-card: #FFFFFF;
+        --bg-nav: #FFFFFF;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --border-color: #E2E8F0;
+        --shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.07);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.1);
+    }
+    
+    [data-theme="dark"] {
+        --bg-body: #0F172A;
+        --bg-card: #1E293B;
+        --bg-nav: #1E293B;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --border-color: #334155;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.4);
+    }
+    
+    body {
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    /* Main Content */
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 24px 28px;
+        min-height: calc(100vh - 68px);
         transition: all 0.3s ease;
     }
     
-    .card-clickable:hover {
-        transform: translateY(-6px);
-        box-shadow: 0 12px 40px rgba(0,0,0,0.12);
-    }
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg-body); }
+    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
     
-    .card-clickable .stat-card-inner {
-        pointer-events: none;
-    }
-    
-    .card-clickable .stat-card-progress {
-        pointer-events: none;
-    }
-    
-    /* ================================================================
-       UPDATE BADGE
-       ================================================================ */
-    .update-badge {
-        background: rgba(255,255,255,0.1);
-        color: #93C5FD;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 500;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    
-    .update-badge .fa-spin {
-        animation: fa-spin 2s infinite linear;
-    }
-    
-    @keyframes fa-spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
+    /* Grid */
+    .grid { display: grid; }
+    .grid-cols-1 { grid-template-columns: 1fr; }
+    .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+    .grid-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+    .gap-6 { gap: 24px; }
+    .mb-6 { margin-bottom: 24px; }
+    .lg\:col-span-2 { grid-column: span 2; }
+    .lg\:col-span-3 { grid-column: span 3; }
     
     /* ================================================================
        WELCOME HERO
@@ -861,17 +843,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         width: 300px;
         height: 300px;
         background: rgba(255,255,255,0.05);
-        border-radius: 50%;
-    }
-    
-    .welcome-hero::after {
-        content: '';
-        position: absolute;
-        bottom: -30%;
-        left: -10%;
-        width: 200px;
-        height: 200px;
-        background: rgba(255,255,255,0.03);
         border-radius: 50%;
     }
     
@@ -897,10 +868,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         gap: 14px;
     }
     
-    .greeting-icon {
-        font-size: 2.2rem;
-        line-height: 1;
-    }
+    .greeting-icon { font-size: 2.2rem; line-height: 1; }
     
     .welcome-title {
         font-size: 1.6rem;
@@ -909,9 +877,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         margin: 0;
     }
     
-    .welcome-title .doctor-name {
-        color: #93C5FD;
-    }
+    .welcome-title .doctor-name { color: #93C5FD; }
     
     .welcome-subtitle {
         display: flex;
@@ -957,6 +923,21 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         align-items: center;
         gap: 6px;
     }
+    
+    .update-badge {
+        background: rgba(255,255,255,0.1);
+        color: #93C5FD;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .update-badge .fa-spin { animation: fa-spin 2s infinite linear; }
+    @keyframes fa-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     
     .welcome-stats-mini {
         display: flex;
@@ -1066,23 +1047,26 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         margin-bottom: 18px;
     }
     
-    .stats-grid-bottom {
-        margin-bottom: 28px;
-    }
+    .stats-grid-bottom { margin-bottom: 28px; }
     
     .stat-card {
-        background: white;
+        background: var(--bg-card);
         border-radius: 16px;
         padding: 20px 22px;
-        border: 1px solid #E2E8F0;
+        border: 1px solid var(--border-color);
         transition: all 0.3s ease;
         position: relative;
         overflow: hidden;
+        cursor: pointer;
+        text-decoration: none;
+        display: block;
+        color: inherit;
     }
     
     .stat-card:hover {
         transform: translateY(-4px);
-        box-shadow: 0 12px 40px rgba(0,0,0,0.08);
+        box-shadow: var(--shadow-lg);
+        border-color: var(--primary);
     }
     
     .stat-card-inner {
@@ -1123,7 +1107,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .stat-card-label {
         font-size: 0.75rem;
         font-weight: 500;
-        color: #94A3B8;
+        color: var(--text-secondary);
         text-transform: uppercase;
         letter-spacing: 0.04em;
     }
@@ -1131,12 +1115,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .stat-card-number {
         font-size: 1.8rem;
         font-weight: 700;
-        color: #1E293B;
+        color: var(--text-primary);
         line-height: 1.2;
         transition: all 0.3s ease;
     }
-    
-    .stat-card-number.text-orange { color: #D97706; }
     
     .stat-card-details {
         display: flex;
@@ -1160,7 +1142,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     
     .stat-card-trend {
         font-size: 0.65rem;
-        color: #94A3B8;
+        color: var(--text-secondary);
         font-weight: 500;
         display: flex;
         align-items: center;
@@ -1168,12 +1150,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .stat-card-trend .fa-arrow-up { color: #059669; }
-    .stat-card-trend .fa-clock { color: #D97706; }
-    .stat-card-trend .fa-check-circle { color: #059669; }
-    .stat-card-trend .fa-calendar-day { color: #0B5ED7; }
-    .stat-card-trend .fa-prescription { color: #0B5ED7; }
-    .stat-card-trend .fa-flask { color: #D97706; }
-    .stat-card-trend .fa-chart-line { color: #059669; }
     
     .stat-card-right {
         display: flex;
@@ -1190,10 +1166,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border-radius: 20px;
         min-width: 24px;
         text-align: center;
-    }
-    
-    .stat-card-badge.green {
-        background: #059669;
     }
     
     .stat-card-badge.danger {
@@ -1219,37 +1191,20 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     
     .stat-card-green .stat-card-progress { background: #059669; }
     
-    [data-theme="dark"] .stat-card {
-        background: #1E293B;
-        border-color: #334155;
-    }
-    [data-theme="dark"] .stat-card-number {
-        color: #F1F5F9;
-    }
-    [data-theme="dark"] .stat-card-label {
-        color: #94A3B8;
-    }
-    [data-theme="dark"] .stat-card-trend {
-        color: #64748B;
-    }
-    [data-theme="dark"] .stat-card:hover {
-        box-shadow: 0 12px 40px rgba(0,0,0,0.3);
-    }
-    
     /* ================================================================
        DASHBOARD CARDS
        ================================================================ */
     .dashboard-card {
-        background: white;
+        background: var(--bg-card);
         border-radius: 16px;
         padding: 20px 24px;
-        border: 1px solid #E2E8F0;
+        border: 1px solid var(--border-color);
         transition: all 0.3s ease;
     }
     
     .dashboard-card:hover {
-        border-color: #0B5ED7;
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
+        border-color: var(--primary);
+        box-shadow: var(--shadow-md);
     }
     
     .dashboard-card-header {
@@ -1264,7 +1219,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .dashboard-card-title {
         font-size: 0.95rem;
         font-weight: 600;
-        color: #1E293B;
+        color: var(--text-primary);
         display: flex;
         align-items: center;
         gap: 8px;
@@ -1278,7 +1233,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .dashboard-card-footer {
         padding-top: 14px;
         margin-top: 14px;
-        border-top: 1px solid #E2E8F0;
+        border-top: 1px solid var(--border-color);
         text-align: center;
     }
     
@@ -1290,21 +1245,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         transition: color 0.3s;
     }
     
-    .card-link:hover {
-        color: #0A4CA8;
-        text-decoration: underline;
-    }
-    
-    [data-theme="dark"] .dashboard-card {
-        background: #1E293B;
-        border-color: #334155;
-    }
-    [data-theme="dark"] .dashboard-card-title {
-        color: #F1F5F9;
-    }
-    [data-theme="dark"] .dashboard-card-footer {
-        border-color: #334155;
-    }
+    .card-link:hover { text-decoration: underline; color: #0A4CA8; }
     
     /* ================================================================
        CHART
@@ -1320,83 +1261,44 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     /* ================================================================
-       APPOINTMENTS
+       APPOINTMENTS LIST
        ================================================================ */
     .appointments-list {
         max-height: 220px;
         overflow-y: auto;
     }
     
-    .appointments-list::-webkit-scrollbar {
-        width: 4px;
-    }
-    .appointments-list::-webkit-scrollbar-track {
-        background: #F1F5F9;
-        border-radius: 4px;
-    }
-    .appointments-list::-webkit-scrollbar-thumb {
-        background: #0B5ED7;
-        border-radius: 4px;
-    }
-    
-    [data-theme="dark"] .appointments-list::-webkit-scrollbar-track {
-        background: #0F172A;
-    }
+    .appointments-list::-webkit-scrollbar { width: 4px; }
+    .appointments-list::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+    .appointments-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
     
     .appointment-item {
         display: flex;
         align-items: center;
         padding: 8px 12px;
-        border-bottom: 1px solid #F1F5F9;
+        border-bottom: 1px solid var(--border-color);
         gap: 12px;
         border-radius: 6px;
         transition: all 0.2s;
     }
     
-    .appointment-item:hover {
-        background: #E8F0FE;
-    }
-    
-    [data-theme="dark"] .appointment-item:hover {
-        background: #1E3A5F;
-    }
-    [data-theme="dark"] .appointment-item {
-        border-color: #334155;
-    }
-    
-    .appointment-item:last-child {
-        border-bottom: none;
-    }
+    .appointment-item:hover { background: var(--primary-bg); }
+    .appointment-item:last-child { border-bottom: none; }
     
     .appointment-time {
         font-weight: 600;
         font-size: 0.8rem;
-        color: #1E293B;
+        color: var(--text-primary);
         min-width: 55px;
     }
     
-    [data-theme="dark"] .appointment-time {
-        color: #F1F5F9;
-    }
-    
-    .appointment-patient {
-        flex: 1;
-    }
-    
+    .appointment-patient { flex: 1; }
     .appointment-name {
         font-weight: 500;
         font-size: 0.85rem;
-        color: #1E293B;
+        color: var(--text-primary);
     }
-    
-    [data-theme="dark"] .appointment-name {
-        color: #F1F5F9;
-    }
-    
-    .appointment-id {
-        font-size: 0.65rem;
-        color: #94A3B8;
-    }
+    .appointment-id { font-size: 0.65rem; color: var(--text-secondary); }
     
     .appointment-status {
         font-size: 0.6rem;
@@ -1412,97 +1314,50 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .appointment-status.cancelled { background: #FEE2E2; color: #EF4444; }
     .appointment-status.pending { background: #FEF3C7; color: #D97706; }
     
-    [data-theme="dark"] .appointment-status.scheduled { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .appointment-status.confirmed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .appointment-status.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .appointment-status.cancelled { background: #3A1A1A; color: #F87171; }
-    [data-theme="dark"] .appointment-status.pending { background: #3D2E0A; color: #FBBF24; }
-    
     /* ================================================================
        QUEUE
        ================================================================ */
-    .queue-card {
-        border-color: #FDE68A;
-    }
-    
-    [data-theme="dark"] .queue-card {
-        border-color: #3D2E0A;
-    }
-    
+    .queue-card { border-color: #FDE68A; }
     .queue-list {
         max-height: 300px;
         overflow-y: auto;
     }
-    
-    .queue-list::-webkit-scrollbar {
-        width: 4px;
-    }
-    .queue-list::-webkit-scrollbar-track {
-        background: #F1F5F9;
-        border-radius: 4px;
-    }
-    .queue-list::-webkit-scrollbar-thumb {
-        background: #0B5ED7;
-        border-radius: 4px;
-    }
-    
-    [data-theme="dark"] .queue-list::-webkit-scrollbar-track {
-        background: #0F172A;
-    }
+    .queue-list::-webkit-scrollbar { width: 4px; }
+    .queue-list::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+    .queue-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
     
     .queue-item {
         display: flex;
         align-items: center;
         padding: 10px 14px;
-        border-bottom: 1px solid #F1F5F9;
+        border-bottom: 1px solid var(--border-color);
         gap: 14px;
         border-radius: 8px;
         transition: all 0.2s;
     }
     
-    .queue-item:hover {
-        background: #F8FAFC;
-    }
-    
-    [data-theme="dark"] .queue-item:hover {
-        background: #0F172A;
-    }
-    [data-theme="dark"] .queue-item {
-        border-color: #334155;
-    }
-    
+    .queue-item:hover { background: var(--gray-50); }
     .queue-item-first {
-        background: #E8F0FE;
+        background: var(--primary-bg);
         border-left: 4px solid #0B5ED7;
         border-radius: 8px 0 0 8px;
-    }
-    
-    [data-theme="dark"] .queue-item-first {
-        background: #1E3A5F;
     }
     
     .queue-number {
         font-weight: 700;
         font-size: 0.9rem;
-        color: #94A3B8;
+        color: var(--text-secondary);
         min-width: 30px;
     }
     
-    .queue-patient {
-        flex: 1;
-    }
-    
+    .queue-patient { flex: 1; }
     .queue-name {
         font-weight: 500;
         font-size: 0.9rem;
-        color: #1E293B;
+        color: var(--text-primary);
         display: flex;
         align-items: center;
         gap: 8px;
-    }
-    
-    [data-theme="dark"] .queue-name {
-        color: #F1F5F9;
     }
     
     .queue-badge {
@@ -1515,10 +1370,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         animation: pulse-badge 2s infinite;
     }
     
-    .queue-details {
-        font-size: 0.65rem;
-        color: #94A3B8;
-    }
+    .queue-details { font-size: 0.65rem; color: var(--text-secondary); }
     
     .queue-waiting {
         text-align: right;
@@ -1529,15 +1381,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         gap: 2px;
     }
     
-    .queue-time {
-        font-size: 0.7rem;
-        color: #94A3B8;
-    }
-    
-    .queue-time-long {
-        color: #EF4444;
-        font-weight: 600;
-    }
+    .queue-time { font-size: 0.7rem; color: var(--text-secondary); }
+    .queue-time-long { color: #EF4444; font-weight: 600; }
     
     .queue-status {
         font-size: 0.6rem;
@@ -1551,13 +1396,52 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .queue-status.assigned { background: #EFF6FF; color: #0B5ED7; }
     .queue-status.with_doctor { background: #ECFDF5; color: #059669; }
     
-    [data-theme="dark"] .queue-status.pending { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .queue-status.assigned { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .queue-status.with_doctor { background: #1A3A2A; color: #34D399; }
+    .btn-consult {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: #7C3AED;
+        color: white;
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.3s;
+    }
     
-    .queue-action {
+    .btn-consult:hover { background: #6D28D9; transform: scale(1.05); }
+    .btn-consult-sm {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: #7C3AED;
+        color: white;
+        padding: 3px 10px;
+        border-radius: 6px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.3s;
         flex-shrink: 0;
     }
+    .btn-consult-sm:hover { background: #6D28D9; transform: scale(1.05); }
+    
+    .btn-view-sm {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: #0B5ED7;
+        color: white;
+        padding: 3px 10px;
+        border-radius: 6px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: all 0.3s;
+        flex-shrink: 0;
+    }
+    .btn-view-sm:hover { background: #0A4CA8; transform: scale(1.05); }
     
     /* ================================================================
        ACTIVITIES
@@ -1566,47 +1450,22 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         max-height: 260px;
         overflow-y: auto;
     }
-    
-    .activities-list::-webkit-scrollbar {
-        width: 4px;
-    }
-    .activities-list::-webkit-scrollbar-track {
-        background: #F1F5F9;
-        border-radius: 4px;
-    }
-    .activities-list::-webkit-scrollbar-thumb {
-        background: #0B5ED7;
-        border-radius: 4px;
-    }
-    
-    [data-theme="dark"] .activities-list::-webkit-scrollbar-track {
-        background: #0F172A;
-    }
+    .activities-list::-webkit-scrollbar { width: 4px; }
+    .activities-list::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+    .activities-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
     
     .activity-item {
         display: flex;
         align-items: center;
         gap: 12px;
         padding: 8px 12px;
-        border-bottom: 1px solid #F1F5F9;
+        border-bottom: 1px solid var(--border-color);
         border-radius: 6px;
         transition: all 0.2s;
     }
     
-    .activity-item:hover {
-        background: #F8FAFC;
-    }
-    
-    [data-theme="dark"] .activity-item:hover {
-        background: #0F172A;
-    }
-    [data-theme="dark"] .activity-item {
-        border-color: #334155;
-    }
-    
-    .activity-item:last-child {
-        border-bottom: none;
-    }
+    .activity-item:hover { background: var(--gray-50); }
+    .activity-item:last-child { border-bottom: none; }
     
     .activity-icon {
         width: 32px;
@@ -1623,38 +1482,17 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .activity-icon-blue { background: #0B5ED7; }
     .activity-icon-green { background: #059669; }
     
-    .activity-content {
-        flex: 1;
-        min-width: 0;
-    }
+    .activity-content { flex: 1; min-width: 0; }
     
     .activity-action {
         font-weight: 500;
         font-size: 0.85rem;
-        color: #1E293B;
+        color: var(--text-primary);
     }
     
-    [data-theme="dark"] .activity-action {
-        color: #F1F5F9;
-    }
-    
-    .activity-patient {
-        color: #94A3B8;
-        font-weight: 400;
-    }
-    
-    .activity-details {
-        font-size: 0.7rem;
-        color: #94A3B8;
-    }
-    
-    .activity-time {
-        color: #CBD5E1;
-    }
-    
-    [data-theme="dark"] .activity-time {
-        color: #64748B;
-    }
+    .activity-patient { color: var(--text-secondary); font-weight: 400; }
+    .activity-details { font-size: 0.7rem; color: var(--text-secondary); }
+    .activity-time { color: var(--gray-300); }
     
     /* ================================================================
        QUICK ACTIONS
@@ -1672,11 +1510,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         justify-content: center;
         padding: 16px 10px;
         border-radius: 12px;
-        border: 2px solid #E2E8F0;
-        background: white;
+        border: 2px solid var(--border-color);
+        background: var(--bg-card);
         transition: all 0.3s ease;
         text-decoration: none;
-        color: #1E293B;
+        color: var(--text-primary);
         cursor: pointer;
         gap: 6px;
     }
@@ -1684,94 +1522,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .quick-action:hover {
         border-color: #0B5ED7;
         transform: translateY(-3px);
-        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.1);
+        box-shadow: var(--shadow-lg);
     }
     
-    .quick-action i {
-        font-size: 1.3rem;
-    }
-    
-    .quick-action span {
-        font-size: 0.65rem;
-        font-weight: 500;
-        text-align: center;
-    }
-    
+    .quick-action i { font-size: 1.3rem; }
+    .quick-action span { font-size: 0.65rem; font-weight: 500; text-align: center; }
     .quick-action-blue i { color: #0B5ED7; }
     .quick-action-green i { color: #059669; }
-    
     .quick-action-blue:hover { border-color: #0B5ED7; }
     .quick-action-green:hover { border-color: #059669; }
-    
-    [data-theme="dark"] .quick-action {
-        background: #1E293B;
-        border-color: #334155;
-        color: #F1F5F9;
-    }
-    
-    /* ================================================================
-       BUTTONS
-       ================================================================ */
-    .btn-consult {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        background: #7C3AED;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-decoration: none;
-        transition: all 0.3s;
-        border: none;
-        cursor: pointer;
-    }
-    
-    .btn-consult:hover {
-        background: #6D28D9;
-        transform: scale(1.05);
-    }
-    
-    .btn-consult-sm {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        background: #7C3AED;
-        color: white;
-        padding: 3px 10px;
-        border-radius: 6px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        text-decoration: none;
-        transition: all 0.3s;
-        flex-shrink: 0;
-    }
-    
-    .btn-consult-sm:hover {
-        background: #6D28D9;
-        transform: scale(1.05);
-    }
-    
-    .btn-view-sm {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        background: #0B5ED7;
-        color: white;
-        padding: 3px 10px;
-        border-radius: 6px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        text-decoration: none;
-        transition: all 0.3s;
-        flex-shrink: 0;
-    }
-    
-    .btn-view-sm:hover {
-        background: #0A4CA8;
-        transform: scale(1.05);
-    }
     
     /* ================================================================
        EMPTY STATE
@@ -1779,37 +1538,20 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .empty-state {
         text-align: center;
         padding: 20px 10px;
-        color: #94A3B8;
+        color: var(--text-secondary);
     }
-    
     .empty-state i {
         font-size: 2rem;
-        color: #E2E8F0;
+        color: var(--border-color);
         display: block;
         margin-bottom: 6px;
     }
-    
-    .empty-state p {
-        font-size: 0.85rem;
-    }
-    
-    .empty-state-large {
-        padding: 30px 10px;
-    }
-    
-    .empty-state-large i {
-        font-size: 3rem;
-    }
-    
+    .empty-state p { font-size: 0.85rem; }
+    .empty-state-large { padding: 30px 10px; }
+    .empty-state-large i { font-size: 3rem; }
     .text-green-500 { color: #059669; }
-    .text-gray-400 { color: #94A3B8; }
+    .text-gray-400 { color: var(--text-secondary); }
     .text-xs { font-size: 0.75rem; }
-    .text-blue-500 { color: #0B5ED7; }
-    .text-orange { color: #D97706; }
-    
-    [data-theme="dark"] .empty-state i {
-        color: #334155;
-    }
     
     /* ================================================================
        TOAST
@@ -1831,12 +1573,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: white;
         box-shadow: 0 8px 30px rgba(0,0,0,0.2);
     }
-    
-    .toast-custom.show {
-        transform: translateY(0);
-        opacity: 1;
-    }
-    
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
     .toast-custom.success { background: #059669; }
     .toast-custom.error { background: #EF4444; }
     .toast-custom.info { background: #0B5ED7; }
@@ -1847,23 +1584,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
        ================================================================ */
     .footer {
         padding: 14px 0;
-        border-top: 2px solid #E2E8F0;
+        border-top: 2px solid var(--border-color);
         margin-top: 20px;
         text-align: center;
         font-size: 0.7rem;
-        color: #94A3B8;
+        color: var(--text-secondary);
     }
-    
-    .footer .footer-brand {
-        color: #0B5ED7;
-        font-weight: 600;
-    }
-    
-    [data-theme="dark"] .footer {
-        border-color: #334155;
-        color: #64748B;
-    }
-    
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
     .text-gray-300 { color: #D1D5DB; }
     .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
     
@@ -1871,141 +1598,88 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
        RESPONSIVE
        ================================================================ */
     @media (max-width: 1200px) {
-        .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
-        }
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
     }
-    
     @media (max-width: 1024px) {
-        .quick-actions-grid {
-            grid-template-columns: 1fr 1fr 1fr;
-        }
-        .welcome-hero {
-            padding: 20px 24px;
-        }
-        .welcome-title {
-            font-size: 1.3rem;
-        }
+        .quick-actions-grid { grid-template-columns: 1fr 1fr 1fr; }
+        .welcome-hero { padding: 20px 24px; }
+        .welcome-title { font-size: 1.3rem; }
+        .main-content { padding: 16px; }
     }
-    
     @media (max-width: 768px) {
-        .stats-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        .quick-actions-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        .welcome-hero-content {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-        .welcome-hero-right {
-            width: 100%;
-        }
-        .welcome-hero-right .btn-pulse,
-        .welcome-hero-right .btn-refresh {
-            flex: 1;
-            justify-content: center;
-        }
-        .stat-card-number {
-            font-size: 1.4rem;
-        }
-        .queue-item {
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        .queue-waiting {
-            flex-direction: row;
-            align-items: center;
-            margin-left: 0;
-            width: 100%;
-            gap: 10px;
-        }
-        .queue-action {
-            width: 100%;
-        }
-        .queue-action .btn-consult {
-            width: 100%;
-            justify-content: center;
-        }
-        .appointment-item {
-            flex-wrap: wrap;
-        }
-        .appointment-time {
-            min-width: 50px;
-        }
-        .activity-item {
-            flex-wrap: wrap;
-        }
-        .activity-item .btn-consult-sm,
-        .activity-item .btn-view-sm {
-            width: 100%;
-            justify-content: center;
-        }
-        .dashboard-card {
-            padding: 14px 16px;
-        }
-        .chart-container {
-            height: 160px;
-        }
-        .welcome-stats-mini {
-            flex-wrap: wrap;
-        }
-        .welcome-greeting {
-            flex-wrap: wrap;
-        }
-        .greeting-icon {
-            font-size: 1.8rem;
-        }
+        .stats-grid { grid-template-columns: 1fr 1fr; }
+        .quick-actions-grid { grid-template-columns: 1fr 1fr; }
+        .welcome-hero-content { flex-direction: column; align-items: flex-start; }
+        .welcome-hero-right { width: 100%; }
+        .welcome-hero-right .btn-pulse, .welcome-hero-right .btn-refresh { flex: 1; justify-content: center; }
+        .stat-card-number { font-size: 1.4rem; }
+        .queue-item { flex-wrap: wrap; gap: 6px; }
+        .queue-waiting { flex-direction: row; align-items: center; margin-left: 0; width: 100%; gap: 10px; }
+        .queue-action { width: 100%; }
+        .queue-action .btn-consult { width: 100%; justify-content: center; }
+        .appointment-item { flex-wrap: wrap; }
+        .appointment-time { min-width: 50px; }
+        .activity-item { flex-wrap: wrap; }
+        .activity-item .btn-consult-sm, .activity-item .btn-view-sm { width: 100%; justify-content: center; }
+        .dashboard-card { padding: 14px 16px; }
+        .chart-container { height: 160px; }
+        .welcome-stats-mini { flex-wrap: wrap; }
+        .welcome-greeting { flex-wrap: wrap; }
+        .greeting-icon { font-size: 1.8rem; }
+        .lg\:col-span-2 { grid-column: 1; }
     }
-    
     @media (max-width: 480px) {
-        .stats-grid {
-            grid-template-columns: 1fr;
-        }
-        .quick-actions-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        .stat-card-number {
-            font-size: 1.2rem;
-        }
-        .welcome-title {
-            font-size: 1.1rem;
-        }
-        .welcome-hero {
-            padding: 16px 18px;
-        }
-        .btn-pulse {
-            font-size: 0.75rem;
-            padding: 8px 14px;
-        }
-        .btn-refresh {
-            font-size: 0.75rem;
-            padding: 8px 14px;
-        }
-        .specialty-badge,
-        .branch-badge,
-        .date-badge {
-            font-size: 0.7rem;
-            padding: 2px 10px;
-        }
+        .stats-grid { grid-template-columns: 1fr; }
+        .quick-actions-grid { grid-template-columns: 1fr 1fr; }
+        .stat-card-number { font-size: 1.2rem; }
+        .welcome-title { font-size: 1.1rem; }
+        .welcome-hero { padding: 16px 18px; }
+        .btn-pulse { font-size: 0.75rem; padding: 8px 14px; }
+        .btn-refresh { font-size: 0.75rem; padding: 8px 14px; }
+        .specialty-badge, .branch-badge, .date-badge { font-size: 0.7rem; padding: 2px 10px; }
     }
     
-    @media print {
-        .top-nav, .sidebar, .btn, .footer { display: none !important; }
-        .main-content { margin: 0 !important; padding: 20px !important; }
-        .stat-card, .dashboard-card { border: 1px solid #ddd !important; box-shadow: none !important; }
-        .welcome-hero { background: #0B5ED7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        .stat-card-icon { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        .chart-container { height: 120px !important; }
-    }
+    /* Dark theme overrides */
+    [data-theme="dark"] .stat-card:hover { box-shadow: var(--shadow-lg); }
+    [data-theme="dark"] .queue-item-first { background: #1E3A5F; }
+    [data-theme="dark"] .queue-item:hover { background: #0F172A; }
+    [data-theme="dark"] .appointment-item:hover { background: #1E3A5F; }
+    [data-theme="dark"] .activity-item:hover { background: #0F172A; }
+    [data-theme="dark"] .queue-card { border-color: #3D2E0A; }
+    [data-theme="dark"] .appointment-status.scheduled { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .appointment-status.confirmed { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .appointment-status.completed { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .appointment-status.cancelled { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .appointment-status.pending { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .queue-status.pending { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .queue-status.assigned { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .queue-status.with_doctor { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .empty-state i { color: #334155; }
 </style>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH SMART AUTO-UPDATE (3 SECONDS) -->
+<!-- JAVASCRIPT - CHART & AUTO-UPDATE -->
 <!-- ================================================================ -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
 <script>
+    // ================================================================
+    // TIME AGO FUNCTION
+    // ================================================================
+    function time_ago(timestamp) {
+        if (!timestamp) return 'N/A';
+        try {
+            var time = new Date(timestamp);
+            if (isNaN(time.getTime())) return 'N/A';
+            var diff = Math.floor((Date.now() - time.getTime()) / 1000);
+            if (diff < 60) return 'Just now';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+            return time.toLocaleDateString();
+        } catch (e) { return 'N/A'; }
+    }
+    
     // ================================================================
     // CHART - INITIAL RENDER
     // ================================================================
@@ -2058,7 +1732,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         });
     }
-
+    
     // ================================================================
     // TOAST
     // ================================================================
@@ -2066,6 +1740,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
+        if (!toast) return;
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
@@ -2077,375 +1752,56 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 5000);
     }
-
-    // ================================================================
-    // HELPER FUNCTIONS
-    // ================================================================
-    function formatTime(datetime) {
-        var d = new Date(datetime);
-        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    }
     
-    function escapeHtml(text) {
-        var div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-    
-    function capitalize(text) {
-        return text.charAt(0).toUpperCase() + text.slice(1);
-    }
-
     // ================================================================
-    // SMART AUTO-UPDATE - UPDATES ONLY WHEN DATA CHANGES
+    // DARK MODE TOGGLE (if not already defined)
     // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-    var lastHash = null;
-    var updateCount = 0;
-    
-    function fetchAndUpdateStats() {
-        if (isUpdating) return;
-        isUpdating = true;
-        
-        updateCount++;
-        
-        // Update badge every 3 updates
-        if (updateCount % 3 === 0) {
-            document.getElementById('lastUpdateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Checking...';
-        }
-        
-        fetch('get_stats.php')
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    // Check if data has changed
-                    if (lastHash !== data.hash) {
-                        lastHash = data.hash;
-                        updateDashboard(data.data);
-                        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + data.data.timestamp;
-                        
-                        // Show subtle notification on change
-                        if (updateCount > 1) {
-                            showToast('🔄 Updated', 'Dashboard auto-updated at ' + data.data.timestamp, 'info');
-                        }
-                    }
-                    
-                    // Update badge
-                    var now = new Date();
-                    document.getElementById('lastUpdateBadge').innerHTML = 
-                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
-                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                }
-                isUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Error fetching stats:', error);
-                document.getElementById('lastUpdateBadge').innerHTML = '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Connection error';
-                isUpdating = false;
-            });
-    }
-    
-    function updateDashboard(data) {
-        // ================================================================
-        // CARD 1: Today's Patients
-        // ================================================================
-        document.getElementById('todayPatientsTotal').textContent = data.today_patients.total;
-        document.getElementById('todayPatientsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_patients.pending + ' Pending';
-        document.getElementById('todayPatientsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_patients.completed + ' Complete';
-        var pct1 = data.today_patients.total > 0 ? Math.min(100, (data.today_patients.completed / Math.max(data.today_patients.total, 1)) * 100) : 0;
-        document.getElementById('todayPatientsProgress').style.width = pct1 + '%';
-
-        // ================================================================
-        // CARD 2: Today's Visits
-        // ================================================================
-        document.getElementById('todayVisitsTotal').textContent = data.today_visits.total;
-        document.getElementById('todayVisitsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_visits.pending + ' Pending';
-        document.getElementById('todayVisitsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_visits.completed + ' Complete';
-        var pct2 = data.today_visits.total > 0 ? Math.min(100, (data.today_visits.completed / Math.max(data.today_visits.total, 1)) * 100) : 0;
-        document.getElementById('todayVisitsProgress').style.width = pct2 + '%';
-
-        // ================================================================
-        // CARD 3: Total Patients
-        // ================================================================
-        document.getElementById('totalPatients').textContent = Number(data.total_patients).toLocaleString();
-
-        // ================================================================
-        // CARD 4: Total Visits
-        // ================================================================
-        document.getElementById('totalVisits').textContent = Number(data.total_visits).toLocaleString();
-
-        // ================================================================
-        // CARD 5: Today's Appointments
-        // ================================================================
-        document.getElementById('todayAppointmentsTotal').textContent = data.today_appointments.total;
-        document.getElementById('todayAppointmentsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.today_appointments.pending + ' Pending';
-        document.getElementById('todayAppointmentsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.today_appointments.completed + ' Complete';
-        var pct5 = data.today_appointments.total > 0 ? Math.min(100, (data.today_appointments.completed / Math.max(data.today_appointments.total, 1)) * 100) : 0;
-        document.getElementById('todayAppointmentsProgress').style.width = pct5 + '%';
-
-        // ================================================================
-        // CARD 6: Total Appointments
-        // ================================================================
-        document.getElementById('totalAppointments').textContent = Number(data.total_appointments).toLocaleString();
-
-        // ================================================================
-        // CARD 7: Prescriptions
-        // ================================================================
-        document.getElementById('totalPrescriptions').textContent = Number(data.total_prescriptions).toLocaleString();
-
-        // ================================================================
-        // CARD 8: Lab Tests
-        // ================================================================
-        document.getElementById('labTestsTotal').textContent = Number(data.lab_tests.total).toLocaleString();
-        document.getElementById('labTestsPending').innerHTML = '<i class="fas fa-clock"></i> ' + data.lab_tests.pending + ' Pending';
-        document.getElementById('labTestsCompleted').innerHTML = '<i class="fas fa-check-circle"></i> ' + data.lab_tests.completed + ' Complete';
-        var pct8 = data.lab_tests.total > 0 ? Math.min(100, (data.lab_tests.completed / Math.max(data.lab_tests.total, 1)) * 100) : 0;
-        document.getElementById('labTestsProgress').style.width = pct8 + '%';
-        
-        // Lab badge
-        var badge = document.getElementById('labTestsBadge');
-        if (data.lab_tests.pending > 0) {
-            if (!badge) {
-                var card = document.getElementById('cardLabTests');
-                var rightDiv = card.querySelector('.stat-card-right');
-                if (!rightDiv) {
-                    rightDiv = document.createElement('div');
-                    rightDiv.className = 'stat-card-right';
-                    card.querySelector('.stat-card-inner').appendChild(rightDiv);
-                }
-                rightDiv.innerHTML = '<span class="stat-card-badge danger" id="labTestsBadge">' + data.lab_tests.pending + '</span>';
+    var darkModeToggle = document.getElementById('darkModeToggle');
+    if (darkModeToggle) {
+        darkModeToggle.addEventListener('click', function() {
+            var html = document.documentElement;
+            var isDark = html.getAttribute('data-theme') === 'dark';
+            if (isDark) {
+                html.removeAttribute('data-theme');
+                localStorage.setItem('darkMode', 'false');
+                showToast('☀️ Light Mode', 'Switched to light mode', 'info');
             } else {
-                badge.textContent = data.lab_tests.pending;
-                badge.style.display = 'inline-block';
+                html.setAttribute('data-theme', 'dark');
+                localStorage.setItem('darkMode', 'true');
+                showToast('🌙 Dark Mode', 'Switched to dark mode', 'info');
             }
-            document.getElementById('cardLabTests').classList.add('has-badge');
-        } else {
-            if (badge) badge.style.display = 'none';
-            document.getElementById('cardLabTests').classList.remove('has-badge');
-        }
-
-        // ================================================================
-        // UPDATE WELCOME MINI STATS
-        // ================================================================
-        document.getElementById('miniAppointments').textContent = data.today_appointments.total;
-        document.getElementById('miniPending').textContent = data.today_patients.pending;
-        document.getElementById('miniTotalPatients').textContent = data.total_patients;
-
-        // ================================================================
-        // UPDATE APPOINTMENTS COUNT
-        // ================================================================
-        document.getElementById('appointmentsCount').textContent = '(' + data.today_appointments.total + ')';
-
-        // ================================================================
-        // UPDATE PULSE BUTTON
-        // ================================================================
-        var btnPulse = document.getElementById('btnPulse');
-        var btnPulseText = document.getElementById('btnPulseText');
-        if (data.today_patients.pending > 0) {
-            btnPulse.style.display = 'inline-flex';
-            btnPulseText.textContent = data.today_patients.pending + ' Patient(s) Waiting';
-        } else {
-            btnPulse.style.display = 'none';
-        }
-
-        // ================================================================
-        // UPDATE QUEUE COUNT
-        // ================================================================
-        document.getElementById('queueCount').textContent = '(' + data.pending_visits + ' waiting)';
-
-        // ================================================================
-        // UPDATE APPOINTMENTS LIST
-        // ================================================================
-        var appointmentsList = document.getElementById('appointmentsList');
-        if (data.today_appointments.list) {
-            var currentItems = appointmentsList.querySelectorAll('.appointment-item');
-            var newItems = data.today_appointments.list;
-            
-            if (currentItems.length !== newItems.length || newItems.length > 0) {
-                var listHtml = '';
-                if (newItems.length > 0) {
-                    newItems.forEach(function(appt) {
-                        var statusClass = appt.status || 'scheduled';
-                        listHtml += `
-                            <div class="appointment-item">
-                                <div class="appointment-time">${formatTime(appt.appointment_date)}</div>
-                                <div class="appointment-patient">
-                                    <div class="appointment-name">${escapeHtml(appt.patient_name)}</div>
-                                    <div class="appointment-id">${escapeHtml(appt.patient_id)}</div>
-                                </div>
-                                <span class="appointment-status ${statusClass}">
-                                    ${capitalize(statusClass)}
-                                </span>
-                            </div>
-                        `;
-                    });
-                } else {
-                    listHtml = `
-                        <div class="empty-state">
-                            <i class="fas fa-calendar-check"></i>
-                            <p>No appointments scheduled for today</p>
-                        </div>
-                    `;
-                }
-                appointmentsList.innerHTML = listHtml;
-            }
-        }
-
-        // ================================================================
-        // UPDATE QUEUE LIST
-        // ================================================================
-        var queueList = document.getElementById('queueList');
-        if (data.pending_patients) {
-            var currentQueueItems = queueList.querySelectorAll('.queue-item');
-            var newQueueItems = data.pending_patients;
-            
-            if (currentQueueItems.length !== newQueueItems.length) {
-                var queueHtml = '';
-                if (newQueueItems.length > 0) {
-                    newQueueItems.forEach(function(patient, index) {
-                        var isFirst = index === 0 ? 'queue-item-first' : '';
-                        var waitingTime = patient.waiting_time > 0 ? patient.waiting_time + ' min' : 'Just now';
-                        var isLong = patient.waiting_time > 30 ? 'queue-time-long' : '';
-                        queueHtml += `
-                            <div class="queue-item ${isFirst}">
-                                <div class="queue-number">#${index + 1}</div>
-                                <div class="queue-patient">
-                                    <div class="queue-name">
-                                        ${escapeHtml(patient.patient_name)}
-                                        ${index === 0 ? '<span class="queue-badge">Next</span>' : ''}
-                                    </div>
-                                    <div class="queue-details">
-                                        ${escapeHtml(patient.patient_id || 'N/A')} • ${escapeHtml(patient.phone || '')}
-                                    </div>
-                                </div>
-                                <div class="queue-waiting">
-                                    <span class="queue-time ${isLong}">${waitingTime}</span>
-                                    <span class="queue-status ${patient.status || 'pending'}">${capitalize(patient.status || 'Pending')}</span>
-                                </div>
-                                <div class="queue-action">
-                                    <a href="consultation.php?visit_id=${patient.id}" class="btn-consult">
-                                        <i class="fas fa-stethoscope"></i> Consult
-                                    </a>
-                                </div>
-                            </div>
-                        `;
-                    });
-                } else {
-                    queueHtml = `
-                        <div class="empty-state empty-state-large">
-                            <i class="fas fa-check-circle text-green-500"></i>
-                            <p class="text-gray-400">No patients waiting! All clear.</p>
-                            <p class="text-xs text-gray-400">Take a break or review completed cases</p>
-                        </div>
-                    `;
-                }
-                queueList.innerHTML = queueHtml;
-            }
-        }
-
-        // ================================================================
-        // UPDATE RECENT ACTIVITIES
-        // ================================================================
-        // For simplicity, we don't auto-update activities to keep performance
-        // This would require additional API call if needed
+        });
     }
-
-    // ================================================================
-    // START AUTO-UPDATE - EVERY 3 SECONDS
-    // ================================================================
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        // Update every 3 seconds
-        updateInterval = setInterval(fetchAndUpdateStats, 3000);
-        document.getElementById('lastUpdateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Live mode active';
-        fetchAndUpdateStats();
+    
+    // Load saved dark mode
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
     }
-
+    
     // ================================================================
-    // STOP AUTO-UPDATE
-    // ================================================================
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-            document.getElementById('lastUpdateBadge').innerHTML = '<i class="fas fa-pause"></i> Paused';
-        }
-    }
-
-    // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
-    // ================================================================
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
-    });
-
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
-    function manualRefresh() {
-        var btn = document.getElementById('refreshBtn');
-        btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Loading...';
-        btn.disabled = true;
-        
-        // Force reset hash to force update
-        lastHash = null;
-        fetchAndUpdateStats();
-        
-        setTimeout(function() {
-            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
-            btn.disabled = false;
-        }, 1000);
-    }
-
-    // ================================================================
-    // INITIALIZE DASHBOARD
+    // INITIALIZE - Render chart and start auto-update
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Render chart
         renderChart(chartLabels, chartValues);
         
-        // Start auto-update after 2 seconds
+        // Show welcome toast
         setTimeout(function() {
-            startAutoUpdate();
-        }, 2000);
+            var pending = parseInt(document.getElementById('todayPatientsPending')?.textContent || '0');
+            if (pending > 0) {
+                showToast('👋 Patients Waiting', 'You have ' + pending + ' patient(s) waiting for consultation', 'info');
+            }
+        }, 1500);
     });
-
-    // ================================================================
-    // NOTIFICATIONS
-    // ================================================================
-    <?php if ($today_patients_pending > 0): ?>
-    setTimeout(function() {
-        showToast('👋 Patients Waiting', 
-            'You have <?= $today_patients_pending ?> patient(s) waiting for consultation', 
-            'info'
-        );
-    }, 1000);
-    <?php endif; ?>
-
-    <?php if ($today_appointments_completed > 0): ?>
-    setTimeout(function() {
-        showToast('✅ Appointments Completed', 
-            'You have completed <?= $today_appointments_completed ?> appointment(s) today', 
-            'success'
-        );
-    }, 2000);
-    <?php endif; ?>
-
-    console.log('%c👨‍⚕️ Doctor Dashboard - <?= htmlspecialchars($doctor_name) ?>', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Today Patients: <?= $today_patients_total ?> (Pending: <?= $today_patients_pending ?>, Complete: <?= $today_patients_completed ?>)', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c📅 Today Visits: <?= $today_visits_total ?> (Pending: <?= $today_visits_pending ?>, Complete: <?= $today_visits_completed ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c📋 Today Appointments: <?= $today_appointments_total ?> (Pending: <?= $today_appointments_pending ?>, Complete: <?= $today_appointments_completed ?>)', 'font-size:12px; color:#D97706;');
-    console.log('%c🧪 Lab Tests: <?= $lab_tests_total ?> (Pending: <?= $lab_tests_pending ?>, Complete: <?= $lab_tests_completed ?>)', 'font-size:12px; color:#7C3AED;');
-    console.log('%c🔄 Auto-update: Every 3 seconds (Smart - only when data changes)', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Click any card to navigate to related page', 'font-size:12px; color:#0B5ED7;');
+    
+    console.log('%c👨‍⚕️ Doctor Dashboard Initialized', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔄 Auto-update active every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c💡 Dashboard updates automatically - no refresh needed!', 'font-size:12px; color:#64748B;');
 </script>
+
+<!-- ================================================================ -->
+<!-- DOCTOR GLOBAL STATS AUTO-UPDATE SCRIPT -->
+<!-- ================================================================ -->
+<script src="/dispensary_system/frontend/assets/js/doctor_global_stats.js"></script>
 
 </body>
 </html>

@@ -1,31 +1,35 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// DOCTOR - CONSULTATION PAGE (WITH LAB RESULTS)
+// DOCTOR CONSULTATION - FULL VERSION
+// WITH SYMPTOMS DROPDOWN, LAB TESTS, MEDICATIONS, PROCEDURES
+// ALL FEES IN BACKGROUND - DOCTOR SEES NOTHING
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
+    $_SESSION['user_id'] = 5;
+    $_SESSION['doctor_id'] = 5;
+    $_SESSION['full_name'] = 'Dr. John Mushi';
+    $_SESSION['username'] = 'dr.john';
+    $_SESSION['email'] = 'john@braick.com';
+    $_SESSION['phone'] = '+255 700 000 011';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
+    $_SESSION['specialty'] = 'General Medicine';
     $_SESSION['profile_pic'] = '';
+    $_SESSION['is_online'] = 1;
 }
 
-$doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_id = $_SESSION['user_id'] ?? 5;
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
-$doctor_specialty = $_SESSION['specialty'] ?? 'General Practitioner';
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 
 // ================================================================
 // GET PARAMETERS
@@ -41,16 +45,11 @@ if ($visit_id <= 0 && $patient_id <= 0) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found at: " . $db_path);
-}
+require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET VISIT & PATIENT DETAILS
+// GET OR CREATE VISIT
 // ================================================================
 if ($visit_id > 0) {
     $stmt = $db->prepare("
@@ -68,13 +67,10 @@ if ($visit_id > 0) {
                p.emergency_contact,
                p.created_at as patient_registered,
                u.full_name as doctor_name,
-               u.specialty as doctor_specialty,
-               r.full_name as receptionist_name,
                b.name as branch_name
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
-        LEFT JOIN users r ON v.receptionist_id = r.id
         LEFT JOIN branches b ON v.branch_id = b.id
         WHERE v.id = ? AND v.doctor_id = ?
     ");
@@ -87,7 +83,6 @@ if ($visit_id > 0) {
     }
     $patient_id = $visit['patient_id'];
 } else {
-    // Get latest active visit for this patient
     $stmt = $db->prepare("
         SELECT v.*, 
                p.id as patient_id,
@@ -103,13 +98,10 @@ if ($visit_id > 0) {
                p.emergency_contact,
                p.created_at as patient_registered,
                u.full_name as doctor_name,
-               u.specialty as doctor_specialty,
-               r.full_name as receptionist_name,
                b.name as branch_name
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
-        LEFT JOIN users r ON v.receptionist_id = r.id
         LEFT JOIN branches b ON v.branch_id = b.id
         WHERE v.patient_id = ? AND v.doctor_id = ? AND v.status NOT IN ('completed', 'cancelled')
         ORDER BY v.created_at DESC
@@ -119,102 +111,200 @@ if ($visit_id > 0) {
     $visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$visit) {
-        header('Location: my_patients.php?error=no_active_visit');
-        exit;
+        $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT);
+        $stmt = $db->prepare("
+            INSERT INTO visits (
+                visit_number, patient_id, doctor_id, branch_id, visit_type, status, created_at
+            ) VALUES (?, ?, ?, ?, 'new', 'with_doctor', NOW())
+        ");
+        $stmt->execute([$visit_number, $patient_id, $doctor_id, $doctor_branch_id]);
+        $visit_id = $db->lastInsertId();
+        
+        $stmt = $db->prepare("
+            SELECT v.*, 
+                   p.id as patient_id,
+                   p.full_name as patient_name,
+                   p.patient_id as patient_code,
+                   p.phone,
+                   p.email,
+                   p.date_of_birth,
+                   p.gender,
+                   p.address,
+                   p.blood_group,
+                   p.allergies,
+                   p.emergency_contact,
+                   p.created_at as patient_registered,
+                   u.full_name as doctor_name,
+                   b.name as branch_name
+            FROM visits v
+            JOIN patients p ON v.patient_id = p.id
+            LEFT JOIN users u ON v.doctor_id = u.id
+            LEFT JOIN branches b ON v.branch_id = b.id
+            WHERE v.id = ?
+        ");
+        $stmt->execute([$visit_id]);
+        $visit = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     $visit_id = $visit['id'];
 }
 
 // ================================================================
-// GET PATIENT HISTORY
+// GET OR CREATE BILL (BACKGROUND - DOCTOR DOESN'T SEE)
 // ================================================================
-$stmt = $db->prepare("
-    SELECT v.*, u.full_name as doctor_name 
-    FROM visits v
-    LEFT JOIN users u ON v.doctor_id = u.id
-    WHERE v.patient_id = ? 
-    ORDER BY v.created_at DESC
-");
-$stmt->execute([$patient_id]);
-$patient_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$bill_id = null;
+$bill_items_count = 0;
 
-// ================================================================
-// GET PREVIOUS PRESCRIPTIONS
-// ================================================================
-$stmt = $db->prepare("
-    SELECT * FROM prescriptions 
-    WHERE patient_id = ?
-    ORDER BY created_at DESC
-    LIMIT 10
-");
-$stmt->execute([$patient_id]);
-$previous_medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// GET EXISTING CONSULTATION
-// ================================================================
-$consultation = null;
 try {
-    $stmt = $db->prepare("SELECT * FROM consultations WHERE visit_id = ?");
+    $stmt = $db->prepare("SELECT id, status FROM patient_bills WHERE visit_id = ?");
     $stmt->execute([$visit_id]);
-    $consultation = $stmt->fetch(PDO::FETCH_ASSOC);
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($bill) {
+        $bill_id = $bill['id'];
+    } else {
+        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT);
+        $stmt = $db->prepare("
+            INSERT INTO patient_bills (
+                bill_number, patient_id, visit_id, subtotal, total_amount, balance, 
+                status, created_by, branch_id
+            ) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?)
+        ");
+        $stmt->execute([$bill_number, $patient_id, $visit_id, $doctor_id, $doctor_branch_id]);
+        $bill_id = $db->lastInsertId();
+    }
+    
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE bill_id = ?");
+    $stmt->execute([$bill_id]);
+    $bill_items_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } catch (Exception $e) {
-    // Table might not exist
+    error_log("Bill error: " . $e->getMessage());
 }
 
 // ================================================================
-// GET VITAL SIGNS
+// GET SERVICES
 // ================================================================
-$vital_signs = null;
+$services_list = [];
 try {
-    $stmt = $db->prepare("SELECT * FROM consultation_vitals WHERE visit_id = ? ORDER BY recorded_at DESC LIMIT 1");
-    $stmt->execute([$visit_id]);
-    $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+    $stmt = $db->prepare("
+        SELECT id, service_name, price, category_id 
+        FROM services 
+        WHERE is_active = 1
+        ORDER BY service_name ASC
+    ");
+    $stmt->execute();
+    $services_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $vital_signs = null;
+    $services_list = [];
 }
 
 // ================================================================
-// GET SYMPTOMS
+// GET LAB TESTS CATALOG
 // ================================================================
-$symptoms_list = [];
+$lab_tests_catalog = [];
 try {
-    $stmt = $db->prepare("SELECT symptom FROM consultation_symptoms WHERE visit_id = ?");
-    $stmt->execute([$visit_id]);
-    $symptoms_list = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    $stmt = $db->prepare("
+        SELECT id, test_name, price, category 
+        FROM lab_tests_catalog 
+        WHERE is_active = 1
+        ORDER BY category, test_name
+    ");
+    $stmt->execute();
+    $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $symptoms_list = [];
+    $lab_tests_catalog = [];
 }
 
 // ================================================================
-// GET DIAGNOSES
+// GET PROCEDURAL SERVICES
 // ================================================================
-$diagnoses = [];
+$procedural_services = [];
 try {
-    $stmt = $db->prepare("SELECT * FROM consultation_diagnosis WHERE visit_id = ?");
-    $stmt->execute([$visit_id]);
-    $diagnoses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $db->prepare("
+        SELECT s.id, s.service_name, s.price, sc.category_name
+        FROM services s
+        LEFT JOIN service_categories sc ON s.category_id = sc.id
+        WHERE s.is_active = 1 AND sc.category_name IN ('Procedures', 'Procedure', 'Surgery', 'Treatment')
+        ORDER BY s.service_name
+    ");
+    $stmt->execute();
+    $procedural_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $diagnoses = [];
+    $procedural_services = [];
 }
 
 // ================================================================
-// GET LAB REQUESTS
+// GET MEDICATIONS FROM INVENTORY
+// ================================================================
+$medications_list = [];
+try {
+    $stmt = $db->prepare("
+        SELECT id, medication_name, category, unit, selling_price, quantity 
+        FROM medications_inventory 
+        WHERE status = 'active' AND quantity > 0 AND branch_id = ?
+        ORDER BY medication_name ASC
+    ");
+    $stmt->execute([$doctor_branch_id]);
+    $medications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    if (empty($medications_list)) {
+        error_log("No medications found for branch: " . $doctor_branch_id);
+    }
+} catch (Exception $e) {
+    error_log("Medications fetch error: " . $e->getMessage());
+    $medications_list = [];
+}
+
+// ================================================================
+// GET SELECTED MEDICATIONS FOR THIS VISIT (FIXED: medication column)
+// ================================================================
+$selected_medications = [];
+try {
+    $stmt = $db->prepare("
+        SELECT id, medication, dosage, frequency, duration, route, quantity, instructions, status 
+        FROM prescriptions 
+        WHERE visit_id = ? AND status IN ('pending', 'dispensed')
+        ORDER BY created_at DESC
+    ");
+    $stmt->execute([$visit_id]);
+    $selected_medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("Selected medications fetch error: " . $e->getMessage());
+    $selected_medications = [];
+}
+
+// ================================================================
+// GET BILL ITEMS
+// ================================================================
+$bill_items = [];
+try {
+    $stmt = $db->prepare("
+        SELECT id, item_name, item_type, quantity, total_price 
+        FROM bill_items 
+        WHERE bill_id = ?
+        ORDER BY created_at DESC
+    ");
+    $stmt->execute([$bill_id]);
+    $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $bill_items = [];
+}
+
+// ================================================================
+// GET LAB REQUESTS & RESULTS
 // ================================================================
 $lab_requests = [];
+$lab_results = [];
+$lab_results_available = false;
+
 try {
-    $stmt = $db->prepare("SELECT * FROM consultation_lab_requests WHERE visit_id = ?");
+    $stmt = $db->prepare("
+        SELECT * FROM lab_tests 
+        WHERE visit_id = ? AND status IN ('pending', 'in_progress')
+        ORDER BY created_at DESC
+    ");
     $stmt->execute([$visit_id]);
     $lab_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $lab_requests = [];
-}
-
-// ================================================================
-// GET LAB RESULTS - NEW: After lab tests are completed
-// ================================================================
-$lab_results = [];
-try {
+    
     $stmt = $db->prepare("
         SELECT * FROM lab_tests 
         WHERE visit_id = ? AND status = 'completed'
@@ -222,60 +312,52 @@ try {
     ");
     $stmt->execute([$visit_id]);
     $lab_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $lab_results_available = count($lab_results) > 0;
 } catch (Exception $e) {
+    $lab_requests = [];
     $lab_results = [];
 }
 
 // ================================================================
-// GET MEDICATIONS FOR THIS VISIT
+// GET PATIENT HISTORY
 // ================================================================
-$consultation_medications = [];
+$patient_history = [];
 try {
-    $stmt = $db->prepare("SELECT * FROM consultation_medications WHERE visit_id = ?");
-    $stmt->execute([$visit_id]);
-    $consultation_medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $db->prepare("
+        SELECT v.*, u.full_name as doctor_name 
+        FROM visits v
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE v.patient_id = ? AND v.status = 'completed'
+        ORDER BY v.created_at DESC
+        LIMIT 10
+    ");
+    $stmt->execute([$patient_id]);
+    $patient_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $consultation_medications = [];
+    $patient_history = [];
 }
 
 // ================================================================
-// GET PROCEDURES
+// COMMON SYMPTOMS FOR DROPDOWN
 // ================================================================
-$procedures = [];
-try {
-    $stmt = $db->prepare("SELECT * FROM consultation_procedures WHERE visit_id = ?");
-    $stmt->execute([$visit_id]);
-    $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $procedures = [];
-}
+$common_symptoms = [
+    'Fever', 'Headache', 'Cough', 'Chest Pain', 'Vomiting', 'Diarrhea',
+    'Abdominal Pain', 'Dizziness', 'Fatigue', 'Shortness of Breath',
+    'Nausea', 'Muscle Pain', 'Joint Pain', 'Skin Rash', 'Sore Throat',
+    'Runny Nose', 'Sneezing', 'Itching', 'Swelling', 'Redness',
+    'Difficulty Breathing', 'Chest Tightness', 'Palpitations', 'Sweating',
+    'Chills', 'Loss of Appetite', 'Weight Loss', 'Weight Gain',
+    'Numbness', 'Tingling', 'Weakness', 'Confusion', 'Memory Loss',
+    'Anxiety', 'Depression', 'Insomnia', 'Sleep Disturbance',
+    'Ear Pain', 'Eye Pain', 'Blurred Vision', 'Hearing Loss',
+    'Toothache', 'Mouth Sores', 'Sore Muscles', 'Stiff Neck',
+    'Back Pain', 'Neck Pain', 'Shoulder Pain', 'Knee Pain',
+    'Urinary Frequency', 'Painful Urination', 'Blood in Urine',
+    'Constipation', 'Bloating', 'Heartburn', 'Acid Reflux'
+];
 
 // ================================================================
-// GET FOLLOW-UP
-// ================================================================
-$follow_up = null;
-try {
-    $stmt = $db->prepare("SELECT * FROM follow_ups WHERE visit_id = ? ORDER BY created_at DESC LIMIT 1");
-    $stmt->execute([$visit_id]);
-    $follow_up = $stmt->fetch(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $follow_up = null;
-}
-
-// ================================================================
-// GET REFERRAL
-// ================================================================
-$referral = null;
-try {
-    $stmt = $db->prepare("SELECT * FROM referrals WHERE visit_id = ? ORDER BY created_at DESC LIMIT 1");
-    $stmt->execute([$visit_id]);
-    $referral = $stmt->fetch(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $referral = null;
-}
-
-// ================================================================
-// HANDLE FORM SUBMISSION
+// HANDLE FORM SUBMISSIONS
 // ================================================================
 $message = '';
 $message_type = '';
@@ -283,291 +365,365 @@ $message_type = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? 'save';
     
-    // Update visit basic info
+    // ================================================================
+    // 1. UPDATE VISIT
+    // ================================================================
     $symptoms = trim($_POST['symptoms'] ?? '');
     $diagnosis = trim($_POST['diagnosis'] ?? '');
+    $treatment = trim($_POST['treatment'] ?? '');
     $notes = trim($_POST['notes'] ?? '');
     $status = $_POST['status'] ?? 'with_doctor';
     
     $stmt = $db->prepare("
         UPDATE visits 
-        SET symptoms = ?, diagnosis = ?, notes = ?, status = ?, updated_at = NOW()
+        SET symptoms = ?, diagnosis = ?, treatment = ?, notes = ?, status = ?, updated_at = NOW()
         WHERE id = ? AND doctor_id = ?
     ");
-    $stmt->execute([$symptoms, $diagnosis, $notes, $status, $visit_id, $doctor_id]);
-    
-    // Save/Update consultation
-    $chief_complaint = trim($_POST['chief_complaint'] ?? '');
-    $physical_exam = trim($_POST['physical_exam'] ?? '');
-    $consultation_notes = trim($_POST['consultation_notes'] ?? '');
-    
-    try {
-        if ($consultation) {
-            $stmt = $db->prepare("
-                UPDATE consultations 
-                SET chief_complaint = ?, physical_exam = ?, notes = ?, updated_at = NOW()
-                WHERE visit_id = ?
-            ");
-            $stmt->execute([$chief_complaint, $physical_exam, $consultation_notes, $visit_id]);
-        } else {
-            $stmt = $db->prepare("
-                INSERT INTO consultations (visit_id, patient_id, doctor_id, chief_complaint, physical_exam, notes, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
-            ");
-            $stmt->execute([$visit_id, $patient_id, $doctor_id, $chief_complaint, $physical_exam, $consultation_notes]);
-        }
-    } catch (Exception $e) {
-        // Table might not exist
-    }
-    
-    // Save Vital Signs
-    $temperature = trim($_POST['temperature'] ?? '');
-    $blood_pressure = trim($_POST['blood_pressure'] ?? '');
-    $pulse_rate = trim($_POST['pulse_rate'] ?? '');
-    $respiratory_rate = trim($_POST['respiratory_rate'] ?? '');
-    $oxygen_saturation = trim($_POST['oxygen_saturation'] ?? '');
-    $weight = trim($_POST['weight'] ?? '');
-    $height = trim($_POST['height'] ?? '');
-    $bmi = trim($_POST['bmi'] ?? '');
-    
-    try {
-        if ($vital_signs) {
-            $stmt = $db->prepare("
-                UPDATE consultation_vitals 
-                SET temperature = ?, blood_pressure = ?, pulse_rate = ?, respiratory_rate = ?,
-                    oxygen_saturation = ?, weight = ?, height = ?, bmi = ?, recorded_at = NOW()
-                WHERE visit_id = ?
-            ");
-            $stmt->execute([$temperature, $blood_pressure, $pulse_rate, $respiratory_rate, 
-                           $oxygen_saturation, $weight, $height, $bmi, $visit_id]);
-        } else {
-            $stmt = $db->prepare("
-                INSERT INTO consultation_vitals (visit_id, patient_id, temperature, blood_pressure, pulse_rate,
-                    respiratory_rate, oxygen_saturation, weight, height, bmi, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-            ");
-            $stmt->execute([$visit_id, $patient_id, $temperature, $blood_pressure, $pulse_rate,
-                           $respiratory_rate, $oxygen_saturation, $weight, $height, $bmi]);
-        }
-    } catch (Exception $e) {
-        // Table might not exist
-    }
-    
-    // Save Symptoms
-    $selected_symptoms = isset($_POST['symptoms_tags']) ? $_POST['symptoms_tags'] : [];
-    if (!is_array($selected_symptoms)) {
-        $selected_symptoms = [];
-    }
-    
-    try {
-        $stmt = $db->prepare("DELETE FROM consultation_symptoms WHERE visit_id = ?");
-        $stmt->execute([$visit_id]);
-        
-        foreach ($selected_symptoms as $symptom) {
-            $symptom = trim($symptom);
-            if (!empty($symptom)) {
-                $stmt = $db->prepare("INSERT INTO consultation_symptoms (visit_id, symptom) VALUES (?, ?)");
-                $stmt->execute([$visit_id, $symptom]);
-            }
-        }
-    } catch (Exception $e) {
-        // Table might not exist
-    }
-    
-    // Save Diagnoses
-    $primary_diagnosis = trim($_POST['primary_diagnosis'] ?? '');
-    $secondary_diagnosis = trim($_POST['secondary_diagnosis'] ?? '');
-    $icd_code = trim($_POST['icd_code'] ?? '');
-    
-    try {
-        if (!empty($diagnoses)) {
-            $stmt = $db->prepare("
-                UPDATE consultation_diagnosis 
-                SET primary_diagnosis = ?, secondary_diagnosis = ?, icd_code = ?, updated_at = NOW()
-                WHERE visit_id = ?
-            ");
-            $stmt->execute([$primary_diagnosis, $secondary_diagnosis, $icd_code, $visit_id]);
-        } else {
-            $stmt = $db->prepare("
-                INSERT INTO consultation_diagnosis (visit_id, patient_id, primary_diagnosis, secondary_diagnosis, icd_code, created_at)
-                VALUES (?, ?, ?, ?, ?, NOW())
-            ");
-            $stmt->execute([$visit_id, $patient_id, $primary_diagnosis, $secondary_diagnosis, $icd_code]);
-        }
-    } catch (Exception $e) {
-        // Table might not exist
-    }
+    $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $status, $visit_id, $doctor_id]);
     
     // ================================================================
-    // SAVE LAB REQUESTS
+    // 2. ADD SERVICE TO BILL (Background)
     // ================================================================
-    $lab_tests = isset($_POST['lab_tests']) ? $_POST['lab_tests'] : [];
-    if (!is_array($lab_tests)) {
-        $lab_tests = [];
-    }
-    
-    try {
-        $stmt = $db->prepare("DELETE FROM consultation_lab_requests WHERE visit_id = ?");
-        $stmt->execute([$visit_id]);
-        
-        foreach ($lab_tests as $test) {
-            $test = trim($test);
-            if (!empty($test)) {
+    if (isset($_POST['add_service'])) {
+        $service_id = (int)($_POST['service_id'] ?? 0);
+        if ($service_id > 0) {
+            $stmt = $db->prepare("SELECT service_name, price FROM services WHERE id = ? AND is_active = 1");
+            $stmt->execute([$service_id]);
+            $service = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($service) {
                 $stmt = $db->prepare("
-                    INSERT INTO consultation_lab_requests (visit_id, test_name, status, created_at) 
-                    VALUES (?, ?, 'pending', NOW())
+                    SELECT id, quantity FROM bill_items 
+                    WHERE bill_id = ? AND item_name = ? AND item_type = 'consultation'
                 ");
-                $stmt->execute([$visit_id, $test]);
+                $stmt->execute([$bill_id, $service['service_name']]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($existing) {
+                    $new_qty = $existing['quantity'] + 1;
+                    $new_total = $service['price'] * $new_qty;
+                    $stmt = $db->prepare("
+                        UPDATE bill_items 
+                        SET quantity = ?, total_price = ? 
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$new_qty, $new_total, $existing['id']]);
+                } else {
+                    $stmt = $db->prepare("
+                        INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
+                        VALUES (?, 'consultation', ?, 1, ?, ?)
+                    ");
+                    $stmt->execute([$bill_id, $service['service_name'], $service['price'], $service['price']]);
+                }
+                
+                // Update bill total
+                $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                $stmt->execute([$bill_id]);
+                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                
+                $stmt = $db->prepare("
+                    UPDATE patient_bills 
+                    SET subtotal = ?, total_amount = ?, balance = ? 
+                    WHERE id = ?
+                ");
+                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                
+                $message = "✅ Service added successfully!";
+                $message_type = 'success';
             }
         }
-    } catch (Exception $e) {
-        // Table might not exist
     }
     
     // ================================================================
-    // SAVE MEDICATIONS - Only if lab results exist or doctor skips
+    // 3. ADD PROCEDURAL SERVICE
     // ================================================================
-    $med_names = isset($_POST['med_name']) ? $_POST['med_name'] : [];
-    $med_dosages = isset($_POST['med_dosage']) ? $_POST['med_dosage'] : [];
-    $med_frequencies = isset($_POST['med_frequency']) ? $_POST['med_frequency'] : [];
-    $med_durations = isset($_POST['med_duration']) ? $_POST['med_duration'] : [];
-    $med_instructions = isset($_POST['med_instructions']) ? $_POST['med_instructions'] : [];
-    
-    try {
-        $stmt = $db->prepare("DELETE FROM consultation_medications WHERE visit_id = ?");
-        $stmt->execute([$visit_id]);
-        
-        for ($i = 0; $i < count($med_names); $i++) {
-            $name = trim($med_names[$i] ?? '');
-            if (!empty($name)) {
+    if (isset($_POST['add_procedure'])) {
+        $procedure_id = (int)($_POST['procedure_id'] ?? 0);
+        if ($procedure_id > 0) {
+            $stmt = $db->prepare("SELECT service_name, price FROM services WHERE id = ? AND is_active = 1");
+            $stmt->execute([$procedure_id]);
+            $procedure = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($procedure) {
                 $stmt = $db->prepare("
-                    INSERT INTO consultation_medications (visit_id, medication_name, dosage, frequency, duration, instructions, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, NOW())
+                    SELECT id, quantity FROM bill_items 
+                    WHERE bill_id = ? AND item_name = ? AND item_type = 'procedure'
+                ");
+                $stmt->execute([$bill_id, $procedure['service_name']]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($existing) {
+                    $new_qty = $existing['quantity'] + 1;
+                    $new_total = $procedure['price'] * $new_qty;
+                    $stmt = $db->prepare("
+                        UPDATE bill_items 
+                        SET quantity = ?, total_price = ? 
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$new_qty, $new_total, $existing['id']]);
+                } else {
+                    $stmt = $db->prepare("
+                        INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
+                        VALUES (?, 'procedure', ?, 1, ?, ?)
+                    ");
+                    $stmt->execute([$bill_id, $procedure['service_name'], $procedure['price'], $procedure['price']]);
+                }
+                
+                // Update bill total
+                $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                $stmt->execute([$bill_id]);
+                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                
+                $stmt = $db->prepare("
+                    UPDATE patient_bills 
+                    SET subtotal = ?, total_amount = ?, balance = ? 
+                    WHERE id = ?
+                ");
+                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                
+                $message = "✅ Procedure added successfully!";
+                $message_type = 'success';
+            }
+        }
+    }
+    
+    // ================================================================
+    // 4. REMOVE SERVICE/PROCEDURE
+    // ================================================================
+    if (isset($_POST['remove_service'])) {
+        $item_id = (int)($_POST['item_id'] ?? 0);
+        if ($item_id > 0) {
+            $stmt = $db->prepare("DELETE FROM bill_items WHERE id = ? AND bill_id = ?");
+            $stmt->execute([$item_id, $bill_id]);
+            
+            $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+            $stmt->execute([$bill_id]);
+            $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+            
+            $stmt = $db->prepare("
+                UPDATE patient_bills 
+                SET subtotal = ?, total_amount = ?, balance = ? 
+                WHERE id = ?
+            ");
+            $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+            
+            $message = "✅ Item removed from bill";
+            $message_type = 'info';
+        }
+    }
+    
+    // ================================================================
+    // 5. ADD MEDICATION FROM INVENTORY (FIXED: uses 'medication' column)
+    // ================================================================
+    if (isset($_POST['add_medication'])) {
+        $inventory_id = (int)($_POST['inventory_id'] ?? 0);
+        $quantity = (int)($_POST['quantity'] ?? 1);
+        $dosage = trim($_POST['dosage'] ?? '');
+        $frequency = trim($_POST['frequency'] ?? '');
+        $duration = trim($_POST['duration'] ?? '');
+        $route = trim($_POST['route'] ?? '');
+        $instructions = trim($_POST['instructions'] ?? '');
+        
+        if ($inventory_id > 0 && $quantity > 0) {
+            $stmt = $db->prepare("
+                SELECT medication_name, selling_price, unit, quantity as stock 
+                FROM medications_inventory 
+                WHERE id = ? AND status = 'active' AND branch_id = ?
+            ");
+            $stmt->execute([$inventory_id, $doctor_branch_id]);
+            $med = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($med && $med['stock'] >= $quantity) {
+                $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                
+                // FIXED: Using 'medication' column (not 'medication_name')
+                $stmt = $db->prepare("
+                    INSERT INTO prescriptions (
+                        prescription_number, visit_id, patient_id, doctor_id, 
+                        medication, dosage, frequency, duration, route, quantity, instructions,
+                        status, branch_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW())
                 ");
                 $stmt->execute([
-                    $visit_id, 
-                    $name, 
-                    trim($med_dosages[$i] ?? ''), 
-                    trim($med_frequencies[$i] ?? ''), 
-                    trim($med_durations[$i] ?? ''), 
-                    trim($med_instructions[$i] ?? '')
+                    $prescription_number,
+                    $visit_id,
+                    $patient_id,
+                    $doctor_id,
+                    $med['medication_name'],
+                    $dosage,
+                    $frequency,
+                    $duration,
+                    $route,
+                    $quantity,
+                    $instructions,
+                    $doctor_branch_id
                 ]);
+                
+                // Reduce stock
+                $new_stock = $med['stock'] - $quantity;
+                $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ?");
+                $stmt->execute([$new_stock, $inventory_id]);
+                
+                $message = "✅ Medication added successfully!";
+                $message_type = 'success';
+                
+                // Refresh selected medications
+                $stmt = $db->prepare("
+                    SELECT id, medication, dosage, frequency, duration, route, quantity, instructions, status 
+                    FROM prescriptions 
+                    WHERE visit_id = ? AND status IN ('pending', 'dispensed')
+                    ORDER BY created_at DESC
+                ");
+                $stmt->execute([$visit_id]);
+                $selected_medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+            } else {
+                $message = "❌ Insufficient stock! Available: " . ($med['stock'] ?? 0);
+                $message_type = 'error';
             }
+        } else {
+            $message = "❌ Please select a medication and quantity";
+            $message_type = 'error';
         }
-    } catch (Exception $e) {
-        // Table might not exist
     }
     
-    // Save Procedures
-    $procedure_list = isset($_POST['procedures']) ? $_POST['procedures'] : [];
-    if (!is_array($procedure_list)) {
-        $procedure_list = [];
+    // ================================================================
+    // 6. REMOVE MEDICATION
+    // ================================================================
+    if (isset($_POST['remove_medication'])) {
+        $prescription_id = (int)($_POST['prescription_id'] ?? 0);
+        if ($prescription_id > 0) {
+            $stmt = $db->prepare("
+                SELECT medication, quantity FROM prescriptions WHERE id = ? AND visit_id = ?
+            ");
+            $stmt->execute([$prescription_id, $visit_id]);
+            $med = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($med) {
+                // Restore stock
+                $stmt = $db->prepare("
+                    UPDATE medications_inventory 
+                    SET quantity = quantity + ? 
+                    WHERE medication_name = ? AND branch_id = ?
+                ");
+                $stmt->execute([$med['quantity'], $med['medication'], $doctor_branch_id]);
+            }
+            
+            $stmt = $db->prepare("DELETE FROM prescriptions WHERE id = ? AND visit_id = ?");
+            $stmt->execute([$prescription_id, $visit_id]);
+            
+            $message = "✅ Medication removed!";
+            $message_type = 'info';
+            
+            // Refresh selected medications
+            $stmt = $db->prepare("
+                SELECT id, medication, dosage, frequency, duration, route, quantity, instructions, status 
+                FROM prescriptions 
+                WHERE visit_id = ? AND status IN ('pending', 'dispensed')
+                ORDER BY created_at DESC
+            ");
+            $stmt->execute([$visit_id]);
+            $selected_medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        }
     }
     
-    try {
-        $stmt = $db->prepare("DELETE FROM consultation_procedures WHERE visit_id = ?");
+    // ================================================================
+    // 7. SEND LAB REQUESTS
+    // ================================================================
+    if (isset($_POST['lab_tests']) && is_array($_POST['lab_tests'])) {
+        $stmt = $db->prepare("DELETE FROM lab_tests WHERE visit_id = ? AND status IN ('pending', 'in_progress')");
         $stmt->execute([$visit_id]);
         
-        foreach ($procedure_list as $procedure) {
-            $procedure = trim($procedure);
-            if (!empty($procedure)) {
-                $stmt = $db->prepare("INSERT INTO consultation_procedures (visit_id, procedure_name, created_at) VALUES (?, ?, NOW())");
-                $stmt->execute([$visit_id, $procedure]);
+        foreach ($_POST['lab_tests'] as $test_name) {
+            $test_name = trim($test_name);
+            if (!empty($test_name)) {
+                $stmt = $db->prepare("
+                    INSERT INTO lab_tests (
+                        visit_id, patient_id, doctor_id, test_name, status, branch_id, created_at
+                    ) VALUES (?, ?, ?, ?, 'pending', ?, NOW())
+                ");
+                $stmt->execute([$visit_id, $patient_id, $doctor_id, $test_name, $doctor_branch_id]);
             }
         }
-    } catch (Exception $e) {
-        // Table might not exist
+        $message = "✅ Lab requests sent to Laboratory!";
+        $message_type = 'success';
+        
+        // Refresh lab requests
+        $stmt = $db->prepare("
+            SELECT * FROM lab_tests 
+            WHERE visit_id = ? AND status IN ('pending', 'in_progress')
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$visit_id]);
+        $lab_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
-    // Save Follow-up
-    $schedule_followup = isset($_POST['schedule_followup']) ? 1 : 0;
+    // ================================================================
+    // 8. SAVE FOLLOW-UP
+    // ================================================================
     $followup_date = trim($_POST['followup_date'] ?? '');
     $followup_notes = trim($_POST['followup_notes'] ?? '');
     
-    try {
-        if ($schedule_followup && !empty($followup_date)) {
-            if ($follow_up) {
-                $stmt = $db->prepare("
-                    UPDATE follow_ups 
-                    SET followup_date = ?, notes = ?, updated_at = NOW()
-                    WHERE visit_id = ?
-                ");
-                $stmt->execute([$followup_date, $followup_notes, $visit_id]);
-            } else {
-                $stmt = $db->prepare("
-                    INSERT INTO follow_ups (visit_id, patient_id, doctor_id, followup_date, notes, created_at)
-                    VALUES (?, ?, ?, ?, ?, NOW())
-                ");
-                $stmt->execute([$visit_id, $patient_id, $doctor_id, $followup_date, $followup_notes]);
-            }
-        } elseif ($follow_up) {
-            $stmt = $db->prepare("DELETE FROM follow_ups WHERE visit_id = ?");
-            $stmt->execute([$visit_id]);
+    if (!empty($followup_date)) {
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO follow_ups (visit_id, patient_id, doctor_id, followup_date, notes, created_at)
+                VALUES (?, ?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE followup_date = ?, notes = ?, updated_at = NOW()
+            ");
+            $stmt->execute([$visit_id, $patient_id, $doctor_id, $followup_date, $followup_notes, $followup_date, $followup_notes]);
+        } catch (Exception $e) {
+            // Table might not exist
         }
-    } catch (Exception $e) {
-        // Table might not exist
     }
     
-    // Save Referral
-    $refer_patient = isset($_POST['refer_patient']) ? 1 : 0;
+    // ================================================================
+    // 9. SAVE REFERRAL
+    // ================================================================
     $referral_hospital = trim($_POST['referral_hospital'] ?? '');
     $referral_reason = trim($_POST['referral_reason'] ?? '');
     
-    try {
-        if ($refer_patient && !empty($referral_hospital)) {
-            if ($referral) {
-                $stmt = $db->prepare("
-                    UPDATE referrals 
-                    SET hospital = ?, reason = ?, updated_at = NOW()
-                    WHERE visit_id = ?
-                ");
-                $stmt->execute([$referral_hospital, $referral_reason, $visit_id]);
-            } else {
-                $stmt = $db->prepare("
-                    INSERT INTO referrals (visit_id, patient_id, doctor_id, hospital, reason, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'pending', NOW())
-                ");
-                $stmt->execute([$visit_id, $patient_id, $doctor_id, $referral_hospital, $referral_reason]);
-            }
-        } elseif ($referral) {
-            $stmt = $db->prepare("DELETE FROM referrals WHERE visit_id = ?");
-            $stmt->execute([$visit_id]);
+    if (!empty($referral_hospital)) {
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO referrals (visit_id, patient_id, doctor_id, hospital, reason, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', NOW())
+                ON DUPLICATE KEY UPDATE hospital = ?, reason = ?, updated_at = NOW()
+            ");
+            $stmt->execute([$visit_id, $patient_id, $doctor_id, $referral_hospital, $referral_reason, $referral_hospital, $referral_reason]);
+        } catch (Exception $e) {
+            // Table might not exist
         }
-    } catch (Exception $e) {
-        // Table might not exist
     }
     
-    // If Complete Consultation
+    // ================================================================
+    // 10. COMPLETE VISIT
+    // ================================================================
     if ($action === 'complete') {
         $stmt = $db->prepare("
             UPDATE visits 
-            SET status = 'completed', updated_at = NOW()
+            SET status = 'completed', is_completed = 1, completed_at = NOW(), updated_at = NOW()
             WHERE id = ? AND doctor_id = ?
         ");
         $stmt->execute([$visit_id, $doctor_id]);
         
-        // Create medical record
-        try {
-            $stmt = $db->prepare("
-                INSERT INTO medical_records (patient_id, visit_id, doctor_id, diagnosis, notes, created_at)
-                VALUES (?, ?, ?, ?, ?, NOW())
-            ");
-            $stmt->execute([$patient_id, $visit_id, $doctor_id, $diagnosis, $consultation_notes]);
-        } catch (Exception $e) {
-            // Table might not exist
-        }
+        $stmt = $db->prepare("
+            UPDATE patient_bills 
+            SET status = 'pending' 
+            WHERE id = ?
+        ");
+        $stmt->execute([$bill_id]);
         
-        $message = 'Consultation completed successfully! Prescriptions sent to Pharmacy, Lab requests sent to Laboratory.';
+        $message = "✅ Visit completed! Bill sent to cashier.";
         $message_type = 'success';
         
         echo '<script>setTimeout(function(){ window.location.href = "my_patients.php?completed=1"; }, 2000);</script>';
-    } else {
-        $message = 'Consultation saved successfully!';
-        $message_type = 'success';
-        
-        header('Location: consultation.php?visit_id=' . $visit_id . '&saved=1');
-        exit;
     }
+    
+    // Update bill items count
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE bill_id = ?");
+    $stmt->execute([$bill_id]);
+    $bill_items_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
 
 // ================================================================
@@ -586,61 +742,33 @@ try {
 }
 
 // ================================================================
-// CALCULATE AGE
+// HELPER FUNCTIONS
 // ================================================================
 function calculateAge($dob) {
     if (empty($dob)) return 'N/A';
     $birthDate = new DateTime($dob);
     $today = new DateTime('today');
-    $age = $birthDate->diff($today)->y;
-    return $age;
+    return $birthDate->diff($today)->y;
 }
 
-// ================================================================
-// GET USER COLOR
-// ================================================================
 function getUserColor($name) {
     $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
-    $index = 0;
-    for ($i = 0; $i < strlen($name); $i++) {
-        $index = ($index + ord($name[$i])) % count($colors);
-    }
+    $index = abs(crc32($name)) % count($colors);
     return $colors[$index];
 }
 
-// ================================================================
-// GET STATUS BADGE CLASS
-// ================================================================
 function getStatusBadgeClass($status) {
-    switch ($status) {
-        case 'completed': return 'badge-success';
-        case 'cancelled': return 'badge-danger';
-        case 'in_progress': return 'badge-warning';
-        case 'pending': return 'badge-warning';
-        case 'dispensed': return 'badge-success';
-        case 'with_doctor': return 'badge-primary';
-        case 'assigned': return 'badge-info';
-        case 'prescribed': return 'badge-purple';
-        case 'lab_test': return 'badge-warning';
-        default: return 'badge-info';
-    }
+    $map = [
+        'pending' => 'badge-warning',
+        'assigned' => 'badge-info',
+        'with_doctor' => 'badge-primary',
+        'lab_test' => 'badge-warning',
+        'prescribed' => 'badge-purple',
+        'completed' => 'badge-success',
+        'cancelled' => 'badge-danger'
+    ];
+    return $map[$status] ?? 'badge-info';
 }
-
-// ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = 0;
-
-// ================================================================
-// CHECK IF LAB RESULTS ARE AVAILABLE
-// ================================================================
-$lab_results_available = count($lab_results) > 0;
-$has_pending_lab_requests = count($lab_requests) > 0;
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -655,58 +783,44 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-6">
-        <div>
+    <div class="page-header">
+        <div class="page-header-left">
             <h1 class="page-title">
-                <i class="fas fa-stethoscope mr-2" style="color: #0B5ED7;"></i> Doctor Consultation
+                <i class="fas fa-stethoscope"></i> Consultation
+                <span class="page-badge"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span>
             </h1>
             <p class="page-subtitle">
-                Patient consultation, examination and treatment
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?>
-                </span>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>
-                </span>
-                <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
-                    <i class="fas fa-hashtag mr-1"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
+                Patient: <strong><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></strong>
+                <span class="patient-id">(<?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?>)</span>
+                <span class="separator">|</span>
+                Doctor: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+                <span class="separator">|</span>
+                Status: 
+                <span class="status-badge <?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>">
+                    <?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'Pending')) ?>
                 </span>
                 <?php if ($lab_results_available): ?>
-                    <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
-                        <i class="fas fa-check-circle mr-1"></i> Lab Results Available
-                    </span>
-                <?php endif; ?>
-                <?php if ($has_pending_lab_requests && !$lab_results_available): ?>
-                    <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
-                        <i class="fas fa-clock mr-1"></i> Pending Lab Results
+                    <span class="status-badge badge-success ml-2">
+                        <i class="fas fa-check-circle"></i> Lab Results Available
                     </span>
                 <?php endif; ?>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="my_patients.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back
+        <div class="page-header-right">
+            <a href="my_patients.php" class="btn btn-outline">
+                <i class="fas fa-arrow-left"></i> My Patients
             </a>
-            <button onclick="window.print()" class="btn btn-outline btn-sm">
-                <i class="fas fa-print"></i> Print Consultation
-            </button>
-            <button type="submit" form="consultationForm" name="action" value="save" class="btn btn-blue btn-sm">
-                <i class="fas fa-save"></i> Save Consultation
+            <button onclick="window.print()" class="btn btn-outline">
+                <i class="fas fa-print"></i> Print
             </button>
         </div>
     </div>
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
-            <?= $message ?>
-        </div>
-    <?php endif; ?>
-
-    <?php if (isset($_GET['saved'])): ?>
-        <div class="p-4 rounded-xl mb-4 bg-green-100 text-green-700 border border-green-200">
-            <i class="fas fa-check-circle mr-2"></i> Consultation saved successfully!
+        <div class="alert alert-<?= $message_type ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'warning' ? 'fa-exclamation-triangle' : 'fa-exclamation-circle') ?>"></i>
+            <?= htmlspecialchars($message) ?>
         </div>
     <?php endif; ?>
 
@@ -720,10 +834,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <!-- ================================================================ -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
-            <!-- PATIENT INFORMATION CARD -->
             <div class="consultation-card">
                 <h3 class="card-title">
-                    <i class="fas fa-user title-blue mr-2"></i> Patient Information
+                    <i class="fas fa-user title-blue"></i> Patient Information
                 </h3>
                 <div class="patient-header">
                     <div class="patient-avatar-large" style="background: <?= getUserColor($visit['patient_name'] ?? 'Unknown') ?>;">
@@ -743,32 +856,21 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <div><span class="info-label">Phone</span><span class="info-value"><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
                     <div><span class="info-label">Blood Group</span><span class="info-value"><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
                     <div><span class="info-label">Allergies</span><span class="info-value"><?= htmlspecialchars($visit['allergies'] ?? 'None') ?></span></div>
-                    <div><span class="info-label">Emergency Contact</span><span class="info-value"><?= htmlspecialchars($visit['emergency_contact'] ?? 'N/A') ?></span></div>
-                    <div><span class="info-label">Address</span><span class="info-value"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
-                    <div class="col-span-2"><span class="info-label">Registered</span><span class="info-value"><?= date('M d, Y', strtotime($visit['patient_registered'] ?? 'now')) ?></span></div>
+                    <div class="col-span-2"><span class="info-label">Address</span><span class="info-value"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
                 </div>
             </div>
 
-            <!-- VISIT INFORMATION CARD -->
             <div class="consultation-card">
                 <h3 class="card-title">
-                    <i class="fas fa-clinic-medical title-green mr-2"></i> Visit Information
+                    <i class="fas fa-clinic-medical title-green"></i> Visit Information
                 </h3>
                 <div class="visit-info-grid">
                     <div><span class="info-label">Visit Number</span><span class="info-value font-mono"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span></div>
                     <div><span class="info-label">Visit Type</span><span class="info-value"><?= ucfirst($visit['visit_type'] ?? 'New') ?></span></div>
-                    <div><span class="info-label">Assigned Doctor</span><span class="info-value"><?= htmlspecialchars($visit['doctor_name'] ?? $doctor_name) ?></span></div>
-                    <div><span class="info-label">Receptionist</span><span class="info-value"><?= htmlspecialchars($visit['receptionist_name'] ?? 'N/A') ?></span></div>
+                    <div><span class="info-label">Date</span><span class="info-value"><?= date('M d, Y', strtotime($visit['created_at'])) ?></span></div>
+                    <div><span class="info-label">Time</span><span class="info-value"><?= date('h:i A', strtotime($visit['created_at'])) ?></span></div>
                     <div><span class="info-label">Branch</span><span class="info-value"><?= htmlspecialchars($visit['branch_name'] ?? 'N/A') ?></span></div>
-                    <div><span class="info-label">Visit Date</span><span class="info-value"><?= date('M d, Y', strtotime($visit['created_at'])) ?></span></div>
-                    <div><span class="info-label">Visit Time</span><span class="info-value"><?= date('h:i A', strtotime($visit['created_at'])) ?></span></div>
-                    <div><span class="info-label">Queue Number</span><span class="info-value">#<?= sprintf('%03d', $visit['id'] ?? 1) ?></span></div>
-                    <div class="col-span-2">
-                        <span class="info-label">Current Status</span>
-                        <span class="badge <?= getStatusBadgeClass($visit['status']) ?>">
-                            <?= ucfirst($visit['status'] ?? 'Pending') ?>
-                        </span>
-                    </div>
+                    <div><span class="info-label">Queue</span><span class="info-value">#<?= sprintf('%03d', $visit['id'] ?? 1) ?></span></div>
                 </div>
             </div>
 
@@ -779,7 +881,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <!-- ================================================================ -->
         <div class="consultation-card mb-6">
             <h3 class="card-title">
-                <i class="fas fa-history title-blue mr-2"></i> Patient History
+                <i class="fas fa-history title-blue"></i> Patient History
                 <span class="text-sm font-normal text-gray-400">(<?= count($patient_history) ?> previous visits)</span>
             </h3>
             <div class="history-grid">
@@ -804,18 +906,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     </ul>
                 </div>
                 <div class="history-item">
-                    <span class="history-label">Previous Medications</span>
-                    <ul class="history-list">
-                        <?php if (count($previous_medications) > 0): ?>
-                            <?php foreach (array_slice($previous_medications, 0, 5) as $pm): ?>
-                                <li><?= htmlspecialchars($pm['medication_name'] ?? 'N/A') ?></li>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <li class="text-gray-400">No previous medications</li>
-                        <?php endif; ?>
-                    </ul>
-                </div>
-                <div class="history-item">
                     <span class="history-label">Previous Visits</span>
                     <ul class="history-list">
                         <?php if (count($patient_history) > 0): ?>
@@ -831,140 +921,128 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </div>
 
         <!-- ================================================================ -->
-        <!-- SECTION 3: VITAL SIGNS + CHIEF COMPLAINT -->
-        <!-- ================================================================ -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-
-            <div class="consultation-card">
-                <h3 class="card-title">
-                    <i class="fas fa-heartbeat title-red mr-2"></i> Vital Signs
-                </h3>
-                <div class="vitals-grid">
-                    <div>
-                        <label class="form-label">Temperature (°C)</label>
-                        <input type="text" name="temperature" class="form-control" placeholder="36.5" value="<?= htmlspecialchars($vital_signs['temperature'] ?? '') ?>">
-                    </div>
-                    <div>
-                        <label class="form-label">Blood Pressure</label>
-                        <input type="text" name="blood_pressure" class="form-control" placeholder="120/80" value="<?= htmlspecialchars($vital_signs['blood_pressure'] ?? '') ?>">
-                    </div>
-                    <div>
-                        <label class="form-label">Pulse Rate (bpm)</label>
-                        <input type="text" name="pulse_rate" class="form-control" placeholder="72" value="<?= htmlspecialchars($vital_signs['pulse_rate'] ?? '') ?>">
-                    </div>
-                    <div>
-                        <label class="form-label">Respiratory Rate</label>
-                        <input type="text" name="respiratory_rate" class="form-control" placeholder="16" value="<?= htmlspecialchars($vital_signs['respiratory_rate'] ?? '') ?>">
-                    </div>
-                    <div>
-                        <label class="form-label">SpO₂ (%)</label>
-                        <input type="text" name="oxygen_saturation" class="form-control" placeholder="98" value="<?= htmlspecialchars($vital_signs['oxygen_saturation'] ?? '') ?>">
-                    </div>
-                    <div>
-                        <label class="form-label">Weight (kg)</label>
-                        <input type="text" name="weight" class="form-control" placeholder="70" value="<?= htmlspecialchars($vital_signs['weight'] ?? '') ?>">
-                    </div>
-                    <div>
-                        <label class="form-label">Height (cm)</label>
-                        <input type="text" name="height" class="form-control" placeholder="175" value="<?= htmlspecialchars($vital_signs['height'] ?? '') ?>">
-                    </div>
-                    <div>
-                        <label class="form-label">BMI</label>
-                        <input type="text" name="bmi" class="form-control" placeholder="22.9" value="<?= htmlspecialchars($vital_signs['bmi'] ?? '') ?>">
-                    </div>
-                </div>
-            </div>
-
-            <div class="consultation-card">
-                <h3 class="card-title">
-                    <i class="fas fa-comment-medical title-blue mr-2"></i> Chief Complaint
-                </h3>
-                <textarea name="chief_complaint" class="form-control" rows="6" placeholder="Patient complains of fever, headache and body weakness for the last three days..."><?= htmlspecialchars($consultation['chief_complaint'] ?? '') ?></textarea>
-            </div>
-
-        </div>
-
-        <!-- ================================================================ -->
-        <!-- SECTION 4: SYMPTOMS + PHYSICAL EXAMINATION -->
-        <!-- ================================================================ -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-
-            <div class="consultation-card">
-                <h3 class="card-title">
-                    <i class="fas fa-list-ul title-blue mr-2"></i> Symptoms
-                </h3>
-                <div class="symptoms-tags">
-                    <?php
-                    $symptom_options = ['Fever', 'Headache', 'Cough', 'Chest Pain', 'Vomiting', 'Diarrhea', 
-                                        'Abdominal Pain', 'Dizziness', 'Fatigue', 'Shortness of Breath', 
-                                        'Nausea', 'Muscle Pain', 'Joint Pain', 'Skin Rash', 'Sore Throat'];
-                    foreach ($symptom_options as $symptom):
-                        $checked = in_array($symptom, $symptoms_list) ? 'checked' : '';
-                    ?>
-                        <label class="symptom-tag <?= $checked ? 'active' : '' ?>">
-                            <input type="checkbox" name="symptoms_tags[]" value="<?= $symptom ?>" <?= $checked ?>>
-                            <?= $symptom ?>
-                        </label>
-                    <?php endforeach; ?>
-                    <label class="symptom-tag custom">
-                        <input type="text" placeholder="Add custom..." class="custom-symptom">
-                    </label>
-                </div>
-            </div>
-
-            <div class="consultation-card">
-                <h3 class="card-title">
-                    <i class="fas fa-stethoscope title-blue mr-2"></i> Physical Examination
-                </h3>
-                <textarea name="physical_exam" class="form-control" rows="6" placeholder="Record physical examination findings..."><?= htmlspecialchars($consultation['physical_exam'] ?? '') ?></textarea>
-            </div>
-
-        </div>
-
-        <!-- ================================================================ -->
-        <!-- SECTION 5: DIAGNOSIS -->
+        <!-- SECTION 3: SYMPTOMS (Dropdown + Manual Input) -->
         <!-- ================================================================ -->
         <div class="consultation-card mb-6">
             <h3 class="card-title">
-                <i class="fas fa-diagnoses title-blue mr-2"></i> Diagnosis
+                <i class="fas fa-list-ul title-blue"></i> Symptoms
+                <span class="text-sm font-normal text-gray-400">(Select from dropdown or type manually)</span>
             </h3>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                    <label class="form-label">Primary Diagnosis</label>
-                    <input type="text" name="primary_diagnosis" class="form-control" placeholder="Primary diagnosis..." value="<?= htmlspecialchars($diagnoses[0]['primary_diagnosis'] ?? '') ?>">
+            
+            <div class="symptoms-container">
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label class="form-label">Select Symptom</label>
+                        <div class="symptom-select-wrapper">
+                            <select id="symptomSelect" class="form-control" onchange="addSelectedSymptom()">
+                                <option value="">-- Select a symptom --</option>
+                                <?php foreach ($common_symptoms as $symptom): ?>
+                                    <option value="<?= htmlspecialchars($symptom) ?>"><?= htmlspecialchars($symptom) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <button type="button" class="btn btn-primary btn-sm" onclick="addSelectedSymptom()">
+                                <i class="fas fa-plus"></i> Add
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <div>
-                    <label class="form-label">Secondary Diagnosis</label>
-                    <input type="text" name="secondary_diagnosis" class="form-control" placeholder="Secondary diagnosis..." value="<?= htmlspecialchars($diagnoses[0]['secondary_diagnosis'] ?? '') ?>">
+                
+                <div class="quick-symptoms mt-2">
+                    <span class="text-xs text-gray-500">Quick add:</span>
+                    <?php 
+                    $quick_symptoms = ['Fever', 'Headache', 'Cough', 'Chest Pain', 'Vomiting', 'Diarrhea', 'Nausea', 'Fatigue'];
+                    foreach ($quick_symptoms as $qs): 
+                    ?>
+                        <button type="button" class="btn btn-outline btn-xs" onclick="addSymptom('<?= htmlspecialchars($qs) ?>')">
+                            <?= htmlspecialchars($qs) ?>
+                        </button>
+                    <?php endforeach; ?>
                 </div>
-                <div>
-                    <label class="form-label">ICD Code (Optional)</label>
-                    <input type="text" name="icd_code" class="form-control" placeholder="e.g. I10" value="<?= htmlspecialchars($diagnoses[0]['icd_code'] ?? '') ?>">
+                
+                <div class="form-group mt-3">
+                    <label class="form-label">Symptoms Description</label>
+                    <textarea name="symptoms" id="symptomsText" class="form-control symptoms-textarea" rows="3" 
+                              placeholder="Describe patient symptoms. You can type manually or select from dropdown above."><?= htmlspecialchars($visit['symptoms'] ?? '') ?></textarea>
+                    <small class="text-xs text-gray-400">
+                        <i class="fas fa-info-circle"></i> 
+                        Selected symptoms will be added automatically. You can also type or edit manually.
+                    </small>
+                </div>
+                
+                <div class="selected-symptoms-tags mt-2" id="symptomsTags">
+                    <?php 
+                    $current_symptoms = explode(',', $visit['symptoms'] ?? '');
+                    foreach ($current_symptoms as $s):
+                        $s = trim($s);
+                        if (!empty($s)): 
+                    ?>
+                        <span class="symptom-tag">
+                            <?= htmlspecialchars($s) ?>
+                            <span class="remove-symptom" onclick="removeSymptom('<?= htmlspecialchars($s) ?>')">&times;</span>
+                        </span>
+                    <?php endif; endforeach; ?>
                 </div>
             </div>
         </div>
 
         <!-- ================================================================ -->
-        <!-- SECTION 6: LABORATORY REQUESTS (Step 1) -->
+        <!-- SECTION 4: DIAGNOSIS + TREATMENT -->
+        <!-- ================================================================ -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+
+            <div class="consultation-card">
+                <h3 class="card-title">
+                    <i class="fas fa-diagnoses title-blue"></i> Diagnosis
+                </h3>
+                <div class="form-group">
+                    <label class="form-label">Diagnosis <span class="required">*</span></label>
+                    <textarea name="diagnosis" class="form-control" rows="3" placeholder="Enter diagnosis..."><?= htmlspecialchars($visit['diagnosis'] ?? '') ?></textarea>
+                </div>
+            </div>
+
+            <div class="consultation-card">
+                <h3 class="card-title">
+                    <i class="fas fa-notes-medical title-green"></i> Treatment & Notes
+                </h3>
+                <div class="form-group">
+                    <label class="form-label">Treatment Plan</label>
+                    <textarea name="treatment" class="form-control" rows="3" placeholder="Enter treatment plan..."><?= htmlspecialchars($visit['treatment'] ?? '') ?></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Additional Notes</label>
+                    <textarea name="notes" class="form-control" rows="2" placeholder="Any additional notes..."><?= htmlspecialchars($visit['notes'] ?? '') ?></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Visit Status</label>
+                    <select name="status" class="form-control">
+                        <option value="with_doctor" <?= ($visit['status'] ?? '') === 'with_doctor' ? 'selected' : '' ?>>With Doctor</option>
+                        <option value="lab_test" <?= ($visit['status'] ?? '') === 'lab_test' ? 'selected' : '' ?>>Lab Test</option>
+                        <option value="prescribed" <?= ($visit['status'] ?? '') === 'prescribed' ? 'selected' : '' ?>>Prescribed</option>
+                        <option value="completed" <?= ($visit['status'] ?? '') === 'completed' ? 'selected' : '' ?>>Completed</option>
+                    </select>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- ================================================================ -->
+        <!-- SECTION 5: LAB REQUESTS -->
         <!-- ================================================================ -->
         <div class="consultation-card mb-6">
             <h3 class="card-title">
-                <i class="fas fa-flask title-blue mr-2"></i> Laboratory Requests
-                <span class="text-sm font-normal text-gray-400">(Request tests before prescribing)</span>
+                <i class="fas fa-flask title-blue"></i> Laboratory Requests
+                <span class="text-sm font-normal text-gray-400">(<?= count($lab_requests) ?> pending)</span>
                 <button type="button" class="btn btn-outline btn-sm ml-2" onclick="addLabTest()">
                     <i class="fas fa-plus"></i> Add Test
                 </button>
             </h3>
-            <div class="lab-info-box">
-                <i class="fas fa-info-circle text-blue-500"></i>
-                <span class="text-sm text-gray-600">Request lab tests first. Medications can only be prescribed after receiving lab results.</span>
-            </div>
+            
             <div id="labTestsContainer" class="mt-3">
                 <?php if (count($lab_requests) > 0): ?>
-                    <?php foreach ($lab_requests as $index => $lab): ?>
+                    <?php foreach ($lab_requests as $lab): ?>
                         <div class="lab-test-row">
                             <input type="text" name="lab_tests[]" class="form-control" value="<?= htmlspecialchars($lab['test_name']) ?>" placeholder="Enter test name...">
-                            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
+                            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove();">
                                 <i class="fas fa-times"></i>
                             </button>
                         </div>
@@ -973,51 +1051,43 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <div class="lab-test-row">
                         <select name="lab_tests[]" class="form-control">
                             <option value="">-- Select Test --</option>
-                            <option value="Malaria Test">Malaria Test</option>
-                            <option value="Urine Test">Urine Test</option>
-                            <option value="Blood Sugar">Blood Sugar</option>
-                            <option value="Full Blood Count">Full Blood Count</option>
-                            <option value="Pregnancy Test">Pregnancy Test</option>
-                            <option value="HIV Test">HIV Test</option>
-                            <option value="Typhoid">Typhoid</option>
-                            <option value="Liver Function">Liver Function</option>
-                            <option value="Kidney Function">Kidney Function</option>
-                            <option value="X-Ray">X-Ray</option>
-                            <option value="Ultrasound">Ultrasound</option>
-                            <option value="COVID-19 Test">COVID-19 Test</option>
-                            <option value="Stool Test">Stool Test</option>
-                            <option value="Sputum Test">Sputum Test</option>
-                            <option value="Other">Other</option>
+                            <?php foreach ($lab_tests_catalog as $test): ?>
+                                <option value="<?= htmlspecialchars($test['test_name']) ?>">
+                                    <?= htmlspecialchars($test['test_name']) ?>
+                                    <?php if (!empty($test['category'])): ?>
+                                        (<?= htmlspecialchars($test['category']) ?>)
+                                    <?php endif; ?>
+                                </option>
+                            <?php endforeach; ?>
                         </select>
-                        <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
+                        <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove();">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
                 <?php endif; ?>
             </div>
             
-            <!-- Send Lab Requests Button -->
             <div class="mt-3">
-                <button type="button" class="btn btn-warning btn-sm" onclick="submitLabRequests()">
+                <button type="submit" name="action" value="lab_request" class="btn btn-warning btn-sm">
                     <i class="fas fa-paper-plane"></i> Send to Laboratory
                 </button>
-                <span class="text-xs text-gray-400 ml-2">Lab results will appear below when completed</span>
+                <span class="text-xs text-gray-400 ml-2"><?= count($lab_requests) ?> test(s) pending</span>
             </div>
         </div>
 
         <!-- ================================================================ -->
-        <!-- SECTION 7: LABORATORY RESULTS (Step 2 - After lab tests) -->
+        <!-- SECTION 6: LAB RESULTS -->
         <!-- ================================================================ -->
-        <div class="consultation-card mb-6 <?= $lab_results_available ? 'border-green-500' : 'border-gray-200' ?>">
+        <div class="consultation-card mb-6 <?= $lab_results_available ? 'border-green-500' : '' ?>">
             <h3 class="card-title">
-                <i class="fas fa-file-medical-alt title-green mr-2"></i> Laboratory Results
+                <i class="fas fa-file-medical-alt title-green"></i> Laboratory Results
                 <span class="text-sm font-normal text-gray-400">
                     <?php if ($lab_results_available): ?>
                         <span class="text-green-600">✅ <?= count($lab_results) ?> result(s) available</span>
-                    <?php elseif ($has_pending_lab_requests): ?>
-                        <span class="text-yellow-600">⏳ Waiting for lab results...</span>
+                    <?php elseif (count($lab_requests) > 0): ?>
+                        <span class="text-yellow-600">⏳ <?= count($lab_requests) ?> pending</span>
                     <?php else: ?>
-                        <span class="text-gray-400">No lab results yet</span>
+                        <span class="text-gray-400">No lab results</span>
                     <?php endif; ?>
                 </span>
             </h3>
@@ -1029,7 +1099,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             <tr>
                                 <th>Test Name</th>
                                 <th>Result</th>
-                                <th>Unit</th>
                                 <th>Reference Range</th>
                                 <th>Status</th>
                                 <th>Date</th>
@@ -1040,200 +1109,259 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <tr>
                                     <td><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
                                     <td class="font-medium"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($result['unit'] ?? '') ?></td>
                                     <td><?= htmlspecialchars($result['reference_range'] ?? '') ?></td>
-                                    <td>
-                                        <span class="badge badge-success">
-                                            <?= ucfirst($result['status'] ?? 'Completed') ?>
-                                        </span>
-                                    </td>
+                                    <td><span class="badge badge-success">Completed</span></td>
                                     <td><?= date('M d, Y', strtotime($result['completed_at'] ?? $result['created_at'])) ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>
-                
-                <!-- Lab Results Confirmation -->
-                <div class="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
-                    <label class="checkbox-label">
-                        <input type="checkbox" name="lab_results_reviewed" value="1" id="labResultsReviewed">
-                        I have reviewed the lab results and am ready to prescribe medication
-                    </label>
-                </div>
-            <?php elseif ($has_pending_lab_requests): ?>
+            <?php elseif (count($lab_requests) > 0): ?>
                 <div class="text-center py-6 text-yellow-600">
                     <i class="fas fa-clock text-3xl block mb-2"></i>
-                    <p>Lab requests have been sent. Please wait for results.</p>
-                    <p class="text-sm text-gray-400">Refresh the page to check for updates</p>
+                    <p><?= count($lab_requests) ?> lab request(s) pending</p>
                 </div>
             <?php else: ?>
                 <div class="text-center py-6 text-gray-400">
                     <i class="fas fa-flask text-3xl block mb-2"></i>
                     <p>No lab results available</p>
-                    <p class="text-sm">Please request lab tests above first</p>
                 </div>
             <?php endif; ?>
         </div>
 
         <!-- ================================================================ -->
-        <!-- SECTION 8: MEDICATIONS / PRESCRIPTION (Step 3 - After lab results) -->
+        <!-- SECTION 7: MEDICATIONS / PRESCRIPTION -->
         <!-- ================================================================ -->
-        <div class="consultation-card mb-6 <?= $lab_results_available ? '' : 'opacity-50 pointer-events-none' ?>">
+        <div class="consultation-card mb-6">
             <h3 class="card-title">
-                <i class="fas fa-prescription title-blue mr-2"></i> Medication / Prescription
-                <?php if (!$lab_results_available): ?>
-                    <span class="text-sm font-normal text-yellow-600">(🔒 Requires lab results)</span>
-                <?php else: ?>
-                    <span class="text-sm font-normal text-green-600">(✅ Lab results reviewed)</span>
-                <?php endif; ?>
-                <button type="button" class="btn btn-outline btn-sm ml-2" onclick="addMedication()" <?= !$lab_results_available ? 'disabled' : '' ?>>
+                <i class="fas fa-prescription title-blue"></i> Medications
+                <button type="button" class="btn btn-outline btn-sm ml-2" onclick="addMedicationRow()">
                     <i class="fas fa-plus"></i> Add Medication
                 </button>
             </h3>
             
-            <?php if (!$lab_results_available && $has_pending_lab_requests): ?>
-                <div class="lab-info-box bg-yellow-50 border-yellow-200 mb-3">
-                    <i class="fas fa-lock text-yellow-600"></i>
-                    <span class="text-sm text-yellow-700">Medications are locked until lab results are available. Please wait for results or request lab tests.</span>
+            <!-- Add Medication Form -->
+            <div class="medication-form" id="medicationForm">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <div>
+                        <label class="form-label">Medication <span class="required">*</span></label>
+                        <select name="inventory_id" class="form-control" id="medicationSelect">
+                            <option value="">Select Medication...</option>
+                            <?php if (count($medications_list) > 0): ?>
+                                <?php foreach ($medications_list as $med): ?>
+                                    <option value="<?= $med['id'] ?>">
+                                        <?= htmlspecialchars($med['medication_name'] ?? 'Unknown Medication') ?> 
+                                        (<?= $med['quantity'] ?? 0 ?> available)
+                                    </option>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <option value="" disabled>No medications available</option>
+                            <?php endif; ?>
+                        </select>
+                        <?php if (empty($medications_list)): ?>
+                            <small class="text-xs text-danger">No medications in inventory. Please contact pharmacy.</small>
+                        <?php endif; ?>
+                    </div>
+                    <div>
+                        <label class="form-label">Qty</label>
+                        <input type="number" name="quantity" class="form-control" value="1" min="1" max="99" id="medQuantity">
+                    </div>
+                    <div>
+                        <label class="form-label">Dosage</label>
+                        <input type="text" name="dosage" class="form-control" placeholder="e.g. 500mg" id="medDosage">
+                    </div>
+                    <div>
+                        <label class="form-label">Frequency</label>
+                        <select name="frequency" class="form-control" id="medFrequency">
+                            <option value="">Select</option>
+                            <option value="Once Daily">Once Daily</option>
+                            <option value="Twice Daily">Twice Daily</option>
+                            <option value="Three Times Daily">Three Times Daily</option>
+                            <option value="Four Times Daily">Four Times Daily</option>
+                            <option value="Every 4 Hours">Every 4 Hours</option>
+                            <option value="Every 6 Hours">Every 6 Hours</option>
+                            <option value="Every 8 Hours">Every 8 Hours</option>
+                            <option value="As Needed">As Needed</option>
+                        </select>
+                    </div>
                 </div>
-            <?php elseif (!$lab_results_available && !$has_pending_lab_requests): ?>
-                <div class="lab-info-box bg-blue-50 border-blue-200 mb-3">
-                    <i class="fas fa-info-circle text-blue-500"></i>
-                    <span class="text-sm text-blue-700">Please request lab tests first before prescribing medication.</span>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                    <div>
+                        <label class="form-label">Duration (Days)</label>
+                        <input type="number" name="duration" class="form-control" value="7" min="1" max="90" id="medDuration">
+                    </div>
+                    <div>
+                        <label class="form-label">Route</label>
+                        <select name="route" class="form-control" id="medRoute">
+                            <option value="">Select</option>
+                            <option value="Oral">Oral</option>
+                            <option value="Topical">Topical</option>
+                            <option value="Injection">Injection</option>
+                            <option value="IV">IV</option>
+                            <option value="Sublingual">Sublingual</option>
+                            <option value="Inhalation">Inhalation</option>
+                            <option value="Rectal">Rectal</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">Instructions</label>
+                        <input type="text" name="instructions" class="form-control" placeholder="e.g. After meals" id="medInstructions">
+                    </div>
                 </div>
-            <?php endif; ?>
+                <div class="mt-3">
+                    <button type="submit" name="add_medication" class="btn btn-primary" onclick="return validateMedication()">
+                        <i class="fas fa-plus"></i> Add Medication
+                    </button>
+                </div>
+            </div>
             
-            <div id="medicationsContainer">
-                <?php if (count($consultation_medications) > 0 && $lab_results_available): ?>
-                    <?php foreach ($consultation_medications as $index => $med): ?>
-                        <div class="medication-row">
-                            <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
-                                <input type="text" name="med_name[]" class="form-control" placeholder="Medicine" value="<?= htmlspecialchars($med['medication_name']) ?>">
-                                <input type="text" name="med_dosage[]" class="form-control" placeholder="Dosage" value="<?= htmlspecialchars($med['dosage']) ?>">
-                                <input type="text" name="med_frequency[]" class="form-control" placeholder="Frequency" value="<?= htmlspecialchars($med['frequency']) ?>">
-                                <input type="text" name="med_duration[]" class="form-control" placeholder="Duration" value="<?= htmlspecialchars($med['duration']) ?>">
-                                <input type="text" name="med_instructions[]" class="form-control" placeholder="Instructions" value="<?= htmlspecialchars($med['instructions']) ?>">
+            <!-- Selected Medications List -->
+            <div class="selected-medications mt-4">
+                <h4 class="text-sm font-semibold text-gray-600 mb-2">
+                    <i class="fas fa-list"></i> Selected Medications
+                    <span class="text-xs text-gray-400">(<?= count($selected_medications) ?> items)</span>
+                </h4>
+                
+                <?php if (count($selected_medications) > 0): ?>
+                    <div class="medications-list">
+                        <?php foreach ($selected_medications as $med): ?>
+                            <div class="medication-item">
+                                <div class="medication-item-info">
+                                    <span class="med-name"><?= htmlspecialchars($med['medication'] ?? 'Unknown') ?></span>
+                                    <span class="med-details">
+                                        <?= htmlspecialchars($med['dosage'] ?? '') ?> • 
+                                        <?= htmlspecialchars($med['frequency'] ?? '') ?> • 
+                                        <?= htmlspecialchars($med['duration'] ?? '') ?> days
+                                    </span>
+                                    <span class="med-qty">x<?= $med['quantity'] ?? 0 ?></span>
+                                </div>
+                                <form method="POST" action="" style="display:inline;">
+                                    <input type="hidden" name="prescription_id" value="<?= $med['id'] ?? 0 ?>">
+                                    <button type="submit" name="remove_medication" class="btn-remove" title="Remove medication">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </form>
                             </div>
-                            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        </div>
-                    <?php endforeach; ?>
-                <?php elseif ($lab_results_available): ?>
-                    <div class="medication-row">
-                        <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
-                            <input type="text" name="med_name[]" class="form-control" placeholder="Paracetamol">
-                            <input type="text" name="med_dosage[]" class="form-control" placeholder="500mg">
-                            <input type="text" name="med_frequency[]" class="form-control" placeholder="3 Times Daily">
-                            <input type="text" name="med_duration[]" class="form-control" placeholder="5 Days">
-                            <input type="text" name="med_instructions[]" class="form-control" placeholder="After Meals">
-                        </div>
-                        <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
-                            <i class="fas fa-times"></i>
-                        </button>
+                        <?php endforeach; ?>
                     </div>
                 <?php else: ?>
-                    <div class="text-center py-6 text-gray-400">
-                        <i class="fas fa-prescription text-2xl block mb-2"></i>
-                        <p>Add medications after receiving lab results</p>
+                    <div class="empty-state">
+                        <i class="fas fa-prescription"></i>
+                        <p>No medications added yet</p>
                     </div>
                 <?php endif; ?>
             </div>
         </div>
 
         <!-- ================================================================ -->
-        <!-- SECTION 9: PROCEDURES -->
+        <!-- SECTION 8: PROCEDURAL SERVICES -->
         <!-- ================================================================ -->
         <div class="consultation-card mb-6">
             <h3 class="card-title">
-                <i class="fas fa-syringe title-blue mr-2"></i> Procedures
-                <button type="button" class="btn btn-outline btn-sm ml-2" onclick="addProcedure()">
+                <i class="fas fa-syringe title-blue"></i> Procedural Services
+                <button type="button" class="btn btn-outline btn-sm ml-2" onclick="addProcedureRow()">
                     <i class="fas fa-plus"></i> Add Procedure
                 </button>
             </h3>
-            <div id="proceduresContainer">
-                <?php if (count($procedures) > 0): ?>
-                    <?php foreach ($procedures as $index => $proc): ?>
-                        <div class="procedure-row">
-                            <select name="procedures[]" class="form-control">
-                                <option value="">-- Select Procedure --</option>
-                                <option value="Injection" <?= $proc['procedure_name'] === 'Injection' ? 'selected' : '' ?>>Injection</option>
-                                <option value="Wound Dressing" <?= $proc['procedure_name'] === 'Wound Dressing' ? 'selected' : '' ?>>Wound Dressing</option>
-                                <option value="Minor Surgery" <?= $proc['procedure_name'] === 'Minor Surgery' ? 'selected' : '' ?>>Minor Surgery</option>
-                                <option value="Nebulization" <?= $proc['procedure_name'] === 'Nebulization' ? 'selected' : '' ?>>Nebulization</option>
-                                <option value="IV Fluids" <?= $proc['procedure_name'] === 'IV Fluids' ? 'selected' : '' ?>>IV Fluids</option>
-                                <option value="Other" <?= $proc['procedure_name'] === 'Other' ? 'selected' : '' ?>>Other</option>
-                            </select>
-                            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="procedure-row">
-                        <select name="procedures[]" class="form-control">
-                            <option value="">-- Select Procedure --</option>
-                            <option value="Injection">Injection</option>
-                            <option value="Wound Dressing">Wound Dressing</option>
-                            <option value="Minor Surgery">Minor Surgery</option>
-                            <option value="Nebulization">Nebulization</option>
-                            <option value="IV Fluids">IV Fluids</option>
-                            <option value="Other">Other</option>
+            
+            <div class="procedure-form" id="procedureForm">
+                <div class="form-row">
+                    <div class="form-group flex-1">
+                        <label class="form-label">Select Procedure</label>
+                        <select name="procedure_id" class="form-control" id="procedureSelect">
+                            <option value="">Choose a procedure...</option>
+                            <?php foreach ($procedural_services as $proc): ?>
+                                <option value="<?= $proc['id'] ?>">
+                                    <?= htmlspecialchars($proc['service_name']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                            <?php if (empty($procedural_services)): ?>
+                                <option value="" disabled>No procedures available</option>
+                            <?php endif; ?>
                         </select>
-                        <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
-                            <i class="fas fa-times"></i>
+                    </div>
+                    <div class="form-group add-btn-group">
+                        <label>&nbsp;</label>
+                        <button type="submit" name="add_procedure" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Add Procedure
                         </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Selected Procedures List -->
+            <div class="selected-procedures mt-3">
+                <h4 class="text-sm font-semibold text-gray-600 mb-2">
+                    <i class="fas fa-list"></i> Selected Procedures
+                    <span class="text-xs text-gray-400">
+                        (<?= count(array_filter($bill_items, function($item) { return ($item['item_type'] ?? '') === 'procedure'; })) ?> items)
+                    </span>
+                </h4>
+                
+                <?php 
+                $procedures = array_filter($bill_items, function($item) { 
+                    return ($item['item_type'] ?? '') === 'procedure'; 
+                });
+                ?>
+                
+                <?php if (count($procedures) > 0): ?>
+                    <div class="procedures-list">
+                        <?php foreach ($procedures as $item): ?>
+                            <div class="procedure-item">
+                                <span class="procedure-name"><?= htmlspecialchars($item['item_name']) ?></span>
+                                <span class="procedure-qty">x<?= $item['quantity'] ?></span>
+                                <form method="POST" action="" style="display:inline;">
+                                    <input type="hidden" name="item_id" value="<?= $item['id'] ?>">
+                                    <button type="submit" name="remove_service" class="btn-remove" title="Remove procedure">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="empty-state">
+                        <i class="fas fa-syringe"></i>
+                        <p>No procedures added yet</p>
                     </div>
                 <?php endif; ?>
             </div>
         </div>
 
         <!-- ================================================================ -->
-        <!-- SECTION 10: FOLLOW-UP + REFERRAL -->
+        <!-- SECTION 9: FOLLOW-UP + REFERRAL -->
         <!-- ================================================================ -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
             <div class="consultation-card">
                 <h3 class="card-title">
-                    <i class="fas fa-calendar-check title-blue mr-2"></i> Follow Up
+                    <i class="fas fa-calendar-check title-blue"></i> Follow Up
                 </h3>
                 <div class="space-y-3">
-                    <label class="checkbox-label">
-                        <input type="checkbox" name="schedule_followup" value="1" <?= $follow_up ? 'checked' : '' ?>>
-                        Schedule Follow-up
-                    </label>
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label class="form-label">Follow-up Date</label>
-                            <input type="date" name="followup_date" class="form-control" value="<?= htmlspecialchars($follow_up['followup_date'] ?? '') ?>">
-                        </div>
-                        <div>
-                            <label class="form-label">Follow-up Notes</label>
-                            <input type="text" name="followup_notes" class="form-control" placeholder="Notes..." value="<?= htmlspecialchars($follow_up['notes'] ?? '') ?>">
-                        </div>
+                    <div>
+                        <label class="form-label">Follow-up Date</label>
+                        <input type="date" name="followup_date" class="form-control" value="<?= date('Y-m-d', strtotime('+7 days')) ?>">
+                    </div>
+                    <div>
+                        <label class="form-label">Follow-up Notes</label>
+                        <input type="text" name="followup_notes" class="form-control" placeholder="Notes...">
                     </div>
                 </div>
             </div>
 
             <div class="consultation-card">
                 <h3 class="card-title">
-                    <i class="fas fa-ambulance title-blue mr-2"></i> Referral
+                    <i class="fas fa-ambulance title-blue"></i> Referral
                 </h3>
                 <div class="space-y-3">
-                    <label class="checkbox-label">
-                        <input type="checkbox" name="refer_patient" value="1" <?= $referral ? 'checked' : '' ?>>
-                        Refer Patient
-                    </label>
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label class="form-label">Referral Hospital</label>
-                            <input type="text" name="referral_hospital" class="form-control" placeholder="Hospital name..." value="<?= htmlspecialchars($referral['hospital'] ?? '') ?>">
-                        </div>
-                        <div>
-                            <label class="form-label">Referral Reason</label>
-                            <input type="text" name="referral_reason" class="form-control" placeholder="Reason..." value="<?= htmlspecialchars($referral['reason'] ?? '') ?>">
-                        </div>
+                    <div>
+                        <label class="form-label">Referral Hospital</label>
+                        <input type="text" name="referral_hospital" class="form-control" placeholder="Hospital name...">
+                    </div>
+                    <div>
+                        <label class="form-label">Referral Reason</label>
+                        <input type="text" name="referral_reason" class="form-control" placeholder="Reason...">
                     </div>
                 </div>
             </div>
@@ -1241,69 +1369,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </div>
 
         <!-- ================================================================ -->
-        <!-- SECTION 11: DOCTOR NOTES + CONSULTATION SUMMARY -->
-        <!-- ================================================================ -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-
-            <div class="consultation-card">
-                <h3 class="card-title">
-                    <i class="fas fa-notes-medical title-blue mr-2"></i> Doctor Notes
-                </h3>
-                <textarea name="consultation_notes" class="form-control" rows="6" placeholder="Additional clinical notes..."><?= htmlspecialchars($consultation['notes'] ?? '') ?></textarea>
-            </div>
-
-            <div class="consultation-card">
-                <h3 class="card-title">
-                    <i class="fas fa-file-alt title-blue mr-2"></i> Consultation Summary
-                </h3>
-                <div class="summary-content">
-                    <div class="summary-item">
-                        <span class="summary-label">Diagnosis:</span>
-                        <span class="summary-value" id="summaryDiagnosis"><?= htmlspecialchars($diagnoses[0]['primary_diagnosis'] ?? 'Not entered') ?></span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">Lab Requests:</span>
-                        <span class="summary-value" id="summaryLab"><?= count($lab_requests) > 0 ? count($lab_requests) . ' test(s)' : 'None' ?></span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">Lab Results:</span>
-                        <span class="summary-value" id="summaryLabResults"><?= count($lab_results) > 0 ? count($lab_results) . ' result(s)' : 'Pending' ?></span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">Medications:</span>
-                        <span class="summary-value" id="summaryMed"><?= count($consultation_medications) > 0 ? count($consultation_medications) . ' medication(s)' : 'None' ?></span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">Procedures:</span>
-                        <span class="summary-value" id="summaryProc"><?= count($procedures) > 0 ? count($procedures) . ' procedure(s)' : 'None' ?></span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">Follow-up:</span>
-                        <span class="summary-value"><?= $follow_up ? 'Scheduled' : 'None' ?></span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">Referral:</span>
-                        <span class="summary-value"><?= $referral ? 'Yes' : 'No' ?></span>
-                    </div>
-                </div>
-            </div>
-
-        </div>
-
-        <!-- ================================================================ -->
-        <!-- SECTION 12: FORM ACTIONS -->
+        <!-- SECTION 10: FORM ACTIONS -->
         <!-- ================================================================ -->
         <div class="consultation-card">
             <div class="form-actions">
-                <button type="submit" form="consultationForm" name="action" value="save" class="btn btn-blue">
+                <button type="submit" name="action" value="save" class="btn btn-primary">
                     <i class="fas fa-save"></i> Save Draft
                 </button>
-                <button type="submit" form="consultationForm" name="action" value="complete" class="btn btn-success" 
-                        onclick="return confirm('Are you sure you want to complete this consultation?\n\nThis will:\n✅ Update visit status to Completed\n✅ Send prescriptions to Pharmacy\n✅ Send lab requests to Laboratory\n✅ Create medical record\n\nThis action cannot be undone!')">
-                    <i class="fas fa-check-circle"></i> Complete Consultation
+                <button type="submit" name="action" value="complete" class="btn btn-success" 
+                        onclick="return confirm('Complete this consultation?\n\nBill will be sent to Cashier.')">
+                    <i class="fas fa-check-circle"></i> Complete & Send to Cashier
                 </button>
                 <button type="button" class="btn btn-outline" onclick="window.print()">
-                    <i class="fas fa-print"></i> Print Consultation
+                    <i class="fas fa-print"></i> Print
                 </button>
                 <a href="my_patients.php" class="btn btn-outline">
                     <i class="fas fa-times"></i> Cancel
@@ -1317,11 +1395,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="separator">|</span>
             Consultation
-            <span class="text-gray-300 mx-2">|</span>
-            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="separator">|</span>
+            <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
+            <span class="separator">|</span>
+            <span id="footerTimestamp"><?= date('H:i:s') ?></span>
+            <span class="separator">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1343,18 +1423,125 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- STYLES -->
 <!-- ================================================================ -->
 <style>
+    /* ================================================================
+       CONSULTATION STYLES
+       ================================================================ */
+    
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 24px 28px;
+        min-height: calc(100vh - 68px);
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: all 0.3s ease;
+    }
+    
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 3px solid var(--primary);
+    }
+    
+    .page-header-left { flex: 1; }
+    .page-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .page-title i { color: var(--primary); }
+    .page-badge {
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: var(--primary-bg);
+        color: var(--primary);
+        padding: 2px 14px;
+        border-radius: 20px;
+    }
+    .page-subtitle {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        margin-top: 4px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+    .page-subtitle strong { color: var(--text-primary); }
+    .page-subtitle .patient-id { color: var(--text-secondary); font-size: 0.8rem; }
+    .separator { color: var(--border-color); margin: 0 4px; }
+    .ml-2 { margin-left: 8px; }
+    
+    .status-badge {
+        display: inline-block;
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 2px 14px;
+        border-radius: 20px;
+    }
+    .badge-warning { background: #FEF3C7; color: #D97706; }
+    .badge-info { background: #E8F0FE; color: #0B5ED7; }
+    .badge-primary { background: #E8F0FE; color: #0B5ED7; }
+    .badge-success { background: #D1FAE5; color: #059669; }
+    .badge-danger { background: #FEE2E2; color: #DC2626; }
+    .badge-purple { background: #EDE9FE; color: #7C3AED; }
+    
+    [data-theme="dark"] .badge-warning { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .badge-info { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .badge-primary { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .badge-success { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .badge-danger { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .badge-purple { background: #2D1A3A; color: #A78BFA; }
+    
+    .page-header-right {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    
+    .alert {
+        padding: 12px 18px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.9rem;
+        border: 1px solid transparent;
+    }
+    .alert-success { background: #D1FAE5; color: #059669; border-color: #059669; }
+    .alert-error { background: #FEE2E2; color: #DC2626; border-color: #DC2626; }
+    .alert-warning { background: #FEF3C7; color: #D97706; border-color: #D97706; }
+    .alert-info { background: #E8F0FE; color: #0B5ED7; border-color: #0B5ED7; }
+    
+    [data-theme="dark"] .alert-success { background: #1A3A2A; color: #34D399; border-color: #34D399; }
+    [data-theme="dark"] .alert-error { background: #3A1A1A; color: #F87171; border-color: #F87171; }
+    [data-theme="dark"] .alert-warning { background: #3D2E0A; color: #FBBF24; border-color: #FBBF24; }
+    [data-theme="dark"] .alert-info { background: #1E3A5F; color: #6EA8FE; border-color: #6EA8FE; }
+    
     .consultation-card {
         background: var(--bg-card);
         border-radius: 16px;
         padding: 20px 24px;
         border: 2px solid var(--border-color);
         transition: all 0.3s ease;
+        margin-bottom: 20px;
     }
-    
     .consultation-card:hover {
         border-color: var(--primary);
         box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
     }
+    .consultation-card.border-green-500 { border-color: #059669; }
     
     .card-title {
         font-size: 1rem;
@@ -1368,10 +1555,21 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         flex-wrap: wrap;
         gap: 6px;
     }
-    
     .title-blue { color: var(--primary); }
     .title-green { color: #059669; }
-    .title-red { color: #EF4444; }
+    
+    .grid { display: grid; }
+    .grid-cols-1 { grid-template-columns: 1fr; }
+    .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+    .gap-6 { gap: 24px; }
+    .gap-3 { gap: 12px; }
+    .mb-6 { margin-bottom: 24px; }
+    .mt-2 { margin-top: 8px; }
+    .mt-3 { margin-top: 12px; }
+    .mt-4 { margin-top: 16px; }
+    .lg\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+    .md\:grid-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+    .md\:grid-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
     
     .patient-header {
         display: flex;
@@ -1382,10 +1580,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border-radius: 12px;
         margin-bottom: 16px;
     }
-    
-    [data-theme="dark"] .patient-header {
-        background: #1E3A5F;
-    }
+    [data-theme="dark"] .patient-header { background: #1E3A5F; }
     
     .patient-avatar-large {
         width: 64px;
@@ -1399,35 +1594,21 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: white;
         flex-shrink: 0;
     }
-    
-    .patient-header-info .patient-name {
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-    
-    .patient-header-info .patient-id {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-        font-family: monospace;
-    }
-    
-    .patient-header-info .patient-gender-age {
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-    }
+    .patient-header-info .patient-name { font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
+    .patient-header-info .patient-id { font-size: 0.8rem; color: var(--text-secondary); font-family: monospace; }
+    .patient-header-info .patient-gender-age { font-size: 0.85rem; color: var(--text-secondary); }
     
     .patient-info-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 6px 16px;
     }
-    
     .visit-info-grid {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
         gap: 6px 16px;
     }
+    .col-span-2 { grid-column: span 2; }
     
     .info-label {
         display: block;
@@ -1437,22 +1618,29 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         text-transform: uppercase;
         letter-spacing: 0.03em;
     }
-    
     .info-value {
         display: block;
         font-size: 0.9rem;
         font-weight: 500;
         color: var(--text-primary);
     }
-    
-    .col-span-2 { grid-column: span 2; }
+    .font-mono { font-family: monospace; }
+    .text-sm { font-size: 0.875rem; }
+    .text-xs { font-size: 0.75rem; }
+    .text-gray-400 { color: var(--text-secondary); }
+    .text-gray-500 { color: var(--text-secondary); }
+    .text-gray-600 { color: var(--text-secondary); }
+    .text-green-600 { color: #059669; }
+    .text-yellow-600 { color: #D97706; }
+    .text-blue-500 { color: var(--primary); }
+    .text-danger { color: #EF4444; }
+    .text-primary { color: var(--primary); }
     
     .history-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
+        grid-template-columns: 1fr 1fr;
         gap: 16px;
     }
-    
     .history-item .history-label {
         display: block;
         font-size: 0.7rem;
@@ -1460,132 +1648,21 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: var(--text-secondary);
         margin-bottom: 4px;
     }
-    
     .history-list {
         list-style: none;
         padding: 0;
         margin: 0;
     }
-    
     .history-list li {
         font-size: 0.8rem;
         color: var(--text-primary);
         padding: 2px 0;
         border-bottom: 1px solid var(--border-color);
     }
+    .history-list li:last-child { border-bottom: none; }
+    .history-list li.text-gray-400 { color: var(--text-secondary); }
     
-    .history-list li:last-child {
-        border-bottom: none;
-    }
-    
-    .vitals-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr 1fr;
-        gap: 10px;
-    }
-    
-    .symptoms-tags {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        padding: 8px 0;
-    }
-    
-    .symptom-tag {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 6px 14px;
-        border-radius: 20px;
-        border: 2px solid var(--border-color);
-        background: var(--bg-card);
-        color: var(--text-secondary);
-        font-size: 0.8rem;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    
-    .symptom-tag:hover {
-        border-color: var(--primary);
-        color: var(--primary);
-    }
-    
-    .symptom-tag.active {
-        background: var(--primary);
-        border-color: var(--primary);
-        color: white;
-    }
-    
-    .symptom-tag input[type="checkbox"] {
-        display: none;
-    }
-    
-    .symptom-tag.custom {
-        border-style: dashed;
-        padding: 4px 8px;
-    }
-    
-    .symptom-tag.custom input {
-        border: none;
-        background: transparent;
-        outline: none;
-        font-size: 0.8rem;
-        color: var(--text-primary);
-        width: 100px;
-    }
-    
-    .symptom-tag.custom input::placeholder {
-        color: var(--text-secondary);
-    }
-    
-    .lab-test-row,
-    .medication-row,
-    .procedure-row {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 8px;
-        align-items: center;
-    }
-    
-    .lab-test-row .form-control,
-    .procedure-row .form-control {
-        flex: 1;
-    }
-    
-    .medication-row .grid {
-        flex: 1;
-    }
-    
-    .summary-content {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 6px 16px;
-    }
-    
-    .summary-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 4px 0;
-        border-bottom: 1px solid var(--border-color);
-    }
-    
-    .summary-item:last-child {
-        border-bottom: none;
-    }
-    
-    .summary-label {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    
-    .summary-value {
-        font-size: 0.85rem;
-        color: var(--text-primary);
-        font-weight: 500;
-        text-align: right;
-    }
-    
+    .form-group { margin-bottom: 14px; }
     .form-label {
         display: block;
         font-size: 0.75rem;
@@ -1593,6 +1670,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: var(--text-secondary);
         margin-bottom: 4px;
     }
+    .required { color: #EF4444; }
     
     .form-control {
         width: 100%;
@@ -1606,33 +1684,46 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         transition: all 0.3s ease;
         font-family: 'Inter', 'Segoe UI', sans-serif;
     }
-    
     .form-control:focus {
         border-color: var(--primary);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
     }
+    .form-control::placeholder { color: var(--text-secondary); opacity: 0.6; }
     
-    .form-control::placeholder {
-        color: var(--text-secondary);
-        opacity: 0.6;
-    }
-    
-    .checkbox-label {
+    .form-row {
         display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 0.9rem;
-        font-weight: 500;
-        color: var(--text-primary);
-        cursor: pointer;
+        gap: 12px;
+        align-items: flex-end;
     }
+    .form-row .form-group { flex: 1; margin-bottom: 0; }
+    .form-row .add-btn-group { flex: 0 0 auto; }
     
-    .checkbox-label input[type="checkbox"] {
-        width: 18px;
-        height: 18px;
-        accent-color: var(--primary);
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.8rem;
+        transition: all 0.3s ease;
         cursor: pointer;
+        border: none;
+        text-decoration: none;
+        background: transparent;
     }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+    .btn-success { background: #059669; color: white; }
+    .btn-success:hover { background: #047857; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3); }
+    .btn-warning { background: #D97706; color: white; }
+    .btn-warning:hover { background: #B45309; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
+    .btn-danger { background: #EF4444; color: white; padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
+    .btn-danger:hover { background: #DC2626; transform: scale(1.05); }
+    .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
+    .btn-outline:hover { background: var(--bg-body); border-color: var(--primary); color: var(--primary); }
+    .btn-sm { padding: 4px 12px; font-size: 0.7rem; border-radius: 6px; }
+    .btn-xs { padding: 2px 10px; font-size: 0.65rem; border-radius: 4px; }
     
     .form-actions {
         display: flex;
@@ -1643,123 +1734,154 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border-top: 2px solid var(--border-color);
     }
     
-    .lab-info-box {
+    .symptom-select-wrapper {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+    .symptom-select-wrapper select { flex: 1; }
+    
+    .quick-symptoms {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+    }
+    
+    .symptoms-textarea {
+        transition: height 0.2s ease;
+    }
+    
+    .selected-symptoms-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 4px 0;
+        min-height: 30px;
+    }
+    
+    .symptom-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--primary-bg);
+        color: var(--primary);
+        padding: 4px 10px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        border: 1px solid var(--primary);
+    }
+    .symptom-tag .remove-symptom {
+        cursor: pointer;
+        font-weight: 700;
+        font-size: 1rem;
+        color: var(--danger);
+        transition: all 0.3s ease;
+        line-height: 1;
+    }
+    .symptom-tag .remove-symptom:hover {
+        transform: scale(1.3);
+        color: #DC2626;
+    }
+    
+    [data-theme="dark"] .symptom-tag {
+        background: #1E3A5F;
+        border-color: #6EA8FE;
+        color: #6EA8FE;
+    }
+    [data-theme="dark"] .symptom-tag .remove-symptom {
+        color: #F87171;
+    }
+    
+    .lab-test-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+        align-items: center;
+    }
+    .lab-test-row .form-control { flex: 1; }
+    
+    .medication-form {
+        background: var(--bg-body);
+        border-radius: 12px;
+        padding: 16px;
+        border: 1px solid var(--border-color);
+    }
+    .selected-medications {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 12px 16px;
+        border: 1px solid var(--border-color);
+    }
+    .medications-list { max-height: 200px; overflow-y: auto; }
+    .medications-list::-webkit-scrollbar { width: 4px; }
+    .medications-list::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+    .medications-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+    
+    .medication-item {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 10px 16px;
-        border-radius: 8px;
-        border: 1px solid;
-        background: var(--bg-card);
+        justify-content: space-between;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
     }
+    .medication-item:last-child { border-bottom: none; }
+    .medication-item-info { flex: 1; }
+    .med-name { font-weight: 600; font-size: 0.9rem; color: var(--text-primary); }
+    .med-details { font-size: 0.75rem; color: var(--text-secondary); display: block; }
+    .med-qty { font-size: 0.7rem; color: var(--text-secondary); background: var(--bg-body); padding: 1px 10px; border-radius: 12px; margin-left: 8px; }
     
-    .lab-info-box i {
-        font-size: 1.1rem;
-    }
-    
-    .opacity-50 {
-        opacity: 0.5;
-    }
-    
-    .pointer-events-none {
-        pointer-events: none;
-    }
-    
-    .badge {
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        color: white;
-        border: none;
-    }
-    
-    .badge-success { background: #059669; }
-    .badge-danger { background: #EF4444; }
-    .badge-warning { background: #D97706; }
-    .badge-info { background: var(--primary); }
-    .badge-primary { background: #0B5ED7; }
-    .badge-purple { background: #7C3AED; }
-    
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 20px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-        min-height: 44px;
-    }
-    
-    .btn-blue {
-        background: var(--primary);
-        color: white;
-        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
-    }
-    .btn-blue:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4);
-    }
-    
-    .btn-success {
-        background: #059669;
-        color: white;
-        box-shadow: 0 4px 14px rgba(5, 150, 105, 0.3);
-    }
-    .btn-success:hover {
-        background: #047857;
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(5, 150, 105, 0.4);
-    }
-    
-    .btn-warning {
-        background: #D97706;
-        color: white;
-        box-shadow: 0 4px 14px rgba(217, 119, 6, 0.3);
-    }
-    .btn-warning:hover {
-        background: #B45309;
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(217, 119, 6, 0.4);
-    }
-    
-    .btn-danger {
-        background: #EF4444;
-        color: white;
-        padding: 6px 12px;
-        min-height: 34px;
-    }
-    .btn-danger:hover {
-        background: #DC2626;
-        transform: scale(1.05);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    .btn-outline:hover {
+    .procedure-form {
         background: var(--bg-body);
-        border-color: var(--primary);
-        color: var(--primary);
-        transform: translateY(-2px);
+        border-radius: 12px;
+        padding: 16px;
+        border: 1px solid var(--border-color);
     }
+    .selected-procedures {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 12px 16px;
+        border: 1px solid var(--border-color);
+    }
+    .procedures-list { max-height: 150px; overflow-y: auto; }
+    .procedures-list::-webkit-scrollbar { width: 4px; }
+    .procedures-list::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+    .procedures-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
     
-    .btn-sm {
-        padding: 4px 12px;
-        font-size: 0.75rem;
-        min-height: 32px;
+    .procedure-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--border-color);
     }
+    .procedure-item:last-child { border-bottom: none; }
+    .procedure-name { font-weight: 500; font-size: 0.85rem; color: var(--text-primary); flex: 1; }
+    .procedure-qty { font-size: 0.7rem; color: var(--text-secondary); background: var(--bg-body); padding: 1px 10px; border-radius: 12px; }
+    
+    .btn-remove {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: none;
+        background: #FEE2E2;
+        color: #DC2626;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .btn-remove:hover { background: #DC2626; color: white; transform: scale(1.1); }
+    
+    .empty-state {
+        text-align: center;
+        padding: 16px 10px;
+        color: var(--text-secondary);
+    }
+    .empty-state i { font-size: 1.8rem; color: var(--border-color); display: block; margin-bottom: 4px; }
+    .empty-state p { font-size: 0.85rem; margin: 2px 0; }
     
     .table-wrap { overflow-x: auto; }
     .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
@@ -1767,62 +1889,94 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .data-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
     .data-table tr:hover td { background: var(--primary-bg); }
     
+    .badge {
+        padding: 2px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-block;
+        color: white;
+    }
+    .badge-success { background: #059669; }
+    .badge-warning { background: #D97706; }
+    
     .space-y-3 > * + * { margin-top: 0.75rem; }
-    .ml-2 { margin-left: 0.5rem; }
-    .mr-2 { margin-right: 0.5rem; }
-    .mb-3 { margin-bottom: 0.75rem; }
-    .mb-6 { margin-bottom: 1.5rem; }
-    .mt-3 { margin-top: 0.75rem; }
-    .gap-3 { gap: 0.75rem; }
-    .gap-4 { gap: 1rem; }
-    .gap-6 { gap: 1.5rem; }
+    .space-y-3 { margin-top: 0; }
     
-    .font-mono { font-family: monospace; }
-    .text-sm { font-size: 0.875rem; }
-    .text-xs { font-size: 0.75rem; }
-    .text-gray-400 { color: var(--text-muted); }
-    .text-gray-500 { color: var(--text-secondary); }
-    .text-gray-600 { color: var(--text-secondary); }
-    .text-green-600 { color: #059669; }
-    .text-yellow-600 { color: #D97706; }
-    .text-yellow-700 { color: #B45309; }
-    .text-blue-500 { color: var(--primary); }
-    .text-blue-700 { color: var(--primary-dark); }
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #EF4444; }
+    .toast-custom.info { background: var(--primary); }
+    .toast-custom.warning { background: #D97706; }
     
-    .bg-green-50 { background: #ECFDF5; }
-    .bg-yellow-50 { background: #FEF3C7; }
-    .bg-blue-50 { background: #EFF6FF; }
-    .border-green-500 { border-color: #059669; }
-    .border-green-200 { border-color: #A7F3D0; }
-    .border-yellow-200 { border-color: #FDE68A; }
-    .border-blue-200 { border-color: #BFDBFE; }
-    .border-gray-200 { border-color: var(--border-color); }
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
     
-    [data-theme="dark"] .bg-green-50 { background: #1A3A2A; }
-    [data-theme="dark"] .bg-yellow-50 { background: #3D2E0A; }
-    [data-theme="dark"] .bg-blue-50 { background: #1E3A5F; }
-    [data-theme="dark"] .text-yellow-700 { color: #FBBF24; }
-    [data-theme="dark"] .text-blue-700 { color: #6EA8FE; }
+    @media (max-width: 1200px) {
+        .consultation-card { padding: 16px 18px; }
+        .history-grid { grid-template-columns: 1fr; }
+        .md\:grid-cols-3 { grid-template-columns: 1fr; }
+        .md\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
+    }
     
     @media (max-width: 1024px) {
-        .visit-info-grid { grid-template-columns: 1fr 1fr; }
-        .history-grid { grid-template-columns: 1fr 1fr; }
-        .vitals-grid { grid-template-columns: 1fr 1fr; }
-        .summary-content { grid-template-columns: 1fr; }
+        .main-content { padding: 16px; }
+        .lg\:grid-cols-2 { grid-template-columns: 1fr; }
     }
     
     @media (max-width: 768px) {
+        .main-content { margin-left: 0; padding: 12px; }
+        .page-header { flex-direction: column; }
+        .page-header-right { width: 100%; }
+        .page-header-right .btn { flex: 1; justify-content: center; }
         .patient-info-grid { grid-template-columns: 1fr; }
         .visit-info-grid { grid-template-columns: 1fr; }
-        .history-grid { grid-template-columns: 1fr; }
-        .vitals-grid { grid-template-columns: 1fr 1fr; }
-        .consultation-card { padding: 14px 16px; }
-        .patient-header { flex-direction: column; text-align: center; }
+        .form-row { flex-direction: column; }
+        .form-row .form-group { width: 100%; }
         .form-actions { flex-direction: column; }
         .form-actions .btn { width: 100%; justify-content: center; }
-        .medication-row .grid { grid-template-columns: 1fr !important; }
-        .lab-test-row, .procedure-row { flex-direction: column; }
-        .lab-test-row .form-control, .procedure-row .form-control { width: 100%; }
+        .lab-test-row { flex-direction: column; }
+        .lab-test-row .form-control { width: 100%; }
+        .history-grid { grid-template-columns: 1fr; }
+        .patient-header { flex-direction: column; text-align: center; }
+        .consultation-card { padding: 12px 14px; }
+        .page-title { font-size: 1.2rem; }
+        .md\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
+        .medication-item { flex-direction: column; align-items: flex-start; gap: 6px; }
+        .procedure-item { flex-wrap: wrap; }
+        .symptom-select-wrapper { flex-direction: column; }
+        .symptom-select-wrapper .btn { width: 100%; justify-content: center; }
+        .quick-symptoms { gap: 3px; }
+        .quick-symptoms .btn-xs { font-size: 0.6rem; padding: 1px 8px; }
+    }
+    
+    @media (max-width: 480px) {
+        .md\:grid-cols-4 { grid-template-columns: 1fr; }
+        .medication-form .grid { grid-template-columns: 1fr !important; }
     }
     
     @media print {
@@ -1831,7 +1985,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .consultation-card { border: 1px solid #ddd !important; box-shadow: none !important; page-break-inside: avoid; }
         .page-header { border-bottom: 2px solid #0B5ED7 !important; }
         .form-actions { display: none !important; }
-        .lab-info-box { display: none !important; }
     }
 </style>
 
@@ -1839,6 +1992,71 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // SYMPTOMS MANAGEMENT
+    // ================================================================
+    
+    function addSelectedSymptom() {
+        var select = document.getElementById('symptomSelect');
+        var symptom = select.value;
+        if (symptom) {
+            addSymptom(symptom);
+            select.value = '';
+        }
+    }
+
+    function addSymptom(symptom) {
+        var textarea = document.getElementById('symptomsText');
+        var currentText = textarea.value;
+        var symptomsList = currentText.split(',').map(s => s.trim()).filter(s => s);
+        
+        if (symptomsList.includes(symptom)) {
+            showToast('Info', '"' + symptom + '" already added', 'info');
+            return;
+        }
+        
+        symptomsList.push(symptom);
+        textarea.value = symptomsList.join(', ');
+        updateSymptomsTags();
+        textarea.style.height = 'auto';
+        textarea.style.height = textarea.scrollHeight + 'px';
+    }
+
+    function removeSymptom(symptom) {
+        var textarea = document.getElementById('symptomsText');
+        var currentText = textarea.value;
+        var symptomsList = currentText.split(',').map(s => s.trim()).filter(s => s);
+        symptomsList = symptomsList.filter(s => s !== symptom);
+        textarea.value = symptomsList.join(', ');
+        updateSymptomsTags();
+    }
+
+    function updateSymptomsTags() {
+        var textarea = document.getElementById('symptomsText');
+        var tagsContainer = document.getElementById('symptomsTags');
+        var symptomsList = textarea.value.split(',').map(s => s.trim()).filter(s => s);
+        
+        tagsContainer.innerHTML = '';
+        symptomsList.forEach(function(symptom) {
+            var tag = document.createElement('span');
+            tag.className = 'symptom-tag';
+            tag.innerHTML = symptom + ' <span class="remove-symptom" onclick="removeSymptom(\'' + symptom.replace(/'/g, "\\'") + '\')">&times;</span>';
+            tagsContainer.appendChild(tag);
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var textarea = document.getElementById('symptomsText');
+        if (textarea) {
+            textarea.addEventListener('input', function() {
+                updateSymptomsTags();
+                this.style.height = 'auto';
+                this.style.height = this.scrollHeight + 'px';
+            });
+            updateSymptomsTags();
+        }
+    });
+
     // ================================================================
     // ADD LAB TEST
     // ================================================================
@@ -1849,155 +2067,55 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         row.innerHTML = `
             <select name="lab_tests[]" class="form-control">
                 <option value="">-- Select Test --</option>
-                <option value="Malaria Test">Malaria Test</option>
-                <option value="Urine Test">Urine Test</option>
-                <option value="Blood Sugar">Blood Sugar</option>
-                <option value="Full Blood Count">Full Blood Count</option>
-                <option value="Pregnancy Test">Pregnancy Test</option>
-                <option value="HIV Test">HIV Test</option>
-                <option value="Typhoid">Typhoid</option>
-                <option value="Liver Function">Liver Function</option>
-                <option value="Kidney Function">Kidney Function</option>
-                <option value="X-Ray">X-Ray</option>
-                <option value="Ultrasound">Ultrasound</option>
-                <option value="COVID-19 Test">COVID-19 Test</option>
-                <option value="Stool Test">Stool Test</option>
-                <option value="Sputum Test">Sputum Test</option>
-                <option value="Other">Other</option>
+                <?php foreach ($lab_tests_catalog as $test): ?>
+                    <option value="<?= htmlspecialchars($test['test_name']) ?>">
+                        <?= htmlspecialchars($test['test_name']) ?>
+                        <?php if (!empty($test['category'])): ?>
+                            (<?= htmlspecialchars($test['category']) ?>)
+                        <?php endif; ?>
+                    </option>
+                <?php endforeach; ?>
             </select>
-            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
+            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove();">
                 <i class="fas fa-times"></i>
             </button>
         `;
         container.appendChild(row);
-        updateSummary();
     }
 
     // ================================================================
-    // SUBMIT LAB REQUESTS
+    // ADD MEDICATION ROW
     // ================================================================
-    function submitLabRequests() {
-        var labTests = document.querySelectorAll('#labTestsContainer select, #labTestsContainer input');
-        var hasTests = false;
-        labTests.forEach(function(input) {
-            if (input.value && input.value.trim() !== '') {
-                hasTests = true;
-            }
-        });
+    function addMedicationRow() {
+        document.getElementById('medicationForm').scrollIntoView({ behavior: 'smooth' });
+        document.getElementById('medicationSelect').focus();
+    }
+
+    // ================================================================
+    // ADD PROCEDURE ROW
+    // ================================================================
+    function addProcedureRow() {
+        document.getElementById('procedureForm').scrollIntoView({ behavior: 'smooth' });
+        document.getElementById('procedureSelect').focus();
+    }
+
+    // ================================================================
+    // VALIDATE MEDICATION
+    // ================================================================
+    function validateMedication() {
+        var medSelect = document.getElementById('medicationSelect');
+        var qty = parseInt(document.getElementById('medQuantity').value) || 0;
         
-        if (!hasTests) {
-            showToast('Warning', 'Please add at least one lab test request', 'warning');
-            return;
+        if (!medSelect.value) {
+            showToast('Error', 'Please select a medication', 'error');
+            return false;
         }
-        
-        if (confirm('Send lab requests to Laboratory?\n\nThese tests will be sent to the lab for processing.')) {
-            document.getElementById('consultationForm').submit();
+        if (qty < 1) {
+            showToast('Error', 'Quantity must be at least 1', 'error');
+            return false;
         }
+        return true;
     }
-
-    // ================================================================
-    // ADD MEDICATION
-    // ================================================================
-    function addMedication() {
-        var labResultsAvailable = <?= $lab_results_available ? 'true' : 'false' ?>;
-        if (!labResultsAvailable) {
-            showToast('Locked', 'Please wait for lab results before prescribing medication', 'warning');
-            return;
-        }
-        
-        var container = document.getElementById('medicationsContainer');
-        var row = document.createElement('div');
-        row.className = 'medication-row';
-        row.innerHTML = `
-            <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
-                <input type="text" name="med_name[]" class="form-control" placeholder="Medicine">
-                <input type="text" name="med_dosage[]" class="form-control" placeholder="Dosage">
-                <input type="text" name="med_frequency[]" class="form-control" placeholder="Frequency">
-                <input type="text" name="med_duration[]" class="form-control" placeholder="Duration">
-                <input type="text" name="med_instructions[]" class="form-control" placeholder="Instructions">
-            </div>
-            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
-                <i class="fas fa-times"></i>
-            </button>
-        `;
-        container.appendChild(row);
-        updateSummary();
-    }
-
-    // ================================================================
-    // ADD PROCEDURE
-    // ================================================================
-    function addProcedure() {
-        var container = document.getElementById('proceduresContainer');
-        var row = document.createElement('div');
-        row.className = 'procedure-row';
-        row.innerHTML = `
-            <select name="procedures[]" class="form-control">
-                <option value="">-- Select Procedure --</option>
-                <option value="Injection">Injection</option>
-                <option value="Wound Dressing">Wound Dressing</option>
-                <option value="Minor Surgery">Minor Surgery</option>
-                <option value="Nebulization">Nebulization</option>
-                <option value="IV Fluids">IV Fluids</option>
-                <option value="Other">Other</option>
-            </select>
-            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove(); updateSummary();">
-                <i class="fas fa-times"></i>
-            </button>
-        `;
-        container.appendChild(row);
-        updateSummary();
-    }
-
-    // ================================================================
-    // UPDATE SUMMARY
-    // ================================================================
-    function updateSummary() {
-        var labCount = document.querySelectorAll('#labTestsContainer .lab-test-row').length;
-        document.getElementById('summaryLab').textContent = labCount > 0 ? labCount + ' test(s)' : 'None';
-        
-        var medCount = document.querySelectorAll('#medicationsContainer .medication-row').length;
-        document.getElementById('summaryMed').textContent = medCount > 0 ? medCount + ' medication(s)' : 'None';
-        
-        var procCount = document.querySelectorAll('#proceduresContainer .procedure-row').length;
-        document.getElementById('summaryProc').textContent = procCount > 0 ? procCount + ' procedure(s)' : 'None';
-    }
-
-    // ================================================================
-    // SYMPTOM TAGS
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        document.querySelectorAll('.symptom-tag input[type="checkbox"]').forEach(function(cb) {
-            cb.addEventListener('change', function() {
-                this.closest('.symptom-tag').classList.toggle('active');
-            });
-        });
-        
-        document.querySelector('.custom-symptom')?.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                var value = this.value.trim();
-                if (value) {
-                    var tag = document.createElement('label');
-                    tag.className = 'symptom-tag active';
-                    tag.innerHTML = `<input type="checkbox" name="symptoms_tags[]" value="${value}" checked> ${value}`;
-                    this.closest('.symptoms-tags').insertBefore(tag, this.parentElement);
-                    this.value = '';
-                }
-            }
-        });
-        
-        // Lab Results Reviewed checkbox - enable medications
-        document.getElementById('labResultsReviewed')?.addEventListener('change', function() {
-            var medSection = document.querySelector('.consultation-card:has(.fa-prescription)');
-            if (this.checked) {
-                medSection.classList.remove('opacity-50', 'pointer-events-none');
-                showToast('Ready', 'Lab results reviewed. You can now prescribe medication.', 'success');
-            } else {
-                medSection.classList.add('opacity-50', 'pointer-events-none');
-            }
-        });
-    });
 
     // ================================================================
     // SHOW TOAST
@@ -2006,6 +2124,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
+        if (!toast) return;
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
@@ -2015,14 +2134,33 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
             setTimeout(function() { toast.style.display = 'none'; }, 400);
-        }, 3500);
+        }, 5000);
     }
+
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+
+    // ================================================================
+    // SHOW TOAST FOR MESSAGES
+    // ================================================================
+    <?php if ($message && $message_type): ?>
+        setTimeout(function() {
+            showToast('<?= $message_type === 'success' ? '✅ Success' : ($message_type === 'warning' ? '⚠️ Notice' : '❌ Error') ?>', 
+                '<?= addslashes($message) ?>', 
+                '<?= $message_type ?>'
+            );
+        }, 500);
+    <?php endif; ?>
 
     console.log('%c👨‍⚕️ Consultation - <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Status: <?= ucfirst($visit['status'] ?? 'Pending') ?>', 'font-size:12px; color:#64748B;');
-    console.log('%c🧪 Lab Results Available: <?= $lab_results_available ? 'YES' : 'NO' ?>', 'font-size:12px; color:' + (<?= $lab_results_available ? "'#059669'" : "'#D97706'" ?>));
-    console.log('%c✅ Workflow: Lab Requests → Lab Results → Medications', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c💊 Medications Available: <?= count($medications_list) ?>', 'font-size:12px; color:#34D399;');
+    console.log('%c🧪 Lab Tests Available: <?= count($lab_tests_catalog) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c💰 All fees go to cashier - Doctor sees nothing', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

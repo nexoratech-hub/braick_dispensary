@@ -1,29 +1,31 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/view_document.php
-// DOCTOR - VIEW DOCUMENT DETAILS
+// DOCTOR - VIEW DOCUMENT DETAILS (WITH FIXED DOWNLOAD)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
+    $_SESSION['user_id'] = 5;
+    $_SESSION['doctor_id'] = 5;
+    $_SESSION['full_name'] = 'Dr. John Mushi';
+    $_SESSION['username'] = 'dr.john';
+    $_SESSION['email'] = 'john@braick.com';
+    $_SESSION['phone'] = '+255 700 000 011';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
+    $_SESSION['specialty'] = 'General Medicine';
     $_SESSION['profile_pic'] = '';
+    $_SESSION['is_online'] = 1;
 }
 
-$doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_id = $_SESSION['user_id'] ?? 5;
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
@@ -39,44 +41,77 @@ if ($document_id <= 0) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found at: " . $db_path);
-}
+require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
 // GET DOCUMENT DETAILS
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        pd.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_code,
-        p.phone as patient_phone,
-        u.full_name as doctor_name,
-        u.specialty as doctor_specialty,
-        v.visit_number,
-        vu.full_name as verified_by_name
-    FROM patient_documents pd
-    JOIN patients p ON pd.patient_id = p.id
-    LEFT JOIN users u ON pd.doctor_id = u.id
-    LEFT JOIN visits v ON pd.visit_id = v.id
-    LEFT JOIN users vu ON pd.verified_by = vu.id
-    WHERE pd.id = ? AND pd.doctor_id = ?
-");
-$stmt->execute([$document_id, $doctor_id]);
-$document = $stmt->fetch(PDO::FETCH_ASSOC);
+$document = null;
+$file_exists = false;
+$physical_path = '';
+$web_path = '';
+$download_url = '';
 
-if (!$document) {
-    header('Location: documents.php?error=not_found');
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            pd.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            p.phone as patient_phone,
+            u.full_name as doctor_name,
+            u.specialty as doctor_specialty,
+            v.visit_number,
+            vu.full_name as verified_by_name
+        FROM patient_documents pd
+        JOIN patients p ON pd.patient_id = p.id
+        LEFT JOIN users u ON pd.doctor_id = u.id
+        LEFT JOIN visits v ON pd.visit_id = v.id
+        LEFT JOIN users vu ON pd.verified_by = vu.id
+        WHERE pd.id = ? AND pd.doctor_id = ?
+    ");
+    $stmt->execute([$document_id, $doctor_id]);
+    $document = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$document) {
+        header('Location: documents.php?error=not_found');
+        exit;
+    }
+
+    // ================================================================
+    // BUILD CORRECT PATHS
+    // ================================================================
+    // Physical paths to check
+    $paths_to_check = [
+        'C:/xampp/htdocs' . $document['file_path'],
+        'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/' . $document['file_name'],
+        'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/' . str_replace('doc_', '', $document['file_name']),
+        str_replace('\\', '/', 'C:/xampp/htdocs' . $document['file_path']),
+    ];
+
+    foreach ($paths_to_check as $path) {
+        $path = str_replace('\\', '/', $path);
+        if (file_exists($path)) {
+            $file_exists = true;
+            $physical_path = $path;
+            break;
+        }
+    }
+
+    // Web path for viewing
+    $web_path = '/dispensary_system/frontend/assets/uploads/documents/' . $document['file_name'];
+    
+    // Download URL - use download_document.php handler
+    $download_url = 'download_document.php?id=' . $document['id'];
+
+} catch (Exception $e) {
+    header('Location: documents.php?error=database');
     exit;
 }
 
 // ================================================================
-// GET DOCTOR'S BRANCH NAME
+// GET BRANCH NAME
 // ================================================================
 $doctor_branch_name = 'Not Assigned';
 try {
@@ -141,16 +176,6 @@ function getFileIcon($file_type) {
 }
 
 // ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = 0;
-
-// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
@@ -163,10 +188,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-6">
-        <div>
+    <div class="page-header">
+        <div class="page-header-left">
             <h1 class="page-title">
-                <i class="fas fa-file-medical mr-2" style="color: #0B5ED7;"></i> Document Details
+                <i class="fas fa-file-medical"></i> Document Details
             </h1>
             <p class="page-subtitle">
                 View complete document information
@@ -179,21 +204,37 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($document['patient_name']) ?>
                 </span>
+                <?php if ($document['is_verified']): ?>
+                    <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
+                        <i class="fas fa-check-circle mr-1"></i> Verified
+                    </span>
+                <?php else: ?>
+                    <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
+                        <i class="fas fa-clock mr-1"></i> Pending
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="documents.php" class="btn btn-outline btn-sm">
+        <div class="page-header-right">
+            <a href="documents.php" class="btn btn-outline">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
-            <a href="<?= htmlspecialchars($document['file_path']) ?>" class="btn btn-success btn-sm" target="_blank">
-                <i class="fas fa-download"></i> Download
-            </a>
+            <?php if ($file_exists): ?>
+                <!-- DOWNLOAD BUTTON - Using download_document.php handler -->
+                <a href="<?= $download_url ?>" class="btn btn-success" id="downloadBtn">
+                    <i class="fas fa-download"></i> Download
+                </a>
+                <!-- VIEW BUTTON -->
+                <a href="<?= $web_path ?>" target="_blank" class="btn btn-primary" id="viewBtn">
+                    <i class="fas fa-eye"></i> View File
+                </a>
+            <?php endif; ?>
             <?php if (!$document['is_verified']): ?>
-                <a href="verify_document.php?id=<?= $document['id'] ?>" class="btn btn-verify btn-sm" onclick="return confirm('Verify this document?')">
+                <a href="verify_document.php?id=<?= $document['id'] ?>" class="btn btn-verify" onclick="return confirm('Verify this document?')">
                     <i class="fas fa-check"></i> Verify
                 </a>
             <?php endif; ?>
-            <button onclick="window.print()" class="btn btn-outline btn-sm">
+            <button onclick="window.print()" class="btn btn-outline">
                 <i class="fas fa-print"></i> Print
             </button>
         </div>
@@ -213,14 +254,25 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <?= getDocumentTypeLabel($document['document_type']) ?>
                 </span>
                 <span class="preview-size">• <?= formatFileSize($document['file_size'] ?? 0) ?></span>
+                <?php if ($file_exists): ?>
+                    <span class="preview-size text-green-600">✅ File available</span>
+                <?php else: ?>
+                    <span class="preview-size text-red-600">❌ File not found</span>
+                <?php endif; ?>
             </p>
             <div class="preview-actions">
-                <a href="<?= htmlspecialchars($document['file_path']) ?>" class="btn btn-success btn-sm" target="_blank">
-                    <i class="fas fa-eye"></i> View File
-                </a>
-                <a href="<?= htmlspecialchars($document['file_path']) ?>" class="btn btn-blue btn-sm" download>
-                    <i class="fas fa-download"></i> Download
-                </a>
+                <?php if ($file_exists): ?>
+                    <a href="<?= $web_path ?>" target="_blank" class="btn btn-primary btn-sm">
+                        <i class="fas fa-eye"></i> View File
+                    </a>
+                    <a href="<?= $download_url ?>" class="btn btn-success btn-sm" id="downloadBtn2">
+                        <i class="fas fa-download"></i> Download
+                    </a>
+                <?php else: ?>
+                    <span class="btn btn-danger btn-sm disabled">
+                        <i class="fas fa-exclamation-triangle"></i> File Not Available
+                    </span>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -305,6 +357,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <span class="info-value"><?= date('F d, Y h:i A', strtotime($document['upload_date'])) ?></span>
                 </div>
                 <div class="info-row">
+                    <span class="info-label">File Path</span>
+                    <span class="info-value text-sm" style="word-break: break-all;"><?= htmlspecialchars($document['file_path']) ?></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Physical Path</span>
+                    <span class="info-value text-sm" style="word-break: break-all; color: #059669;">
+                        <?= htmlspecialchars($physical_path) ?>
+                        <?php if ($file_exists): ?>
+                            <span class="text-green-600"> ✅</span>
+                        <?php endif; ?>
+                    </span>
+                </div>
+                <div class="info-row">
                     <span class="info-label">Status</span>
                     <span class="info-value">
                         <?php if ($document['is_verified']): ?>
@@ -332,11 +397,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="separator">|</span>
             Document Details
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="separator">|</span>
             Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="separator">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -358,6 +423,58 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- STYLES -->
 <!-- ================================================================ -->
 <style>
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 3px solid var(--primary);
+    }
+    
+    .page-header-left { flex: 1; }
+    .page-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .page-title i { color: var(--primary); }
+    .page-subtitle {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        margin-top: 4px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+    .ml-2 { margin-left: 8px; }
+    
+    .page-header-right {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    
+    .branch-tag {
+        background: #059669;
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
     .preview-card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -369,7 +486,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         margin-bottom: 24px;
         transition: all 0.3s ease;
     }
-    
     .preview-card:hover {
         border-color: var(--primary);
         box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
@@ -388,29 +504,23 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         flex-shrink: 0;
     }
     
-    .preview-info {
-        flex: 1;
-    }
-    
+    .preview-info { flex: 1; }
     .preview-title {
         font-size: 1.2rem;
         font-weight: 700;
         color: var(--text-primary);
         margin: 0 0 4px 0;
     }
-    
     .preview-type {
         display: flex;
         align-items: center;
         gap: 8px;
         margin: 0 0 12px 0;
+        flex-wrap: wrap;
     }
-    
-    .preview-size {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-    
+    .preview-size { font-size: 0.8rem; color: var(--text-secondary); }
+    .text-green-600 { color: #059669; }
+    .text-red-600 { color: #DC2626; }
     .preview-actions {
         display: flex;
         gap: 8px;
@@ -425,10 +535,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        color: #fff;
+        color: white;
         border: none;
     }
-    
     .badge-success { background: #059669; }
     .badge-warning { background: #D97706; }
     .badge-blue { background: var(--primary); }
@@ -439,6 +548,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .badge-indigo { background: #4F46E5; }
     .badge-pink { background: #DB2777; }
     .badge-gray { background: #64748B; }
+    .badge-danger { background: #EF4444; }
     
     .info-grid {
         display: grid;
@@ -454,7 +564,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border: 2px solid var(--border-color);
         transition: all 0.3s ease;
     }
-    
     .info-card:hover {
         border-color: var(--primary);
         box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
@@ -471,30 +580,25 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         align-items: center;
         gap: 8px;
     }
-    
+    .text-blue-600 { color: var(--primary); }
+    .text-green-600 { color: #059669; }
     .info-card-body {
         display: flex;
         flex-direction: column;
         gap: 6px;
     }
-    
     .info-row {
         display: flex;
         justify-content: space-between;
         padding: 4px 0;
         border-bottom: 1px solid var(--border-color);
     }
-    
-    .info-row:last-child {
-        border-bottom: none;
-    }
-    
+    .info-row:last-child { border-bottom: none; }
     .info-label {
         font-size: 0.8rem;
         color: var(--text-secondary);
         font-weight: 500;
     }
-    
     .info-value {
         font-size: 0.85rem;
         color: var(--text-primary);
@@ -502,7 +606,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         max-width: 60%;
         word-break: break-word;
     }
-    
     .info-value.font-semibold { font-weight: 600; }
     .info-value.font-mono { font-family: monospace; }
     .info-value.text-sm { font-size: 0.8rem; }
@@ -520,7 +623,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border: none;
         text-decoration: none;
     }
-    
     .btn-outline {
         background: transparent;
         color: var(--text-secondary);
@@ -532,70 +634,94 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: var(--primary);
         transform: translateY(-2px);
     }
-    
     .btn-success {
         background: #059669;
-        color: #fff;
+        color: white;
         padding: 4px 12px;
         font-size: 0.7rem;
         border-radius: 6px;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        border: none;
-        cursor: pointer;
     }
     .btn-success:hover {
         background: #047857;
         transform: scale(1.05);
     }
-    
-    .btn-blue {
+    .btn-primary {
         background: var(--primary);
-        color: #fff;
+        color: white;
         padding: 4px 12px;
         font-size: 0.7rem;
         border-radius: 6px;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        border: none;
-        cursor: pointer;
     }
-    .btn-blue:hover {
+    .btn-primary:hover {
         background: var(--primary-dark);
         transform: scale(1.05);
     }
-    
     .btn-verify {
         background: #7C3AED;
-        color: #fff;
+        color: white;
         padding: 4px 12px;
         font-size: 0.7rem;
         border-radius: 6px;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        border: none;
-        cursor: pointer;
     }
     .btn-verify:hover {
         background: #6D28D9;
         transform: scale(1.05);
     }
-    
+    .btn-danger {
+        background: #EF4444;
+        color: white;
+        padding: 4px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+    }
+    .btn-danger:hover {
+        background: #DC2626;
+        transform: scale(1.05);
+    }
     .btn-sm {
         padding: 4px 10px;
         font-size: 0.7rem;
         border-radius: 6px;
     }
+    .btn-sm.disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        pointer-events: none;
+    }
     
-    .text-blue-600 { color: var(--primary); }
-    .text-green-600 { color: #059669; }
-    .text-muted { color: var(--text-muted); }
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    .separator { color: var(--border-color); margin: 0 4px; }
+    
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #EF4444; }
+    .toast-custom.info { background: var(--primary); }
+    .toast-custom.warning { background: #D97706; }
     
     [data-theme="dark"] .preview-card {
         background: #1E293B;
@@ -621,6 +747,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     [data-theme="dark"] .info-value {
         color: #F1F5F9;
     }
+    [data-theme="dark"] .badge-success { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .badge-warning { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .badge-danger { background: #3A1A1A; color: #F87171; }
     
     @media (max-width: 768px) {
         .preview-card {
@@ -649,6 +778,25 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             height: 60px;
             font-size: 2rem;
         }
+        .page-title {
+            font-size: 1.2rem;
+        }
+        .page-header {
+            flex-direction: column;
+        }
+        .page-header-right {
+            width: 100%;
+        }
+        .page-header-right .btn {
+            flex: 1;
+            justify-content: center;
+        }
+        .page-subtitle {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 4px;
+        }
+        .separator { display: none; }
     }
     
     @media (max-width: 480px) {
@@ -683,6 +831,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
+        if (!toast) return;
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
@@ -695,9 +844,26 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 3500);
     }
 
+    // ================================================================
+    // DOWNLOAD BUTTON - Debug
+    // ================================================================
+    document.getElementById('downloadBtn')?.addEventListener('click', function(e) {
+        console.log('⬇️ Download button clicked - ID: <?= $document['id'] ?>');
+        console.log('📂 File: <?= htmlspecialchars($document['file_name']) ?>');
+        console.log('📁 Physical Path: <?= htmlspecialchars($physical_path) ?>');
+        console.log('🔗 Download URL: <?= $download_url ?>');
+    });
+
     console.log('%c📄 Document Details - <?= htmlspecialchars($document['document_name']) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📁 Patient: <?= htmlspecialchars($document['patient_name']) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c✅ View document page loaded', 'font-size:12px; color:#64748B;');
+    console.log('%c📂 File: <?= htmlspecialchars($document['file_name']) ?>', 'font-size:12px; color:#64748B;');
+    console.log('%c📊 Size: <?= formatFileSize($document['file_size'] ?? 0) ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($file_exists): ?>
+        console.log('%c✅ File exists at: <?= htmlspecialchars($physical_path) ?>', 'font-size:12px; color:#34D399;');
+        console.log('%c🔗 Download URL: <?= $download_url ?>', 'font-size:12px; color:#0B5ED7;');
+    <?php else: ?>
+        console.log('%c❌ File not found!', 'font-size:12px; color:#EF4444;');
+    <?php endif; ?>
 </script>
 
 </body>
