@@ -1,7 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/components/cashier_sidebar.php
-// CASHIER - SHARED SIDEBAR
+// CASHIER - SHARED SIDEBAR (GREEN THEME)
+// WITH REAL-TIME STATS AUTO-UPDATE (3 SECONDS)
+// REMOVED: Patients, Invoice History, Receive Payment, Reports
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -11,6 +13,7 @@
 $pending_bills = 0;
 $partial_payments = 0;
 $paid_today = 0;
+$total_paid = 0;
 $patients_waiting = 0;
 
 if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
@@ -18,28 +21,37 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
     
     try {
         // Pending Bills
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'pending'");
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
         $stmt->execute([$user_branch_id]);
         $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
         // Partial Payments
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'partial'");
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'partial'");
         $stmt->execute([$user_branch_id]);
         $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
         // Paid Today
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
-            FROM bills 
+            FROM patient_bills 
             WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()
         ");
         $stmt->execute([$user_branch_id]);
         $paid_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // Total Paid Bills (All time)
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM patient_bills 
+            WHERE branch_id = ? AND status = 'paid'
+        ");
+        $stmt->execute([$user_branch_id]);
+        $total_paid = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
         // Patients Waiting for Payment (pending + partial)
         $stmt = $db->prepare("
             SELECT COUNT(DISTINCT patient_id) as count 
-            FROM bills 
+            FROM patient_bills 
             WHERE branch_id = ? AND status IN ('pending', 'partial')
         ");
         $stmt->execute([$user_branch_id]);
@@ -78,7 +90,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         left: 0; 
         bottom: 0;
         width: 270px; 
-        background: #0B4EA8;
+        background: #065F46;
         color: white;
         z-index: 50; 
         overflow-y: auto;
@@ -86,16 +98,16 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     }
     
     [data-theme="dark"] .sidebar {
-        background: #0A3D7A;
+        background: #064E3A;
     }
     
     .sidebar::-webkit-scrollbar { width: 5px; }
-    .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
-    .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
+    .sidebar::-webkit-scrollbar-track { background: #064E3A; }
+    .sidebar::-webkit-scrollbar-thumb { background: #6EE7B7; border-radius: 10px; }
     
     .sidebar-brand {
         padding: 22px 20px 16px;
-        border-bottom: 2px solid #0A3D7A;
+        border-bottom: 2px solid #064E3A;
     }
     
     .sidebar-brand .logo {
@@ -114,7 +126,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     }
     
     .sidebar-brand .brand-sub { 
-        color: #9EC5FE; 
+        color: #A7F3D0; 
         font-size: 0.7rem; 
     }
     
@@ -126,7 +138,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         font-size: 0.55rem; 
         text-transform: uppercase;
         letter-spacing: 0.1em; 
-        color: #9EC5FE;
+        color: #A7F3D0;
         padding: 0 12px; 
         margin: 12px 0 6px; 
         font-weight: 700;
@@ -138,7 +150,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         gap: 12px;
         padding: 9px 14px; 
         border-radius: 10px;
-        color: #D2E3FC; 
+        color: #D1FAE5; 
         text-decoration: none;
         transition: all 0.3s ease; 
         font-size: 0.85rem; 
@@ -149,16 +161,16 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     }
     
     .sidebar-link:hover {
-        background: #0AA84F;
+        background: #059669;
         color: white;
-        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.4);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.4);
         transform: translateX(4px);
     }
     
     .sidebar-link.active {
-        background: #0AA84F;
+        background: #059669;
         color: white;
-        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.4);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.4);
     }
     
     .sidebar-link i { 
@@ -176,6 +188,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         font-weight: 600;
         color: white;
         transition: all 0.3s ease;
+        min-width: 20px;
+        text-align: center;
     }
     
     .sidebar-link:hover .badge {
@@ -224,10 +238,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     
     .sidebar-status {
         padding: 12px 20px;
-        border-top: 2px solid #0A3D7A;
+        border-top: 2px solid #064E3A;
         display: flex;
         align-items: center;
         gap: 10px;
+        background: rgba(0,0,0,0.1);
     }
     
     .sidebar-status .status-dot {
@@ -248,12 +263,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     
     .sidebar-status .status-text {
         font-size: 0.75rem;
-        color: #D2E3FC;
+        color: #D1FAE5;
     }
     
     .sidebar-status .status-time {
         font-size: 0.6rem;
-        color: #9EC5FE;
+        color: #A7F3D0;
         margin-left: auto;
     }
     
@@ -273,14 +288,14 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 </style>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR - CASHIER -->
+<!-- SIDEBAR - CASHIER (GREEN THEME) -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%23065F46%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div>
                 <p class="brand-text">Braick Dispensary</p>
                 <p class="brand-sub">Cashier Panel</p>
@@ -303,31 +318,19 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- Pending Bills -->
         <a href="../cashier/pending_bills.php" class="sidebar-link <?= isActive('pending_bills.php') ?>">
             <i class="fas fa-clock"></i> Pending Bills
-            <?php if ($pending_bills > 0): ?>
-                <span class="badge orange"><?= $pending_bills ?></span>
-            <?php else: ?>
-                <span class="badge">0</span>
-            <?php endif; ?>
+            <span class="badge orange" id="sidebarPendingBadge"><?= $pending_bills ?></span>
         </a>
         
         <!-- Paid Bills -->
         <a href="../cashier/paid_bills.php" class="sidebar-link <?= isActive('paid_bills.php') ?>">
             <i class="fas fa-check-circle"></i> Paid Bills
-            <?php if ($paid_today > 0): ?>
-                <span class="badge green"><?= $paid_today ?></span>
-            <?php else: ?>
-                <span class="badge">0</span>
-            <?php endif; ?>
+            <span class="badge green" id="sidebarPaidBadge"><?= $total_paid ?></span>
         </a>
         
         <!-- Partial Payments -->
         <a href="../cashier/partial_payments.php" class="sidebar-link <?= isActive('partial_payments.php') ?>">
             <i class="fas fa-hand-holding-usd"></i> Partial Payments
-            <?php if ($partial_payments > 0): ?>
-                <span class="badge blue"><?= $partial_payments ?></span>
-            <?php else: ?>
-                <span class="badge">0</span>
-            <?php endif; ?>
+            <span class="badge blue" id="sidebarPartialBadge"><?= $partial_payments ?></span>
         </a>
         
         <!-- Cancelled Bills -->
@@ -338,25 +341,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- 3. Payments -->
         <div class="nav-label mt-2">Payments</div>
         
-        <!-- Receive Payment -->
-        <a href="../cashier/receive_payment.php" class="sidebar-link <?= isActive('receive_payment.php') ?>">
-            <i class="fas fa-hand-holding-usd"></i> Receive Payment
-        </a>
-        
         <!-- Payment History -->
         <a href="../cashier/payment_history.php" class="sidebar-link <?= isActive('payment_history.php') ?>">
             <i class="fas fa-history"></i> Payment History
         </a>
         
-        <!-- 4. Invoices -->
-        <div class="nav-label mt-2">Invoices</div>
-        
-        <!-- Invoice History -->
-        <a href="../cashier/invoice_history.php" class="sidebar-link <?= isActive('invoice_history.php') ?>">
-            <i class="fas fa-file-invoice"></i> Invoice History
-        </a>
-        
-        <!-- 5. Receipts -->
+        <!-- 4. Receipts -->
         <div class="nav-label mt-2">Receipts</div>
         
         <!-- Receipt History -->
@@ -364,12 +354,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <i class="fas fa-receipt"></i> Receipt History
         </a>
         
-        <!-- 6. Reports -->
-        <a href="../cashier/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
-            <i class="fas fa-chart-bar"></i> Reports
-        </a>
-        
-        <!-- ===== ACCOUNT ===== -->
+        <!-- 5. Account -->
         <div class="nav-label mt-2">Account</div>
         
         <a href="../cashier/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
@@ -389,64 +374,48 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     </div>
 </aside>
 
+<!-- ================================================================ -->
+<!-- SIDEBAR AUTO-UPDATE SCRIPT -->
+<!-- ================================================================ -->
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        var sidebar = document.getElementById('sidebar');
-        var sidebarToggle = document.getElementById('sidebarToggle');
-        
-        if (sidebarToggle && sidebar) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('open');
-            });
+    // ================================================================
+    // UPDATE SIDEBAR BADGES
+    // ================================================================
+    function updateSidebarBadges(data) {
+        // Pending Bills
+        var pendingBadge = document.getElementById('sidebarPendingBadge');
+        if (pendingBadge) {
+            var pending = data.pending_bills || 0;
+            pendingBadge.textContent = pending;
+            pendingBadge.className = 'badge ' + (pending > 0 ? 'orange' : '');
         }
         
-        document.addEventListener('click', function(e) {
-            if (window.innerWidth <= 1024) {
-                if (sidebar && sidebarToggle) {
-                    if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                        sidebar.classList.remove('open');
-                    }
-                }
-            }
-        });
-    });
-
-    function updateSidebarBadges(pending, partial, paid, waiting) {
-        var links = document.querySelectorAll('.sidebar-link');
-        links.forEach(function(link) {
-            var text = link.textContent.trim();
-            if (text.includes('Pending Bills')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    if (pending > 0) {
-                        badge.textContent = pending;
-                        badge.className = 'badge orange';
-                    } else {
-                        badge.textContent = '0';
-                        badge.className = 'badge';
-                    }
-                }
-            }
-            if (text.includes('Partial Payments')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    if (partial > 0) {
-                        badge.textContent = partial;
-                        badge.className = 'badge blue';
-                    } else {
-                        badge.textContent = '0';
-                        badge.className = 'badge';
-                    }
-                }
-            }
-            if (text.includes('Paid Bills')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    badge.textContent = paid;
-                }
-            }
-        });
+        // Total Paid Bills (All time)
+        var paidBadge = document.getElementById('sidebarPaidBadge');
+        if (paidBadge) {
+            var totalPaid = data.total_paid || 0;
+            paidBadge.textContent = totalPaid;
+            paidBadge.className = 'badge ' + (totalPaid > 0 ? 'green' : '');
+            console.log('✅ Total Paid Bills (All Time): ' + totalPaid);
+        }
         
+        // Partial Payments
+        var partialBadge = document.getElementById('sidebarPartialBadge');
+        if (partialBadge) {
+            var partial = data.partial_payments || 0;
+            partialBadge.textContent = partial;
+            partialBadge.className = 'badge ' + (partial > 0 ? 'blue' : '');
+        }
+        
+        // Patients Waiting
+        var patientsBadge = document.getElementById('sidebarPatientsBadge');
+        if (patientsBadge) {
+            var waiting = data.patients_waiting || 0;
+            patientsBadge.textContent = waiting;
+            patientsBadge.className = 'badge ' + (waiting > 0 ? 'danger' : '');
+        }
+        
+        // Update time
         var timeEl = document.getElementById('sidebarStatusTime');
         if (timeEl) {
             var now = new Date();
@@ -454,6 +423,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     }
 
+    // ================================================================
+    // FETCH SIDEBAR DATA
+    // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
 
@@ -461,16 +433,16 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         if (sidebarIsUpdating) return;
         sidebarIsUpdating = true;
         
-        fetch('../cashier/get_sidebar_stats.php')
-            .then(function(response) { return response.json(); })
+        fetch('/dispensary_system/frontend/api/get_cashier_sidebar_stats.php?t=' + new Date().getTime())
+            .then(function(response) { 
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json(); 
+            })
             .then(function(data) {
                 if (data.success) {
-                    updateSidebarBadges(
-                        data.pending_bills,
-                        data.partial_payments,
-                        data.paid_today,
-                        data.patients_waiting
-                    );
+                    updateSidebarBadges(data);
                 }
                 sidebarIsUpdating = false;
             })
@@ -480,12 +452,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             });
     }
 
+    // ================================================================
+    // START / STOP AUTO-UPDATE
+    // ================================================================
     function startSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
         fetchSidebarData();
+        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
     }
 
     function stopSidebarAutoUpdate() {
@@ -495,6 +470,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     }
 
+    // ================================================================
+    // VISIBILITY CHANGE
+    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -503,12 +481,17 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     });
 
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
-        }, 2000);
+        }, 1000);
     });
 
-    console.log('%c💰 Cashier Sidebar', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Pending: <?= $pending_bills ?> | Partial: <?= $partial_payments ?> | Paid: <?= $paid_today ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c💰 Cashier Sidebar (Green Theme - Cleaned)', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c📋 Pending: <?= $pending_bills ?> | Partial: <?= $partial_payments ?> | Total Paid: <?= $total_paid ?>', 'font-size:12px; color:#A7F3D0;');
+    console.log('%c🔄 Auto-updates every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Removed: Patients, Invoice History, Receive Payment, Reports', 'font-size:12px; color:#059669;');
 </script>

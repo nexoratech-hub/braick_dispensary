@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/dashboard.php
-// CASHIER DASHBOARD
+// CASHIER DASHBOARD (GREEN THEME)
 // WITH AUTO-UPDATE (3 SECONDS) - NO REFRESH NEEDED
-// WITH CLICKABLE STAT CARDS - NAVIGATE TO RELEVANT PAGES
+// WITH CLICKABLE STAT CARDS (5 CARDS)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -68,17 +68,12 @@ try {
     $stmt->execute([$user_branch_id, $today]);
     $today_payments = $stmt->fetch()['count'] ?? 0;
     
-    // 3. Total Patients
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-    $stmt->execute([$user_branch_id]);
-    $total_patients = $stmt->fetch()['count'] ?? 0;
-    
-    // 4. Total Bills
+    // 3. Total Bills
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ?");
     $stmt->execute([$user_branch_id]);
     $total_bills = $stmt->fetch()['count'] ?? 0;
     
-    // 5. Paid Bills
+    // 4. Paid Bills
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
         FROM patient_bills 
@@ -87,7 +82,7 @@ try {
     $stmt->execute([$user_branch_id]);
     $paid_bills = $stmt->fetch()['count'] ?? 0;
     
-    // 6. Today's Receipts
+    // 5. Today's Receipts
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
         FROM receipts 
@@ -96,7 +91,7 @@ try {
     $stmt->execute([$today]);
     $today_receipts = $stmt->fetch()['count'] ?? 0;
     
-    // 7. Recent Payments
+    // 6. Recent Payments
     $stmt = $db->prepare("
         SELECT p.*, pb.bill_number, pb.total_amount,
                pat.full_name as patient_name, pat.patient_id,
@@ -112,7 +107,7 @@ try {
     $stmt->execute([$user_branch_id]);
     $recent_payments = $stmt->fetchAll();
     
-    // 8. Payment Methods
+    // 7. Payment Methods
     $stmt = $db->prepare("
         SELECT payment_method, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
         FROM payments 
@@ -122,7 +117,7 @@ try {
     $stmt->execute([$user_branch_id, $today]);
     $payment_methods = $stmt->fetchAll();
     
-    // 9. Patients with Bills (for quick access)
+    // 8. Patients with Bills (for quick access)
     $stmt = $db->prepare("
         SELECT DISTINCT p.id, p.full_name, p.patient_id,
             (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND branch_id = ? AND status IN ('pending', 'partial')) as pending_bills_count,
@@ -139,7 +134,6 @@ try {
 } catch (Exception $e) {
     $pending_bills = 0;
     $today_payments = 0;
-    $total_patients = 0;
     $total_bills = 0;
     $paid_bills = 0;
     $today_receipts = 0;
@@ -170,23 +164,27 @@ include_once '../../components/cashier_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES
+           ROOT VARIABLES - GREEN THEME
            ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
+            
             --success: #059669;
             --success-dark: #047857;
             --success-light: #34D399;
             --success-bg: #D1FAE5;
+            
             --danger: #DC2626;
             --danger-dark: #B91C1C;
             --danger-light: #F87171;
             --danger-bg: #FEE2E2;
+            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -198,17 +196,21 @@ include_once '../../components/cashier_sidebar.php';
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
+            
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
             --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
             --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
+            
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
+            --table-stripe: #E8F0FE;
+            --table-hover: #D1FAE5;
         }
         
         [data-theme="dark"] {
@@ -221,6 +223,8 @@ include_once '../../components/cashier_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+            --table-stripe: #1E293B;
+            --table-hover: #1A3A2A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -234,10 +238,10 @@ include_once '../../components/cashier_sidebar.php';
         
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAV
+           TOP NAV - GREEN THEME
            ================================================================ */
         .top-nav {
             position: fixed;
@@ -267,8 +271,8 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+            border-color: var(--success);
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
         }
         
         .top-nav .search-wrapper input {
@@ -286,7 +290,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
+            background: var(--success);
             color: white;
             border: none;
             padding: 8px 16px;
@@ -298,7 +302,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
+            background: var(--success-dark);
         }
         
         .top-nav .datetime {
@@ -318,7 +322,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .top-nav .avatar:hover {
-            border-color: var(--primary);
+            border-color: var(--success);
             transform: scale(1.05);
         }
         
@@ -339,7 +343,7 @@ include_once '../../components/cashier_sidebar.php';
         
         .top-nav .icon-btn:hover {
             background: var(--bg-body);
-            color: var(--primary);
+            color: var(--success);
         }
         
         .notif-dot {
@@ -376,7 +380,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .dark-toggle-btn:hover {
-            border-color: var(--primary);
+            border-color: var(--success);
             background: var(--bg-card);
         }
         
@@ -393,10 +397,10 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER
+           PAGE HEADER - GREEN THEME
            ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            background: linear-gradient(135deg, var(--success), var(--success-dark));
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -405,7 +409,7 @@ include_once '../../components/cashier_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
             position: relative;
             overflow: hidden;
         }
@@ -523,7 +527,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           STAT CARDS - CLICKABLE
+           STAT CARDS - CLICKABLE (5 CARDS)
            ================================================================ */
         .stat-card {
             border-radius: 14px;
@@ -547,14 +551,11 @@ include_once '../../components/cashier_sidebar.php';
             transform: scale(0.97);
         }
         
-        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
         .stat-card.red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
+        .stat-card.green { background: linear-gradient(135deg, var(--success), var(--success-dark)); }
         .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        .stat-card.pink { background: linear-gradient(135deg, #DB2777, #BE185D); }
-        .stat-card.indigo { background: linear-gradient(135deg, #4F46E5, #4338CA); }
         
         .stat-card .stat-icon {
             font-size: 1.6rem;
@@ -622,7 +623,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .card:hover {
-            border-color: var(--primary);
+            border-color: var(--success);
             box-shadow: var(--shadow-md);
         }
         
@@ -697,7 +698,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .scroll-container::-webkit-scrollbar-thumb {
-            background: var(--primary);
+            background: var(--success);
             border-radius: 4px;
         }
         
@@ -745,7 +746,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .footer .footer-brand { 
-            color: var(--primary); 
+            color: var(--success); 
             font-weight: 600; 
         }
         
@@ -958,9 +959,9 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - CLICKABLE NAVIGATION (6 CARDS) -->
+    <!-- STATS CARDS - CLICKABLE NAVIGATION (5 CARDS) -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-5">
         
         <!-- Card 1: Pending Bills -> pending_bills.php -->
         <a href="pending_bills.php" class="stat-card red">
@@ -980,16 +981,7 @@ include_once '../../components/cashier_sidebar.php';
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 3: Total Patients -> ../reception/patients.php -->
-        <a href="../reception/patients.php" class="stat-card purple">
-            <span class="stat-icon">👥</span>
-            <div class="stat-number" id="totalPatients"><?= number_format($total_patients) ?></div>
-            <div class="stat-label">Total Patients</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- Card 4: Total Bills -> pending_bills.php -->
+        <!-- Card 3: Total Bills -> pending_bills.php -->
         <a href="pending_bills.php" class="stat-card orange">
             <span class="stat-icon">📋</span>
             <div class="stat-number" id="totalBills"><?= number_format($total_bills) ?></div>
@@ -998,7 +990,7 @@ include_once '../../components/cashier_sidebar.php';
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 5: Paid Bills -> paid_bills.php -->
+        <!-- Card 4: Paid Bills -> paid_bills.php -->
         <a href="paid_bills.php" class="stat-card green">
             <span class="stat-icon">✅</span>
             <div class="stat-number" id="paidBills"><?= number_format($paid_bills) ?></div>
@@ -1007,7 +999,7 @@ include_once '../../components/cashier_sidebar.php';
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 6: Today's Receipts -> print_receipt.php -->
+        <!-- Card 5: Today's Receipts -> print_receipt.php -->
         <a href="print_receipt.php" class="stat-card teal">
             <span class="stat-icon">🧾</span>
             <div class="stat-number" id="todayReceipts"><?= $today_receipts ?></div>
@@ -1034,7 +1026,7 @@ include_once '../../components/cashier_sidebar.php';
             <?php if (count($patients_with_bills) > 0): ?>
                 <?php foreach ($patients_with_bills as $patient): ?>
                     <a href="patient_bills.php?patient_id=<?= $patient['id'] ?>" 
-                       class="patient-item hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg p-2 border border-transparent hover:border-primary transition">
+                       class="patient-item hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg p-2 border border-transparent hover:border-success transition">
                         <div>
                             <p class="patient-name"><?= htmlspecialchars($patient['full_name']) ?></p>
                             <p class="patient-id"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></p>
@@ -1355,15 +1347,16 @@ include_once '../../components/cashier_sidebar.php';
         }, 500);
     });
 
-    console.log('%c💰 Braick - Cashier Dashboard', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🟢 Braick - Cashier Dashboard (Green Theme)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👋 Welcome, <?= htmlspecialchars($user_full_name) ?>!', 'font-size:13px; color:#64748B;');
+    console.log('%c📊 5 Cards: Pending Bills, Today\'s Payments, Total Bills, Paid Bills, Today\'s Receipts', 'font-size:13px; color:#0B5ED7;');
     console.log('%c⏳ Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
     console.log('%c💳 Today\'s Payments: <?= $today_payments ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🧾 Today\'s Receipts: <?= $today_receipts ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Click any stat card to navigate to relevant page', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Patients with Bills section shows each patient\'s bills', 'font-size:13px; color:#059669;');
+    console.log('%c🟢 Green theme applied to all components', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

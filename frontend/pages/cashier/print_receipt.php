@@ -3,7 +3,7 @@
 // FILE: frontend/pages/cashier/print_receipt.php
 // CASHIER - PRINT RECEIPT WITH BRAICK LOGO
 // AUTO OPENS PRINT DIALOG
-// BACK BUTTON GOES TO PAID_BILLS.PHP
+// SAVES RECEIPT TO DATABASE (FIXED: payment_id can be NULL)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -92,21 +92,88 @@ try {
             $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             // ================================================================
-            // GET PAYMENT DETAILS (if payment_id is provided)
+            // GET PAYMENT DETAILS (if payment_id is provided and exists)
             // ================================================================
+            $payment = null;
+            $valid_payment_id = null;
+            
             if ($payment_id > 0) {
                 $stmt = $db->prepare("
                     SELECT * FROM payments WHERE id = ? AND bill_id = ?
                 ");
                 $stmt->execute([$payment_id, $bill_id]);
                 $payment = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($payment) {
+                    $valid_payment_id = $payment_id;
+                }
+            }
+            
+            // If payment_id not provided, try to get the latest payment for this bill
+            if (!$payment) {
+                $stmt = $db->prepare("
+                    SELECT id FROM payments WHERE bill_id = ? ORDER BY received_at DESC LIMIT 1
+                ");
+                $stmt->execute([$bill_id]);
+                $latest_payment = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($latest_payment) {
+                    $valid_payment_id = $latest_payment['id'];
+                    // Get payment details
+                    $stmt = $db->prepare("SELECT * FROM payments WHERE id = ?");
+                    $stmt->execute([$valid_payment_id]);
+                    $payment = $stmt->fetch(PDO::FETCH_ASSOC);
+                }
+            }
+            
+            // ================================================================
+            // SAVE RECEIPT TO DATABASE
+            // ================================================================
+            $receipt_number = 'REC-' . date('Ymd') . '-' . str_pad($bill_id, 6, '0', STR_PAD_LEFT);
+            
+            // Check if receipt already exists
+            $stmt = $db->prepare("SELECT id FROM receipts WHERE bill_id = ?");
+            $stmt->execute([$bill_id]);
+            $existing_receipt = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$existing_receipt) {
+                // Create receipt data as JSON
+                $receipt_data = json_encode([
+                    'bill_number' => $bill['bill_number'],
+                    'patient_name' => $bill['patient_name'],
+                    'total_amount' => $bill['total_amount'],
+                    'paid_amount' => $bill['paid_amount'] ?? 0,
+                    'balance' => $bill['balance'] ?? 0,
+                    'items' => $items,
+                    'payment_method' => $payment ? $payment['payment_method'] : null,
+                    'printed_at' => date('Y-m-d H:i:s')
+                ]);
+                
+                // Insert receipt with payment_id (can be NULL)
+                // payment_id is allowed to be NULL in the database
+                $stmt = $db->prepare("
+                    INSERT INTO receipts (
+                        receipt_number, payment_id, bill_id, patient_id, receipt_data, 
+                        printed_by, printed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NOW())
+                ");
+                $stmt->execute([
+                    $receipt_number,
+                    $valid_payment_id, // Can be NULL if no payment found
+                    $bill_id,
+                    $bill['patient_id'],
+                    $receipt_data,
+                    $_SESSION['user_id']
+                ]);
+                
+                $receipt_saved = true;
+            } else {
+                $receipt_saved = true;
             }
         } else {
-            $error_message = 'Bill not found. Please check the bill ID.';
+            $error_message = 'Bill not found.';
             $has_error = true;
         }
     } else {
-        $error_message = 'Invalid bill ID. Please provide a valid bill_id.';
+        $error_message = 'Invalid bill ID.';
         $has_error = true;
     }
     
@@ -162,7 +229,7 @@ $logo_available = !empty($logo_base64);
         }
         
         /* ================================================================
-           PAGE HEADER - HIDDEN DURING PRINT
+           PAGE HEADER
            ================================================================ */
         .page-header {
             max-width: 420px;
@@ -190,10 +257,6 @@ $logo_available = !empty($logo_base64);
             border-color: #0B5ED7;
             color: #0B5ED7;
             background: #F8FAFC;
-        }
-        
-        .page-header .back-link i {
-            margin-right: 6px;
         }
         
         .page-header .print-link {
@@ -435,7 +498,7 @@ $logo_available = !empty($logo_base64);
         }
         
         /* ================================================================
-           ERROR MESSAGE - CLEAN DESIGN
+           ERROR MESSAGE
            ================================================================ */
         .error-box {
             max-width: 420px;
@@ -556,8 +619,6 @@ $logo_available = !empty($logo_base64);
             .page-header .print-link {
                 flex: 1;
                 text-align: center;
-                font-size: 0.75rem;
-                padding: 6px 12px;
             }
         }
     </style>
@@ -566,10 +627,9 @@ $logo_available = !empty($logo_base64);
 
 <div class="receipt-wrapper">
 
-    <!-- ============================================================ -->
+    <!-- ================================================================ -->
     <!-- PAGE HEADER - HIDDEN WHEN PRINTING -->
-    <!-- BACK BUTTON GOES TO PAID_BILLS.PHP -->
-    <!-- ============================================================ -->
+    <!-- ================================================================ -->
     <div class="page-header no-print">
         <a href="paid_bills.php" class="back-link">
             <i class="fas fa-arrow-left"></i> Back
@@ -579,28 +639,28 @@ $logo_available = !empty($logo_base64);
         </button>
     </div>
 
-    <!-- ============================================================ -->
-    <!-- ERROR MESSAGE - CLEAN AND PROFESSIONAL -->
-    <!-- ============================================================ -->
-    <?php if ($has_error): ?>
+    <!-- ================================================================ -->
+    <!-- ERROR MESSAGE -->
+    <!-- ================================================================ -->
+    <?php if ($has_error || !$bill): ?>
     <div class="error-box">
         <i class="fas fa-exclamation-circle"></i>
-        <h3>Oops! Something went wrong</h3>
-        <p><?= htmlspecialchars($error_message) ?></p>
+        <h3>Error</h3>
+        <p><?= htmlspecialchars($error_message ?: 'Bill not found') ?></p>
         <a href="paid_bills.php" class="back-btn">
-            <i class="fas fa-arrow-left"></i> Back to Bills
+            <i class="fas fa-arrow-left"></i> Back to Paid Bills
         </a>
     </div>
     <?php else: ?>
 
-    <!-- ============================================================ -->
+    <!-- ================================================================ -->
     <!-- RECEIPT -->
-    <!-- ============================================================ -->
+    <!-- ================================================================ -->
     <div class="receipt" id="receipt">
         
-        <!-- ============================================================ -->
+        <!-- ================================================================ -->
         <!-- RECEIPT HEADER WITH LOGO -->
-        <!-- ============================================================ -->
+        <!-- ================================================================ -->
         <div class="receipt-header">
             <?php if ($logo_available): ?>
                 <img src="<?= $logo_base64 ?>" alt="Braick Dispensary Logo" class="receipt-logo">
@@ -624,15 +684,19 @@ $logo_available = !empty($logo_base64);
             </div>
         </div>
         
-        <!-- ============================================================ -->
+        <!-- ================================================================ -->
         <!-- RECEIPT BODY -->
-        <!-- ============================================================ -->
+        <!-- ================================================================ -->
         <div class="receipt-body">
             
             <!-- Bill Info -->
             <div class="receipt-row">
                 <span class="label">Receipt #</span>
-                <span class="value bold"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></span>
+                <span class="value bold"><?= htmlspecialchars('REC-' . date('Ymd') . '-' . str_pad($bill_id, 6, '0', STR_PAD_LEFT)) ?></span>
+            </div>
+            <div class="receipt-row">
+                <span class="label">Bill #</span>
+                <span class="value"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></span>
             </div>
             <div class="receipt-row">
                 <span class="label">Date</span>
@@ -679,9 +743,9 @@ $logo_available = !empty($logo_base64);
             </div>
             <?php endif; ?>
             
-            <!-- ============================================================ -->
+            <!-- ================================================================ -->
             <!-- BILL ITEMS -->
-            <!-- ============================================================ -->
+            <!-- ================================================================ -->
             <div class="receipt-items">
                 <div class="receipt-row" style="font-weight:700;border-bottom:1px solid #E2E8F0;padding-bottom:4px;margin-bottom:4px;">
                     <span>Item</span>
@@ -710,9 +774,9 @@ $logo_available = !empty($logo_base64);
                 <?php endif; ?>
             </div>
             
-            <!-- ============================================================ -->
+            <!-- ================================================================ -->
             <!-- TOTALS -->
-            <!-- ============================================================ -->
+            <!-- ================================================================ -->
             <div class="receipt-totals">
                 <div class="receipt-total-row">
                     <span class="label">Subtotal</span>
@@ -753,9 +817,9 @@ $logo_available = !empty($logo_base64);
                 <?php endif; ?>
             </div>
             
-            <!-- ============================================================ -->
+            <!-- ================================================================ -->
             <!-- PAYMENT INFO -->
-            <!-- ============================================================ -->
+            <!-- ================================================================ -->
             <?php if ($payment): ?>
             <hr class="receipt-divider">
             <div class="receipt-row">
@@ -778,9 +842,9 @@ $logo_available = !empty($logo_base64);
             </div>
             <?php endif; ?>
             
-            <!-- ============================================================ -->
+            <!-- ================================================================ -->
             <!-- RECEIPT FOOTER -->
-            <!-- ============================================================ -->
+            <!-- ================================================================ -->
             <div class="receipt-footer">
                 <div class="footer-brand"><?= htmlspecialchars($site_name) ?></div>
                 <hr class="footer-divider">
@@ -818,17 +882,16 @@ $logo_available = !empty($logo_base64);
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // AUTO OPEN PRINT DIALOG - 500ms after page load
+    // AUTO OPEN PRINT DIALOG
     // ================================================================
     (function() {
-        // Check if there is no error
         var hasError = <?= $has_error ? 'true' : 'false' ?>;
         var autoPrint = <?= $auto_print ? 'true' : 'false' ?>;
         
         if (!hasError && autoPrint) {
             setTimeout(function() {
                 window.print();
-            }, 500);
+            }, 800);
         }
     })();
 
@@ -841,13 +904,12 @@ $logo_available = !empty($logo_base64);
         }
     });
 
-    console.log('%c🧾 Braick - Receipt Print', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🧾 Braick - Receipt Print (FIXED - payment_id NULL allowed)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔙 Back button goes to paid_bills.php', 'font-size:13px; color:#34D399;');
-    console.log('%c🖨️ Auto-print: <?= $auto_print ? '✅ Enabled' : '❌ Disabled (click Print button)' ?>', 'font-size:13px; color:#34D399;');
-    console.log('%c💡 Add ?print=1 to URL for auto-print', 'font-size:13px; color:#64748B;');
+    console.log('%c🖨️ Receipt saved to database', 'font-size:13px; color:#34D399;');
+    console.log('%c💡 payment_id set to NULL if no payment found', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

@@ -1,9 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/cashier/cancelled_bills.php
-// CASHIER - CANCELLED BILLS LIST (GREEN THEME)
-// WITH FILTERS: Today, Week, Month, 3 Months, 6 Months, Year, All, Date Picker
-// NO TOTAL AMOUNT CARD
+// FILE: frontend/pages/cashier/patient_bills.php
+// CASHIER - VIEW ALL BILLS FOR A SPECIFIC PATIENT (GREEN THEME)
 // WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
 // BRAICK DISPENSARY
 // ================================================================
@@ -32,109 +30,76 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $selected_branch_id = $user_branch_id;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-
-// ================================================================
-// GET FILTER PARAMETERS
-// ================================================================
-$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
-$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : '';
-$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : '';
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 
 $message = '';
 $message_type = '';
 
 // Initialize variables
-$cancelled_bills = [];
-$total_cancelled = 0;
-$total_amount = 0;
+$patient = null;
+$bills = [];
+$total_bills = 0;
+$total_pending = 0;
+$total_paid = 0;
+$total_partial = 0;
 $currency = 'TSh';
+
+if ($patient_id <= 0) {
+    header('Location: patients.php?error=invalid_patient');
+    exit;
+}
 
 try {
     $db = getDB();
     
     // ================================================================
-    // BUILD DATE FILTER
+    // GET PATIENT DETAILS
     // ================================================================
-    $date_condition = "";
-    $params = [$selected_branch_id];
+    $stmt = $db->prepare("
+        SELECT p.*, b.name as branch_name
+        FROM patients p
+        LEFT JOIN branches b ON p.branch_id = b.id
+        WHERE p.id = ? AND p.branch_id = ?
+    ");
+    $stmt->execute([$patient_id, $selected_branch_id]);
+    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    switch ($filter) {
-        case 'today':
-            $date_condition = "AND DATE(pb.updated_at) = CURDATE()";
-            break;
-        case 'week':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-            break;
-        case 'month':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-            break;
-        case '3months':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-            break;
-        case '6months':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-            break;
-        case 'year':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-            break;
-        case 'custom':
-            if (!empty($start_date) && !empty($end_date)) {
-                $date_condition = "AND DATE(pb.updated_at) BETWEEN ? AND ?";
-                $params[] = $start_date;
-                $params[] = $end_date;
-            } else {
-                $date_condition = "";
-            }
-            break;
-        case 'all':
-        default:
-            $date_condition = "";
-            break;
+    if (!$patient) {
+        header('Location: patients.php?error=patient_not_found');
+        exit;
     }
     
     // ================================================================
-    // BUILD SEARCH CONDITION
+    // GET ALL BILLS FOR THIS PATIENT
     // ================================================================
-    $search_condition = "";
-    if (!empty($search)) {
-        $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pb.bill_number LIKE ? OR p.phone LIKE ?)";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-    }
-    
-    // ================================================================
-    // GET CANCELLED BILLS
-    // ================================================================
-    $sql = "
+    $stmt = $db->prepare("
         SELECT pb.*, 
-               p.full_name as patient_name, 
-               p.patient_id,
-               p.phone,
-               u.full_name as created_by_name
+               u.full_name as cashier_name,
+               (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id) as item_count
         FROM patient_bills pb
-        JOIN patients p ON pb.patient_id = p.id
-        JOIN users u ON pb.created_by = u.id
-        WHERE pb.branch_id = ? 
-        AND pb.status = 'cancelled'
-        $date_condition
-        $search_condition
-        ORDER BY pb.updated_at DESC
-    ";
-    
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $cancelled_bills = $stmt->fetchAll();
+        LEFT JOIN users u ON pb.created_by = u.id
+        WHERE pb.patient_id = ? AND pb.branch_id = ?
+        ORDER BY pb.created_at DESC
+    ");
+    $stmt->execute([$patient_id, $selected_branch_id]);
+    $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
     // CALCULATE TOTALS
     // ================================================================
-    $total_cancelled = count($cancelled_bills);
-    $total_amount = 0;
-    foreach ($cancelled_bills as $bill) {
-        $total_amount += $bill['total_amount'] ?? 0;
+    $total_bills = count($bills);
+    $total_pending = 0;
+    $total_paid = 0;
+    $total_partial = 0;
+    
+    foreach ($bills as $bill) {
+        if (in_array($bill['status'], ['pending', 'partial'])) {
+            $total_pending += $bill['balance'] ?? 0;
+        } elseif ($bill['status'] === 'paid') {
+            $total_paid += $bill['total_amount'] ?? 0;
+        } elseif ($bill['status'] === 'partial') {
+            $total_partial += $bill['balance'] ?? 0;
+        }
     }
     
     // ================================================================
@@ -150,9 +115,7 @@ try {
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
-    $cancelled_bills = [];
-    $total_cancelled = 0;
-    $total_amount = 0;
+    $bills = [];
 }
 
 // ================================================================
@@ -166,7 +129,7 @@ include_once '../../components/cashier_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cancelled Bills - Braick Dispensary</title>
+    <title>Patient Bills - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
@@ -403,7 +366,7 @@ include_once '../../components/cashier_sidebar.php';
            PAGE HEADER - GREEN THEME
            ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            background: linear-gradient(135deg, var(--success), var(--success-dark));
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -412,7 +375,7 @@ include_once '../../components/cashier_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(220, 38, 38, 0.25);
+            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
             position: relative;
             overflow: hidden;
         }
@@ -513,116 +476,60 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           FILTER SECTION
+           PATIENT PROFILE CARD
            ================================================================ */
-        .filter-section {
+        .patient-profile {
             background: var(--bg-card);
-            border-radius: 14px;
-            padding: 16px 20px;
+            border-radius: 16px;
+            padding: 20px 24px;
             border: 1px solid var(--border-color);
-            margin-bottom: 20px;
-            max-width: 1200px;
-            margin-left: auto;
-            margin-right: auto;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
             box-shadow: var(--shadow-sm);
+            max-width: 1200px;
+            margin: 0 auto 20px;
         }
         
-        .filter-section:hover {
+        .patient-profile:hover {
             border-color: var(--success);
             box-shadow: var(--shadow-md);
         }
         
-        .filter-btn {
-            padding: 5px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            border: 2px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-block;
-        }
-        
-        .filter-btn:hover {
-            border-color: var(--success);
-            color: var(--success);
-            background: var(--success-bg);
-        }
-        
-        .filter-btn.active {
-            background: var(--success);
+        .patient-avatar {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
+            font-weight: 700;
             color: white;
-            border-color: var(--success);
+            flex-shrink: 0;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+            background: var(--success);
         }
         
-        .filter-btn.active:hover {
-            background: var(--success-dark);
-            border-color: var(--success-dark);
-        }
-        
-        .filter-btn i {
-            margin-right: 4px;
-        }
-        
-        .filter-group {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .filter-group .filter-label {
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-right: 4px;
-        }
-        
-        /* ================================================================
-           DATE PICKER
-           ================================================================ */
-        .date-picker-group {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
-        .date-picker-group .form-control {
-            padding: 4px 10px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 0.75rem;
-            background: var(--bg-card);
+        .patient-info h2 {
+            font-size: 1.3rem;
+            font-weight: 700;
             color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s;
-            width: auto;
         }
         
-        .date-picker-group .form-control:focus {
-            border-color: var(--success);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+        .patient-info .patient-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 4px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
         }
         
-        .date-picker-group .btn-apply {
-            padding: 4px 14px;
-            border-radius: 8px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            background: var(--success);
-            color: white;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .date-picker-group .btn-apply:hover {
-            background: var(--success-dark);
-            transform: translateY(-1px);
+        .patient-info .patient-meta span i {
+            margin-right: 4px;
+            color: var(--success);
         }
         
         /* ================================================================
@@ -660,7 +567,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           TABLE
+           TABLE - GREEN THEME
            ================================================================ */
         .table-wrap {
             overflow-x: auto;
@@ -717,9 +624,39 @@ include_once '../../components/cashier_sidebar.php';
             text-transform: uppercase;
         }
         
+        .status-badge.pending {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        .status-badge.partial {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        .status-badge.paid {
+            background: #D1FAE5;
+            color: #059669;
+        }
+        
         .status-badge.cancelled {
             background: #FEE2E2;
             color: #DC2626;
+        }
+        
+        [data-theme="dark"] .status-badge.pending {
+            background: #3D2E0A;
+            color: #FBBF24;
+        }
+        
+        [data-theme="dark"] .status-badge.partial {
+            background: #3D2E0A;
+            color: #FBBF24;
+        }
+        
+        [data-theme="dark"] .status-badge.paid {
+            background: #1A3A2A;
+            color: #34D399;
         }
         
         [data-theme="dark"] .status-badge.cancelled {
@@ -728,7 +665,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           BUTTONS
+           BUTTONS - GREEN THEME
            ================================================================ */
         .btn {
             display: inline-flex;
@@ -750,6 +687,17 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .btn-primary:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-success:hover {
             background: var(--success-dark);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
@@ -797,12 +745,16 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 700;
         }
         
-        .stat-card .stat-number.red {
-            color: #DC2626;
-        }
-        
         .stat-card .stat-number.green {
             color: var(--success);
+        }
+        
+        .stat-card .stat-number.orange {
+            color: #D97706;
+        }
+        
+        .stat-card .stat-number.purple {
+            color: #7C3AED;
         }
         
         .stat-card .stat-label {
@@ -905,6 +857,7 @@ include_once '../../components/cashier_sidebar.php';
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
+            .patient-profile { padding: 16px 18px; }
         }
         
         @media (max-width: 768px) {
@@ -912,9 +865,8 @@ include_once '../../components/cashier_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .filter-section { padding: 12px 14px; }
-            .filter-group { gap: 4px; }
-            .filter-btn { font-size: 0.6rem; padding: 3px 10px; }
+            .patient-profile { flex-direction: column; text-align: center; }
+            .patient-profile .patient-meta { justify-content: center; }
             .card { padding: 14px 16px; }
         }
         
@@ -922,11 +874,8 @@ include_once '../../components/cashier_sidebar.php';
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .filter-section { padding: 10px 12px; }
-            .filter-btn { font-size: 0.55rem; padding: 2px 8px; }
-            .date-picker-group { flex-direction: column; align-items: stretch; }
-            .date-picker-group .form-control { width: 100%; }
-            .date-picker-group .btn-apply { width: 100%; justify-content: center; }
+            .patient-profile { padding: 12px 14px; }
+            .patient-avatar { width: 50px; height: 50px; font-size: 1.2rem; }
             .card { padding: 10px 12px; }
             .btn { padding: 4px 8px; font-size: 0.6rem; }
             .data-table { font-size: 0.65rem; min-width: 600px; }
@@ -946,7 +895,7 @@ include_once '../../components/cashier_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search cancelled bills..." value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search patients...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -988,30 +937,33 @@ include_once '../../components/cashier_sidebar.php';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-times-circle"></i>
-                Cancelled Bills
+                <i class="fas fa-file-invoice"></i>
+                Patient Bills
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-file-invoice"></i>
-                View cancelled bills in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                <i class="fas fa-user"></i>
+                View all bills for <strong><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></strong>
                 
                 <span class="header-badge">
                     <i class="fas fa-file-invoice"></i>
-                    <?= $total_cancelled ?> Cancelled Bills
+                    <?= $total_bills ?> Total Bills
                 </span>
                 
-                <?php if ($filter !== 'all' && $filter !== 'custom'): ?>
                 <span class="header-badge">
-                    <i class="fas fa-filter"></i>
-                    <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
+                    <i class="fas fa-clock"></i>
+                    <?= $currency ?> <?= number_format($total_pending, 0) ?> Pending
                 </span>
-                <?php endif; ?>
+                
+                <span class="header-badge">
+                    <i class="fas fa-check-circle"></i>
+                    <?= $currency ?> <?= number_format($total_paid, 0) ?> Paid
+                </span>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="dashboard.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back to Dashboard
+            <a href="patients.php" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back to Patients
             </a>
             <button onclick="window.location.reload()" class="btn-outline-light">
                 <i class="fas fa-sync-alt"></i> Refresh
@@ -1028,103 +980,59 @@ include_once '../../components/cashier_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- FILTERS -->
+    <!-- PATIENT PROFILE -->
     <!-- ================================================================ -->
-    <div class="filter-section">
-        <div class="filter-group" style="margin-bottom:8px;">
-            <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
-            
-            <a href="?filter=all&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'all' ? 'active' : '' ?>">
-                <i class="fas fa-globe"></i> All
-            </a>
-            <a href="?filter=today&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'today' ? 'active' : '' ?>">
-                <i class="fas fa-calendar-day"></i> Today
-            </a>
-            <a href="?filter=week&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'week' ? 'active' : '' ?>">
-                <i class="fas fa-calendar-week"></i> 1 Week
-            </a>
-            <a href="?filter=month&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'month' ? 'active' : '' ?>">
-                <i class="fas fa-calendar-alt"></i> 1 Month
-            </a>
-            <a href="?filter=3months&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === '3months' ? 'active' : '' ?>">
-                <i class="fas fa-calendar-alt"></i> 3 Months
-            </a>
-            <a href="?filter=6months&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === '6months' ? 'active' : '' ?>">
-                <i class="fas fa-calendar-alt"></i> 6 Months
-            </a>
-            <a href="?filter=year&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'year' ? 'active' : '' ?>">
-                <i class="fas fa-calendar-alt"></i> 1 Year
-            </a>
+    <div class="patient-profile" style="max-width:1200px;margin:0 auto 20px;">
+        <div class="patient-avatar">
+            <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
         </div>
-        
-        <!-- ============================================================ -->
-        <!-- DATE PICKER (Custom Range) -->
-        <!-- ============================================================ -->
-        <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
-            <input type="hidden" name="filter" value="custom">
-            <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
-            
-            <span class="filter-label"><i class="fas fa-calendar-plus"></i> Custom:</span>
-            
-            <div class="date-picker-group">
-                <input type="date" name="start_date" class="form-control" 
-                       value="<?= $start_date ?>" placeholder="Start Date">
-                <span style="color:var(--text-secondary);font-size:0.7rem;">to</span>
-                <input type="date" name="end_date" class="form-control" 
-                       value="<?= $end_date ?>" placeholder="End Date">
-                <button type="submit" class="btn-apply">
-                    <i class="fas fa-check"></i> Apply
-                </button>
-                <?php if ($filter === 'custom' && !empty($start_date) && !empty($end_date)): ?>
-                    <a href="?filter=all&search=<?= urlencode($search) ?>" class="btn-apply" style="background:#DC2626;">
-                        <i class="fas fa-times"></i> Clear
-                    </a>
-                <?php endif; ?>
+        <div class="patient-info">
+            <h2><?= htmlspecialchars($patient['full_name']) ?></h2>
+            <div class="patient-meta">
+                <span><i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+                <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone'] ?? 'No phone') ?></span>
+                <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($patient['email'] ?? 'No email') ?></span>
+                <span><i class="fas fa-venus-mars"></i> <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
+                <span><i class="fas fa-store-alt"></i> <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?></span>
             </div>
-        </form>
+        </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- QUICK STATS - NO TOTAL AMOUNT CARD -->
+    <!-- QUICK STATS - GREEN THEME -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
+    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
         <div class="stat-card">
             <div class="stat-icon">📋</div>
-            <p class="stat-number red"><?= $total_cancelled ?></p>
-            <p class="stat-label">Total Cancelled</p>
+            <p class="stat-number green"><?= $total_bills ?></p>
+            <p class="stat-label">Total Bills</p>
         </div>
         <div class="stat-card">
-            <div class="stat-icon">📅</div>
-            <p class="stat-number green">
-                <?php 
-                    if ($filter === 'today') echo 'Today';
-                    elseif ($filter === 'week') echo '7 Days';
-                    elseif ($filter === 'month') echo '30 Days';
-                    elseif ($filter === '3months') echo '90 Days';
-                    elseif ($filter === '6months') echo '180 Days';
-                    elseif ($filter === 'year') echo '365 Days';
-                    elseif ($filter === 'custom') echo 'Custom';
-                    else echo 'All Time';
-                ?>
-            </p>
-            <p class="stat-label">Date Range</p>
+            <div class="stat-icon">⏳</div>
+            <p class="stat-number orange"><?= $currency ?> <?= number_format($total_pending, 0) ?></p>
+            <p class="stat-label">Pending Amount</p>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">✅</div>
+            <p class="stat-number green"><?= $currency ?> <?= number_format($total_paid, 0) ?></p>
+            <p class="stat-label">Paid Amount</p>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">💰</div>
+            <p class="stat-number purple"><?= $currency ?> <?= number_format($total_pending + $total_paid, 0) ?></p>
+            <p class="stat-label">Total Amount</p>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- CANCELLED BILLS TABLE -->
+    <!-- BILLS TABLE -->
     <!-- ================================================================ -->
     <div class="card" style="max-width:1200px;margin:0 auto;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list" style="color:#DC2626;"></i> Cancelled Bills List
-                <span class="text-sm font-normal text-gray-400">(<?= $total_cancelled ?> bills)</span>
+                <i class="fas fa-list" style="color:var(--success);"></i> Bills List
+                <span class="text-sm font-normal text-gray-400">(<?= $total_bills ?> bills)</span>
             </h3>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <span class="text-xs text-gray-400">
-                    <i class="fas fa-clock"></i> Updated: <?= date('h:i:s A') ?>
-                </span>
-            </div>
         </div>
         
         <div class="table-wrap">
@@ -1133,18 +1041,18 @@ include_once '../../components/cashier_sidebar.php';
                     <tr>
                         <th>#</th>
                         <th>Bill #</th>
-                        <th>Patient</th>
-                        <th>Patient ID</th>
                         <th>Total Amount</th>
-                        <th>Created By</th>
+                        <th>Amount Paid</th>
+                        <th>Balance</th>
                         <th>Status</th>
-                        <th>Cancelled Date</th>
+                        <th>Items</th>
+                        <th>Date</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php if (is_array($cancelled_bills) && count($cancelled_bills) > 0): ?>
-                        <?php $i = 1; foreach ($cancelled_bills as $bill): ?>
+                    <?php if (is_array($bills) && count($bills) > 0): ?>
+                        <?php $i = 1; foreach ($bills as $bill): ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td>
@@ -1153,30 +1061,35 @@ include_once '../../components/cashier_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['phone'] ?? 'No phone') ?></div>
-                                </td>
-                                <td>
-                                    <span class="text-xs font-mono"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></span>
-                                </td>
-                                <td>
                                     <span class="font-semibold text-gray-800 dark:text-gray-200">
                                         <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="text-sm"><?= htmlspecialchars($bill['created_by_name'] ?? 'N/A') ?></span>
+                                    <span class="font-semibold text-green-600 dark:text-green-400">
+                                        <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
+                                    </span>
                                 </td>
                                 <td>
-                                    <span class="status-badge cancelled">
-                                        Cancelled
+                                    <span class="font-semibold <?= ($bill['balance'] ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400' ?>">
+                                        <?= $currency ?> <?= number_format($bill['balance'] ?? 0, 0) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="status-badge <?= $bill['status'] ?? 'pending' ?>">
+                                        <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                                    </span>
+                                </td>
+                                <td class="text-center">
+                                    <span class="text-sm font-semibold text-gray-600 dark:text-gray-400">
+                                        <?= $bill['item_count'] ?? 0 ?>
                                     </span>
                                 </td>
                                 <td class="text-xs">
-                                    <?= isset($bill['updated_at']) ? date('d/m/Y', strtotime($bill['updated_at'])) : 'N/A' ?>
+                                    <?= isset($bill['created_at']) ? date('d/m/Y', strtotime($bill['created_at'])) : 'N/A' ?>
                                     <br>
                                     <span class="text-gray-400 text-[0.6rem]">
-                                        <?= isset($bill['updated_at']) ? date('h:i A', strtotime($bill['updated_at'])) : '' ?>
+                                        <?= isset($bill['created_at']) ? date('h:i A', strtotime($bill['created_at'])) : '' ?>
                                     </span>
                                 </td>
                                 <td>
@@ -1185,6 +1098,17 @@ include_once '../../components/cashier_sidebar.php';
                                         <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
                                             <i class="fas fa-eye"></i>
                                         </a>
+                                        <?php if (in_array($bill['status'], ['pending', 'partial'])): ?>
+                                            <!-- Make Payment -->
+                                            <a href="make_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-success btn-sm" title="Make Payment">
+                                                <i class="fas fa-money-bill-wave"></i> Pay
+                                            </a>
+                                        <?php else: ?>
+                                            <!-- Print Receipt -->
+                                            <a href="print_receipt.php?bill_id=<?= $bill['id'] ?>&print=1" class="btn btn-outline btn-sm" title="Print Receipt" target="_blank">
+                                                <i class="fas fa-print"></i>
+                                            </a>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -1192,15 +1116,8 @@ include_once '../../components/cashier_sidebar.php';
                     <?php else: ?>
                         <tr>
                             <td colspan="9" class="text-center py-8 text-gray-400">
-                                <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
-                                <p class="text-lg">No cancelled bills</p>
-                                <p class="text-sm">
-                                    <?php if ($filter !== 'all'): ?>
-                                        No cancelled bills found for the selected date range
-                                    <?php else: ?>
-                                        All bills are active
-                                    <?php endif; ?>
-                                </p>
+                                <i class="fas fa-file-invoice text-3xl block mb-2 text-gray-300"></i>
+                                <p class="text-lg">No bills found for this patient</p>
                             </td>
                         </tr>
                     <?php endif; ?>
@@ -1216,7 +1133,7 @@ include_once '../../components/cashier_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Cancelled Bills
+            Patient Bills
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1307,11 +1224,8 @@ include_once '../../components/cashier_sidebar.php';
     
     function performSearch() {
         var query = searchInput.value.trim();
-        var filter = '<?= $filter ?>';
-        var start_date = '<?= $start_date ?>';
-        var end_date = '<?= $end_date ?>';
         if (query.length > 0) {
-            window.location.href = 'cancelled_bills.php?search=' + encodeURIComponent(query) + '&filter=' + filter + '&start_date=' + start_date + '&end_date=' + end_date;
+            window.location.href = 'search_patients.php?q=' + encodeURIComponent(query);
         }
     }
     
@@ -1340,13 +1254,13 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c❌ Braick - Cancelled Bills (With Filters)', 'font-size:18px; font-weight:bold; color:#DC2626;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Total Cancelled: <?= $total_cancelled ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📅 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Braick - Patient Bills (Green Theme)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Total Bills: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Pending: <?= $currency ?> <?= number_format($total_pending, 0) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Paid: <?= $currency ?> <?= number_format($total_paid, 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds via global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c❌ Removed Total Amount card', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Added filters: Today, Week, Month, 3 Months, 6 Months, Year, All, Date Picker', 'font-size:13px; color:#059669;');
+    console.log('%c🟢 Green theme applied', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

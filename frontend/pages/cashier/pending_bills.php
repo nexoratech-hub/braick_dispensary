@@ -1,16 +1,18 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/pending_bills.php
-// CASHIER - PENDING BILLS LIST
-// WITH AUTO-UPDATE (3 SECONDS) - NO REFRESH NEEDED
-// WITH CLICKABLE STAT CARDS - NAVIGATE TO RELEVANT PAGES
+// CASHIER - PENDING BILLS LIST (GREEN THEME)
+// WITH FILTERS: Today, Week, Month, 3 Months, 6 Months, Year, All, Date Picker
+// NO CASH FIELD (AMOUNT PAID) - BECAUSE BILLS ARE PENDING
+// NO TOTAL PENDING AMOUNT CARD
+// WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Cashier Dodoma
+// FORCE SESSION - Cashier
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
     $_SESSION['user_id'] = 10;
@@ -29,135 +31,132 @@ require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
+$selected_branch_id = $user_branch_id;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
-$unread_notifications = 0;
+
+// ================================================================
+// GET FILTER PARAMETERS
+// ================================================================
+$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
+$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : '';
+$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : '';
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+
+$message = '';
+$message_type = '';
+
+// Initialize variables
+$pending_bills = [];
+$total_pending = 0;
+$currency = 'TSh';
 
 try {
     $db = getDB();
-    $today = date('Y-m-d');
     
     // ================================================================
-    // GET UNREAD NOTIFICATIONS
+    // BUILD DATE FILTER
     // ================================================================
-    if (isset($_SESSION['user_id'])) {
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $date_condition = "";
+    $params = [$selected_branch_id];
+    
+    switch ($filter) {
+        case 'today':
+            $date_condition = "AND DATE(pb.created_at) = CURDATE()";
+            break;
+        case 'week':
+            $date_condition = "AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+            break;
+        case 'month':
+            $date_condition = "AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+            break;
+        case '3months':
+            $date_condition = "AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+            break;
+        case '6months':
+            $date_condition = "AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+            break;
+        case 'year':
+            $date_condition = "AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+            break;
+        case 'custom':
+            if (!empty($start_date) && !empty($end_date)) {
+                $date_condition = "AND DATE(pb.created_at) BETWEEN ? AND ?";
+                $params[] = $start_date;
+                $params[] = $end_date;
+            } else {
+                $date_condition = "";
+            }
+            break;
+        case 'all':
+        default:
+            $date_condition = "";
+            break;
     }
     
     // ================================================================
-    // GET STATS FOR INITIAL LOAD
+    // BUILD SEARCH CONDITION
     // ================================================================
-    
-    // Pending Bills
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM patient_bills 
-        WHERE branch_id = ? AND status IN ('pending', 'partial')
-    ");
-    $stmt->execute([$user_branch_id]);
-    $pending_bills = $stmt->fetch()['count'] ?? 0;
-    
-    // Total Patients
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-    $stmt->execute([$user_branch_id]);
-    $total_patients = $stmt->fetch()['count'] ?? 0;
-    
-    // Total Bills
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ?");
-    $stmt->execute([$user_branch_id]);
-    $total_bills = $stmt->fetch()['count'] ?? 0;
-    
-    // Paid Bills
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM patient_bills 
-        WHERE branch_id = ? AND status = 'paid'
-    ");
-    $stmt->execute([$user_branch_id]);
-    $paid_bills = $stmt->fetch()['count'] ?? 0;
-    
-    // Today's Revenue
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as total 
-        FROM patient_bills 
-        WHERE branch_id = ? AND DATE(created_at) = ? AND status = 'paid'
-    ");
-    $stmt->execute([$user_branch_id, $today]);
-    $today_revenue = $stmt->fetch()['total'] ?? 0;
-    
-    // Today's Payments
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM payments 
-        WHERE branch_id = ? AND DATE(received_at) = ?
-    ");
-    $stmt->execute([$user_branch_id, $today]);
-    $today_payments = $stmt->fetch()['count'] ?? 0;
+    $search_condition = "";
+    if (!empty($search)) {
+        $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pb.bill_number LIKE ? OR p.phone LIKE ?)";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+    }
     
     // ================================================================
-    // GET PENDING BILLS LIST
+    // GET PENDING BILLS
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
-               v.visit_number, v.visit_type, v.created_at as visit_date,
-               u.full_name as doctor_name
+    $sql = "
+        SELECT pb.*, 
+               p.full_name as patient_name, 
+               p.patient_id,
+               p.phone,
+               u.full_name as created_by_name
         FROM patient_bills pb
         JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE pb.branch_id = ? AND pb.status IN ('pending', 'partial')
+        JOIN users u ON pb.created_by = u.id
+        WHERE pb.branch_id = ? 
+        AND pb.status IN ('pending', 'partial')
+        $date_condition
+        $search_condition
         ORDER BY pb.created_at DESC
-        LIMIT 50
-    ");
-    $stmt->execute([$user_branch_id]);
-    $pending_bills_list = $stmt->fetchAll();
+    ";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $pending_bills = $stmt->fetchAll();
     
     // ================================================================
-    // GET RECENT PAYMENTS
+    // GET TOTAL PENDING AMOUNT (For display in table only)
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT p.*, pb.bill_number, pb.total_amount,
-               pat.full_name as patient_name, pat.patient_id,
-               u.full_name as cashier_name
-        FROM payments p
-        JOIN patient_bills pb ON p.bill_id = pb.id
-        JOIN patients pat ON p.patient_id = pat.id
-        LEFT JOIN users u ON p.received_by = u.id
-        WHERE p.branch_id = ?
-        ORDER BY p.received_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$user_branch_id]);
-    $recent_payments = $stmt->fetchAll();
+    $total_pending = 0;
+    if (is_array($pending_bills) && count($pending_bills) > 0) {
+        foreach ($pending_bills as $bill) {
+            $total_pending += $bill['balance'] ?? 0;
+        }
+    }
     
     // ================================================================
-    // GET PAYMENT METHODS
+    // GET SYSTEM SETTINGS
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT payment_method, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
-        FROM payments 
-        WHERE branch_id = ? AND DATE(received_at) = ?
-        GROUP BY payment_method
-    ");
-    $stmt->execute([$user_branch_id, $today]);
-    $payment_methods = $stmt->fetchAll();
+    $settings = [];
+    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $settings[$row['setting_key']] = $row['setting_value'];
+    }
+    $currency = $settings['currency'] ?? 'TSh';
     
 } catch (Exception $e) {
-    $pending_bills = 0;
-    $today_revenue = 0;
-    $today_payments = 0;
-    $total_patients = 0;
-    $total_bills = 0;
-    $paid_bills = 0;
-    $pending_bills_list = [];
-    $recent_payments = [];
-    $payment_methods = [];
+    $message = "Database error: " . $e->getMessage();
+    $message_type = 'error';
+    $pending_bills = [];
+    $total_pending = 0;
 }
 
 // ================================================================
-// INCLUDE CASHIER HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
 include_once '../../components/cashier_sidebar.php';
@@ -170,14 +169,12 @@ include_once '../../components/cashier_sidebar.php';
     <title>Pending Bills - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -215,6 +212,8 @@ include_once '../../components/cashier_sidebar.php';
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
+            --table-stripe: #E8F0FE;
+            --table-hover: #D1FAE5;
         }
         
         [data-theme="dark"] {
@@ -227,6 +226,8 @@ include_once '../../components/cashier_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+            --table-stripe: #1E293B;
+            --table-hover: #1A3A2A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -240,7 +241,7 @@ include_once '../../components/cashier_sidebar.php';
         
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
         /* ================================================================
            TOP NAV
@@ -273,8 +274,8 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+            border-color: var(--success);
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
         }
         
         .top-nav .search-wrapper input {
@@ -292,7 +293,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
+            background: var(--success);
             color: white;
             border: none;
             padding: 8px 16px;
@@ -304,7 +305,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
+            background: var(--success-dark);
         }
         
         .top-nav .datetime {
@@ -324,7 +325,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .top-nav .avatar:hover {
-            border-color: var(--primary);
+            border-color: var(--success);
             transform: scale(1.05);
         }
         
@@ -345,7 +346,7 @@ include_once '../../components/cashier_sidebar.php';
         
         .top-nav .icon-btn:hover {
             background: var(--bg-body);
-            color: var(--primary);
+            color: var(--success);
         }
         
         .notif-dot {
@@ -382,7 +383,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .dark-toggle-btn:hover {
-            border-color: var(--primary);
+            border-color: var(--success);
             background: var(--bg-card);
         }
         
@@ -399,10 +400,10 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER
+           PAGE HEADER - GREEN THEME
            ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            background: linear-gradient(135deg, var(--warning), #B45309);
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -411,7 +412,7 @@ include_once '../../components/cashier_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 4px 20px rgba(217, 119, 6, 0.25);
             position: relative;
             overflow: hidden;
         }
@@ -487,11 +488,6 @@ include_once '../../components/cashier_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        .page-header .header-badge .count {
-            color: #34D399;
-            font-weight: 700;
-        }
-        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -516,105 +512,155 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.8);
-            padding: 3px 12px;
+        /* ================================================================
+           FILTER SECTION
+           ================================================================ */
+        .filter-section {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 16px 20px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 20px;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .filter-section:hover {
+            border-color: var(--success);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .filter-btn {
+            padding: 5px 14px;
             border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
+            font-size: 0.7rem;
+            font-weight: 500;
+            border: 2px solid var(--border-color);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .filter-btn:hover {
+            border-color: var(--success);
+            color: var(--success);
+            background: var(--success-bg);
+        }
+        
+        .filter-btn.active {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
+        }
+        
+        .filter-btn.active:hover {
+            background: var(--success-dark);
+            border-color: var(--success-dark);
+        }
+        
+        .filter-btn i {
+            margin-right: 4px;
+        }
+        
+        .filter-group {
+            display: flex;
+            flex-wrap: wrap;
             align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(4px);
+            gap: 6px;
+        }
+        
+        .filter-group .filter-label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-right: 4px;
         }
         
         /* ================================================================
-           STAT CARDS - CLICKABLE
+           DATE PICKER
            ================================================================ */
-        .stat-card {
-            border-radius: 14px;
-            padding: 18px 20px;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            position: relative;
-            overflow: hidden;
-            color: white;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-            text-decoration: none;
-            display: block;
-        }
-        
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 40px rgba(0,0,0,0.15);
-        }
-        
-        .stat-card:active {
-            transform: scale(0.97);
-        }
-        
-        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        .stat-card.red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        
-        .stat-card .stat-icon {
-            font-size: 1.6rem;
-            opacity: 0.9;
-            margin-bottom: 4px;
-            display: block;
-        }
-        
-        .stat-card .stat-number {
-            font-size: 2rem;
-            font-weight: 700;
-            color: white;
-            line-height: 1.2;
-        }
-        
-        .stat-card .stat-label {
-            font-size: 0.7rem;
-            color: rgba(255,255,255,0.8);
-            font-weight: 500;
-            margin-top: 2px;
-        }
-        
-        .stat-card .stat-update {
-            font-size: 0.55rem;
-            color: rgba(255,255,255,0.5);
-            margin-top: 4px;
+        .date-picker-group {
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 8px;
+            flex-wrap: wrap;
         }
         
-        .stat-card .stat-update .live-dot {
-            display: inline-block;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #34D399;
-            animation: pulse-dot 1.5s infinite;
+        .date-picker-group .form-control {
+            padding: 4px 10px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 0.75rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.3s;
+            width: auto;
         }
         
-        .stat-card .stat-arrow {
-            position: absolute;
-            bottom: 12px;
-            right: 16px;
-            font-size: 0.7rem;
-            color: rgba(255,255,255,0.4);
-            transition: all 0.3s ease;
+        .date-picker-group .form-control:focus {
+            border-color: var(--success);
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
         }
         
-        .stat-card:hover .stat-arrow {
-            transform: translateX(4px);
-            color: rgba(255,255,255,0.8);
+        .date-picker-group .btn-apply {
+            padding: 4px 14px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: var(--success);
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .date-picker-group .btn-apply:hover {
+            background: var(--success-dark);
+            transform: translateY(-1px);
         }
         
         /* ================================================================
-           TABLE STYLES
+           CARD
+           ================================================================ */
+        .card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 20px 24px;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s;
+            box-shadow: var(--shadow-sm);
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .card:hover {
+            border-color: var(--success);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .card-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        /* ================================================================
+           TABLE
            ================================================================ */
         .table-wrap {
             overflow-x: auto;
@@ -623,8 +669,8 @@ include_once '../../components/cashier_sidebar.php';
         .data-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.82rem;
-            min-width: 900px;
+            font-size: 0.8rem;
+            min-width: 700px;
         }
         
         .data-table thead th {
@@ -635,15 +681,20 @@ include_once '../../components/cashier_sidebar.php';
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: white;
-            background: var(--primary);
-            border-bottom: 3px solid var(--primary-dark);
+            background: var(--success);
+            border-bottom: 3px solid var(--success-dark);
             white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 10;
         }
         
-        .data-table tbody td {
+        .data-table thead th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+        
+        .data-table thead th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+        
+        .data-table td {
             padding: 10px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
@@ -651,7 +702,39 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .data-table tbody tr:hover td {
-            background: var(--bg-body);
+            background: var(--table-hover);
+        }
+        
+        /* ================================================================
+           STATUS BADGE
+           ================================================================ */
+        .status-badge {
+            display: inline-block;
+            padding: 3px 14px;
+            border-radius: 12px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-badge.pending {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        .status-badge.partial {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        [data-theme="dark"] .status-badge.pending {
+            background: #3D2E0A;
+            color: #FBBF24;
+        }
+        
+        [data-theme="dark"] .status-badge.partial {
+            background: #3D2E0A;
+            color: #FBBF24;
         }
         
         /* ================================================================
@@ -664,69 +747,112 @@ include_once '../../components/cashier_sidebar.php';
             padding: 6px 14px;
             border-radius: 8px;
             font-weight: 600;
-            font-size: 0.75rem;
-            transition: all 0.3s ease;
+            font-size: 0.72rem;
+            transition: all 0.3s;
             cursor: pointer;
             border: none;
             text-decoration: none;
         }
         
         .btn-primary {
-            background: var(--primary);
+            background: var(--success);
             color: white;
         }
+        
         .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
         .btn-success {
             background: var(--success);
             color: white;
         }
+        
         .btn-success:hover {
             background: var(--success-dark);
-            transform: translateY(-1px);
+            transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
-        .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--success);
+            color: var(--success);
+        }
+        
+        .btn-sm { 
+            padding: 4px 10px; 
+            font-size: 0.65rem; 
+            border-radius: 6px; 
+        }
         
         /* ================================================================
-           CARD
+           STATS CARD
            ================================================================ */
-        .card {
+        .stat-card {
             background: var(--bg-card);
             border-radius: 14px;
-            padding: 18px 20px;
+            padding: 16px 20px;
             border: 1px solid var(--border-color);
-            transition: all 0.3s;
+            text-align: center;
+            transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
         }
         
-        .card:hover {
-            border-color: var(--primary);
+        .stat-card:hover {
+            border-color: var(--success);
+            transform: translateY(-3px);
             box-shadow: var(--shadow-md);
         }
         
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
+        .stat-card .stat-number {
+            font-size: 1.8rem;
+            font-weight: 700;
         }
         
-        .card-title {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-primary);
+        .stat-card .stat-number.orange {
+            color: #D97706;
         }
         
-        .card-title .title-blue { color: var(--primary); }
-        .card-title .title-green { color: var(--success); }
+        .stat-card .stat-number.green {
+            color: var(--success);
+        }
+        
+        .stat-card .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .stat-card .stat-icon {
+            font-size: 1.4rem;
+            margin-bottom: 4px;
+        }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { 
+            color: var(--success); 
+            font-weight: 600; 
+        }
         
         /* ================================================================
            BADGES
@@ -763,28 +889,6 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           SCROLL CONTAINER
-           ================================================================ */
-        .scroll-container {
-            max-height: 250px;
-            overflow-y: auto;
-        }
-        
-        .scroll-container::-webkit-scrollbar {
-            width: 4px;
-        }
-        
-        .scroll-container::-webkit-scrollbar-track {
-            background: var(--bg-body);
-            border-radius: 4px;
-        }
-        
-        .scroll-container::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 4px;
-        }
-        
-        /* ================================================================
            TOAST
            ================================================================ */
         .toast-custom {
@@ -816,23 +920,6 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.warning { background: var(--warning); }
         
         /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { 
-            color: var(--primary); 
-            font-weight: 600; 
-        }
-        
-        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
@@ -846,47 +933,25 @@ include_once '../../components/cashier_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stat-card .stat-number { font-size: 1.6rem; }
-            .stat-card { padding: 14px 16px; }
+            .filter-section { padding: 12px 14px; }
+            .filter-group { gap: 4px; }
+            .filter-btn { font-size: 0.6rem; padding: 3px 10px; }
+            .card { padding: 14px 16px; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .stat-card .stat-number { font-size: 1.3rem; }
-            .stat-card { padding: 12px 14px; }
+            .filter-section { padding: 10px 12px; }
+            .filter-btn { font-size: 0.55rem; padding: 2px 8px; }
+            .date-picker-group { flex-direction: column; align-items: stretch; }
+            .date-picker-group .form-control { width: 100%; }
+            .date-picker-group .btn-apply { width: 100%; justify-content: center; }
+            .card { padding: 10px 12px; }
+            .btn { padding: 4px 8px; font-size: 0.6rem; }
+            .data-table { font-size: 0.65rem; min-width: 600px; }
         }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
-        }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -902,7 +967,7 @@ include_once '../../components/cashier_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search bills by patient name or bill number...">
+            <input type="text" id="searchInput" placeholder="Search pending bills..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -923,7 +988,7 @@ include_once '../../components/cashier_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
@@ -944,132 +1009,212 @@ include_once '../../components/cashier_sidebar.php';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-receipt"></i>
+                <i class="fas fa-clock"></i>
                 Pending Bills
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
-                <span class="update-badge-light" id="updateBadge">
-                    <i class="fas fa-sync-alt fa-spin"></i> Live
-                </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-money-bill"></i>
-                Manage and process pending bills in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                <i class="fas fa-file-invoice"></i>
+                Manage pending bills in <strong><?= htmlspecialchars($branch_name) ?></strong>
                 
                 <span class="header-badge">
-                    <i class="fas fa-clock"></i>
-                    <span class="count" id="pendingCount"><?= $pending_bills ?></span> Pending
+                    <i class="fas fa-file-invoice"></i>
+                    <?= is_array($pending_bills) ? count($pending_bills) : 0 ?> Pending Bills
                 </span>
                 
+                <?php if ($filter !== 'all' && $filter !== 'custom'): ?>
                 <span class="header-badge">
-                    <i class="fas fa-check-circle" style="color:#34D399;"></i>
-                    <span class="count" id="paidCount"><?= $paid_bills ?></span> Paid
+                    <i class="fas fa-filter"></i>
+                    <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
                 </span>
+                <?php endif; ?>
             </p>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+        <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Dashboard
             </a>
-            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
+            <button onclick="window.location.reload()" class="btn-outline-light">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
     </div>
 
+    <!-- Message -->
+    <?php if ($message): ?>
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>" style="max-width:1200px;margin:0 auto 16px;">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
+            <?= $message ?>
+        </div>
+    <?php endif; ?>
+
     <!-- ================================================================ -->
-    <!-- STATS CARDS - CLICKABLE NAVIGATION -->
+    <!-- FILTERS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+    <div class="filter-section">
+        <div class="filter-group" style="margin-bottom:8px;">
+            <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
+            
+            <a href="?filter=all&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'all' ? 'active' : '' ?>">
+                <i class="fas fa-globe"></i> All
+            </a>
+            <a href="?filter=today&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'today' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-day"></i> Today
+            </a>
+            <a href="?filter=week&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'week' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-week"></i> 1 Week
+            </a>
+            <a href="?filter=month&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'month' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Month
+            </a>
+            <a href="?filter=3months&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === '3months' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 3 Months
+            </a>
+            <a href="?filter=6months&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === '6months' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 6 Months
+            </a>
+            <a href="?filter=year&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'year' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Year
+            </a>
+        </div>
         
-        <!-- Card 1: Pending Bills -> pending_bills.php -->
-        <a href="pending_bills.php" class="stat-card red">
-            <span class="stat-icon">⏳</span>
-            <div class="stat-number" id="pendingBills"><?= $pending_bills ?></div>
-            <div class="stat-label">Pending Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- Card 2: Total Patients -> patients.php -->
-        <a href="../reception/patients.php" class="stat-card purple">
-            <span class="stat-icon">👥</span>
-            <div class="stat-number" id="totalPatients"><?= number_format($total_patients) ?></div>
-            <div class="stat-label">Total Patients</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- Card 3: Total Bills -> pending_bills.php -->
-        <a href="pending_bills.php" class="stat-card orange">
-            <span class="stat-icon">📋</span>
-            <div class="stat-number" id="totalBills"><?= number_format($total_bills) ?></div>
-            <div class="stat-label">Total Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- Card 4: Paid Bills -> paid_bills.php -->
-        <a href="paid_bills.php" class="stat-card teal">
-            <span class="stat-icon">✅</span>
-            <div class="stat-number" id="paidBills"><?= number_format($paid_bills) ?></div>
-            <div class="stat-label">Paid Bills</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
+        <!-- ============================================================ -->
+        <!-- DATE PICKER (Custom Range) -->
+        <!-- ============================================================ -->
+        <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
+            <input type="hidden" name="filter" value="custom">
+            <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
+            
+            <span class="filter-label"><i class="fas fa-calendar-plus"></i> Custom:</span>
+            
+            <div class="date-picker-group">
+                <input type="date" name="start_date" class="form-control" 
+                       value="<?= $start_date ?>" placeholder="Start Date">
+                <span style="color:var(--text-secondary);font-size:0.7rem;">to</span>
+                <input type="date" name="end_date" class="form-control" 
+                       value="<?= $end_date ?>" placeholder="End Date">
+                <button type="submit" class="btn-apply">
+                    <i class="fas fa-check"></i> Apply
+                </button>
+                <?php if ($filter === 'custom' && !empty($start_date) && !empty($end_date)): ?>
+                    <a href="?filter=all&search=<?= urlencode($search) ?>" class="btn-apply" style="background:#DC2626;">
+                        <i class="fas fa-times"></i> Clear
+                    </a>
+                <?php endif; ?>
+            </div>
+        </form>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- QUICK STATS - NO TOTAL PENDING AMOUNT CARD -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
+        <div class="stat-card">
+            <div class="stat-icon">📋</div>
+            <p class="stat-number orange"><?= is_array($pending_bills) ? count($pending_bills) : 0 ?></p>
+            <p class="stat-label">Total Pending Bills</p>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">📅</div>
+            <p class="stat-number green">
+                <?php 
+                    if ($filter === 'today') echo 'Today';
+                    elseif ($filter === 'week') echo '7 Days';
+                    elseif ($filter === 'month') echo '30 Days';
+                    elseif ($filter === '3months') echo '90 Days';
+                    elseif ($filter === '6months') echo '180 Days';
+                    elseif ($filter === 'year') echo '365 Days';
+                    elseif ($filter === 'custom') echo 'Custom';
+                    else echo 'All Time';
+                ?>
+            </p>
+            <p class="stat-label">Date Range</p>
+        </div>
     </div>
 
     <!-- ================================================================ -->
     <!-- PENDING BILLS TABLE -->
     <!-- ================================================================ -->
-    <div class="card">
+    <div class="card" style="max-width:1200px;margin:0 auto;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i> Pending Bills
-                <span class="text-sm font-normal text-gray-400" id="pendingBillsCount">(<?= count($pending_bills_list) ?>)</span>
+                <i class="fas fa-list" style="color:var(--success);"></i> Pending Bills List
+                <span class="text-sm font-normal text-gray-400">(<?= is_array($pending_bills) ? count($pending_bills) : 0 ?> bills)</span>
             </h3>
-            <span class="text-xs text-gray-400" id="lastUpdateTime">● Live</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <span class="text-xs text-gray-400">
+                    <i class="fas fa-clock"></i> Updated: <?= date('h:i:s A') ?>
+                </span>
+            </div>
         </div>
         
         <div class="table-wrap">
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th style="border-radius:8px 0 0 0;">Bill #</th>
+                        <th>#</th>
+                        <th>Bill #</th>
                         <th>Patient</th>
-                        <th>Visit Type</th>
-                        <th>Doctor</th>
-                        <th>Amount</th>
+                        <th>Patient ID</th>
+                        <th>Created By</th>
+                        <th>Total Amount</th>
+                        <th>Balance</th>
                         <th>Status</th>
                         <th>Date</th>
-                        <th style="border-radius:0 8px 0 0;">Actions</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
-                <tbody id="pendingBillsList">
-                    <?php if (count($pending_bills_list) > 0): ?>
-                        <?php foreach ($pending_bills_list as $bill): ?>
+                <tbody>
+                    <?php if (is_array($pending_bills) && count($pending_bills) > 0): ?>
+                        <?php $i = 1; foreach ($pending_bills as $bill): ?>
                             <tr>
-                                <td class="font-medium"><?= htmlspecialchars($bill['bill_number']) ?></td>
+                                <td><?= $i++ ?></td>
                                 <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name']) ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></div>
-                                </td>
-                                <td><?= htmlspecialchars($bill['visit_type'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($bill['doctor_name'] ?? 'N/A') ?></td>
-                                <td class="font-semibold"><?= number_format($bill['total_amount'] ?? 0) ?></td>
-                                <td>
-                                    <span class="px-2 py-1 text-xs rounded-full <?= $bill['status'] === 'pending' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400' ?>">
-                                        <?= $bill['status'] === 'pending' ? '⏳ Pending' : '🔶 Partial' ?>
+                                    <span class="font-mono text-xs font-bold text-gray-700 dark:text-gray-300">
+                                        <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
-                                <td class="text-sm text-gray-500"><?= date('M d, Y h:i A', strtotime($bill['created_at'])) ?></td>
                                 <td>
-                                    <div class="flex gap-1">
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['phone'] ?? 'No phone') ?></div>
+                                </td>
+                                <td>
+                                    <span class="text-xs font-mono"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></span>
+                                </td>
+                                <td>
+                                    <span class="text-sm"><?= htmlspecialchars($bill['created_by_name'] ?? 'N/A') ?></span>
+                                </td>
+                                <td>
+                                    <span class="font-semibold text-gray-800 dark:text-gray-200">
+                                        <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="font-semibold text-red-600 dark:text-red-400">
+                                        <?= $currency ?> <?= number_format($bill['balance'] ?? 0, 0) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="status-badge <?= $bill['status'] ?? 'pending' ?>">
+                                        <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                                    </span>
+                                </td>
+                                <td class="text-xs">
+                                    <?= isset($bill['created_at']) ? date('d/m/Y', strtotime($bill['created_at'])) : 'N/A' ?>
+                                    <br>
+                                    <span class="text-gray-400 text-[0.6rem]">
+                                        <?= isset($bill['created_at']) ? date('h:i A', strtotime($bill['created_at'])) : '' ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="flex flex-wrap gap-1">
+                                        <!-- View Bill -->
                                         <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <a href="view_bill.php?id=<?= $bill['id'] ?>#payment" class="btn btn-success btn-sm" title="Process Payment">
-                                            <i class="fas fa-money-bill"></i>
+                                        <!-- Make Payment -->
+                                        <a href="make_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-success btn-sm" title="Make Payment">
+                                            <i class="fas fa-money-bill-wave"></i> Pay
                                         </a>
                                     </div>
                                 </td>
@@ -1077,97 +1222,22 @@ include_once '../../components/cashier_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" class="text-center py-8 text-gray-400">
+                            <td colspan="10" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
-                                <p>No pending bills found</p>
-                                <p class="text-sm mt-1">All bills have been processed</p>
+                                <p class="text-lg">No pending bills</p>
+                                <p class="text-sm">
+                                    <?php if ($filter !== 'all'): ?>
+                                        No pending bills found for the selected date range
+                                    <?php else: ?>
+                                        All bills have been paid
+                                    <?php endif; ?>
+                                </p>
                             </td>
                         </tr>
                     <?php endif; ?>
                 </tbody>
             </table>
         </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- RECENT PAYMENTS & PAYMENT METHODS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5">
-        
-        <!-- Recent Payments -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-history title-blue mr-2"></i> Recent Payments
-                </h3>
-            </div>
-            <div class="scroll-container" id="recentPaymentsList">
-                <?php if (count($recent_payments) > 0): ?>
-                    <?php foreach ($recent_payments as $payment): ?>
-                        <div class="flex items-center justify-between p-2 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg transition">
-                            <div>
-                                <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($payment['patient_name']) ?></p>
-                                <p class="text-xs text-gray-400"><?= htmlspecialchars($payment['bill_number']) ?></p>
-                            </div>
-                            <div class="text-right">
-                                <p class="font-semibold text-sm text-green-600 dark:text-green-400"><?= number_format($payment['amount'] ?? 0) ?></p>
-                                <p class="text-xs text-gray-400">
-                                    <?php 
-                                        $method = $payment['payment_method'] ?? 'cash';
-                                        $methodIcon = $method === 'cash' ? '💵' : ($method === 'm-pesa' ? '📱' : '💳');
-                                        echo $methodIcon . ' ' . strtoupper($method);
-                                    ?>
-                                    • <?= isset($payment['received_at']) ? time_ago($payment['received_at']) : 'N/A' ?>
-                                </p>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-clock text-2xl block mb-2"></i>
-                        <p class="text-sm">No recent payments</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-        <!-- Payment Methods -->
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-chart-pie title-green mr-2"></i> Today's Payment Methods
-                </h3>
-            </div>
-            <div class="scroll-container" id="paymentMethods">
-                <?php if (count($payment_methods) > 0): ?>
-                    <?php 
-                        $methodIcons = [
-                            'cash' => '💵',
-                            'm-pesa' => '📱',
-                            'airtel_money' => '📱',
-                            'tigo_pesa' => '📱',
-                            'halopesa' => '📱',
-                            'card' => '💳',
-                            'bank' => '🏦',
-                            'insurance' => '🏥',
-                            'other' => '📦'
-                        ];
-                    ?>
-                    <?php foreach ($payment_methods as $method): ?>
-                        <div class="flex items-center justify-between p-2 border-b border-gray-100 dark:border-gray-700">
-                            <span class="text-sm"><?= $methodIcons[$method['payment_method']] ?? '💵' ?> <?= strtoupper($method['payment_method'] ?? 'CASH') ?></span>
-                            <span class="text-sm text-gray-500"><?= $method['count'] ?> payments</span>
-                            <span class="font-semibold text-sm text-green-600 dark:text-green-400"><?= number_format($method['total'] ?? 0) ?></span>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <p class="text-sm">No payments today</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
     </div>
 
     <!-- ================================================================ -->
@@ -1179,7 +1249,7 @@ include_once '../../components/cashier_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Pending Bills
             <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTimestamp">● Live</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1199,17 +1269,14 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- CASHIER GLOBAL STATS AUTO-UPDATE -->
+<!-- GLOBAL STATS AUTO-UPDATE -->
 <!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/cashier_global_stats.js"></script>
+<script src="/dispensary_system/frontend/assets/js/global_stats.js"></script>
 
 <!-- ================================================================ -->
 <!-- PAGE-SPECIFIC JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1237,9 +1304,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -1255,9 +1319,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1267,20 +1328,21 @@ include_once '../../components/cashier_sidebar.php';
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
+        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
     function performSearch() {
         var query = searchInput.value.trim();
+        var filter = '<?= $filter ?>';
+        var start_date = '<?= $start_date ?>';
+        var end_date = '<?= $end_date ?>';
         if (query.length > 0) {
-            window.location.href = 'pending_bills.php?search=' + encodeURIComponent(query);
+            window.location.href = 'pending_bills.php?search=' + encodeURIComponent(query) + '&filter=' + filter + '&start_date=' + start_date + '&end_date=' + end_date;
         }
     }
     
@@ -1289,9 +1351,6 @@ include_once '../../components/cashier_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1312,60 +1371,13 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
-    function manualRefresh() {
-        var btn = document.getElementById('refreshBtn');
-        btn.innerHTML = '<span class="spinner"></span> Loading...';
-        btn.disabled = true;
-        
-        setTimeout(function() {
-            window.location.reload();
-        }, 1000);
-        
-        setTimeout(function() {
-            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
-            btn.disabled = false;
-            showToast('✅ Refreshed', 'Page data updated manually', 'success');
-        }, 2000);
-    }
-
-    // ================================================================
-    // TIME AGO FUNCTION
-    // ================================================================
-    function time_ago(timestamp) {
-        if (!timestamp) return 'N/A';
-        var now = new Date();
-        var past = new Date(timestamp);
-        var diff = Math.floor((now - past) / 1000);
-        if (diff < 60) return 'Just now';
-        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-        return past.toLocaleDateString();
-    }
-
-    // ================================================================
-    // MONITOR CASHIER STATS
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var checkCashierStats = setInterval(function() {
-            if (window.CashierStats) {
-                console.log('%c💰 Cashier Stats System Connected', 'font-size:14px; font-weight:bold; color:#34D399;');
-                console.log('%c🔄 Auto-update every ' + window.CashierStats.config.updateInterval / 1000 + ' seconds', 'font-size:12px; color:#64748B;');
-                clearInterval(checkCashierStats);
-            }
-        }, 500);
-    });
-
-    console.log('%c💰 Braick - Pending Bills (Cashier)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c⏳ Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c👥 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Paid Bills: <?= number_format($paid_bills) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click any stat card to navigate to relevant page', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c⏳ Braick - Pending Bills (With Filters)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Total Pending Bills: <?= is_array($pending_bills) ? count($pending_bills) : 0 ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📅 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔄 Auto-update every 3 seconds via global_stats.js', 'font-size:13px; color:#34D399;');
+    console.log('%c❌ Removed Total Pending Amount card', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ Added filters: Today, Week, Month, 3 Months, 6 Months, Year, All, Date Picker', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

@@ -1,7 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/components/cashier_header.php
-// CASHIER - SHARED HEADER
+// CASHIER - SHARED HEADER (GREEN THEME)
+// WITH PROFILE PICTURE - SHOWS ON ALL PAGES
+// WITH DATE AND TIME
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -11,23 +13,27 @@
 require_once __DIR__ . '/../../backend/config/config.php';
 
 // ================================================================
-// SESSION - Default to reception.rose (Cashier)
+// SESSION - Default to Cashier
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
+    $_SESSION['user_id'] = 10;
+    $_SESSION['full_name'] = 'Cashier Dodoma';
+    $_SESSION['role'] = 'cashier';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
+    $_SESSION['username'] = 'cashier.dodoma';
+    $_SESSION['email'] = 'cashier.dodoma@braick.com';
+    $_SESSION['phone'] = '+255 700 000 016';
     $_SESSION['is_admin'] = false;
+    $_SESSION['profile_pic'] = '';
 }
 
-$user_id = $_SESSION['user_id'] ?? 6;
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
-$user_role = $_SESSION['role'] ?? 'reception';
+$user_id = $_SESSION['user_id'] ?? 10;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier Dodoma';
+$user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // GET UNREAD NOTIFICATIONS
@@ -43,12 +49,25 @@ try {
 }
 
 // ================================================================
-// PROFILE PICTURE
+// PROFILE PICTURE - CHECK IF EXISTS
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+$profile_pic_exists = false;
+$profile_pic_url = '';
+
+if (!empty($profile_pic)) {
+    $file_path = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
+    if (file_exists($file_path)) {
+        $profile_pic_exists = true;
+        $profile_pic_url = '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
+    } else {
+        // If file doesn't exist, clear session
+        $_SESSION['profile_pic'] = '';
+        $profile_pic = '';
+    }
+}
+
+// If profile pic doesn't exist, use default avatar with user initials
+$default_letter = strtoupper(substr($user_full_name, 0, 1));
 
 // ================================================================
 // LOGO PATH
@@ -68,6 +87,12 @@ if (empty($page_title) || $page_title == '') {
 // DARK MODE
 // ================================================================
 $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
+
+// ================================================================
+// CURRENT DATE & TIME
+// ================================================================
+$current_date = date('F d, Y');
+$current_time = date('h:i:s A');
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode ?>">
@@ -102,15 +127,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
-            --pending: #D97706;
-            --pending-bg: #FEF3C7;
-            --partial: #0B5ED7;
-            --partial-bg: #E8F0FE;
-            --paid: #059669;
-            --paid-bg: #D1FAE5;
-            --cancelled: #DC2626;
-            --cancelled-bg: #FEE2E2;
             
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -165,8 +181,11 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
+        /* ================================================================
+           TOP NAV
+           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -195,8 +214,8 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         }
         
         .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+            border-color: var(--success);
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
         }
         
         .top-nav .search-wrapper input {
@@ -214,7 +233,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         }
         
         .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
+            background: var(--success);
             color: white;
             border: none;
             padding: 8px 16px;
@@ -226,13 +245,25 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         }
         
         .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
+            background: var(--success-dark);
         }
         
         .top-nav .datetime {
             font-size: 0.78rem;
             color: var(--text-secondary);
             font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .top-nav .datetime .date-part {
+            color: var(--text-secondary);
+        }
+        
+        .top-nav .datetime .time-part {
+            color: var(--success);
+            font-weight: 600;
         }
         
         .top-nav .avatar {
@@ -246,8 +277,29 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         }
         
         .top-nav .avatar:hover {
-            border-color: var(--primary);
+            border-color: var(--success);
             transform: scale(1.05);
+        }
+        
+        .top-nav .avatar-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            font-weight: 700;
+            color: white;
+            background: var(--success);
+            border: 2px solid var(--success);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .top-nav .avatar-avatar:hover {
+            transform: scale(1.05);
+            border-color: var(--success-light);
         }
         
         .top-nav .icon-btn {
@@ -267,7 +319,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         
         .top-nav .icon-btn:hover {
             background: var(--bg-body);
-            color: var(--primary);
+            color: var(--success);
         }
         
         .notif-dot {
@@ -310,7 +362,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         }
         
         .dark-toggle-btn:hover {
-            border-color: var(--primary);
+            border-color: var(--success);
             background: var(--bg-card);
         }
         
@@ -351,6 +403,9 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             transition: background 0.3s ease;
         }
         
+        /* ================================================================
+           STAT CARD
+           ================================================================ */
         .stat-card {
             border-radius: 16px;
             padding: 18px 20px;
@@ -430,8 +485,8 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         }
         
         .card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+            border-color: var(--success);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.08);
         }
         
         .card-header {
@@ -463,16 +518,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             text-decoration: none;
         }
         
-        .btn-blue {
-            background: var(--primary);
-            color: white;
-        }
-        .btn-blue:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
         .btn-green {
             background: var(--success);
             color: white;
@@ -483,16 +528,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
-        .btn-purple {
-            background: #7C3AED;
-            color: white;
-        }
-        .btn-purple:hover {
-            background: #6D28D9;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
-        }
-        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
@@ -500,15 +535,11 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         }
         .btn-outline:hover {
             background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
+            border-color: var(--success);
+            color: var(--success);
         }
         
         .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-danger:hover { background: var(--danger-dark); transform: translateY(-2px); }
-        .btn-warning { background: #D97706; color: white; }
-        .btn-warning:hover { background: #B45309; transform: translateY(-2px); }
         
         .badge {
             padding: 3px 10px;
@@ -526,24 +557,23 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         .badge-partial { background: #0B5ED7; color: white; }
         .badge-paid { background: #059669; color: white; }
         .badge-cancelled { background: #DC2626; color: white; }
-        .badge-blue { background: #0B5ED7; color: white; }
         .badge-green { background: #059669; color: white; }
         .badge-red { background: #DC2626; color: white; }
         .badge-yellow { background: #D97706; color: white; }
         
         .page-header {
-            border-bottom: 3px solid var(--primary);
+            border-bottom: 3px solid var(--success);
             padding-bottom: 12px;
         }
         
         .page-header .page-title {
-            color: var(--primary-dark);
+            color: var(--success-dark);
             font-size: 1.8rem;
             font-weight: 700;
         }
         
         [data-theme="dark"] .page-header .page-title {
-            color: var(--primary-light);
+            color: var(--success-light);
         }
         
         .page-header .page-subtitle {
@@ -577,8 +607,8 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: #fff;
-            background: var(--primary);
-            border-bottom: 3px solid var(--primary-dark);
+            background: var(--success);
+            border-bottom: 3px solid var(--success-dark);
             white-space: nowrap;
         }
         
@@ -599,7 +629,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         }
         
         .data-table tbody tr:hover {
-            background: #D1FAE5;
+            background: var(--success-bg);
         }
         
         [data-theme="dark"] .data-table tbody tr:hover {
@@ -649,7 +679,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             transition: all 0.3s ease;
         }
         
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        .footer .footer-brand { color: var(--success); font-weight: 600; }
         
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
@@ -659,12 +689,14 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
         
         @media (max-width: 768px) {
             .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
+            .top-nav .datetime .date-part { display: none; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .stat-card .stat-number { font-size: 1.4rem; }
+            .top-nav .datetime .date-part { display: none; }
+            .top-nav .datetime .time-part { font-size: 0.7rem; }
         }
         
         @keyframes fadeInUp {
@@ -679,3 +711,96 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
     </style>
 </head>
 <body>
+
+<!-- ================================================================ -->
+<!-- TOP NAVIGATION -->
+<!-- ================================================================ -->
+<nav class="top-nav">
+    <div class="flex items-center gap-4 flex-1">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search patients...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex items-center gap-3">
+        <span class="branch-badge">
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
+        </span>
+        
+        <span class="datetime" id="currentDateTime">
+            <span class="date-part" id="datePart"><?= $current_date ?></span>
+            <span class="time-part" id="timePart"><?= $current_time ?></span>
+        </span>
+        
+        <button id="darkModeToggle" class="dark-toggle-btn">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
+        
+        <button class="icon-btn">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+        </button>
+        
+        <a href="profile.php">
+            <?php if ($profile_pic_exists && !empty($profile_pic)): ?>
+                <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar" style="object-fit:cover;">
+            <?php else: ?>
+                <div class="avatar-avatar">
+                    <?= $default_letter ?>
+                </div>
+            <?php endif; ?>
+        </a>
+    </div>
+</nav>
+
+<!-- ================================================================ -->
+<!-- JAVASCRIPT FOR DATE/TIME UPDATE -->
+<!-- ================================================================ -->
+<script>
+    // ================================================================
+    // DATE & TIME - LIVE UPDATE
+    // ================================================================
+    function updateDateTime() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', 
+            month: 'short', 
+            day: 'numeric', 
+            year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit', 
+            hour12: true
+        });
+        
+        var datePart = document.getElementById('datePart');
+        var timePart = document.getElementById('timePart');
+        
+        if (datePart) {
+            datePart.textContent = dateStr;
+        }
+        if (timePart) {
+            timePart.textContent = timeStr;
+        }
+    }
+    
+    // Update immediately and every second
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
+    
+    console.log('%c🟢 Cashier Header - Green Theme', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📸 Profile Pic: <?= $profile_pic_exists ? '✅ Uploaded' : '❌ Default' ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📅 Date/Time: ' + new Date().toLocaleString(), 'font-size:13px; color:#0B5ED7;');
+</script>
