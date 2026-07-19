@@ -2,24 +2,40 @@
 // ================================================================
 // FILE: frontend/pages/cashier/dashboard.php
 // CASHIER DASHBOARD (GREEN THEME)
-// WITH AUTO-UPDATE (3 SECONDS) - NO REFRESH NEEDED
-// WITH CLICKABLE STAT CARDS (5 CARDS)
+// WITH AUTO-UPDATE (3 SECONDS)
+// DEFAULT LOGIN: reception.rose (Reception who is also Cashier)
+// PATIENTS WITH BILLS -> payment_history.php?patient_id=X
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Cashier Dodoma
+// FORCE SESSION - Default to reception.rose (ID: 11)
+// RECEPTION WOTE NI CASHIERS
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 10;
-    $_SESSION['full_name'] = 'Cashier Dodoma';
-    $_SESSION['role'] = 'cashier';
+if (!isset($_SESSION['user_id'])) {
+    $_SESSION['user_id'] = 11;
+    $_SESSION['full_name'] = 'Rose Mwangi';
+    $_SESSION['role'] = 'reception';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.dodoma';
+    $_SESSION['username'] = 'reception.rose';
+    $_SESSION['email'] = 'rose@braick.com';
+    $_SESSION['phone'] = '+255 700 000 005';
     $_SESSION['is_admin'] = false;
+    $_SESSION['profile_pic'] = '';
+}
+
+// ================================================================
+// ALLOW RECEPTION TO ACCESS CASHIER PAGES
+// Reception wote ni Cashiers
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    // If not allowed, redirect to their own dashboard
+    header('Location: ../' . $_SESSION['role'] . '/dashboard.php');
+    exit;
 }
 
 // ================================================================
@@ -30,7 +46,8 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+$user_role = $_SESSION['role'] ?? 'reception';
 $unread_notifications = 0;
 
 try {
@@ -117,7 +134,7 @@ try {
     $stmt->execute([$user_branch_id, $today]);
     $payment_methods = $stmt->fetchAll();
     
-    // 8. Patients with Bills (for quick access)
+    // 8. Patients with Bills (for quick access) -> Redirects to payment_history.php
     $stmt = $db->prepare("
         SELECT DISTINCT p.id, p.full_name, p.patient_id,
             (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND branch_id = ? AND status IN ('pending', 'partial')) as pending_bills_count,
@@ -751,6 +768,81 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
+           PATIENT BILLS ITEM - CLICK TO PAYMENT HISTORY
+           ================================================================ */
+        .patient-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            text-decoration: none;
+            border-radius: 8px;
+        }
+        
+        .patient-item:hover {
+            background: var(--bg-body);
+            border-radius: 8px;
+            border-color: var(--success);
+        }
+        
+        .patient-item:last-child {
+            border-bottom: none;
+        }
+        
+        .patient-item .patient-name {
+            font-weight: 500;
+            font-size: 0.85rem;
+            color: var(--text-primary);
+        }
+        
+        .patient-item .patient-id {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+        }
+        
+        .patient-item .bill-count {
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 12px;
+        }
+        
+        .patient-item .bill-count.pending {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        .patient-item .bill-count.paid {
+            background: #D1FAE5;
+            color: #059669;
+        }
+        
+        .patient-item .click-hint {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            opacity: 0.5;
+            transition: opacity 0.3s ease;
+        }
+        
+        .patient-item:hover .click-hint {
+            opacity: 1;
+            color: var(--success);
+        }
+        
+        [data-theme="dark"] .patient-item .bill-count.pending {
+            background: #3D2E0A;
+            color: #FBBF24;
+        }
+        
+        [data-theme="dark"] .patient-item .bill-count.paid {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
@@ -806,66 +898,6 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         @keyframes spin { to { transform: rotate(360deg); } }
-        
-        /* ================================================================
-           PATIENT BILLS ITEM
-           ================================================================ */
-        .patient-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color);
-            transition: all 0.3s ease;
-            cursor: pointer;
-        }
-        
-        .patient-item:hover {
-            background: var(--bg-body);
-            border-radius: 8px;
-        }
-        
-        .patient-item:last-child {
-            border-bottom: none;
-        }
-        
-        .patient-item .patient-name {
-            font-weight: 500;
-            font-size: 0.85rem;
-            color: var(--text-primary);
-        }
-        
-        .patient-item .patient-id {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-        }
-        
-        .patient-item .bill-count {
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 12px;
-        }
-        
-        .patient-item .bill-count.pending {
-            background: #FEF3C7;
-            color: #D97706;
-        }
-        
-        .patient-item .bill-count.paid {
-            background: #D1FAE5;
-            color: #059669;
-        }
-        
-        [data-theme="dark"] .patient-item .bill-count.pending {
-            background: #3D2E0A;
-            color: #FBBF24;
-        }
-        
-        [data-theme="dark"] .patient-item .bill-count.paid {
-            background: #1A3A2A;
-            color: #34D399;
-        }
     </style>
 </head>
 <body>
@@ -925,7 +957,7 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-home"></i>
                 Cashier Dashboard
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
                 <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
@@ -972,8 +1004,8 @@ include_once '../../components/cashier_sidebar.php';
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 2: Today's Payments -> pending_bills.php -->
-        <a href="pending_bills.php" class="stat-card blue">
+        <!-- Card 2: Today's Payments -> payment_history.php -->
+        <a href="payment_history.php" class="stat-card blue">
             <span class="stat-icon">💳</span>
             <div class="stat-number" id="todayPayments"><?= $today_payments ?></div>
             <div class="stat-label">Today's Payments</div>
@@ -999,8 +1031,8 @@ include_once '../../components/cashier_sidebar.php';
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 5: Today's Receipts -> print_receipt.php -->
-        <a href="print_receipt.php" class="stat-card teal">
+        <!-- Card 5: Today's Receipts -> receipt_history.php -->
+        <a href="receipt_history.php" class="stat-card teal">
             <span class="stat-icon">🧾</span>
             <div class="stat-number" id="todayReceipts"><?= $today_receipts ?></div>
             <div class="stat-label">Today's Receipts</div>
@@ -1011,36 +1043,41 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PATIENTS WITH BILLS - QUICK ACCESS -->
+    <!-- PATIENTS WITH BILLS - QUICK ACCESS -> payment_history.php -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-users title-blue mr-2"></i> Patients with Bills
-                <span class="text-sm font-normal text-gray-400">(Click to view patient bills)</span>
+                <span class="text-sm font-normal text-gray-400">(Click to view payment history)</span>
             </h3>
-            <a href="../reception/patients.php" class="text-primary text-sm hover:underline">View All →</a>
+            <a href="payment_history.php" class="text-primary text-sm hover:underline">View All →</a>
         </div>
         
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2" id="patientsWithBills">
             <?php if (count($patients_with_bills) > 0): ?>
                 <?php foreach ($patients_with_bills as $patient): ?>
-                    <a href="patient_bills.php?patient_id=<?= $patient['id'] ?>" 
+                    <a href="payment_history.php?patient_id=<?= $patient['id'] ?>" 
                        class="patient-item hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg p-2 border border-transparent hover:border-success transition">
                         <div>
                             <p class="patient-name"><?= htmlspecialchars($patient['full_name']) ?></p>
                             <p class="patient-id"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></p>
                         </div>
-                        <div class="flex gap-2">
-                            <?php if (($patient['pending_bills_count'] ?? 0) > 0): ?>
-                                <span class="bill-count pending">⏳ <?= $patient['pending_bills_count'] ?></span>
-                            <?php endif; ?>
-                            <?php if (($patient['paid_bills_count'] ?? 0) > 0): ?>
-                                <span class="bill-count paid">✅ <?= $patient['paid_bills_count'] ?></span>
-                            <?php endif; ?>
-                            <?php if (($patient['pending_bills_count'] ?? 0) == 0 && ($patient['paid_bills_count'] ?? 0) == 0): ?>
-                                <span class="bill-count" style="background:#E2E8F0;color:#64748B;">No bills</span>
-                            <?php endif; ?>
+                        <div class="flex items-center gap-2">
+                            <div class="flex gap-1">
+                                <?php if (($patient['pending_bills_count'] ?? 0) > 0): ?>
+                                    <span class="bill-count pending">⏳ <?= $patient['pending_bills_count'] ?></span>
+                                <?php endif; ?>
+                                <?php if (($patient['paid_bills_count'] ?? 0) > 0): ?>
+                                    <span class="bill-count paid">✅ <?= $patient['paid_bills_count'] ?></span>
+                                <?php endif; ?>
+                                <?php if (($patient['pending_bills_count'] ?? 0) == 0 && ($patient['paid_bills_count'] ?? 0) == 0): ?>
+                                    <span class="bill-count" style="background:#E2E8F0;color:#64748B;">No bills</span>
+                                <?php endif; ?>
+                            </div>
+                            <span class="click-hint">
+                                <i class="fas fa-chevron-right text-xs"></i>
+                            </span>
                         </div>
                     </a>
                 <?php endforeach; ?>
@@ -1153,9 +1190,9 @@ include_once '../../components/cashier_sidebar.php';
             <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Print Receipt</span>
         </a>
         
-        <a href="../reception/patients.php" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#7C3AED;">👥</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">View Patients</span>
+        <a href="payment_history.php" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
+            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#7C3AED;">📜</span>
+            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Payment History</span>
         </a>
     </div>
 
@@ -1347,16 +1384,17 @@ include_once '../../components/cashier_sidebar.php';
         }, 500);
     });
 
-    console.log('%c🟢 Braick - Cashier Dashboard (Green Theme)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c🟢 Braick - Cashier Dashboard (Reception Default)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c👋 Welcome, <?= htmlspecialchars($user_full_name) ?>!', 'font-size:13px; color:#64748B;');
+    console.log('%c👋 Welcome, <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 Default Login: reception.rose (Reception = Cashier)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 5 Cards: Pending Bills, Today\'s Payments, Total Bills, Paid Bills, Today\'s Receipts', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👥 Patients with Bills -> payment_history.php?patient_id=X', 'font-size:13px; color:#7C3AED;');
     console.log('%c⏳ Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
     console.log('%c💳 Today\'s Payments: <?= $today_payments ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🧾 Today\'s Receipts: <?= $today_receipts ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click any stat card to navigate to relevant page', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🟢 Green theme applied to all components', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Reception users can access cashier pages', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

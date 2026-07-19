@@ -1,6 +1,6 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/cashier/process_payment.php
+// FILE: frontend/pages/cashier/make_payment.php
 // CASHIER - PROCESS PAYMENT (BULK PAYMENT SYSTEM)
 // Select bills to pay, choose payment method, complete payment
 // BRAICK DISPENSARY

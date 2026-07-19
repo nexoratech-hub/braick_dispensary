@@ -2,27 +2,41 @@
 // ================================================================
 // FILE: frontend/pages/cashier/pending_bills.php
 // CASHIER - PENDING BILLS LIST (GREEN THEME)
-// WITH FILTERS: Today, Week, Month, 3 Months, 6 Months, Year, All, Date Picker
-// NO CASH FIELD (AMOUNT PAID) - BECAUSE BILLS ARE PENDING
-// NO TOTAL PENDING AMOUNT CARD
-// WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
+// FIXED: Supports both string and integer status values
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Cashier
+// FORCE SESSION - Default to reception.rose (ID: 11)
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 10;
-    $_SESSION['full_name'] = 'Cashier Dodoma';
-    $_SESSION['role'] = 'cashier';
+if (!isset($_SESSION['user_id'])) {
+    $_SESSION['user_id'] = 11;
+    $_SESSION['full_name'] = 'Rose Mwangi';
+    $_SESSION['role'] = 'reception';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.dodoma';
+    $_SESSION['username'] = 'reception.rose';
+    $_SESSION['email'] = 'rose@braick.com';
+    $_SESSION['phone'] = '+255 700 000 005';
     $_SESSION['is_admin'] = false;
+    $_SESSION['profile_pic'] = '';
 }
+
+// ================================================================
+// ALLOW RECEPTION TO ACCESS CASHIER PAGES
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    header('Location: ../' . $_SESSION['role'] . '/dashboard.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+$is_admin = ($_SESSION['role'] === 'admin' || $_SESSION['is_admin'] === true);
 
 // ================================================================
 // PATH SAHIHI
@@ -47,7 +61,8 @@ $message_type = '';
 
 // Initialize variables
 $pending_bills = [];
-$total_pending = 0;
+$total_pending_amount = 0;
+$total_bills_count = 0;
 $currency = 'TSh';
 
 try {
@@ -57,7 +72,7 @@ try {
     // BUILD DATE FILTER
     // ================================================================
     $date_condition = "";
-    $params = [$selected_branch_id];
+    $params = [];
     
     switch ($filter) {
         case 'today':
@@ -106,36 +121,82 @@ try {
     }
     
     // ================================================================
-    // GET PENDING BILLS
+    // GET PENDING BILLS - FIXED: Supports both string and integer status
     // ================================================================
     $sql = "
-        SELECT pb.*, 
-               p.full_name as patient_name, 
-               p.patient_id,
-               p.phone,
-               u.full_name as created_by_name
+        SELECT 
+            pb.*, 
+            p.full_name as patient_name, 
+            p.patient_id as patient_id_number,
+            p.phone,
+            p.gender,
+            u.full_name as created_by_name,
+            (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id) as item_count,
+            (SELECT COUNT(*) FROM payments WHERE bill_id = pb.id) as payment_count,
+            (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = pb.id) as total_paid
         FROM patient_bills pb
-        JOIN patients p ON pb.patient_id = p.id
-        JOIN users u ON pb.created_by = u.id
+        LEFT JOIN patients p ON pb.patient_id = p.id
+        LEFT JOIN users u ON pb.created_by = u.id
         WHERE pb.branch_id = ? 
-        AND pb.status IN ('pending', 'partial')
+        AND pb.status IN ('pending', 'partial', '0', '1', 0, 1)
         $date_condition
         $search_condition
         ORDER BY pb.created_at DESC
     ";
     
     $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    
+    // Build parameters
+    $exec_params = [$selected_branch_id];
+    foreach ($params as $param) {
+        $exec_params[] = $param;
+    }
+    
+    $stmt->execute($exec_params);
     $pending_bills = $stmt->fetchAll();
     
     // ================================================================
-    // GET TOTAL PENDING AMOUNT (For display in table only)
+    // DEBUG - Log results
     // ================================================================
-    $total_pending = 0;
-    if (is_array($pending_bills) && count($pending_bills) > 0) {
-        foreach ($pending_bills as $bill) {
-            $total_pending += $bill['balance'] ?? 0;
+    error_log("Pending bills found: " . count($pending_bills));
+    if (count($pending_bills) > 0) {
+        error_log("First bill status: " . $pending_bills[0]['status']);
+        error_log("First bill number: " . $pending_bills[0]['bill_number']);
+    }
+    
+    // ================================================================
+    // GROUP BILLS BY PATIENT
+    // ================================================================
+    $patient_bills = [];
+    foreach ($pending_bills as $bill) {
+        $patient_id = $bill['patient_id'];
+        if (!isset($patient_bills[$patient_id])) {
+            $patient_bills[$patient_id] = [
+                'patient_id' => $patient_id,
+                'patient_name' => $bill['patient_name'] ?? 'Unknown Patient',
+                'patient_id_number' => $bill['patient_id_number'] ?? 'N/A',
+                'phone' => $bill['phone'] ?? 'N/A',
+                'gender' => $bill['gender'] ?? 'N/A',
+                'bills' => [],
+                'total_amount' => 0,
+                'total_balance' => 0,
+                'total_paid' => 0,
+                'bill_count' => 0
+            ];
         }
+        
+        $patient_bills[$patient_id]['bills'][] = $bill;
+        $patient_bills[$patient_id]['total_amount'] += $bill['total_amount'];
+        $patient_bills[$patient_id]['total_balance'] += $bill['balance'];
+        $patient_bills[$patient_id]['total_paid'] += $bill['paid_amount'];
+        $patient_bills[$patient_id]['bill_count']++;
+    }
+    
+    // Calculate totals
+    $total_bills_count = count($pending_bills);
+    $total_pending_amount = 0;
+    foreach ($patient_bills as $patient) {
+        $total_pending_amount += $patient['total_balance'];
     }
     
     // ================================================================
@@ -152,7 +213,10 @@ try {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
     $pending_bills = [];
-    $total_pending = 0;
+    $patient_bills = [];
+    $total_pending_amount = 0;
+    $total_bills_count = 0;
+    error_log("Pending bills error: " . $e->getMessage());
 }
 
 // ================================================================
@@ -214,6 +278,7 @@ include_once '../../components/cashier_sidebar.php';
             --border-color: #E2E8F0;
             --table-stripe: #E8F0FE;
             --table-hover: #D1FAE5;
+            --patient-card-border: #059669;
         }
         
         [data-theme="dark"] {
@@ -228,6 +293,7 @@ include_once '../../components/cashier_sidebar.php';
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
+            --patient-card-border: #34D399;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -243,9 +309,7 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
+        /* TOP NAV */
         .top-nav {
             position: fixed;
             top: 0;
@@ -389,9 +453,7 @@ include_once '../../components/cashier_sidebar.php';
         
         .dark-toggle-btn i { font-size: 0.9rem; }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
+        /* MAIN CONTENT */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -399,9 +461,7 @@ include_once '../../components/cashier_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - GREEN THEME
-           ================================================================ */
+        /* PAGE HEADER */
         .page-header {
             background: linear-gradient(135deg, var(--warning), #B45309);
             border-radius: 16px;
@@ -512,16 +572,14 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           FILTER SECTION
-           ================================================================ */
+        /* FILTER SECTION */
         .filter-section {
             background: var(--bg-card);
             border-radius: 14px;
             padding: 16px 20px;
             border: 1px solid var(--border-color);
             margin-bottom: 20px;
-            max-width: 1200px;
+            max-width: 1400px;
             margin-left: auto;
             margin-right: auto;
             box-shadow: var(--shadow-sm);
@@ -581,9 +639,6 @@ include_once '../../components/cashier_sidebar.php';
             margin-right: 4px;
         }
         
-        /* ================================================================
-           DATE PICKER
-           ================================================================ */
         .date-picker-group {
             display: flex;
             align-items: center;
@@ -625,43 +680,215 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-1px);
         }
         
-        /* ================================================================
-           CARD
-           ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 20px 24px;
-            border: 1px solid var(--border-color);
-            transition: all 0.3s;
-            box-shadow: var(--shadow-sm);
-            max-width: 1200px;
-            margin: 0 auto;
+        /* STATS */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            max-width: 1400px;
+            margin: 0 auto 20px;
         }
         
-        .card:hover {
+        .stat-card-box {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 16px 20px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .stat-card-box:hover {
             border-color: var(--success);
+            transform: translateY(-3px);
             box-shadow: var(--shadow-md);
         }
         
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 14px;
-            flex-wrap: wrap;
-            gap: 8px;
+        .stat-card-box .stat-number {
+            font-size: 2rem;
+            font-weight: 700;
         }
         
-        .card-title {
-            font-size: 0.95rem;
+        .stat-card-box .stat-number.orange {
+            color: #D97706;
+        }
+        
+        .stat-card-box .stat-number.green {
+            color: var(--success);
+        }
+        
+        .stat-card-box .stat-number.red {
+            color: var(--danger);
+        }
+        
+        .stat-card-box .stat-number.blue {
+            color: var(--primary);
+        }
+        
+        .stat-card-box .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-top: 2px;
+        }
+        
+        .stat-card-box .stat-icon {
+            font-size: 1.4rem;
+            margin-bottom: 4px;
+        }
+        
+        /* PATIENT CARD */
+        .patient-card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+            max-width: 1400px;
+            margin: 0 auto 16px;
+        }
+        
+        .patient-card:hover {
+            border-color: var(--patient-card-border);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .patient-card-header {
+            background: var(--primary-bg);
+            padding: 14px 20px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.3s ease;
+            user-select: none;
+        }
+        
+        .patient-card-header:hover {
+            background: var(--success-bg);
+        }
+        
+        [data-theme="dark"] .patient-card-header {
+            background: #1E3A5F;
+        }
+        
+        [data-theme="dark"] .patient-card-header:hover {
+            background: #1A3A2A;
+        }
+        
+        .patient-card-header .patient-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            flex: 1;
+        }
+        
+        .patient-card-header .patient-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1rem;
+            color: white;
+            background: var(--success);
+            flex-shrink: 0;
+        }
+        
+        .patient-card-header .patient-name {
             font-weight: 600;
+            font-size: 1rem;
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
+        .patient-card-header .patient-id {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .patient-card-header .patient-totals {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .patient-card-header .total-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+        }
+        
+        .patient-card-header .total-badge.orange {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        .patient-card-header .total-badge.green {
+            background: #D1FAE5;
+            color: #059669;
+        }
+        
+        .patient-card-header .total-badge.red {
+            background: #FEE2E2;
+            color: #DC2626;
+        }
+        
+        .patient-card-header .total-amount {
+            font-weight: 700;
+            font-size: 1.1rem;
+            color: var(--danger);
+        }
+        
+        .chevron-icon {
+            transition: transform 0.3s ease;
+            font-size: 1rem;
+            color: var(--text-secondary);
+            display: inline-block;
+        }
+        
+        .chevron-icon.rotated {
+            transform: rotate(180deg);
+        }
+        
+        [data-theme="dark"] .patient-card-header .total-badge.orange {
+            background: #3D2E0A;
+            color: #FBBF24;
+        }
+        
+        [data-theme="dark"] .patient-card-header .total-badge.green {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        [data-theme="dark"] .patient-card-header .total-badge.red {
+            background: #3A1A1A;
+            color: #F87171;
+        }
+        
+        .patient-card-body {
+            overflow: hidden;
+            transition: max-height 0.4s ease-in-out, padding 0.3s ease;
+            max-height: 0;
+            padding: 0 20px;
+            background: var(--bg-card);
+        }
+        
+        .patient-card-body.open {
+            max-height: 3000px;
+            padding: 16px 20px;
+        }
+        
+        /* TABLE */
         .table-wrap {
             overflow-x: auto;
         }
@@ -670,7 +897,7 @@ include_once '../../components/cashier_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.8rem;
-            min-width: 700px;
+            min-width: <?= $is_admin ? '1000px' : '900px' ?>;
         }
         
         .data-table thead th {
@@ -705,9 +932,30 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--table-hover);
         }
         
-        /* ================================================================
-           STATUS BADGE
-           ================================================================ */
+        .data-table .bill-number {
+            font-weight: 600;
+            font-size: 0.75rem;
+            font-family: monospace;
+        }
+        
+        .data-table .bill-number.pending {
+            color: #D97706;
+        }
+        
+        .data-table .bill-number.partial {
+            color: var(--primary);
+        }
+        
+        <?php if (!$is_admin): ?>
+        .data-table .balance-col {
+            display: none !important;
+        }
+        .data-table .balance-col-header {
+            display: none !important;
+        }
+        <?php endif; ?>
+        
+        /* STATUS BADGE */
         .status-badge {
             display: inline-block;
             padding: 3px 14px;
@@ -723,8 +971,8 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .status-badge.partial {
-            background: #FEF3C7;
-            color: #D97706;
+            background: #E8F0FE;
+            color: #0B5ED7;
         }
         
         [data-theme="dark"] .status-badge.pending {
@@ -733,13 +981,11 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         [data-theme="dark"] .status-badge.partial {
-            background: #3D2E0A;
-            color: #FBBF24;
+            background: #1E3A5F;
+            color: #6EA8FE;
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
+        /* BUTTONS */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -754,38 +1000,26 @@ include_once '../../components/cashier_sidebar.php';
             text-decoration: none;
         }
         
-        .btn-primary {
+        .btn-view {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-view:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-process {
             background: var(--success);
             color: white;
         }
         
-        .btn-primary:hover {
+        .btn-process:hover {
             background: var(--success-dark);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--success);
-            color: var(--success);
         }
         
         .btn-sm { 
@@ -794,69 +1028,6 @@ include_once '../../components/cashier_sidebar.php';
             border-radius: 6px; 
         }
         
-        /* ================================================================
-           STATS CARD
-           ================================================================ */
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: 14px;
-            padding: 16px 20px;
-            border: 1px solid var(--border-color);
-            text-align: center;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .stat-card:hover {
-            border-color: var(--success);
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .stat-card .stat-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-        }
-        
-        .stat-card .stat-number.orange {
-            color: #D97706;
-        }
-        
-        .stat-card .stat-number.green {
-            color: var(--success);
-        }
-        
-        .stat-card .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .stat-card .stat-icon {
-            font-size: 1.4rem;
-            margin-bottom: 4px;
-        }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { 
-            color: var(--success); 
-            font-weight: 600; 
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .role-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -888,9 +1059,17 @@ include_once '../../components/cashier_sidebar.php';
             color: #34D399;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
+        .admin-badge {
+            display: <?= $is_admin ? 'inline-block' : 'none' ?>;
+            background: #7C3AED;
+            color: white;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+        }
+        
+        /* TOAST */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -919,9 +1098,61 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        /* FOOTER */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { 
+            color: var(--success); 
+            font-weight: 600; 
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            color: var(--border-color);
+            display: block;
+            margin-bottom: 12px;
+        }
+        
+        .empty-state .sub {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.4s ease forwards;
+            opacity: 0;
+        }
+        
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -936,7 +1167,9 @@ include_once '../../components/cashier_sidebar.php';
             .filter-section { padding: 12px 14px; }
             .filter-group { gap: 4px; }
             .filter-btn { font-size: 0.6rem; padding: 3px 10px; }
-            .card { padding: 14px 16px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .patient-card-header { flex-direction: column; align-items: flex-start; }
+            .patient-card-header .patient-totals { width: 100%; justify-content: flex-start; }
         }
         
         @media (max-width: 640px) {
@@ -948,17 +1181,19 @@ include_once '../../components/cashier_sidebar.php';
             .date-picker-group { flex-direction: column; align-items: stretch; }
             .date-picker-group .form-control { width: 100%; }
             .date-picker-group .btn-apply { width: 100%; justify-content: center; }
-            .card { padding: 10px 12px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+            .stat-card-box { padding: 12px 14px; }
+            .stat-card-box .stat-number { font-size: 1.4rem; }
             .btn { padding: 4px 8px; font-size: 0.6rem; }
             .data-table { font-size: 0.65rem; min-width: 600px; }
+            .patient-card-header .patient-info { width: 100%; }
+            .patient-card-header .patient-totals { width: 100%; flex-wrap: wrap; }
         }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -967,7 +1202,7 @@ include_once '../../components/cashier_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search pending bills..." value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search patients or bills..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -998,20 +1233,19 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </nav>
 
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-clock"></i>
                 Pending Bills
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <?php if ($is_admin): ?>
+                    <span class="admin-badge"><i class="fas fa-user-shield"></i> ADMIN VIEW</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-file-invoice"></i>
@@ -1019,7 +1253,12 @@ include_once '../../components/cashier_sidebar.php';
                 
                 <span class="header-badge">
                     <i class="fas fa-file-invoice"></i>
-                    <?= is_array($pending_bills) ? count($pending_bills) : 0 ?> Pending Bills
+                    <?= $total_bills_count ?> Bills
+                </span>
+                
+                <span class="header-badge">
+                    <i class="fas fa-users"></i>
+                    <?= count($patient_bills) ?> Patients
                 </span>
                 
                 <?php if ($filter !== 'all' && $filter !== 'custom'): ?>
@@ -1042,15 +1281,13 @@ include_once '../../components/cashier_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>" style="max-width:1200px;margin:0 auto 16px;">
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>" style="max-width:1400px;margin:0 auto 16px;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- FILTERS -->
-    <!-- ================================================================ -->
     <div class="filter-section">
         <div class="filter-group" style="margin-bottom:8px;">
             <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
@@ -1078,9 +1315,6 @@ include_once '../../components/cashier_sidebar.php';
             </a>
         </div>
         
-        <!-- ============================================================ -->
-        <!-- DATE PICKER (Custom Range) -->
-        <!-- ============================================================ -->
         <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
             <input type="hidden" name="filter" value="custom">
             <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
@@ -1105,16 +1339,26 @@ include_once '../../components/cashier_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- QUICK STATS - NO TOTAL PENDING AMOUNT CARD -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
-        <div class="stat-card">
+    <!-- STATS -->
+    <div class="stats-grid">
+        <div class="stat-card-box">
             <div class="stat-icon">📋</div>
-            <p class="stat-number orange"><?= is_array($pending_bills) ? count($pending_bills) : 0 ?></p>
+            <p class="stat-number orange"><?= $total_bills_count ?></p>
             <p class="stat-label">Total Pending Bills</p>
         </div>
-        <div class="stat-card">
+        <div class="stat-card-box">
+            <div class="stat-icon">👤</div>
+            <p class="stat-number blue"><?= count($patient_bills) ?></p>
+            <p class="stat-label">Patients with Bills</p>
+        </div>
+        <?php if ($is_admin): ?>
+        <div class="stat-card-box">
+            <div class="stat-icon">💰</div>
+            <p class="stat-number red"><?= $currency ?> <?= number_format($total_pending_amount, 0) ?></p>
+            <p class="stat-label">Total Balance</p>
+        </div>
+        <?php endif; ?>
+        <div class="stat-card-box">
             <div class="stat-icon">📅</div>
             <p class="stat-number green">
                 <?php 
@@ -1132,117 +1376,183 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- PENDING BILLS TABLE -->
-    <!-- ================================================================ -->
-    <div class="card" style="max-width:1200px;margin:0 auto;">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-list" style="color:var(--success);"></i> Pending Bills List
-                <span class="text-sm font-normal text-gray-400">(<?= is_array($pending_bills) ? count($pending_bills) : 0 ?> bills)</span>
-            </h3>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <span class="text-xs text-gray-400">
-                    <i class="fas fa-clock"></i> Updated: <?= date('h:i:s A') ?>
-                </span>
-            </div>
-        </div>
-        
-        <div class="table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Bill #</th>
-                        <th>Patient</th>
-                        <th>Patient ID</th>
-                        <th>Created By</th>
-                        <th>Total Amount</th>
-                        <th>Balance</th>
-                        <th>Status</th>
-                        <th>Date</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (is_array($pending_bills) && count($pending_bills) > 0): ?>
-                        <?php $i = 1; foreach ($pending_bills as $bill): ?>
-                            <tr>
-                                <td><?= $i++ ?></td>
-                                <td>
-                                    <span class="font-mono text-xs font-bold text-gray-700 dark:text-gray-300">
-                                        <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['phone'] ?? 'No phone') ?></div>
-                                </td>
-                                <td>
-                                    <span class="text-xs font-mono"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></span>
-                                </td>
-                                <td>
-                                    <span class="text-sm"><?= htmlspecialchars($bill['created_by_name'] ?? 'N/A') ?></span>
-                                </td>
-                                <td>
-                                    <span class="font-semibold text-gray-800 dark:text-gray-200">
-                                        <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="font-semibold text-red-600 dark:text-red-400">
-                                        <?= $currency ?> <?= number_format($bill['balance'] ?? 0, 0) ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="status-badge <?= $bill['status'] ?? 'pending' ?>">
-                                        <?= ucfirst($bill['status'] ?? 'Pending') ?>
-                                    </span>
-                                </td>
-                                <td class="text-xs">
-                                    <?= isset($bill['created_at']) ? date('d/m/Y', strtotime($bill['created_at'])) : 'N/A' ?>
-                                    <br>
-                                    <span class="text-gray-400 text-[0.6rem]">
-                                        <?= isset($bill['created_at']) ? date('h:i A', strtotime($bill['created_at'])) : '' ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <div class="flex flex-wrap gap-1">
-                                        <!-- View Bill -->
-                                        <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <!-- Make Payment -->
-                                        <a href="make_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-success btn-sm" title="Make Payment">
-                                            <i class="fas fa-money-bill-wave"></i> Pay
-                                        </a>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <tr>
-                            <td colspan="10" class="text-center py-8 text-gray-400">
-                                <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
-                                <p class="text-lg">No pending bills</p>
-                                <p class="text-sm">
-                                    <?php if ($filter !== 'all'): ?>
-                                        No pending bills found for the selected date range
-                                    <?php else: ?>
-                                        All bills have been paid
+    <!-- PATIENT BILLS LIST -->
+    <?php if (count($patient_bills) > 0): ?>
+        <?php foreach ($patient_bills as $patient): ?>
+            <div class="patient-card animate-fade-in-up">
+                <!-- Patient Header - Click to toggle -->
+                <div class="patient-card-header" onclick="togglePatient(<?= $patient['patient_id'] ?>)">
+                    <div class="patient-info">
+                        <div class="patient-avatar">
+                            <?= strtoupper(substr($patient['patient_name'], 0, 1)) ?>
+                        </div>
+                        <div>
+                            <div class="patient-name">
+                                <?= htmlspecialchars($patient['patient_name']) ?>
+                                <span class="patient-id ml-2">
+                                    <?= htmlspecialchars($patient['patient_id_number'] ?? 'N/A') ?>
+                                </span>
+                            </div>
+                            <div style="font-size:0.75rem;color:var(--text-secondary);">
+                                <i class="fas fa-phone mr-1"></i> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?>
+                                <?php if ($patient['gender']): ?>
+                                    <span class="mx-1">•</span>
+                                    <i class="fas fa-venus-mars mr-1"></i> <?= htmlspecialchars($patient['gender']) ?>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="patient-totals">
+                        <span class="total-badge orange">
+                            <i class="fas fa-file-invoice mr-1"></i> <?= $patient['bill_count'] ?> Bills
+                        </span>
+                        <?php if ($is_admin): ?>
+                            <span class="total-badge red">
+                                <i class="fas fa-money-bill mr-1"></i> Balance: <?= $currency ?> <?= number_format($patient['total_balance'], 0) ?>
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($patient['total_paid'] > 0): ?>
+                            <span class="total-badge green">
+                                <i class="fas fa-check-circle mr-1"></i> Paid: <?= $currency ?> <?= number_format($patient['total_paid'], 0) ?>
+                            </span>
+                        <?php endif; ?>
+                        <span class="total-amount">
+                            <?= $currency ?> <?= number_format($patient['total_amount'], 0) ?>
+                        </span>
+                        <i class="fas fa-chevron-down chevron-icon" id="chevron_<?= $patient['patient_id'] ?>"></i>
+                    </div>
+                </div>
+                
+                <!-- Patient Bills Table - Collapsible -->
+                <div class="patient-card-body" id="patient_<?= $patient['patient_id'] ?>">
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Bill #</th>
+                                    <th>Total Amount</th>
+                                    <th>Paid</th>
+                                    <?php if ($is_admin): ?>
+                                        <th class="balance-col-header">Balance</th>
                                     <?php endif; ?>
-                                </p>
-                            </td>
-                        </tr>
-                    <?php endif; ?>
-                </tbody>
-            </table>
+                                    <th>Status</th>
+                                    <th>Items</th>
+                                    <th>Created</th>
+                                    <th colspan="2">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php $i = 1; foreach ($patient['bills'] as $bill): ?>
+                                    <tr>
+                                        <td><?= $i++ ?></td>
+                                        <td>
+                                            <span class="bill-number <?= $bill['status'] ?>">
+                                                <?= htmlspecialchars($bill['bill_number']) ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="font-semibold">
+                                                <?= $currency ?> <?= number_format($bill['total_amount'], 0) ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="text-green-600 dark:text-green-400">
+                                                <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
+                                            </span>
+                                        </td>
+                                        <?php if ($is_admin): ?>
+                                            <td class="balance-col">
+                                                <span class="font-semibold text-red-600 dark:text-red-400">
+                                                    <?= $currency ?> <?= number_format($bill['balance'], 0) ?>
+                                                </span>
+                                            </td>
+                                        <?php endif; ?>
+                                        <td>
+                                            <span class="status-badge <?= $bill['status'] ?>">
+                                                <?= ucfirst($bill['status']) ?>
+                                            </span>
+                                        </td>
+                                        <td class="text-center">
+                                            <span class="text-sm font-semibold">
+                                                <?= $bill['item_count'] ?? 0 ?>
+                                            </span>
+                                        </td>
+                                        <td class="text-xs">
+                                            <?= isset($bill['created_at']) ? date('d/m/Y', strtotime($bill['created_at'])) : 'N/A' ?>
+                                            <br>
+                                            <span class="text-gray-400 text-[0.6rem]">
+                                                <?= isset($bill['created_at']) ? date('h:i A', strtotime($bill['created_at'])) : '' ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <!-- View Button -->
+                                            <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-view btn-sm" title="View Bill Details">
+                                                <i class="fas fa-eye"></i> View
+                                            </a>
+                                        </td>
+                                        <td>
+                                            <!-- Process Payment Button -->
+                                            <?php if (!$is_admin): ?>
+                                                <a href="process_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-process btn-sm" title="Process Payment">
+                                                    <i class="fas fa-money-bill-wave"></i> Pay
+                                                </a>
+                                            <?php else: ?>
+                                                <span class="text-xs text-gray-400">(Read Only)</span>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                <!-- Patient Total Row -->
+                                <tr style="background: var(--primary-bg); font-weight: 700;">
+                                    <td colspan="2" style="text-align:right;font-size:0.8rem;">
+                                        <i class="fas fa-calculator mr-1"></i> Patient Total:
+                                    </td>
+                                    <td>
+                                        <?= $currency ?> <?= number_format($patient['total_amount'], 0) ?>
+                                    </td>
+                                    <td>
+                                        <?= $currency ?> <?= number_format($patient['total_paid'], 0) ?>
+                                    </td>
+                                    <?php if ($is_admin): ?>
+                                        <td style="color:var(--danger);">
+                                            <?= $currency ?> <?= number_format($patient['total_balance'], 0) ?>
+                                        </td>
+                                    <?php endif; ?>
+                                    <td colspan="<?= $is_admin ? 5 : 4 ?>"></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Patient Action Buttons -->
+                    <div style="padding: 12px 0 0; display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--border-color); margin-top: 8px;">
+                        <a href="patient_bills.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-view">
+                            <i class="fas fa-file-invoice"></i> View All Bills
+                        </a>
+                        <?php if (!$is_admin): ?>
+                            <a href="process_payment.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-process">
+                                <i class="fas fa-money-bill-wave"></i> Pay All Bills
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+        <?php endforeach; ?>
+    <?php else: ?>
+        <div class="empty-state" style="max-width:1400px;margin:0 auto;">
+            <i class="fas fa-exclamation-circle text-yellow-500 text-3xl block mb-3"></i>
+            <p class="text-lg font-semibold text-gray-500">No Pending Bills Found</p>
+            <p class="sub">Check if there are any bills with status 'pending' or 'partial'</p>
+            <p class="text-xs text-gray-400 mt-2">Debug: Total bills in query: <?= $total_bills_count ?></p>
+            <p class="text-xs text-gray-400">Branch ID: <?= $selected_branch_id ?></p>
+            <?php if ($filter !== 'all'): ?>
+                <p class="text-xs text-gray-400">Filter: <?= $filter ?></p>
+            <?php endif; ?>
         </div>
-    </div>
+    <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1257,9 +1567,7 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1268,15 +1576,29 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
 <!-- GLOBAL STATS AUTO-UPDATE -->
-<!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/global_stats.js"></script>
+<script src="/dispensary_system/frontend/assets/js/cashier_global_stats.js"></script>
 
-<!-- ================================================================ -->
 <!-- PAGE-SPECIFIC JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
+    // ================================================================
+    // TOGGLE PATIENT BILLS
+    // ================================================================
+    function togglePatient(patientId) {
+        var body = document.getElementById('patient_' + patientId);
+        var chevron = document.getElementById('chevron_' + patientId);
+        
+        if (body) {
+            body.classList.toggle('open');
+        }
+        if (chevron) {
+            chevron.classList.toggle('rotated');
+        }
+    }
+
+    // ================================================================
+    // DARK MODE
+    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1304,6 +1626,9 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -1319,6 +1644,9 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1333,6 +1661,9 @@ include_once '../../components/cashier_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
+    // ================================================================
+    // SEARCH
+    // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
@@ -1351,6 +1682,9 @@ include_once '../../components/cashier_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
+    // ================================================================
+    // TOAST
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1371,13 +1705,19 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c⏳ Braick - Pending Bills (With Filters)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c⏳ Braick - Pending Bills (Fixed - Supports Integer Status)', 'font-size:18px; font-weight:bold; color:#D97706;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Total Pending Bills: <?= is_array($pending_bills) ? count($pending_bills) : 0 ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📅 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔄 Auto-update every 3 seconds via global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c❌ Removed Total Pending Amount card', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Added filters: Today, Week, Month, 3 Months, 6 Months, Year, All, Date Picker', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Total Bills Found: <?= $total_bills_count ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 Patients: <?= count($patient_bills) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Total Balance: <?= $currency ?> <?= number_format($total_pending_amount, 0) ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ Status check includes: pending, partial, 0, 1', 'font-size:13px; color:#34D399;');
+    <?php if ($total_bills_count > 0): ?>
+    console.log('%c✅ Bills found!', 'font-size:13px; color:#34D399;');
+    <?php else: ?>
+    console.log('%c❌ No bills found. Check database.', 'font-size:13px; color:#DC2626;');
+    console.log('%c🔍 Check if bill status is "pending", "partial", 0, or 1', 'font-size:13px; color:#D97706;');
+    <?php endif; ?>
+    console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

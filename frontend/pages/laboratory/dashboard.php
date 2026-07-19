@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/dashboard.php
-// LABORATORY DASHBOARD (WITH NAVIGATION CARDS)
+// LABORATORY DASHBOARD - FULL VERSION WITH AUTO-UPDATE
+// DEFAULT USER: Lab Technician Dodoma (ID: 8)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -14,30 +15,35 @@ require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 // ================================================================
-// SESSION - Default to lab.anna
+// DEFAULT SESSION - Lab Technician Dodoma (ID: 8)
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 4;
-    $_SESSION['full_name'] = 'Anna Mushi';
+    $_SESSION['user_id'] = 8;
+    $_SESSION['full_name'] = 'Lab Technician Dodoma';
     $_SESSION['role'] = 'laboratory';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.anna';
+    $_SESSION['username'] = 'lab.dodoma';
     $_SESSION['is_admin'] = false;
+    $_SESSION['profile_pic'] = '';
 }
 
-$user_id = $_SESSION['user_id'] ?? 4;
-$user_full_name = $_SESSION['full_name'] ?? 'Anna Mushi';
+$user_id = $_SESSION['user_id'] ?? 8;
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_username = $_SESSION['username'] ?? 'lab.dodoma';
 
+// ================================================================
+// DATABASE CONNECTION
+// ================================================================
 $db = getDB();
 
 // ================================================================
 // GET STATISTICS
 // ================================================================
 $today = date('Y-m-d');
-$start_of_month = date('Y-m-d', strtotime('first day of this month'));
+$start_of_month = date('Y-m-01');
 
 // 1. Pending Requests
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
@@ -64,7 +70,36 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id, $today]);
 $today_tests = $stmt->fetch()['count'] ?? 0;
 
-// 5. Recent Requests (Last 10)
+// 5. Total Tests (All Time)
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM lab_request_items lri
+    JOIN lab_requests lr ON lri.request_id = lr.id
+    WHERE lr.branch_id = ?
+");
+$stmt->execute([$user_branch_id]);
+$total_tests = $stmt->fetch()['count'] ?? 0;
+
+// 6. Total Requests
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ?");
+$stmt->execute([$user_branch_id]);
+$total_requests = $stmt->fetch()['count'] ?? 0;
+
+// 7. Completion Rate
+$stmt = $db->prepare("
+    SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+    FROM lab_requests 
+    WHERE branch_id = ?
+");
+$stmt->execute([$user_branch_id]);
+$rate_data = $stmt->fetch();
+$total_requests_all = $rate_data['total'] ?? 0;
+$completed_requests = $rate_data['completed'] ?? 0;
+$completion_rate = $total_requests_all > 0 ? round(($completed_requests / $total_requests_all) * 100, 1) : 0;
+
+// 8. Recent Requests (Last 10)
 $stmt = $db->prepare("
     SELECT lr.*, 
            p.full_name as patient_name, p.patient_id,
@@ -81,7 +116,7 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $recent_requests = $stmt->fetchAll();
 
-// 6. Daily Tests Chart (Last 7 days)
+// 9. Daily Tests Chart (Last 7 days)
 $daily_labels = [];
 $daily_tests = [];
 for ($i = 6; $i >= 0; $i--) {
@@ -95,10 +130,10 @@ for ($i = 6; $i >= 0; $i--) {
         WHERE lr.branch_id = ? AND DATE(lri.completed_at) = ?
     ");
     $stmt->execute([$user_branch_id, $date]);
-    $daily_tests[] = $stmt->fetch()['count'] ?? 0;
+    $daily_tests[] = (int)($stmt->fetch()['count'] ?? 0);
 }
 
-// 7. Monthly Tests Chart (Last 6 months)
+// 10. Monthly Tests Chart (Last 6 months)
 $monthly_labels = [];
 $monthly_tests = [];
 for ($i = 5; $i >= 0; $i--) {
@@ -115,10 +150,10 @@ for ($i = 5; $i >= 0; $i--) {
         WHERE lr.branch_id = ? AND DATE(lri.completed_at) BETWEEN ? AND ?
     ");
     $stmt->execute([$user_branch_id, $start, $end]);
-    $monthly_tests[] = $stmt->fetch()['count'] ?? 0;
+    $monthly_tests[] = (int)($stmt->fetch()['count'] ?? 0);
 }
 
-// 8. Most Requested Tests
+// 11. Most Requested Tests
 $stmt = $db->prepare("
     SELECT lri.test_name, COUNT(*) as count 
     FROM lab_request_items lri
@@ -159,6 +194,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 ?>
 
 <style>
+    /* ================================================================
+       LABORATORY DASHBOARD STYLES
+       ================================================================ */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -166,7 +204,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         margin-bottom: 24px;
     }
     
-    /* Navigation Cards - with pointer cursor */
     .stat-card {
         border-radius: 16px;
         padding: 18px 20px;
@@ -178,6 +215,20 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         display: flex;
         align-items: center;
         justify-content: space-between;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .stat-card::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -30%;
+        width: 100px;
+        height: 100px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
     }
     
     .stat-card:hover {
@@ -189,14 +240,21 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         transform: scale(0.98);
     }
     
-    .stat-card.blue { background: var(--primary); }
-    .stat-card.blue-dark { background: var(--primary-dark); }
-    .stat-card.green { background: var(--success); }
-    .stat-card.green-dark { background: var(--success-dark); }
-    .stat-card.purple { background: #7C3AED; }
-    .stat-card.orange { background: #D97706; }
-    .stat-card.red { background: var(--danger); }
-    .stat-card.teal { background: #0D9488; }
+    .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
+    .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+    .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
+    .stat-card.red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+    .stat-card.pink { background: linear-gradient(135deg, #DB2777, #BE185D); }
+    .stat-card.indigo { background: linear-gradient(135deg, #4F46E5, #4338CA); }
+    
+    .stat-card .stat-left {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        z-index: 1;
+    }
     
     .stat-card .stat-icon {
         width: 42px;
@@ -209,6 +267,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         background: rgba(255,255,255,0.15);
         color: white;
         flex-shrink: 0;
+        z-index: 1;
     }
     
     .stat-card .stat-number {
@@ -234,12 +293,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         display: inline-block;
     }
     
-    /* Arrow indicator for navigation */
     .stat-card .nav-arrow {
         opacity: 0;
         transition: all 0.3s ease;
-        margin-left: 8px;
         font-size: 0.8rem;
+        z-index: 1;
     }
     
     .stat-card:hover .nav-arrow {
@@ -247,6 +305,33 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         transform: translateX(4px);
     }
     
+    /* ================================================================
+       UPDATE BADGE
+       ================================================================ */
+    .update-badge {
+        background: rgba(255,255,255,0.1);
+        color: #93C5FD;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .update-badge .fa-spin {
+        animation: fa-spin 2s infinite linear;
+    }
+    
+    @keyframes fa-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    /* ================================================================
+       RECENT ITEMS
+       ================================================================ */
     .recent-item {
         display: flex;
         align-items: center;
@@ -323,6 +408,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         color: #F87171;
     }
     
+    /* ================================================================
+       CHART CONTAINER
+       ================================================================ */
     .chart-container {
         height: 200px;
         max-height: 200px;
@@ -333,6 +421,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         max-height: 200px !important;
     }
     
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
     .empty-state {
         text-align: center;
         padding: 30px 20px;
@@ -346,6 +437,47 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         margin-bottom: 10px;
     }
     
+    /* ================================================================
+       MOST REQUESTED
+       ================================================================ */
+    .most-requested-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border-color);
+    }
+    
+    .most-requested-item:last-child {
+        border-bottom: none;
+    }
+    
+    .most-requested-item .rank {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: var(--text-secondary);
+        min-width: 28px;
+    }
+    
+    .most-requested-item .test-name {
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--text-primary);
+        flex: 1;
+    }
+    
+    .most-requested-item .count {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--primary);
+        background: var(--primary-bg);
+        padding: 2px 12px;
+        border-radius: 20px;
+    }
+    
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
     @media (max-width: 768px) {
         .stats-grid {
             grid-template-columns: repeat(2, 1fr);
@@ -409,18 +541,24 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-flask mr-2" style="color: var(--primary);"></i> Laboratory Dashboard
+                <span class="role-badge-display ml-2">LABORATORY</span>
+                <span class="update-badge ml-2" id="updateBadge">
+                    <i class="fas fa-sync-alt fa-spin"></i> Live
+                </span>
             </h1>
             <p class="page-subtitle">
-                Welcome, <?= htmlspecialchars($user_full_name) ?>!
+                Welcome, <strong><?= htmlspecialchars($user_full_name) ?></strong>!
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
-                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
                 </span>
                 <span class="ml-2 text-xs text-gray-400">
@@ -430,11 +568,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </div>
         <div class="flex gap-2 flex-wrap">
             <a href="pending_requests.php" class="btn btn-blue btn-sm">
-                <i class="fas fa-clock"></i> Pending (<?= $pending ?>)
+                <i class="fas fa-clock"></i> Pending (<span id="statPending"><?= $pending ?></span>)
             </a>
             <a href="in_progress.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-spinner"></i> In Progress (<?= $in_progress ?>)
+                <i class="fas fa-spinner"></i> In Progress (<span id="statInProgress"><?= $in_progress ?></span>)
             </a>
+            <button onclick="manualRefresh()" class="btn btn-outline btn-sm" id="refreshBtn">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
         </div>
     </div>
 
@@ -443,11 +584,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         
-        <!-- 1. Pending Requests - Navigates to pending_requests.php -->
+        <!-- 1. Pending Requests -->
         <a href="pending_requests.php" class="stat-card orange">
-            <div>
+            <div class="stat-left">
                 <p class="stat-label">Pending Requests</p>
-                <p class="stat-number"><?= $pending ?></p>
+                <p class="stat-number" id="statPendingCard"><?= $pending ?></p>
                 <span class="stat-trend"><i class="fas fa-clock"></i> Awaiting</span>
             </div>
             <div class="stat-icon">
@@ -456,11 +597,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </div>
         </a>
         
-        <!-- 2. In Progress - Navigates to in_progress.php -->
+        <!-- 2. In Progress -->
         <a href="in_progress.php" class="stat-card blue">
-            <div>
+            <div class="stat-left">
                 <p class="stat-label">In Progress</p>
-                <p class="stat-number"><?= $in_progress ?></p>
+                <p class="stat-number" id="statInProgressCard"><?= $in_progress ?></p>
                 <span class="stat-trend"><i class="fas fa-spinner"></i> Running</span>
             </div>
             <div class="stat-icon">
@@ -469,11 +610,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </div>
         </a>
         
-        <!-- 3. Completed Today - Navigates to completed_requests.php -->
+        <!-- 3. Completed Today -->
         <a href="completed_requests.php" class="stat-card green">
-            <div>
+            <div class="stat-left">
                 <p class="stat-label">Completed Today</p>
-                <p class="stat-number"><?= $completed_today ?></p>
+                <p class="stat-number" id="statCompletedTodayCard"><?= $completed_today ?></p>
                 <span class="stat-trend"><i class="fas fa-check-circle"></i> Done</span>
             </div>
             <div class="stat-icon">
@@ -482,15 +623,69 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </div>
         </a>
         
-        <!-- 4. Today's Tests - Navigates to results_history.php -->
+        <!-- 4. Today's Tests -->
         <a href="results_history.php?filter=today" class="stat-card purple">
-            <div>
+            <div class="stat-left">
                 <p class="stat-label">Today's Tests</p>
-                <p class="stat-number"><?= $today_tests ?></p>
+                <p class="stat-number" id="statTodayTestsCard"><?= $today_tests ?></p>
                 <span class="stat-trend"><i class="fas fa-flask"></i> Completed</span>
             </div>
             <div class="stat-icon">
                 <i class="fas fa-flask"></i>
+                <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+        </a>
+        
+        <!-- 5. Total Tests -->
+        <a href="results_history.php" class="stat-card teal">
+            <div class="stat-left">
+                <p class="stat-label">Total Tests</p>
+                <p class="stat-number" id="statTotalTestsCard"><?= number_format($total_tests) ?></p>
+                <span class="stat-trend"><i class="fas fa-chart-line"></i> All Time</span>
+            </div>
+            <div class="stat-icon">
+                <i class="fas fa-chart-line"></i>
+                <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+        </a>
+        
+        <!-- 6. Total Requests -->
+        <a href="pending_requests.php" class="stat-card indigo">
+            <div class="stat-left">
+                <p class="stat-label">Total Requests</p>
+                <p class="stat-number" id="statTotalRequestsCard"><?= number_format($total_requests) ?></p>
+                <span class="stat-trend"><i class="fas fa-list"></i> All Time</span>
+            </div>
+            <div class="stat-icon">
+                <i class="fas fa-list"></i>
+                <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+        </a>
+        
+        <!-- 7. Completion Rate -->
+        <a href="completed_requests.php" class="stat-card pink">
+            <div class="stat-left">
+                <p class="stat-label">Completion Rate</p>
+                <p class="stat-number" id="statCompletionRateCard"><?= $completion_rate ?>%</p>
+                <span class="stat-trend"><i class="fas fa-percentage"></i> Success Rate</span>
+            </div>
+            <div class="stat-icon">
+                <i class="fas fa-percentage"></i>
+                <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+        </a>
+        
+        <!-- 8. Average Tests per Request -->
+        <a href="results_history.php" class="stat-card red">
+            <div class="stat-left">
+                <p class="stat-label">Avg Tests/Request</p>
+                <p class="stat-number" id="statAvgTestsCard">
+                    <?= $total_requests > 0 ? number_format($total_tests / $total_requests, 1) : '0.0' ?>
+                </p>
+                <span class="stat-trend"><i class="fas fa-calculator"></i> Per Request</span>
+            </div>
+            <div class="stat-icon">
+                <i class="fas fa-calculator"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
             </div>
         </a>
@@ -500,7 +695,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- ================================================================ -->
     <!-- CHARTS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
         
         <!-- Daily Tests Chart -->
         <div class="card animate-fade-in-up">
@@ -520,7 +715,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         <div class="card animate-fade-in-up">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-chart-line title-blue mr-2"></i>
+                    <i class="fas fa-chart-line title-green mr-2"></i>
                     Monthly Tests
                 </h3>
                 <span class="text-xs text-gray-400">Last 6 months</span>
@@ -530,54 +725,55 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </div>
         </div>
         
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- MOST REQUESTED TESTS & RECENT REQUESTS -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+        
         <!-- Most Requested Tests -->
-        <div class="card animate-fade-in-up">
+        <div class="card animate-fade-in-up lg:col-span-1">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-trophy title-purple mr-2"></i>
                     Most Requested Tests
                 </h3>
             </div>
-            <?php if (count($most_requested) > 0): ?>
-                <div class="space-y-2">
+            <div id="mostRequested">
+                <?php if (count($most_requested) > 0): ?>
                     <?php foreach ($most_requested as $index => $test): ?>
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-3">
-                                <span class="text-sm font-bold text-gray-400">#<?= $index + 1 ?></span>
-                                <span class="text-sm font-medium text-gray-700"><?= htmlspecialchars($test['test_name']) ?></span>
-                            </div>
-                            <span class="badge badge-blue"><?= $test['count'] ?></span>
+                        <div class="most-requested-item">
+                            <span class="rank">#<?= $index + 1 ?></span>
+                            <span class="test-name"><?= htmlspecialchars($test['test_name']) ?></span>
+                            <span class="count"><?= $test['count'] ?></span>
                         </div>
                     <?php endforeach; ?>
-                </div>
-            <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-flask"></i>
-                    <p>No tests completed yet</p>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- RECENT REQUESTS -->
-    <!-- ================================================================ -->
-    <div class="card animate-fade-in-up">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-history title-blue mr-2"></i>
-                Recent Requests
-                <span class="text-sm font-normal text-gray-400">(Last 10)</span>
-            </h3>
-            <a href="pending_requests.php" class="text-xs text-blue-600 hover:underline">View All →</a>
+                <?php else: ?>
+                    <div class="empty-state">
+                        <i class="fas fa-flask"></i>
+                        <p>No tests completed yet</p>
+                    </div>
+                <?php endif; ?>
+            </div>
         </div>
         
-        <?php if (count($recent_requests) > 0): ?>
+        <!-- Recent Requests -->
+        <div class="card animate-fade-in-up lg:col-span-2">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <i class="fas fa-history title-blue mr-2"></i>
+                    Recent Requests
+                    <span class="text-sm font-normal text-gray-400">(Last 10)</span>
+                </h3>
+                <a href="pending_requests.php" class="text-xs text-blue-600 hover:underline">View All →</a>
+            </div>
+            
             <div class="overflow-x-auto">
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Request ID</th>
+                            <th>Request #</th>
                             <th>Patient</th>
                             <th>Visit</th>
                             <th>Doctor</th>
@@ -587,47 +783,55 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                             <th>Action</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        <?php foreach ($recent_requests as $req): ?>
+                    <tbody id="recentTableBody">
+                        <?php if (count($recent_requests) > 0): ?>
+                            <?php foreach ($recent_requests as $req): ?>
+                                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+                                    <td class="font-mono text-xs font-semibold text-blue-600">
+                                        <?= htmlspecialchars($req['request_number'] ?? 'N/A') ?>
+                                    </td>
+                                    <td>
+                                        <div class="font-medium text-sm"><?= htmlspecialchars($req['patient_name'] ?? 'Unknown') ?></div>
+                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($req['patient_id'] ?? 'N/A') ?></div>
+                                    </td>
+                                    <td class="font-mono text-xs"><?= htmlspecialchars($req['visit_id'] ?? 'N/A') ?></td>
+                                    <td><?= htmlspecialchars($req['doctor_name'] ?? 'N/A') ?></td>
+                                    <td>
+                                        <?= $req['test_count'] ?? 0 ?> tests
+                                        <?php if (($req['completed_count'] ?? 0) > 0 && ($req['status'] ?? '') !== 'completed'): ?>
+                                            <span class="text-xs text-gray-400">(<?= $req['completed_count'] ?> done)</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <span class="badge <?= 
+                                            ($req['status'] ?? '') === 'pending' ? 'badge-yellow' : 
+                                            (($req['status'] ?? '') === 'in_progress' ? 'badge-blue' : 
+                                            (($req['status'] ?? '') === 'completed' ? 'badge-green' : 'badge-red')) 
+                                        ?>">
+                                            <?= ucfirst(str_replace('_', ' ', $req['status'] ?? 'Pending')) ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-sm"><?= isset($req['requested_at']) ? date('M d, Y', strtotime($req['requested_at'])) : 'N/A' ?></td>
+                                    <td>
+                                        <a href="view_request.php?id=<?= $req['id'] ?>" class="btn btn-outline btn-sm">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php else: ?>
                             <tr>
-                                <td class="font-mono text-xs font-semibold text-blue-600">
-                                    <?= htmlspecialchars($req['request_number']) ?>
-                                </td>
-                                <td><?= htmlspecialchars($req['patient_name'] ?? 'Unknown') ?></td>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($req['visit_id']) ?></td>
-                                <td><?= htmlspecialchars($req['doctor_name'] ?? 'N/A') ?></td>
-                                <td>
-                                    <?= $req['test_count'] ?> tests
-                                    <?php if ($req['completed_count'] > 0 && $req['status'] !== 'completed'): ?>
-                                        <span class="text-xs text-gray-400">(<?= $req['completed_count'] ?> done)</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span class="badge <?= 
-                                        $req['status'] === 'pending' ? 'badge-yellow' : 
-                                        ($req['status'] === 'in_progress' ? 'badge-blue' : 
-                                        ($req['status'] === 'completed' ? 'badge-green' : 'badge-red')) 
-                                    ?>">
-                                        <?= ucfirst(str_replace('_', ' ', $req['status'] ?? 'Pending')) ?>
-                                    </span>
-                                </td>
-                                <td class="text-sm"><?= date('M d, Y', strtotime($req['requested_at'])) ?></td>
-                                <td>
-                                    <a href="view_request.php?id=<?= $req['id'] ?>" class="btn btn-outline btn-sm">
-                                        <i class="fas fa-eye"></i> View
-                                    </a>
+                                <td colspan="8" class="text-center py-8 text-gray-400">
+                                    <i class="fas fa-flask text-3xl block mb-2"></i>
+                                    <p>No laboratory requests yet</p>
                                 </td>
                             </tr>
-                        <?php endforeach; ?>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
-        <?php else: ?>
-            <div class="empty-state">
-                <i class="fas fa-flask"></i>
-                <p>No laboratory requests yet</p>
-            </div>
-        <?php endif; ?>
+        </div>
+        
     </div>
 
     <!-- ================================================================ -->
@@ -638,6 +842,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Laboratory Dashboard
+            <span class="text-gray-300 mx-2">|</span>
+            Logged in as: <strong><?= htmlspecialchars($user_full_name) ?></strong>
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -657,8 +865,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - WITH AUTO-UPDATE -->
 <!-- ================================================================ -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
     // ================================================================
     // DARK MODE
@@ -696,18 +905,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    if (sidebarToggle) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
-    }
+    sidebarToggle?.addEventListener('click', function() {
+        sidebar.classList.toggle('open');
+    });
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (sidebar && sidebarToggle) {
-                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                    sidebar.classList.remove('open');
-                }
+            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                sidebar.classList.remove('open');
             }
         }
     });
@@ -725,14 +930,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     }
     
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
 
     // ================================================================
     // DATE & TIME
@@ -777,63 +978,363 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
 
     // ================================================================
-    // CHARTS
+    // CHARTS - INITIAL RENDER
     // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        // Daily Chart
-        var dailyCtx = document.getElementById('dailyChart')?.getContext('2d');
-        if (dailyCtx && typeof Chart !== 'undefined') {
-            new Chart(dailyCtx, {
-                type: 'bar',
-                data: {
-                    labels: <?= json_encode($daily_labels) ?>,
-                    datasets: [{
-                        label: 'Tests Completed',
-                        data: <?= json_encode($daily_tests) ?>,
-                        backgroundColor: '#0B5ED7',
-                        borderRadius: 4,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: { beginAtZero: true, ticks: { stepSize: 1 } },
-                        x: { grid: { display: false } }
-                    }
-                }
-            });
+    var chartInstances = {
+        daily: null,
+        monthly: null
+    };
+    
+    var dailyLabels = <?= json_encode($daily_labels) ?>;
+    var dailyValues = <?= json_encode($daily_tests) ?>;
+    var monthlyLabels = <?= json_encode($monthly_labels) ?>;
+    var monthlyValues = <?= json_encode($monthly_tests) ?>;
+    
+    function renderDailyChart(labels, values) {
+        var canvas = document.getElementById('dailyChart');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        
+        if (chartInstances.daily) {
+            chartInstances.daily.destroy();
+            chartInstances.daily = null;
         }
         
-        // Monthly Chart
-        var monthlyCtx = document.getElementById('monthlyChart')?.getContext('2d');
-        if (monthlyCtx && typeof Chart !== 'undefined') {
-            new Chart(monthlyCtx, {
-                type: 'line',
-                data: {
-                    labels: <?= json_encode($monthly_labels) ?>,
-                    datasets: [{
-                        label: 'Tests Completed',
-                        data: <?= json_encode($monthly_tests) ?>,
-                        borderColor: '#059669',
-                        backgroundColor: 'rgba(5, 150, 105, 0.1)',
-                        fill: true,
-                        tension: 0.4,
-                        pointBackgroundColor: '#059669',
-                        pointRadius: 4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: { beginAtZero: true, ticks: { stepSize: 1 } },
-                        x: { grid: { display: false } }
+        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+        var gridColor = isDark ? '#334155' : '#E2E8F0';
+        var textColor = isDark ? '#94A3B8' : '#64748B';
+        
+        var defaultLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        var defaultValues = [0, 0, 0, 0, 0, 0, 0];
+        
+        chartInstances.daily = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: (labels && labels.length > 0) ? labels : defaultLabels,
+                datasets: [{
+                    label: 'Tests Completed',
+                    data: (values && values.length > 0) ? values : defaultValues,
+                    backgroundColor: '#0B5ED7',
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { stepSize: 1, color: textColor },
+                        grid: { color: gridColor }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: textColor }
                     }
                 }
+            }
+        });
+    }
+    
+    function renderMonthlyChart(labels, values) {
+        var canvas = document.getElementById('monthlyChart');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        
+        if (chartInstances.monthly) {
+            chartInstances.monthly.destroy();
+            chartInstances.monthly = null;
+        }
+        
+        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+        var gridColor = isDark ? '#334155' : '#E2E8F0';
+        var textColor = isDark ? '#94A3B8' : '#64748B';
+        
+        var defaultLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
+        var defaultValues = [0, 0, 0, 0, 0, 0];
+        
+        chartInstances.monthly = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: (labels && labels.length > 0) ? labels : defaultLabels,
+                datasets: [{
+                    label: 'Tests Completed',
+                    data: (values && values.length > 0) ? values : defaultValues,
+                    borderColor: '#059669',
+                    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+                    fill: true,
+                    tension: 0.4,
+                    pointBackgroundColor: '#059669',
+                    pointRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { stepSize: 1, color: textColor },
+                        grid: { color: gridColor }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: textColor }
+                    }
+                }
+            }
+        });
+    }
+    
+    // Initial chart render
+    document.addEventListener('DOMContentLoaded', function() {
+        renderDailyChart(dailyLabels, dailyValues);
+        renderMonthlyChart(monthlyLabels, monthlyValues);
+    });
+
+    // ================================================================
+    // AUTO-UPDATE - EVERY 3 SECONDS
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    var lastHash = null;
+    var updateCount = 0;
+    
+    function fetchAndUpdateStats() {
+        if (isUpdating) return;
+        isUpdating = true;
+        
+        updateCount++;
+        
+        if (updateCount % 3 === 0) {
+            document.getElementById('updateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Checking...';
+        }
+        
+        fetch('get_lab_stats.php?t=' + new Date().getTime())
+            .then(function(response) {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
+            .then(function(data) {
+                if (data.success) {
+                    if (lastHash !== data.hash) {
+                        lastHash = data.hash;
+                        updateDashboard(data.data);
+                        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + data.data.timestamp;
+                        
+                        if (updateCount > 1) {
+                            showToast('🔄 Updated', 'Dashboard auto-updated at ' + data.data.timestamp, 'info');
+                        }
+                    }
+                    
+                    var now = new Date();
+                    document.getElementById('updateBadge').innerHTML = 
+                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
+                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }
+                isUpdating = false;
+            })
+            .catch(function(error) {
+                console.error('Error fetching stats:', error);
+                document.getElementById('updateBadge').innerHTML = '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Error';
+                isUpdating = false;
             });
+    }
+    
+    function updateDashboard(data) {
+        var stats = data.stats || {};
+        var charts = data.charts || {};
+        var lists = data.lists || {};
+        
+        // ================================================================
+        // UPDATE STATS CARDS
+        // ================================================================
+        document.getElementById('statPending').textContent = stats.pending || 0;
+        document.getElementById('statInProgress').textContent = stats.in_progress || 0;
+        document.getElementById('statPendingCard').textContent = stats.pending || 0;
+        document.getElementById('statInProgressCard').textContent = stats.in_progress || 0;
+        document.getElementById('statCompletedTodayCard').textContent = stats.completed_today || 0;
+        document.getElementById('statTodayTestsCard').textContent = stats.today_tests || 0;
+        document.getElementById('statTotalTestsCard').textContent = Number(stats.total_tests || 0).toLocaleString();
+        document.getElementById('statTotalRequestsCard').textContent = Number(stats.total_requests || 0).toLocaleString();
+        document.getElementById('statCompletionRateCard').textContent = (stats.completion_rate || 0) + '%';
+        
+        // Average tests per request
+        var avg = (stats.total_requests || 0) > 0 ? (stats.total_tests / stats.total_requests) : 0;
+        document.getElementById('statAvgTestsCard').textContent = avg.toFixed(1);
+        
+        // ================================================================
+        // UPDATE CHARTS
+        // ================================================================
+        if (charts.daily_labels && charts.daily_tests) {
+            renderDailyChart(charts.daily_labels, charts.daily_tests);
+        }
+        if (charts.monthly_labels && charts.monthly_tests) {
+            renderMonthlyChart(charts.monthly_labels, charts.monthly_tests);
+        }
+        
+        // ================================================================
+        // UPDATE MOST REQUESTED TESTS
+        // ================================================================
+        var mostRequested = document.getElementById('mostRequested');
+        if (mostRequested && lists.most_requested) {
+            var tests = lists.most_requested || [];
+            if (tests.length > 0) {
+                var html = '';
+                tests.forEach(function(test, index) {
+                    html += `
+                        <div class="most-requested-item">
+                            <span class="rank">#${index + 1}</span>
+                            <span class="test-name">${escapeHtml(test.test_name)}</span>
+                            <span class="count">${test.count}</span>
+                        </div>
+                    `;
+                });
+                mostRequested.innerHTML = html;
+            } else {
+                mostRequested.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-flask"></i>
+                        <p>No tests completed yet</p>
+                    </div>
+                `;
+            }
+        }
+        
+        // ================================================================
+        // UPDATE RECENT REQUESTS TABLE
+        // ================================================================
+        var tableBody = document.getElementById('recentTableBody');
+        if (tableBody && lists.recent_requests) {
+            var requests = lists.recent_requests || [];
+            if (requests.length > 0) {
+                var html = '';
+                requests.forEach(function(req) {
+                    var statusClass = req.status || 'pending';
+                    var statusLabel = capitalize(req.status || 'Pending');
+                    var badgeClass = 'badge-yellow';
+                    if (statusClass === 'in_progress') badgeClass = 'badge-blue';
+                    else if (statusClass === 'completed') badgeClass = 'badge-green';
+                    else if (statusClass === 'cancelled') badgeClass = 'badge-red';
+                    
+                    var testInfo = (req.test_count || 0) + ' tests';
+                    if ((req.completed_count || 0) > 0 && req.status !== 'completed') {
+                        testInfo += ' <span class="text-xs text-gray-400">(' + req.completed_count + ' done)</span>';
+                    }
+                    
+                    html += `
+                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+                            <td class="font-mono text-xs font-semibold text-blue-600">${escapeHtml(req.request_number || 'N/A')}</td>
+                            <td>
+                                <div class="font-medium text-sm">${escapeHtml(req.patient_name || 'Unknown')}</div>
+                                <div class="text-xs text-gray-400">${escapeHtml(req.patient_id || 'N/A')}</div>
+                            </td>
+                            <td class="font-mono text-xs">${escapeHtml(req.visit_id || 'N/A')}</td>
+                            <td>${escapeHtml(req.doctor_name || 'N/A')}</td>
+                            <td>${testInfo}</td>
+                            <td>
+                                <span class="badge ${badgeClass}">${statusLabel}</span>
+                            </td>
+                            <td class="text-sm">${formatDate(req.requested_at)}</td>
+                            <td>
+                                <a href="view_request.php?id=${req.id}" class="btn btn-outline btn-sm">
+                                    <i class="fas fa-eye"></i> View
+                                </a>
+                            </td>
+                        </tr>
+                    `;
+                });
+                tableBody.innerHTML = html;
+            } else {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="8" class="text-center py-8 text-gray-400">
+                            <i class="fas fa-flask text-3xl block mb-2"></i>
+                            <p>No laboratory requests yet</p>
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+    }
+    
+    // ================================================================
+    // HELPER FUNCTIONS
+    // ================================================================
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function capitalize(text) {
+        if (!text) return '';
+        return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+    
+    function formatDate(datetime) {
+        if (!datetime) return 'N/A';
+        var d = new Date(datetime);
+        if (isNaN(d.getTime())) return 'N/A';
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+    
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        if (btn) {
+            btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Loading...';
+            btn.disabled = true;
+        }
+        
+        lastHash = null;
+        fetchAndUpdateStats();
+        
+        setTimeout(function() {
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+                btn.disabled = false;
+            }
+        }, 1000);
+    }
+
+    // ================================================================
+    // START AUTO-UPDATE
+    // ================================================================
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        updateInterval = setInterval(fetchAndUpdateStats, 3000);
+        document.getElementById('updateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Live mode active';
+        fetchAndUpdateStats();
+    }
+
+    // ================================================================
+    // STOP AUTO-UPDATE
+    // ================================================================
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            document.getElementById('updateBadge').innerHTML = '<i class="fas fa-pause"></i> Paused';
+        }
+    }
+
+    // ================================================================
+    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
         }
     });
 
@@ -846,25 +1347,39 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             searchInput?.focus();
             searchInput?.select();
         }
+        if (e.altKey && e.key === 'r') {
+            e.preventDefault();
+            manualRefresh();
+        }
     });
 
     // ================================================================
-    // CARD CLICK NAVIGATION - Track clicks
+    // INITIALIZE
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        var cards = document.querySelectorAll('.stat-card');
-        cards.forEach(function(card) {
-            card.addEventListener('click', function(e) {
-                var href = this.getAttribute('href');
-                console.log('🔗 Navigating to: ' + href);
-            });
-        });
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 2000);
     });
 
-    console.log('%c🧪 Braick - Laboratory Dashboard (Navigation Cards)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // EXPOSE FOR CONSOLE
+    // ================================================================
+    window.LabDashboard = {
+        start: startAutoUpdate,
+        stop: stopAutoUpdate,
+        refresh: manualRefresh,
+        renderDaily: renderDailyChart,
+        renderMonthly: renderMonthlyChart
+    };
+
+    console.log('%c🧪 Braick - Laboratory Dashboard', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Pending: <?= $pending ?> | In Progress: <?= $in_progress ?> | Completed: <?= $completed_today ?> | Today Tests: <?= $today_tests ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🖱️ Click cards to navigate to respective pages', 'font-size:13px; color:#34D399;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Pending: <?= $pending ?> | In Progress: <?= $in_progress ?> | Completed: <?= $completed_today ?> | Today Tests: <?= $today_tests ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🔄 Auto-update: Every 3 seconds (Smart - only when data changes)', 'font-size:13px; color:#34D399;');
+    console.log('%c💡 Type LabDashboard.stop() or LabDashboard.start() to control', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💡 Press Alt+R to refresh manually', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -1,9 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/new_patient.php
-// RECEPTION - REGISTER NEW PATIENT (SIMPLE)
-// NO DOCTOR ASSIGNMENT - NO FEE SYSTEM
-// JUST PATIENT REGISTRATION
+// RECEPTION - REGISTER NEW PATIENT WITH AUTO BILL
+// - Registration Fee is BACKGROUND ONLY (not charged to patient)
+// - General Consultation Fee is BACKGROUND ONLY (not shown to reception)
+// - Bill sent to Cashier as Pending (Background)
+// - NO FEE DISPLAYED TO RECEPTION
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -35,6 +37,41 @@ $message_type = '';
 try {
     $db = getDB();
     
+    // ================================================================
+    // GET FEES FROM SERVICES TABLE (BACKGROUND ONLY)
+    // ================================================================
+    
+    // 1. Registration Fee (category_id = 1) - BACKGROUND ONLY
+    $registration_fee = 0;
+    $registration_service_name = 'Registration Fee';
+    $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category_id = 1 AND is_active = 1 LIMIT 1");
+    $stmt->execute();
+    $reg_service = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($reg_service) {
+        $registration_fee = $reg_service['price'];
+        $registration_service_name = $reg_service['service_name'];
+    }
+    
+    // 2. General Consultation Fee (category_id = 2) - BACKGROUND ONLY
+    $consultation_fee = 0;
+    $consultation_service_name = 'General Consultation';
+    $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category_id = 2 AND service_name LIKE '%General%' AND is_active = 1 LIMIT 1");
+    $stmt->execute();
+    $cons_service = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($cons_service) {
+        $consultation_fee = $cons_service['price'];
+        $consultation_service_name = $cons_service['service_name'];
+    } else {
+        // Fallback: get any consultation service
+        $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category_id = 2 AND is_active = 1 LIMIT 1");
+        $stmt->execute();
+        $cons_service = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($cons_service) {
+            $consultation_fee = $cons_service['price'];
+            $consultation_service_name = $cons_service['service_name'];
+        }
+    }
+    
     // Generate patient ID
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE branch_id = ?");
     $stmt->execute([$selected_branch_id]);
@@ -63,7 +100,7 @@ try {
         
         if (empty($errors)) {
             // ================================================================
-            // INSERT PATIENT
+            // 1. INSERT PATIENT
             // ================================================================
             $stmt = $db->prepare("
                 INSERT INTO patients (
@@ -81,42 +118,85 @@ try {
                 $patient_db_id = $db->lastInsertId();
                 
                 // ================================================================
-                // CREATE VISIT (PENDING - NO DOCTOR ASSIGNED)
+                // 2. CREATE VISIT (PENDING - NO DOCTOR ASSIGNED)
                 // ================================================================
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT);
                 
                 $stmt = $db->prepare("
                     INSERT INTO visits (
                         visit_number, patient_id, receptionist_id, 
-                        branch_id, visit_type, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'new', 'pending', NOW(), NOW())
+                        branch_id, visit_type, status, created_at, updated_at,
+                        registration_fee, consultation_fee
+                    ) VALUES (?, ?, ?, ?, 'new', 'pending', NOW(), NOW(), ?, ?)
                 ");
                 $stmt->execute([
                     $visit_number, 
                     $patient_db_id, 
                     $_SESSION['user_id'], 
-                    $branch_id
+                    $branch_id,
+                    $registration_fee,
+                    $consultation_fee
                 ]);
                 $visit_id = $db->lastInsertId();
                 
+                // ================================================================
+                // 3. CREATE BILL (BACKGROUND - ONLY CONSULTATION FEE)
+                // ================================================================
+                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_db_id, 6, '0', STR_PAD_LEFT);
+                $total_amount = $consultation_fee;
+                
+                $stmt = $db->prepare("
+                    INSERT INTO patient_bills (
+                        bill_number, patient_id, visit_id, 
+                        registration_fee, consultation_fee,
+                        subtotal, total_amount, balance, 
+                        status, created_by, branch_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+                ");
+                $stmt->execute([
+                    $bill_number,
+                    $patient_db_id,
+                    $visit_id,
+                    $registration_fee,
+                    $consultation_fee,
+                    $total_amount,
+                    $total_amount,
+                    $total_amount,
+                    $_SESSION['user_id'],
+                    $branch_id
+                ]);
+                $bill_id = $db->lastInsertId();
+                
+                // ================================================================
+                // 4. ADD BILL ITEMS (Only Consultation - NO Registration)
+                // ================================================================
+                if ($consultation_fee > 0) {
+                    $stmt = $db->prepare("
+                        INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
+                        VALUES (?, 'consultation', ?, 1, ?, ?)
+                    ");
+                    $stmt->execute([$bill_id, $consultation_service_name, $consultation_fee, $consultation_fee]);
+                }
+                
                 $_SESSION['current_patient_id'] = $patient_db_id;
                 $_SESSION['current_visit_id'] = $visit_id;
+                $_SESSION['current_bill_id'] = $bill_id;
                 
                 // Log activity
                 try {
                     $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'patient_registered', ?, NOW())");
-                    $stmt->execute([$_SESSION['user_id'], "New patient registered: $full_name (ID: $patient_id_number) in $branch_name"]);
+                    $stmt->execute([$_SESSION['user_id'], "New patient registered: $full_name (ID: $patient_id_number) in $branch_name - Bill #$bill_number"]);
                 } catch (Exception $e) {}
                 
                 $message = "✅ Patient registered successfully!";
                 $message .= "<br>📋 Patient ID: <strong>$patient_id_number</strong>";
-                $message .= "<br>⏳ Visit status: <strong>Pending</strong> - Waiting for doctor assignment";
+                $message .= "<br>⏳ Bill sent to Cashier - <strong>Pending</strong>";
                 $message_type = 'success';
                 
                 echo '<script>
                     setTimeout(function(){ 
-                        window.location.href = "patients.php"; 
-                    }, 3000);
+                        window.location.href = "patients.php?registered=1"; 
+                    }, 2000);
                 </script>';
                 
             } else {
@@ -161,6 +241,7 @@ $common_allergies = [
 include_once __DIR__ . '/../../components/reception_header.php';
 include_once __DIR__ . '/../../components/reception_sidebar.php';
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -729,16 +810,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             transform: none;
         }
         
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
@@ -884,6 +955,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             display: flex;
             align-items: flex-start;
             gap: 12px;
+            max-width: 950px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .alert-success {
@@ -968,34 +1042,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
-        
-        .online-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #059669;
-            animation: pulse-dot 1.5s infinite;
-        }
-        
-        .offline-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #94A3B8;
-        }
-        
-        .update-badge {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            background: var(--bg-body);
-            padding: 2px 10px;
-            border-radius: 20px;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
     </style>
 </head>
 <body>
@@ -1066,6 +1112,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     Next ID: <strong><?= $patient_id_number ?></strong>
                 </span>
                 
+                <span class="header-badge" style="background:rgba(255,215,0,0.15);border-color:rgba(255,215,0,0.2);">
+                    <i class="fas fa-receipt"></i>
+                    Bill: <strong>Pending Cashier</strong>
+                </span>
+                
                 <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
@@ -1080,11 +1131,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="alert <?= $message_type === 'success' ? 'alert-success' : 'alert-error' ?>" style="max-width:950px;margin:0 auto 16px;">
+        <div class="alert <?= $message_type === 'success' ? 'alert-success' : 'alert-error' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <div class="alert-content"><?= $message ?></div>
         </div>
     <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- FEE INFO BAR - REMOVED - Bill is BACKGROUND ONLY -->
+    <!-- ================================================================ -->
+    <!-- FEE INFO BAR IMETOLEWA KABISA - HAIONEKANI KWA RECEPTION -->
 
     <!-- ================================================================ -->
     <!-- REGISTRATION FORM -->
@@ -1197,7 +1253,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 6: Emergency Contact (Full Width - No Doctor) -->
+            <!-- ROW 6: Emergency Contact (Full Width) -->
             <!-- ============================================================ -->
             <div class="form-row grid-full">
                 <label class="form-label">
@@ -1252,10 +1308,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <!-- ============================================================ -->
             <div class="mt-4 pt-3 text-xs text-gray-400 text-center border-t border-gray-200 dark:border-gray-700">
                 <i class="fas fa-info-circle mr-1"></i>
-                Patient will be registered with ID: <strong><?= $patient_id_number ?></strong>
+                Patient ID: <strong><?= $patient_id_number ?></strong>
                 <span class="mx-2">|</span>
-                Visit status: <strong>Pending</strong> - Waiting for doctor assignment
-                <span class="mx-2">|</span>
+                <i class="fas fa-clock mr-1"></i>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
             </div>
         </form>
@@ -1264,21 +1319,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <!-- ================================================================ -->
     <!-- QUICK STATS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5" style="max-width:950px;margin:24px auto 0;">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5" style="max-width:950px;margin:24px auto 0;">
         <div class="stat-card">
             <div class="stat-icon">📋</div>
             <p class="stat-number text-purple-600"><?= $patient_id_number ?></p>
             <p class="stat-label">Next Patient ID</p>
         </div>
         <div class="stat-card">
-            <div class="stat-icon">📅</div>
-            <p class="stat-number text-green-600"><?= date('d M Y') ?></p>
-            <p class="stat-label">Today's Date</p>
-        </div>
-        <div class="stat-card">
             <div class="stat-icon">⏳</div>
             <p class="stat-number text-orange-500">Pending</p>
-            <p class="stat-label">Visit Status</p>
+            <p class="stat-label">Bill Status</p>
         </div>
     </div>
 
@@ -1449,12 +1499,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             }
             
             allergiesTextarea.value = allergyList.join(', ');
-            
-            if (checkbox.checked) {
-                showToast('✅ Added', allergyName + ' added to allergies', 'info');
-            } else {
-                showToast('🗑️ Removed', allergyName + ' removed from allergies', 'info');
-            }
         });
     });
 
@@ -1482,11 +1526,44 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     
     syncAllergyChips();
 
-    console.log('%c👤 Braick - New Patient Registration (Simple)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // FORM VALIDATION
+    // ================================================================
+    document.getElementById('registrationForm').addEventListener('submit', function(e) {
+        var name = document.querySelector('input[name="full_name"]').value.trim();
+        var phone = document.querySelector('input[name="phone"]').value.trim();
+        var gender = document.querySelector('select[name="gender"]').value;
+        
+        if (!name) {
+            e.preventDefault();
+            showToast('Error', 'Please enter patient full name', 'error');
+            return false;
+        }
+        if (!phone) {
+            e.preventDefault();
+            showToast('Error', 'Please enter phone number', 'error');
+            return false;
+        }
+        if (!gender) {
+            e.preventDefault();
+            showToast('Error', 'Please select gender', 'error');
+            return false;
+        }
+        
+        // Show loading
+        var btn = document.getElementById('registerBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Registering...';
+    });
+
+    console.log('%c👤 Braick - New Patient Registration (Bill is BACKGROUND)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Next Patient ID: <?= $patient_id_number ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ No doctor assignment - No fee system', 'font-size:13px; color:#34D399;');
-    console.log('%c⏳ Visit status: Pending - Waiting for doctor assignment', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💰 Registration Fee: TSh <?= number_format($registration_fee, 0) ?> (BACKGROUND)', 'font-size:13px; color:#94A3B8;');
+    console.log('%c🏥 Consultation Fee: TSh <?= number_format($consultation_fee, 0) ?> (BACKGROUND)', 'font-size:13px; color:#94A3B8;');
+    console.log('%c💳 Total Bill: TSh <?= number_format($consultation_fee, 0) ?> (BACKGROUND - Not shown to Reception)', 'font-size:13px; color:#94A3B8;');
+    console.log('%c✅ Bill sent to Cashier as Pending (Background)', 'font-size:13px; color:#34D399;');
+    console.log('%c👁️ Reception sees NO fee information - Bill is completely BACKGROUND', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>
