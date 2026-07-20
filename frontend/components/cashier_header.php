@@ -3,7 +3,8 @@
 // FILE: frontend/components/cashier_header.php
 // CASHIER - SHARED HEADER (GREEN THEME)
 // WITH PROFILE PICTURE - SHOWS ON ALL PAGES
-// WITH DATE AND TIME
+// WITH DATE AND TIME - LIVE UPDATE
+// WITH DARK MODE - PERSISTENT
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -84,7 +85,7 @@ if (empty($page_title) || $page_title == '') {
 }
 
 // ================================================================
-// DARK MODE
+// DARK MODE - Check cookie first, then localStorage via JS
 // ================================================================
 $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
 
@@ -763,9 +764,49 @@ $current_time = date('h:i:s A');
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT FOR DATE/TIME UPDATE -->
+<!-- JAVASCRIPT - DATE/TIME + DARK MODE -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // DARK MODE - PERSISTENT
+    // ================================================================
+    (function() {
+        var darkModeToggle = document.getElementById('darkModeToggle');
+        var darkIcon = document.getElementById('darkIcon');
+        var darkText = document.getElementById('darkText');
+        var htmlElement = document.documentElement;
+        
+        // Check saved preference
+        var savedDarkMode = localStorage.getItem('darkMode');
+        if (savedDarkMode === 'true') {
+            htmlElement.setAttribute('data-theme', 'dark');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
+        } else {
+            htmlElement.removeAttribute('data-theme');
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
+        }
+        
+        // Toggle dark mode
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('click', function() {
+                var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+                if (isDark) {
+                    htmlElement.removeAttribute('data-theme');
+                    if (darkIcon) darkIcon.className = 'fas fa-moon';
+                    if (darkText) darkText.textContent = 'Dark';
+                    localStorage.setItem('darkMode', 'false');
+                } else {
+                    htmlElement.setAttribute('data-theme', 'dark');
+                    if (darkIcon) darkIcon.className = 'fas fa-sun';
+                    if (darkText) darkText.textContent = 'Light';
+                    localStorage.setItem('darkMode', 'true');
+                }
+            });
+        }
+    })();
+
     // ================================================================
     // DATE & TIME - LIVE UPDATE
     // ================================================================
@@ -804,3 +845,5 @@ $current_time = date('h:i:s A');
     console.log('%c📸 Profile Pic: <?= $profile_pic_exists ? '✅ Uploaded' : '❌ Default' ?>', 'font-size:13px; color:#059669;');
     console.log('%c📅 Date/Time: ' + new Date().toLocaleString(), 'font-size:13px; color:#0B5ED7;');
 </script>
+
+
