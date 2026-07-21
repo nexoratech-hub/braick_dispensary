@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/view_appointment.php
-// DOCTOR - VIEW APPOINTMENT DETAILS
+// DOCTOR - VIEW APPOINTMENT DETAILS WITH VITAL SIGNS
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -60,6 +60,8 @@ $stmt = $db->prepare("
         p.date_of_birth,
         p.gender,
         p.address,
+        p.blood_group,
+        p.allergies,
         u.full_name as doctor_name,
         u.specialty as doctor_specialty,
         r.full_name as created_by_name
@@ -75,6 +77,35 @@ $appointment = $stmt->fetch(PDO::FETCH_ASSOC);
 if (!$appointment) {
     header('Location: appointments.php?error=not_found');
     exit;
+}
+
+// ================================================================
+// GET VITAL SIGNS FOR THIS APPOINTMENT
+// ================================================================
+$vital_signs = null;
+$stmt = $db->prepare("
+    SELECT vs.*, u.full_name as recorded_by_name
+    FROM vital_signs vs
+    LEFT JOIN users u ON vs.recorded_by = u.id
+    WHERE vs.appointment_id = ?
+    ORDER BY vs.recorded_at DESC
+    LIMIT 1
+");
+$stmt->execute([$appointment_id]);
+$vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+
+// If no vital signs for this appointment, try to get latest for patient
+if (!$vital_signs && $appointment['patient_id']) {
+    $stmt = $db->prepare("
+        SELECT vs.*, u.full_name as recorded_by_name
+        FROM vital_signs vs
+        LEFT JOIN users u ON vs.recorded_by = u.id
+        WHERE vs.patient_id = ?
+        ORDER BY vs.recorded_at DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$appointment['patient_id']]);
+    $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
 // ================================================================
@@ -143,7 +174,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <i class="fas fa-calendar-check mr-2" style="color: #0B5ED7;"></i> Appointment Details
             </h1>
             <p class="page-subtitle">
-                View complete appointment information
+                View complete appointment information with vital signs
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?>
                 </span>
@@ -202,6 +233,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <i class="fas fa-user-md"></i>
                     Doctor: <?= htmlspecialchars($appointment['doctor_name'] ?? $doctor_name) ?>
                 </span>
+                <span class="meta-item">
+                    <i class="fas fa-venus-mars"></i>
+                    <?= htmlspecialchars($appointment['gender'] ?? 'N/A') ?>
+                </span>
+                <span class="meta-item">
+                    <i class="fas fa-calendar-alt"></i>
+                    Age: <?= calculateAge($appointment['date_of_birth'] ?? '') ?> years
+                </span>
             </div>
         </div>
         <div class="summary-header-right">
@@ -211,6 +250,145 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 Created by: <?= htmlspecialchars($appointment['created_by_name'] ?? 'N/A') ?>
             </span>
         </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- VITAL SIGNS SECTION - 6 SIGNS -->
+    <!-- ================================================================ -->
+    <div class="vital-signs-container">
+        <div class="vital-signs-header">
+            <h3 class="vital-signs-title">
+                <i class="fas fa-heartbeat"></i> 6 Vital Signs
+                <?php if ($vital_signs): ?>
+                    <span class="vital-recorded">
+                        <i class="fas fa-check-circle"></i> 
+                        Recorded: <?= date('d/m/Y H:i', strtotime($vital_signs['recorded_at'])) ?>
+                        <?php if ($vital_signs['recorded_by_name']): ?>
+                            by <?= htmlspecialchars($vital_signs['recorded_by_name']) ?>
+                        <?php endif; ?>
+                    </span>
+                <?php else: ?>
+                    <span class="vital-not-recorded">
+                        <i class="fas fa-clock"></i> Not recorded yet
+                    </span>
+                <?php endif; ?>
+            </h3>
+        </div>
+        
+        <div class="vital-signs-grid">
+            
+            <!-- 1. Blood Pressure -->
+            <div class="vital-item">
+                <div class="vital-icon">💓</div>
+                <div class="vital-value">
+                    <?php if ($vital_signs && $vital_signs['blood_pressure_systolic'] && $vital_signs['blood_pressure_diastolic']): ?>
+                        <?= $vital_signs['blood_pressure_systolic'] ?>/<?= $vital_signs['blood_pressure_diastolic'] ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </div>
+                <div class="vital-label">Blood Pressure</div>
+                <div class="vital-unit">mmHg</div>
+                <div class="vital-normal">Normal: 120/80</div>
+            </div>
+            
+            <!-- 2. Temperature -->
+            <div class="vital-item">
+                <div class="vital-icon">🌡️</div>
+                <div class="vital-value">
+                    <?php if ($vital_signs && $vital_signs['temperature']): ?>
+                        <?= $vital_signs['temperature'] ?>°
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </div>
+                <div class="vital-label">Temperature</div>
+                <div class="vital-unit">Celsius</div>
+                <div class="vital-normal">Normal: 36.5 - 37.5</div>
+            </div>
+            
+            <!-- 3. Pulse Rate -->
+            <div class="vital-item">
+                <div class="vital-icon">❤️</div>
+                <div class="vital-value">
+                    <?php if ($vital_signs && $vital_signs['pulse_rate']): ?>
+                        <?= $vital_signs['pulse_rate'] ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </div>
+                <div class="vital-label">Pulse Rate</div>
+                <div class="vital-unit">bpm</div>
+                <div class="vital-normal">Normal: 60 - 100</div>
+            </div>
+            
+            <!-- 4. Weight -->
+            <div class="vital-item">
+                <div class="vital-icon">⚖️</div>
+                <div class="vital-value">
+                    <?php if ($vital_signs && $vital_signs['weight']): ?>
+                        <?= $vital_signs['weight'] ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </div>
+                <div class="vital-label">Weight</div>
+                <div class="vital-unit">kg</div>
+                <div class="vital-normal">Recorded</div>
+            </div>
+            
+            <!-- 5. Height -->
+            <div class="vital-item">
+                <div class="vital-icon">📏</div>
+                <div class="vital-value">
+                    <?php if ($vital_signs && $vital_signs['height']): ?>
+                        <?= $vital_signs['height'] ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </div>
+                <div class="vital-label">Height</div>
+                <div class="vital-unit">cm</div>
+                <div class="vital-normal">Recorded</div>
+            </div>
+            
+            <!-- 6. BMI (Auto-calculated) -->
+            <div class="vital-item bmi-item">
+                <div class="vital-icon">📊</div>
+                <div class="vital-value">
+                    <?php if ($vital_signs && $vital_signs['bmi']): ?>
+                        <?= $vital_signs['bmi'] ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </div>
+                <div class="vital-label">BMI</div>
+                <div class="vital-unit">kg/m²</div>
+                <?php if ($vital_signs && $vital_signs['bmi']): ?>
+                    <?php 
+                        $bmi = $vital_signs['bmi'];
+                        $category = 'Normal';
+                        $color = '#059669';
+                        if ($bmi < 18.5) { $category = 'Underweight'; $color = '#D97706'; }
+                        elseif ($bmi < 25) { $category = 'Normal'; $color = '#059669'; }
+                        elseif ($bmi < 30) { $category = 'Overweight'; $color = '#D97706'; }
+                        else { $category = 'Obese'; $color = '#DC2626'; }
+                    ?>
+                    <div class="vital-category" style="color:<?= $color ?>;"><?= $category ?></div>
+                <?php else: ?>
+                    <div class="vital-normal">Normal: 18.5 - 24.9</div>
+                <?php endif; ?>
+            </div>
+            
+        </div>
+        
+        <!-- Vital Signs Notes -->
+        <?php if ($vital_signs && $vital_signs['notes']): ?>
+            <div class="vital-notes">
+                <div class="vital-notes-label">📝 Notes:</div>
+                <div class="vital-notes-text"><?= htmlspecialchars($vital_signs['notes']) ?></div>
+            </div>
+        <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
@@ -241,6 +419,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             <?= ucfirst($appointment['status'] ?? 'Scheduled') ?>
                         </span>
                     </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Doctor</span>
+                    <span class="info-value"><?= htmlspecialchars($appointment['doctor_name'] ?? $doctor_name) ?></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Specialty</span>
+                    <span class="info-value"><?= htmlspecialchars($appointment['doctor_specialty'] ?? 'General Practitioner') ?></span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">Created By</span>
@@ -288,6 +474,18 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <span class="info-value"><?= htmlspecialchars($appointment['patient_email']) ?></span>
                     </div>
                 <?php endif; ?>
+                <?php if (!empty($appointment['blood_group'])): ?>
+                    <div class="info-row">
+                        <span class="info-label">Blood Group</span>
+                        <span class="info-value"><?= htmlspecialchars($appointment['blood_group']) ?></span>
+                    </div>
+                <?php endif; ?>
+                <?php if (!empty($appointment['allergies'])): ?>
+                    <div class="info-row">
+                        <span class="info-label">Allergies</span>
+                        <span class="info-value"><?= htmlspecialchars($appointment['allergies']) ?></span>
+                    </div>
+                <?php endif; ?>
                 <?php if (!empty($appointment['address'])): ?>
                     <div class="info-row">
                         <span class="info-label">Address</span>
@@ -303,7 +501,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Appointment Details
+            Appointment Details with Vital Signs
             <span class="text-gray-300 mx-2">|</span>
             Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
@@ -418,6 +616,155 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .status-badge.badge-danger { background: #EF4444; }
     .status-badge.badge-warning { background: #D97706; }
     .status-badge.badge-info { background: var(--primary); }
+    
+    /* ================================================================
+       VITAL SIGNS SECTION
+       ================================================================ */
+    .vital-signs-container {
+        background: var(--bg-card);
+        border-radius: 16px;
+        padding: 20px 24px;
+        border: 2px solid var(--border-color);
+        margin-bottom: 24px;
+        transition: all 0.3s ease;
+    }
+    
+    .vital-signs-container:hover {
+        border-color: var(--primary);
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
+    }
+    
+    .vital-signs-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 2px solid var(--border-color);
+        padding-bottom: 12px;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .vital-signs-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0;
+    }
+    
+    .vital-signs-title i {
+        color: #DC2626;
+    }
+    
+    .vital-recorded {
+        font-size: 0.7rem;
+        font-weight: 500;
+        color: #059669;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .vital-not-recorded {
+        font-size: 0.7rem;
+        font-weight: 500;
+        color: var(--text-secondary);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .vital-signs-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+    }
+    
+    .vital-item {
+        background: var(--bg-body);
+        border-radius: 12px;
+        padding: 16px 18px;
+        text-align: center;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s ease;
+    }
+    
+    .vital-item:hover {
+        border-color: var(--primary);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+    }
+    
+    .vital-item .vital-icon {
+        font-size: 1.6rem;
+        display: block;
+        margin-bottom: 4px;
+    }
+    
+    .vital-item .vital-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+    
+    .vital-item .vital-label {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+        margin-top: 2px;
+    }
+    
+    .vital-item .vital-unit {
+        font-size: 0.6rem;
+        color: var(--text-secondary);
+    }
+    
+    .vital-item .vital-normal {
+        font-size: 0.55rem;
+        color: var(--success);
+        margin-top: 2px;
+    }
+    
+    .vital-item .vital-category {
+        font-size: 0.6rem;
+        font-weight: 700;
+        margin-top: 2px;
+    }
+    
+    .vital-item.bmi-item {
+        background: var(--primary-bg);
+        border-color: var(--primary);
+    }
+    
+    .vital-item.bmi-item .vital-value {
+        color: var(--primary);
+    }
+    
+    .vital-notes {
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 2px solid var(--border-color);
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    
+    .vital-notes-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--text-secondary);
+    }
+    
+    .vital-notes-text {
+        font-size: 0.8rem;
+        color: var(--text-primary);
+        flex: 1;
+    }
     
     /* ================================================================
        INFO GRID
@@ -682,6 +1029,30 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     [data-theme="dark"] .info-value {
         color: #F1F5F9;
     }
+    [data-theme="dark"] .vital-signs-container {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .vital-signs-title {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .vital-item {
+        background: #0F172A;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .vital-item .vital-value {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .vital-item.bmi-item {
+        background: #1E3A5F;
+        border-color: #0B5ED7;
+    }
+    [data-theme="dark"] .vital-notes {
+        border-color: #334155;
+    }
+    [data-theme="dark"] .vital-notes-text {
+        color: #F1F5F9;
+    }
     [data-theme="dark"] .footer {
         border-color: #334155;
         color: #64748B;
@@ -690,6 +1061,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     /* ================================================================
        RESPONSIVE
        ================================================================ */
+    @media (max-width: 1024px) {
+        .vital-signs-grid {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+    
     @media (max-width: 768px) {
         .info-grid {
             grid-template-columns: 1fr;
@@ -710,6 +1087,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             flex-direction: column;
             gap: 4px;
         }
+        .vital-signs-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+        .vital-signs-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
         .page-header .page-title {
             font-size: 1.2rem;
         }
@@ -728,9 +1112,21 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             font-size: 0.7rem;
             padding: 4px 10px;
         }
+        .vital-signs-container {
+            padding: 14px 16px;
+        }
+        .vital-item {
+            padding: 12px 14px;
+        }
+        .vital-item .vital-value {
+            font-size: 1.2rem;
+        }
     }
     
     @media (max-width: 480px) {
+        .vital-signs-grid {
+            grid-template-columns: 1fr 1fr;
+        }
         .summary-title {
             font-size: 1rem;
         }
@@ -754,12 +1150,18 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             font-size: 0.6rem;
             padding: 2px 10px;
         }
+        .vital-item .vital-value {
+            font-size: 1rem;
+        }
+        .vital-item .vital-icon {
+            font-size: 1.2rem;
+        }
     }
     
     @media print {
         .top-nav, .sidebar, .btn, .footer { display: none !important; }
         .main-content { margin: 0 !important; padding: 20px !important; }
-        .summary-header, .info-card { 
+        .summary-header, .info-card, .vital-signs-container { 
             border: 1px solid #ddd !important; 
             box-shadow: none !important; 
             page-break-inside: avoid;
@@ -767,7 +1169,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .page-header { border-bottom: 2px solid #0B5ED7 !important; }
         .summary-header { background: white !important; }
         .info-card { background: white !important; }
+        .vital-signs-container { background: white !important; }
+        .vital-item { background: #f8f9fa !important; }
         .status-badge { background: #0B5ED7 !important; color: white !important; }
+        .vital-item.bmi-item { background: #E8F0FE !important; }
     }
 </style>
 
@@ -791,9 +1196,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 3500);
     }
 
-    console.log('%c📅 Appointment Details - <?= htmlspecialchars($appointment['patient_name']) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📅 Appointment Details with Vital Signs', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($appointment['patient_name']) ?>', 'font-size:12px; color:#059669;');
     console.log('%c📋 Status: <?= ucfirst($appointment['status'] ?? 'Scheduled') ?>', 'font-size:12px; color:#64748B;');
-    console.log('%c✅ View appointment page loaded', 'font-size:12px; color:#059669;');
+    console.log('%c💓 Vital Signs: <?= $vital_signs ? '✅ Recorded' : '❌ Not recorded' ?>', 'font-size:12px; color:#DC2626;');
+    console.log('%c📊 6 Vital Signs: BP, Weight, Height, Temperature, Pulse, BMI', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>
