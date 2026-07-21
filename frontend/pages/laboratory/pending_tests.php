@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/laboratory/in_progress.php
-// LABORATORY - IN PROGRESS REQUESTS
+// FILE: frontend/pages/laboratory/pending_tests.php
+// LABORATORY - PENDING TESTS (USING lab_tests TABLE)
 // WITH REAL-TIME AUTO-UPDATE (3 SECONDS)
 // BRAICK DISPENSARY
 // ================================================================
@@ -36,30 +36,27 @@ $db = Database::getInstance()->getConnection();
 // ================================================================
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $date_filter = isset($_GET['date']) ? $_GET['date'] : '';
-$sort_by = isset($_GET['sort']) ? $_GET['sort'] : 'oldest';
 
 // ================================================================
-// BUILD QUERY - Get requests with status 'accepted' or 'in_progress'
+// BUILD QUERY - Get pending tests (status NULL or 'pending')
 // ================================================================
 $query = "
-    SELECT lr.*, 
+    SELECT lt.*, 
            p.full_name as patient_name, p.patient_id, p.phone,
            u.full_name as doctor_name, u.specialty,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as total_tests,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'completed') as completed_tests,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'in_progress') as in_progress_tests,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'pending') as pending_tests,
-           TIMESTAMPDIFF(MINUTE, lr.accepted_at, NOW()) as processing_time
-    FROM lab_requests lr
-    JOIN patients p ON lr.patient_id = p.id
-    JOIN users u ON lr.doctor_id = u.id
-    WHERE lr.branch_id = ? AND lr.status IN ('accepted', 'in_progress')
+           v.visit_number,
+           TIMESTAMPDIFF(MINUTE, lt.created_at, NOW()) as waiting_time
+    FROM lab_tests lt
+    JOIN visits v ON lt.visit_id = v.id
+    JOIN patients p ON v.patient_id = p.id
+    JOIN users u ON lt.doctor_id = u.id
+    WHERE lt.branch_id = ? AND (lt.status IS NULL OR lt.status = 'pending')
 ";
 
 $params = [$user_branch_id];
 
 if (!empty($search)) {
-    $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lr.request_number LIKE ?)";
+    $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lt.test_name LIKE ?)";
     $search_term = "%$search%";
     $params[] = $search_term;
     $params[] = $search_term;
@@ -67,61 +64,40 @@ if (!empty($search)) {
 }
 
 if (!empty($date_filter)) {
-    $query .= " AND DATE(lr.requested_at) = ?";
+    $query .= " AND DATE(lt.created_at) = ?";
     $params[] = $date_filter;
 }
 
-// Sort order
-switch ($sort_by) {
-    case 'newest':
-        $query .= " ORDER BY lr.requested_at DESC";
-        break;
-    case 'most_tests':
-        $query .= " ORDER BY total_tests DESC";
-        break;
-    case 'longest_waiting':
-        $query .= " ORDER BY processing_time DESC";
-        break;
-    default: // oldest
-        $query .= " ORDER BY lr.requested_at ASC";
-        break;
-}
+$query .= " ORDER BY lt.created_at ASC";
 
-// ================================================================
-// EXECUTE QUERY
-// ================================================================
 $stmt = $db->prepare($query);
 $stmt->execute($params);
-$requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET COUNTS FOR STATS
+// GET COUNTS
 // ================================================================
-
-// In Progress (accepted or in_progress)
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status IN ('accepted', 'in_progress')");
-$stmt->execute([$user_branch_id]);
-$in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Pending
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count FROM lab_tests 
+    WHERE branch_id = ? AND (status IS NULL OR status = 'pending')
+");
 $stmt->execute([$user_branch_id]);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// Completed Today
-$today = date('Y-m-d');
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
-$stmt->execute([$user_branch_id, $today]);
-$completed_today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Average processing time
 $stmt = $db->prepare("
-    SELECT AVG(TIMESTAMPDIFF(MINUTE, accepted_at, NOW())) as avg_time 
-    FROM lab_requests 
-    WHERE branch_id = ? AND status IN ('accepted', 'in_progress') AND accepted_at IS NOT NULL
+    SELECT COUNT(*) as count FROM lab_tests 
+    WHERE branch_id = ? AND status = 'in_progress'
 ");
 $stmt->execute([$user_branch_id]);
-$avg_processing_time = round($stmt->fetch(PDO::FETCH_ASSOC)['avg_time'] ?? 0);
+$in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$today = date('Y-m-d');
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count FROM lab_tests 
+    WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?
+");
+$stmt->execute([$user_branch_id, $today]);
+$completed_today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -151,16 +127,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 ?>
 
 <style>
-    /* ================================================================
-       IN PROGRESS REQUESTS STYLES
-       ================================================================ */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 14px;
         margin-bottom: 20px;
     }
-    
     .stat-card {
         background: var(--bg-card);
         border-radius: 12px;
@@ -172,17 +144,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     .stat-card:hover {
         border-color: var(--primary);
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.06);
     }
     .stat-card .number {
         font-size: 1.6rem;
         font-weight: 700;
         line-height: 1.2;
     }
-    .stat-card .number.in-progress { color: #0B5ED7; }
     .stat-card .number.pending { color: #D97706; }
+    .stat-card .number.in-progress { color: #0B5ED7; }
     .stat-card .number.completed { color: #059669; }
-    .stat-card .number.avg { color: #7C3AED; }
     .stat-card .label {
         font-size: 0.7rem;
         color: var(--text-secondary);
@@ -212,37 +182,30 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         border-color: var(--primary);
     }
     
-    .request-row td {
+    .test-row td {
         padding: 10px 14px;
         border-bottom: 1px solid var(--border-color);
         vertical-align: middle;
     }
-    .request-row:hover td {
+    .test-row:hover td {
         background: var(--table-hover);
     }
-    .request-row.urgent {
-        border-left: 3px solid #DC2626;
-        background: rgba(220, 38, 38, 0.05);
-    }
     
-    .status-badge-request {
+    .status-badge {
         display: inline-block;
         font-size: 0.6rem;
         font-weight: 600;
         padding: 2px 12px;
         border-radius: 12px;
     }
-    .status-badge-request.accepted { background: #E8F0FE; color: #0B5ED7; }
-    .status-badge-request.in_progress { background: #E8F0FE; color: #0B5ED7; }
-    .status-badge-request.completed { background: #D1FAE5; color: #059669; }
-    .status-badge-request.pending { background: #FEF3C7; color: #D97706; }
-    .status-badge-request.cancelled { background: #FEE2E2; color: #DC2626; }
+    .status-badge.pending { background: #FEF3C7; color: #D97706; }
+    .status-badge.in_progress { background: #E8F0FE; color: #0B5ED7; }
+    .status-badge.completed { background: #D1FAE5; color: #059669; }
+    .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
     
-    [data-theme="dark"] .status-badge-request.accepted { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .status-badge-request.in_progress { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .status-badge-request.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .status-badge-request.pending { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .status-badge-request.cancelled { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .status-badge.pending { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .status-badge.in_progress { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .status-badge.completed { background: #1A3A2A; color: #34D399; }
     
     .btn {
         display: inline-flex;
@@ -269,7 +232,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         width: 100%;
         border-collapse: collapse;
         font-size: 0.82rem;
-        min-width: 900px;
+        min-width: 800px;
     }
     .data-table thead th {
         text-align: left;
@@ -328,67 +291,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         gap: 4px;
     }
     
-    .progress-bar {
-        height: 4px;
-        background: #E2E8F0;
-        border-radius: 2px;
-        overflow: hidden;
-        width: 80px;
-        display: inline-block;
-    }
-    .progress-bar .fill {
-        height: 100%;
-        background: #0B5ED7;
-        border-radius: 2px;
-        transition: width 0.5s ease;
-    }
-    .progress-bar .fill.completed { background: #059669; }
-    
-    [data-theme="dark"] .progress-bar { background: #334155; }
-    
-    .processing-time {
+    .waiting-time {
         font-size: 0.7rem;
         font-weight: 500;
     }
-    .processing-time.long { color: #DC2626; }
-    .processing-time.medium { color: #D97706; }
-    
-    .urgent-badge {
-        font-size: 0.55rem;
-        font-weight: 700;
-        background: #DC2626;
-        color: white;
-        padding: 2px 8px;
-        border-radius: 10px;
-        animation: pulse-badge 2s infinite;
-        display: inline-block;
-        margin-left: 4px;
-    }
-    
-    @keyframes pulse-badge {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.6; transform: scale(0.95); }
-    }
-    
-    .quick-stats {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        align-items: center;
-    }
-    .quick-stat {
-        font-size: 0.7rem;
-        padding: 2px 10px;
-        border-radius: 12px;
-        background: var(--bg-body);
-        color: var(--text-secondary);
-    }
-    .quick-stat .num { font-weight: 600; color: var(--primary); }
+    .waiting-time.long { color: #DC2626; }
+    .waiting-time.medium { color: #D97706; }
     
     @media (max-width: 768px) {
         .stats-grid { grid-template-columns: repeat(2, 1fr); }
-        .data-table { font-size: 0.7rem; min-width: 750px; }
-        .filter-group { flex-wrap: wrap; }
+        .data-table { font-size: 0.7rem; min-width: 650px; }
     }
 </style>
 
@@ -400,33 +312,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
         </button>
-        
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search in-progress requests..." value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search pending tests..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
         </div>
     </div>
-    
     <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
+        <span class="branch-badge"><i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?></span>
         <span class="datetime" id="currentDateTime"></span>
-        
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
-        
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
-        
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
@@ -443,19 +347,19 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-spinner mr-2" style="color: #0B5ED7;"></i> In Progress Requests
+                <i class="fas fa-clock mr-2" style="color: #D97706;"></i> Pending Tests
                 <span class="role-badge ml-2">LABORATORY</span>
                 <span class="update-badge ml-2" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
             </h1>
             <p class="page-subtitle">
-                Manage all laboratory requests currently being processed
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-spinner mr-1"></i> <?= $in_progress_count ?> In Progress
-                </span>
+                Manage all pending laboratory tests
                 <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
                     <i class="fas fa-clock mr-1"></i> <?= $pending_count ?> Pending
+                </span>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-spinner mr-1"></i> <?= $in_progress_count ?> In Progress
                 </span>
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-check-circle mr-1"></i> <?= $completed_today_count ?> Completed Today
@@ -463,9 +367,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </p>
         </div>
         <div>
-            <a href="pending_requests.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-clock"></i> Pending
-            </a>
             <a href="dashboard.php" class="btn btn-outline btn-sm">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
@@ -477,20 +378,20 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- ================================================================ -->
     <div class="stats-grid">
         <div class="stat-card">
-            <p class="number in-progress" id="statInProgress"><?= $in_progress_count ?></p>
-            <p class="label">🔬 In Progress</p>
+            <p class="number pending" id="statPending"><?= $pending_count ?></p>
+            <p class="label">⏳ Pending Tests</p>
         </div>
         <div class="stat-card">
-            <p class="number pending" id="statPending"><?= $pending_count ?></p>
-            <p class="label">⏳ Pending</p>
+            <p class="number in-progress" id="statInProgress"><?= $in_progress_count ?></p>
+            <p class="label">🔬 In Progress</p>
         </div>
         <div class="stat-card">
             <p class="number completed" id="statCompletedToday"><?= $completed_today_count ?></p>
             <p class="label">✅ Completed Today</p>
         </div>
         <div class="stat-card">
-            <p class="number avg" id="statAvgTime"><?= $avg_processing_time ?> min</p>
-            <p class="label">⏱️ Avg Processing</p>
+            <p class="number" id="statTotal" style="color: #7C3AED;"><?= count($tests) ?></p>
+            <p class="label">📋 Total Pending</p>
         </div>
     </div>
 
@@ -498,24 +399,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- FILTERS -->
     <!-- ================================================================ -->
     <div class="card mb-5">
-        <div class="flex flex-wrap items-center gap-3 filter-group">
-            <span class="text-sm font-medium text-gray-600 mr-2">Sort by:</span>
-            <a href="in_progress.php?sort=oldest&search=<?= urlencode($search) ?>&date=<?= $date_filter ?>" 
-               class="filter-btn <?= $sort_by === 'oldest' || empty($sort_by) ? 'active' : '' ?>">⏳ Oldest First</a>
-            <a href="in_progress.php?sort=newest&search=<?= urlencode($search) ?>&date=<?= $date_filter ?>" 
-               class="filter-btn <?= $sort_by === 'newest' ? 'active' : '' ?>">🆕 Newest First</a>
-            <a href="in_progress.php?sort=most_tests&search=<?= urlencode($search) ?>&date=<?= $date_filter ?>" 
-               class="filter-btn <?= $sort_by === 'most_tests' ? 'active' : '' ?>">📊 Most Tests</a>
-            <a href="in_progress.php?sort=longest_waiting&search=<?= urlencode($search) ?>&date=<?= $date_filter ?>" 
-               class="filter-btn <?= $sort_by === 'longest_waiting' ? 'active' : '' ?>">⏱️ Longest Processing</a>
-            
-            <span class="text-sm font-medium text-gray-600 ml-4 mr-2">Date:</span>
+        <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium text-gray-600 mr-2">Date:</span>
             <input type="date" id="dateFilter" value="<?= $date_filter ?>"
-                   onchange="window.location.href='in_progress.php?date='+this.value+'&sort=<?= $sort_by ?>&search=<?= urlencode($search) ?>'"
+                   onchange="window.location.href='pending_tests.php?date='+this.value+'&search=<?= urlencode($search) ?>'"
                    class="form-control" style="width:auto;padding:4px 10px;font-size:0.8rem;border:2px solid var(--border-color);border-radius:8px;background:var(--bg-card);color:var(--text-primary);">
             
             <?php if (!empty($search)): ?>
-                <a href="in_progress.php" class="btn btn-outline btn-sm">
+                <a href="pending_tests.php" class="btn btn-outline btn-sm">
                     <i class="fas fa-times"></i> Clear Search
                 </a>
             <?php endif; ?>
@@ -523,121 +414,71 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- REQUESTS TABLE -->
+    <!-- TESTS TABLE -->
     <!-- ================================================================ -->
     <div class="card">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i> In Progress Requests
-                <span class="text-sm font-normal text-gray-400" id="requestCount">(<?= count($requests) ?>)</span>
+                <i class="fas fa-list title-blue mr-2"></i> Pending Tests
+                <span class="text-sm font-normal text-gray-400" id="testCount">(<?= count($tests) ?>)</span>
             </h3>
-            <div class="quick-stats">
-                <span class="quick-stat">Total Tests: <span class="num" id="totalTests">0</span></span>
-                <span class="quick-stat">Completed: <span class="num" id="completedTests">0</span></span>
-                <span class="text-sm text-gray-400">Scroll to view all</span>
-            </div>
+            <span class="text-sm text-gray-400">Scroll to view all</span>
         </div>
         
         <div class="table-wrap">
-            <table class="data-table" id="requestTable">
+            <table class="data-table" id="testTable">
                 <thead>
                     <tr>
                         <th style="border-radius: 8px 0 0 0;">#</th>
-                        <th>Request #</th>
+                        <th>Test Name</th>
                         <th>Patient</th>
                         <th>Doctor</th>
-                        <th>Tests</th>
-                        <th>Progress</th>
+                        <th>Visit #</th>
                         <th>Status</th>
-                        <th>Processing</th>
-                        <th>Date</th>
+                        <th>Waiting</th>
+                        <th>Requested</th>
                         <th style="border-radius: 0 8px 0 0;">Actions</th>
                     </tr>
                 </thead>
-                <tbody id="requestTableBody">
-                    <?php if (count($requests) > 0): ?>
-                        <?php $i = 1; 
-                        $total_tests_all = 0;
-                        $completed_tests_all = 0;
-                        foreach ($requests as $req): 
-                            $total = $req['total_tests'] ?? 0;
-                            $completed = $req['completed_tests'] ?? 0;
-                            $in_progress_tests = $req['in_progress_tests'] ?? 0;
-                            $pending_tests = $req['pending_tests'] ?? 0;
-                            $progress = $total > 0 ? round(($completed / $total) * 100) : 0;
-                            $processing_time = $req['processing_time'] ?? 0;
-                            $processing_class = $processing_time > 60 ? 'long' : ($processing_time > 30 ? 'medium' : '');
-                            $is_urgent = $processing_time > 45;
-                            
-                            $total_tests_all += $total;
-                            $completed_tests_all += $completed;
-                            
-                            $status_label = $req['status'] === 'accepted' ? 'Accepted' : 'In Progress';
+                <tbody id="testTableBody">
+                    <?php if (count($tests) > 0): ?>
+                        <?php $i = 1; foreach ($tests as $test): 
+                            $waiting = $test['waiting_time'] ?? 0;
+                            $waiting_class = $waiting > 60 ? 'long' : ($waiting > 30 ? 'medium' : '');
+                            $waiting_text = $waiting < 1 ? 'Just now' : ($waiting < 60 ? $waiting . ' min' : floor($waiting / 60) . 'h ' . ($waiting % 60) . 'm');
+                            $status = $test['status'] ?? 'pending';
                         ?>
-                            <tr class="request-row <?= $is_urgent ? 'urgent' : '' ?>" data-id="<?= $req['id'] ?>">
+                            <tr class="test-row" data-id="<?= $test['id'] ?>">
                                 <td><?= $i++ ?></td>
                                 <td>
-                                    <span class="font-mono text-xs font-semibold text-blue-600"><?= htmlspecialchars($req['request_number']) ?></span>
-                                    <?php if ($is_urgent): ?>
-                                        <span class="urgent-badge">URGENT</span>
-                                    <?php endif; ?>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($test['test_name']) ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['test_type'] ?? 'N/A') ?></div>
                                 </td>
                                 <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($req['patient_name']) ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($req['patient_id'] ?? 'N/A') ?></div>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($test['patient_name']) ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['patient_id'] ?? 'N/A') ?></div>
                                 </td>
                                 <td>
-                                    <div class="text-sm">Dr. <?= htmlspecialchars($req['doctor_name']) ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($req['specialty'] ?? 'GP') ?></div>
+                                    <div class="text-sm">Dr. <?= htmlspecialchars($test['doctor_name']) ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['specialty'] ?? 'GP') ?></div>
                                 </td>
-                                <td class="text-sm">
-                                    <?= $total ?> tests
-                                    <?php if ($pending_tests > 0): ?>
-                                        <span class="text-xs text-yellow-600">(<?= $pending_tests ?> pending)</span>
-                                    <?php endif; ?>
-                                    <?php if ($in_progress_tests > 0): ?>
-                                        <span class="text-xs text-blue-600">(<?= $in_progress_tests ?> in progress)</span>
-                                    <?php endif; ?>
-                                </td>
+                                <td class="font-mono text-xs"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></td>
                                 <td>
-                                    <div class="flex items-center gap-2">
-                                        <span class="text-xs font-medium"><?= $progress ?>%</span>
-                                        <div class="progress-bar">
-                                            <div class="fill <?= $progress == 100 ? 'completed' : '' ?>" style="width: <?= $progress ?>%;"></div>
-                                        </div>
-                                    </div>
-                                    <span class="text-xs text-gray-400"><?= $completed ?> / <?= $total ?> done</span>
-                                </td>
-                                <td>
-                                    <span class="status-badge-request <?= $req['status'] ?>">
-                                        <?php if ($req['status'] === 'accepted'): ?>
-                                            📥 Accepted
-                                        <?php elseif ($req['status'] === 'in_progress'): ?>
-                                            🔬 In Progress
-                                        <?php else: ?>
-                                            <?= ucfirst($req['status']) ?>
-                                        <?php endif; ?>
+                                    <span class="status-badge <?= $status ?>">
+                                        <?= $status === 'pending' ? '⏳ Pending' : ucfirst($status) ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="processing-time <?= $processing_class ?>">
-                                        <?php if ($processing_time < 1): ?>
-                                            Just started
-                                        <?php elseif ($processing_time < 60): ?>
-                                            <?= $processing_time ?> min
-                                        <?php else: ?>
-                                            <?= floor($processing_time / 60) ?>h <?= $processing_time % 60 ?>m
-                                        <?php endif; ?>
-                                    </span>
+                                    <span class="waiting-time <?= $waiting_class ?>"><?= $waiting_text ?></span>
                                 </td>
-                                <td class="text-xs"><?= date('M d, Y h:i A', strtotime($req['requested_at'])) ?></td>
+                                <td class="text-xs"><?= date('M d, Y h:i A', strtotime($test['created_at'])) ?></td>
                                 <td>
                                     <div class="flex gap-1">
-                                        <a href="view_request.php?id=<?= $req['id'] ?>" class="btn btn-blue btn-sm" title="View & Update">
+                                        <a href="view_test.php?id=<?= $test['id'] ?>" class="btn btn-blue btn-sm" title="View & Update">
                                             <i class="fas fa-edit"></i>
                                         </a>
-                                        <a href="view_request.php?id=<?= $req['id'] ?>&action=complete" class="btn btn-green btn-sm" title="Complete">
-                                            <i class="fas fa-check"></i>
+                                        <a href="view_test.php?id=<?= $test['id'] ?>&action=start" class="btn btn-outline btn-sm" title="Start" style="border-color:#0B5ED7;color:#0B5ED7;">
+                                            <i class="fas fa-play"></i>
                                         </a>
                                     </div>
                                 </td>
@@ -645,14 +486,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="10">
+                            <td colspan="9">
                                 <div class="empty-state">
                                     <i class="fas fa-check-circle" style="color: #059669; font-size: 3rem;"></i>
-                                    <p>No in-progress requests found</p>
-                                    <p class="text-sm mt-1">All requests have been completed or none have been started</p>
-                                    <a href="pending_requests.php" class="btn btn-blue btn-sm mt-3">
-                                        <i class="fas fa-clock"></i> View Pending Requests
-                                    </a>
+                                    <p>No pending tests found</p>
+                                    <p class="text-sm mt-1">All tests have been processed</p>
                                 </div>
                             </td>
                         </tr>
@@ -661,11 +499,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </table>
         </div>
         
-        <!-- Card Footer -->
         <div class="card-footer">
             <span class="text-sm text-gray-500">
                 <i class="fas fa-flask mr-1"></i> 
-                Showing <strong id="recordCount"><?= count($requests) ?></strong> in-progress request(s)
+                Showing <strong id="recordCount"><?= count($tests) ?></strong> pending test(s)
             </span>
             <span class="text-sm text-gray-500">
                 <i class="fas fa-store-alt mr-1"></i> 
@@ -679,34 +516,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- QUICK ACTIONS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
-        <a href="pending_requests.php" class="card text-center hover:border-blue-500 transition">
-            <i class="fas fa-clock text-yellow-600 text-2xl block mb-2"></i>
-            <span class="text-sm font-medium">View Pending Requests</span>
-            <p class="text-xs text-gray-400"><?= $pending_count ?> requests waiting</p>
-        </a>
-        <a href="completed_requests.php" class="card text-center hover:border-green-500 transition">
-            <i class="fas fa-check-circle text-green-600 text-2xl block mb-2"></i>
-            <span class="text-sm font-medium">Completed Requests</span>
-            <p class="text-xs text-gray-400"><?= $completed_today_count ?> completed today</p>
-        </a>
-        <a href="dashboard.php" class="card text-center hover:border-purple-500 transition">
-            <i class="fas fa-chart-bar text-purple-600 text-2xl block mb-2"></i>
-            <span class="text-sm font-medium">Dashboard Overview</span>
-            <p class="text-xs text-gray-400">View all statistics</p>
-        </a>
-    </div>
-
-    <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            In Progress Requests
+            Pending Tests
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -801,9 +617,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     
     function performSearch() {
         var query = searchInput.value.trim();
-        var sort = '<?= $sort_by ?>';
         var date = '<?= $date_filter ?>';
-        window.location.href = 'in_progress.php?search=' + encodeURIComponent(query) + '&sort=' + sort + '&date=' + date;
+        window.location.href = 'pending_tests.php?search=' + encodeURIComponent(query) + '&date=' + date;
     }
     
     searchBtn?.addEventListener('click', performSearch);
@@ -845,10 +660,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         if (isUpdating) return;
         isUpdating = true;
         
-        var sort = '<?= $sort_by ?>';
         var date = '<?= $date_filter ?>';
         var search = '<?= urlencode($search) ?>';
-        var url = 'get_in_progress_requests.php?sort=' + sort + '&date=' + date + '&search=' + search + '&t=' + new Date().getTime();
+        var url = 'get_lab_tests_stats.php?status=pending&date=' + date + '&search=' + search + '&t=' + new Date().getTime();
         
         fetch(url)
             .then(function(response) {
@@ -859,24 +673,17 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             })
             .then(function(data) {
                 if (data.success) {
-                    // Check if data has changed
                     if (lastHash !== data.hash) {
                         lastHash = data.hash;
                         updateTable(data);
                         
-                        // Update stats
-                        document.getElementById('statInProgress').textContent = data.in_progress_count || 0;
                         document.getElementById('statPending').textContent = data.pending_count || 0;
+                        document.getElementById('statInProgress').textContent = data.in_progress_count || 0;
                         document.getElementById('statCompletedToday').textContent = data.completed_today_count || 0;
-                        document.getElementById('statAvgTime').textContent = (data.avg_processing_time || 0) + ' min';
-                        
-                        // Update counts
-                        document.getElementById('requestCount').textContent = '(' + (data.total || 0) + ')';
+                        document.getElementById('statTotal').textContent = data.total || 0;
+                        document.getElementById('testCount').textContent = '(' + (data.total || 0) + ')';
                         document.getElementById('recordCount').textContent = data.total || 0;
-                        document.getElementById('totalTests').textContent = data.total_tests_all || 0;
-                        document.getElementById('completedTests').textContent = data.completed_tests_all || 0;
                         
-                        // Update timestamp
                         var now = new Date();
                         var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                         document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
@@ -886,77 +693,57 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 isUpdating = false;
             })
             .catch(function(error) {
-                console.error('Error fetching in-progress requests:', error);
+                console.error('Error fetching pending tests:', error);
                 document.getElementById('updateBadge').innerHTML = '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Error';
                 isUpdating = false;
             });
     }
     
     function updateTable(data) {
-        var tbody = document.getElementById('requestTableBody');
-        var requests = data.requests || [];
+        var tbody = document.getElementById('testTableBody');
+        var tests = data.tests || [];
         
-        if (requests.length > 0) {
+        if (tests.length > 0) {
             var html = '';
             var i = 1;
-            requests.forEach(function(req) {
-                var total = req.total_tests || 0;
-                var completed = req.completed_tests || 0;
-                var in_progress = req.in_progress_tests || 0;
-                var pending = req.pending_tests || 0;
-                var progress = total > 0 ? Math.round((completed / total) * 100) : 0;
-                var processing = req.processing_time || 0;
-                var processingClass = processing > 60 ? 'long' : (processing > 30 ? 'medium' : '');
-                var processingText = processing < 1 ? 'Just started' : (processing < 60 ? processing + ' min' : Math.floor(processing / 60) + 'h ' + (processing % 60) + 'm');
-                var isUrgent = processing > 45;
-                var statusClass = req.status || 'accepted';
-                var statusLabel = statusClass === 'accepted' ? '📥 Accepted' : (statusClass === 'in_progress' ? '🔬 In Progress' : statusClass);
+            tests.forEach(function(test) {
+                var waiting = test.waiting_time || 0;
+                var waitingClass = waiting > 60 ? 'long' : (waiting > 30 ? 'medium' : '');
+                var waitingText = waiting < 1 ? 'Just now' : (waiting < 60 ? waiting + ' min' : Math.floor(waiting / 60) + 'h ' + (waiting % 60) + 'm');
+                var status = test.status || 'pending';
                 
                 html += `
-                    <tr class="request-row ${isUrgent ? 'urgent' : ''}" data-id="${req.id}">
+                    <tr class="test-row" data-id="${test.id}">
                         <td>${i++}</td>
                         <td>
-                            <span class="font-mono text-xs font-semibold text-blue-600">${escapeHtml(req.request_number)}</span>
-                            ${isUrgent ? '<span class="urgent-badge">URGENT</span>' : ''}
+                            <div class="font-medium text-sm">${escapeHtml(test.test_name)}</div>
+                            <div class="text-xs text-gray-400">${escapeHtml(test.test_type || 'N/A')}</div>
                         </td>
                         <td>
-                            <div class="font-medium text-sm">${escapeHtml(req.patient_name)}</div>
-                            <div class="text-xs text-gray-400">${escapeHtml(req.patient_id || 'N/A')}</div>
+                            <div class="font-medium text-sm">${escapeHtml(test.patient_name)}</div>
+                            <div class="text-xs text-gray-400">${escapeHtml(test.patient_id || 'N/A')}</div>
                         </td>
                         <td>
-                            <div class="text-sm">Dr. ${escapeHtml(req.doctor_name)}</div>
-                            <div class="text-xs text-gray-400">${escapeHtml(req.specialty || 'GP')}</div>
+                            <div class="text-sm">Dr. ${escapeHtml(test.doctor_name)}</div>
+                            <div class="text-xs text-gray-400">${escapeHtml(test.specialty || 'GP')}</div>
                         </td>
-                        <td class="text-sm">
-                            ${total} tests
-                            ${pending > 0 ? `<span class="text-xs text-yellow-600">(${pending} pending)</span>` : ''}
-                            ${in_progress > 0 ? `<span class="text-xs text-blue-600">(${in_progress} in progress)</span>` : ''}
-                        </td>
+                        <td class="font-mono text-xs">${escapeHtml(test.visit_number || 'N/A')}</td>
                         <td>
-                            <div class="flex items-center gap-2">
-                                <span class="text-xs font-medium">${progress}%</span>
-                                <div class="progress-bar">
-                                    <div class="fill ${progress == 100 ? 'completed' : ''}" style="width: ${progress}%;"></div>
-                                </div>
-                            </div>
-                            <span class="text-xs text-gray-400">${completed} / ${total} done</span>
-                        </td>
-                        <td>
-                            <span class="status-badge-request ${statusClass}">
-                                ${statusLabel}
+                            <span class="status-badge ${status}">
+                                ${status === 'pending' ? '⏳ Pending' : status === 'in_progress' ? '🔬 In Progress' : status}
                             </span>
                         </td>
                         <td>
-                            <span class="processing-time ${processingClass}">${processingText}</span>
+                            <span class="waiting-time ${waitingClass}">${waitingText}</span>
                         </td>
-                        <td class="text-xs">${formatDate(req.requested_at)}</td>
+                        <td class="text-xs">${formatDate(test.created_at)}</td>
                         <td>
                             <div class="flex gap-1">
-                                <a href="view_request.php?id=${req.id}" class="btn btn-blue btn-sm" title="View & Update">
+                                <a href="view_test.php?id=${test.id}" class="btn btn-blue btn-sm" title="View & Update">
                                     <i class="fas fa-edit"></i>
                                 </a>
-                                <a href="view_request.php?id=${req.id}&action=complete" class="btn btn-green btn-sm" title="Complete">
-                                    <i class="fas fa-check"></i>
+                                <a href="view_test.php?id=${test.id}&action=start" class="btn btn-outline btn-sm" title="Start" style="border-color:#0B5ED7;color:#0B5ED7;">
+                                    <i class="fas fa-play"></i>
                                 </a>
                             </div>
                         </td>
@@ -967,14 +754,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         } else {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="10">
+                    <td colspan="9">
                         <div class="empty-state">
                             <i class="fas fa-check-circle" style="color: #059669; font-size: 3rem;"></i>
-                            <p>No in-progress requests found</p>
-                            <p class="text-sm mt-1">All requests have been completed or none have been started</p>
-                            <a href="pending_requests.php" class="btn btn-blue btn-sm mt-3">
-                                <i class="fas fa-clock"></i> View Pending Requests
-                            </a>
+                            <p>No pending tests found</p>
+                            <p class="text-sm mt-1">All tests have been processed</p>
                         </div>
                     </td>
                 </tr>
@@ -1012,9 +796,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     }
     
-    // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopAutoUpdate();
@@ -1023,9 +804,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
     
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
@@ -1033,20 +811,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             searchInput?.select();
         }
     });
-
-    // ================================================================
-    // START AUTO-UPDATE
-    // ================================================================
+    
     startAutoUpdate();
 
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c🧪 Braick - In Progress Requests (Auto-Update)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔬 In Progress: <?= $in_progress_count ?> | ⏳ Pending: <?= $pending_count ?> | ✅ Completed Today: <?= $completed_today_count ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c⏱️ Avg Processing: <?= $avg_processing_time ?> min', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
+    console.log('%c🧪 Braick - Pending Tests (Auto-Update)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c📊 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed Today: <?= $completed_today_count ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

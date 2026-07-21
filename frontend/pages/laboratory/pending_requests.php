@@ -1,217 +1,166 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/pending_requests.php
-// LABORATORY - PENDING REQUESTS
+// LABORATORY - PENDING TESTS (FROM lab_tests + lab_requests)
+// WITH CONFIRM & CANCEL BUTTONS
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// INCLUDE CONFIG
-// ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to lab.anna
+// IF NO SESSION, USE LAB.DODOMA (ID: 8) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 4;
-    $_SESSION['full_name'] = 'Anna Mushi';
+    $_SESSION['user_id'] = 8;
+    $_SESSION['full_name'] = 'Lab Technician Dodoma';
     $_SESSION['role'] = 'laboratory';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.anna';
-    $_SESSION['is_admin'] = false;
+    $_SESSION['username'] = 'lab.dodoma';
 }
 
-$user_id = $_SESSION['user_id'] ?? 4;
-$user_full_name = $_SESSION['full_name'] ?? 'Anna Mushi';
+$user_id = $_SESSION['user_id'] ?? 8;
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
-$db = getDB();
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+$db = Database::getInstance()->getConnection();
 
 // ================================================================
 // GET FILTERS
 // ================================================================
-$status_filter = isset($_GET['status']) ? $_GET['status'] : 'pending';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
-$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
+$date_filter = isset($_GET['date']) ? $_GET['date'] : '';
 
 // ================================================================
-// PROCESS ACTIONS (Accept, Reject)
+// GET PENDING TESTS FROM lab_tests (status NULL or 'pending')
 // ================================================================
-$message = '';
-$message_type = '';
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
-    $request_id = (int)($_POST['request_id'] ?? 0);
-    
-    if ($action === 'accept' && $request_id > 0) {
-        try {
-            $db->beginTransaction();
-            
-            // Update request status
-            $stmt = $db->prepare("
-                UPDATE lab_requests 
-                SET status = 'in_progress', accepted_at = NOW(), lab_technician_id = ? 
-                WHERE id = ? AND branch_id = ? AND status = 'pending'
-            ");
-            $stmt->execute([$user_id, $request_id, $user_branch_id]);
-            
-            if ($stmt->rowCount() > 0) {
-                // Get request items to create billing
-                $stmt = $db->prepare("
-                    SELECT lri.*, lr.patient_id, lr.visit_id 
-                    FROM lab_request_items lri
-                    JOIN lab_requests lr ON lri.request_id = lr.id
-                    WHERE lri.request_id = ?
-                ");
-                $stmt->execute([$request_id]);
-                $items = $stmt->fetchAll();
-                
-                // Get or create bill
-                $stmt = $db->prepare("
-                    SELECT id FROM bills 
-                    WHERE visit_id = ? AND patient_id = ? AND status IN ('pending', 'partial')
-                    ORDER BY created_at DESC LIMIT 1
-                ");
-                $stmt->execute([$items[0]['visit_id'] ?? 0, $items[0]['patient_id'] ?? 0]);
-                $bill = $stmt->fetch();
-                
-                if ($bill) {
-                    $bill_id = $bill['id'];
-                } else {
-                    // Create new bill
-                    $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                    $stmt = $db->prepare("
-                        INSERT INTO bills (bill_number, visit_id, patient_id, branch_id, status, created_by)
-                        VALUES (?, ?, ?, ?, 'pending', ?)
-                    ");
-                    $stmt->execute([$bill_number, $items[0]['visit_id'] ?? 0, $items[0]['patient_id'] ?? 0, $user_branch_id, $user_id]);
-                    $bill_id = $db->lastInsertId();
-                }
-                
-                // Create bill items for each test
-                foreach ($items as $item) {
-                    $stmt = $db->prepare("
-                        INSERT INTO bill_items (bill_id, description, quantity, unit_price, amount)
-                        VALUES (?, ?, 1, ?, ?)
-                    ");
-                    $stmt->execute([
-                        $bill_id,
-                        $item['test_name'],
-                        $item['price'],
-                        $item['price']
-                    ]);
-                }
-                
-                // Update bill totals
-                $stmt = $db->prepare("
-                    UPDATE bills 
-                    SET subtotal = (SELECT COALESCE(SUM(amount), 0) FROM bill_items WHERE bill_id = ?),
-                        grand_total = (SELECT COALESCE(SUM(amount), 0) FROM bill_items WHERE bill_id = ?),
-                        balance = (SELECT COALESCE(SUM(amount), 0) FROM bill_items WHERE bill_id = ?)
-                    WHERE id = ?
-                ");
-                $stmt->execute([$bill_id, $bill_id, $bill_id, $bill_id]);
-                
-                $db->commit();
-                $message = "Request accepted successfully! Billing items created.";
-                $message_type = 'success';
-            } else {
-                $db->rollBack();
-                $message = "Request not found or already processed!";
-                $message_type = 'error';
-            }
-        } catch (Exception $e) {
-            $db->rollBack();
-            $message = "Error: " . $e->getMessage();
-            $message_type = 'error';
-        }
-    }
-    
-    if ($action === 'reject' && $request_id > 0) {
-        $stmt = $db->prepare("
-            UPDATE lab_requests 
-            SET status = 'cancelled', cancelled_at = NOW() 
-            WHERE id = ? AND branch_id = ? AND status = 'pending'
-        ");
-        if ($stmt->execute([$request_id, $user_branch_id])) {
-            $message = "Request rejected successfully!";
-            $message_type = 'success';
-        } else {
-            $message = "Failed to reject request!";
-            $message_type = 'error';
-        }
-    }
-}
-
-// ================================================================
-// GET PENDING REQUESTS
-// ================================================================
-$query = "
-    SELECT lr.*, 
-           p.full_name as patient_name, p.patient_id,
-           u.full_name as doctor_name,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as test_count
-    FROM lab_requests lr
-    LEFT JOIN patients p ON lr.patient_id = p.id
-    LEFT JOIN users u ON lr.doctor_id = u.id
-    WHERE lr.branch_id = ?
+$pending_tests_query = "
+    SELECT 
+        lt.id,
+        lt.visit_id,
+        lt.test_name,
+        lt.test_type,
+        lt.status,
+        lt.created_at,
+        lt.branch_id,
+        p.full_name as patient_name,
+        p.patient_id,
+        COALESCE(u.full_name, 'Not Assigned') as doctor_name,
+        v.visit_number,
+        'test' as source_type
+    FROM lab_tests lt
+    JOIN visits v ON lt.visit_id = v.id
+    JOIN patients p ON v.patient_id = p.id
+    LEFT JOIN users u ON lt.doctor_id = u.id
+    WHERE lt.branch_id = ? AND (lt.status IS NULL OR lt.status = 'pending' OR lt.status = '')
 ";
-
-if ($status_filter !== 'all') {
-    $query .= " AND lr.status = ?";
-}
-
-if (!empty($search)) {
-    $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lr.request_number LIKE ?)";
-}
-
-if (!empty($date_from) && !empty($date_to)) {
-    $query .= " AND DATE(lr.requested_at) BETWEEN ? AND ?";
-}
-
-$query .= " ORDER BY lr.requested_at DESC";
-
-$stmt = $db->prepare($query);
 
 $params = [$user_branch_id];
 
-if ($status_filter !== 'all') {
-    $params[] = $status_filter;
-}
-
 if (!empty($search)) {
+    $pending_tests_query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lt.test_name LIKE ?)";
     $search_term = "%$search%";
     $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
 }
 
-if (!empty($date_from) && !empty($date_to)) {
-    $params[] = $date_from;
-    $params[] = $date_to;
+if (!empty($date_filter)) {
+    $pending_tests_query .= " AND DATE(lt.created_at) = ?";
+    $params[] = $date_filter;
 }
 
+$pending_tests_query .= " ORDER BY lt.created_at ASC";
+
+$stmt = $db->prepare($pending_tests_query);
 $stmt->execute($params);
-$requests = $stmt->fetchAll();
+$pending_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATUS COUNTS
+// GET PENDING REQUESTS FROM lab_requests (status = 'pending')
 // ================================================================
-$counts = [];
-$statuses = ['pending', 'in_progress', 'completed', 'cancelled'];
-foreach ($statuses as $status) {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = ?");
-    $stmt->execute([$user_branch_id, $status]);
-    $counts[$status] = $stmt->fetch()['count'] ?? 0;
+$pending_requests_query = "
+    SELECT 
+        lr.id,
+        lr.request_number,
+        lr.visit_id,
+        lr.patient_id,
+        lr.status,
+        lr.requested_at,
+        lr.branch_id,
+        p.full_name as patient_name,
+        p.patient_id,
+        COALESCE(u.full_name, 'Not Assigned') as doctor_name,
+        v.visit_number,
+        (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as total_tests,
+        'request' as source_type
+    FROM lab_requests lr
+    JOIN patients p ON lr.patient_id = p.id
+    LEFT JOIN visits v ON lr.visit_id = v.id
+    LEFT JOIN users u ON lr.doctor_id = u.id
+    WHERE lr.branch_id = ? AND lr.status = 'pending'
+";
+
+$params2 = [$user_branch_id];
+
+if (!empty($search)) {
+    $pending_requests_query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lr.request_number LIKE ?)";
+    $search_term = "%$search%";
+    $params2[] = $search_term;
+    $params2[] = $search_term;
+    $params2[] = $search_term;
 }
+
+if (!empty($date_filter)) {
+    $pending_requests_query .= " AND DATE(lr.requested_at) = ?";
+    $params2[] = $date_filter;
+}
+
+$pending_requests_query .= " ORDER BY lr.requested_at ASC";
+
+$stmt = $db->prepare($pending_requests_query);
+$stmt->execute($params2);
+$pending_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// MERGE BOTH LISTS
+// ================================================================
+$pending_items = array_merge($pending_tests, $pending_requests);
+
+// ================================================================
+// GET COUNTS
+// ================================================================
+$pending_tests_count = count($pending_tests);
+$pending_requests_count = count($pending_requests);
+$total_pending = $pending_tests_count + $pending_requests_count;
+
+// In Progress (from lab_requests)
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status IN ('accepted', 'in_progress')");
+$stmt->execute([$user_branch_id]);
+$in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// Also get in_progress from lab_tests
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'in_progress'");
+$stmt->execute([$user_branch_id]);
+$in_progress_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$in_progress_total = $in_progress_count + $in_progress_tests;
+
+// Completed Today
+$today = date('Y-m-d');
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
+$stmt->execute([$user_branch_id, $today]);
+$completed_requests_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
+$stmt->execute([$user_branch_id, $today]);
+$completed_tests_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$completed_today_total = $completed_requests_today + $completed_tests_today;
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -244,365 +193,185 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     /* ================================================================
        PENDING REQUESTS STYLES
        ================================================================ */
-    
-    .filter-tabs {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-bottom: 16px;
-        border-bottom: 2px solid var(--border-color);
-        padding-bottom: 12px;
-    }
-    
-    .filter-tab {
-        padding: 6px 16px;
-        border-radius: 20px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        text-decoration: none;
-        transition: all 0.3s ease;
-        background: var(--bg-body);
-        color: var(--text-secondary);
-        border: 2px solid transparent;
-    }
-    
-    .filter-tab:hover {
-        background: var(--primary-bg);
-        color: var(--primary);
-    }
-    
-    .filter-tab.active {
-        background: var(--primary);
-        color: white;
-        border-color: var(--primary);
-    }
-    
-    .filter-tab .count {
-        background: rgba(255,255,255,0.2);
-        padding: 0 6px;
-        border-radius: 10px;
-        font-size: 0.6rem;
-        margin-left: 4px;
-    }
-    
-    .filter-tab.active .count {
-        background: rgba(255,255,255,0.25);
-    }
-    
-    .filter-tab.pending { background: #FEF3C7; color: #D97706; }
-    .filter-tab.pending.active { background: #D97706; color: white; }
-    
-    .filter-tab.in_progress { background: #E8F0FE; color: var(--primary); }
-    .filter-tab.in_progress.active { background: var(--primary); color: white; }
-    
-    .filter-tab.completed { background: #D1FAE5; color: #059669; }
-    .filter-tab.completed.active { background: #059669; color: white; }
-    
-    .filter-tab.cancelled { background: #FEE2E2; color: #DC2626; }
-    .filter-tab.cancelled.active { background: #DC2626; color: white; }
-    
-    [data-theme="dark"] .filter-tab.pending { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .filter-tab.in_progress { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .filter-tab.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .filter-tab.cancelled { background: #3A1A1A; color: #F87171; }
-    
-    /* Request Card */
-    .request-card {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 16px 20px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        margin-bottom: 16px;
-    }
-    
-    .request-card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
-    }
-    
-    .request-card .request-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin-bottom: 8px;
-        padding-bottom: 8px;
-        border-bottom: 2px solid var(--border-color);
-    }
-    
-    .request-card .request-header .request-number {
-        font-weight: 700;
-        font-size: 1rem;
-        color: var(--text-primary);
-        font-family: monospace;
-    }
-    
-    .request-card .request-header .request-number .badge {
-        font-size: 0.6rem;
-        padding: 2px 10px;
-        border-radius: 12px;
-    }
-    
-    .request-card .request-body {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 12px;
-        margin-bottom: 10px;
-    }
-    
-    .request-card .request-body .info-item .label {
-        font-size: 0.6rem;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-    
-    .request-card .request-body .info-item .value {
-        font-size: 0.9rem;
-        font-weight: 500;
-        color: var(--text-primary);
-    }
-    
-    .request-card .request-tests {
-        background: var(--bg-body);
-        border-radius: 8px;
-        padding: 10px 14px;
-        margin-bottom: 10px;
-    }
-    
-    .request-card .request-tests .test-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 4px 0;
-        border-bottom: 1px solid var(--border-color);
-        font-size: 0.85rem;
-    }
-    
-    .request-card .request-tests .test-item:last-child {
-        border-bottom: none;
-    }
-    
-    .request-card .request-tests .test-item .test-price {
-        font-weight: 600;
-        color: var(--primary);
-    }
-    
-    .request-card .request-actions {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-    }
-    
-    .btn-action {
-        padding: 5px 14px;
-        border-radius: 6px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .btn-action:hover {
-        transform: scale(1.05);
-    }
-    
-    .btn-view {
-        background: var(--primary);
-        color: white;
-    }
-    .btn-view:hover {
-        background: var(--primary-dark);
-    }
-    
-    .btn-accept {
-        background: #059669;
-        color: white;
-    }
-    .btn-accept:hover {
-        background: #047857;
-    }
-    
-    .btn-reject {
-        background: #EF4444;
-        color: white;
-    }
-    .btn-reject:hover {
-        background: #DC2626;
-    }
-    
-    .btn-notes {
-        background: #D97706;
-        color: white;
-    }
-    .btn-notes:hover {
-        background: #B45309;
-    }
-    
-    .summary-grid {
+    .stats-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 12px;
+        gap: 14px;
         margin-bottom: 20px;
     }
     
-    .summary-card {
+    .stat-card {
         background: var(--bg-card);
         border-radius: 12px;
         padding: 14px 18px;
         border: 2px solid var(--border-color);
         text-align: center;
         transition: all 0.3s ease;
-        text-decoration: none;
-        color: var(--text-primary);
     }
-    
-    .summary-card:hover {
+    .stat-card:hover {
         border-color: var(--primary);
-        transform: translateY(-3px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.06);
     }
-    
-    .summary-card .number {
-        font-size: 1.5rem;
+    .stat-card .number {
+        font-size: 1.6rem;
         font-weight: 700;
+        line-height: 1.2;
     }
-    
-    .summary-card .label {
+    .stat-card .number.pending { color: #D97706; }
+    .stat-card .number.in-progress { color: #0B5ED7; }
+    .stat-card .number.completed { color: #059669; }
+    .stat-card .label {
         font-size: 0.7rem;
         color: var(--text-secondary);
         font-weight: 500;
-        margin-top: 2px;
     }
     
-    .summary-card.pending .number { color: #D97706; }
-    .summary-card.in_progress .number { color: var(--primary); }
-    .summary-card.completed .number { color: #059669; }
-    .summary-card.cancelled .number { color: #DC2626; }
-    
-    .filter-section {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 12px 16px;
+    .filter-btn {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
         border: 2px solid var(--border-color);
-        margin-bottom: 16px;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .filter-section .form-control {
-        padding: 6px 12px;
-        border: 2px solid var(--border-color);
-        border-radius: 8px;
-        font-size: 0.8rem;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        outline: none;
-        transition: all 0.3s ease;
-    }
-    
-    .filter-section .form-control:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-    }
-    
-    .filter-section .btn-filter {
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        background: var(--primary);
-        color: white;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    
-    .filter-section .btn-filter:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-    }
-    
-    .filter-section .btn-clear {
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        font-weight: 600;
         background: transparent;
         color: var(--text-secondary);
-        border: 2px solid var(--border-color);
         cursor: pointer;
         transition: all 0.3s ease;
         text-decoration: none;
+        display: inline-block;
     }
-    
-    .filter-section .btn-clear:hover {
+    .filter-btn:hover {
         border-color: var(--primary);
         color: var(--primary);
     }
+    .filter-btn.active {
+        background: var(--primary);
+        color: white;
+        border-color: var(--primary);
+    }
+    
+    .item-row td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-color);
+        vertical-align: middle;
+    }
+    .item-row:hover td {
+        background: var(--table-hover);
+    }
+    .item-row .source-badge {
+        font-size: 0.55rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 10px;
+    }
+    .item-row .source-badge.test { background: #E8F0FE; color: #0B5ED7; }
+    .item-row .source-badge.request { background: #FEF3C7; color: #D97706; }
+    
+    .status-badge {
+        display: inline-block;
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 2px 12px;
+        border-radius: 12px;
+    }
+    .status-badge.pending { background: #FEF3C7; color: #D97706; }
+    .status-badge.in_progress { background: #E8F0FE; color: #0B5ED7; }
+    .status-badge.completed { background: #D1FAE5; color: #059669; }
+    .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
+    
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.7rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    .btn-blue { background: #0B5ED7; color: white; }
+    .btn-blue:hover { background: #0A4CA8; transform: scale(1.05); }
+    .btn-green { background: #059669; color: white; }
+    .btn-green:hover { background: #047857; transform: scale(1.05); }
+    .btn-red { background: #DC2626; color: white; }
+    .btn-red:hover { background: #B91C1C; transform: scale(1.05); }
+    .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
+    .btn-outline:hover { background: var(--bg-body); border-color: #0B5ED7; color: #0B5ED7; }
+    .btn-sm { padding: 3px 8px; font-size: 0.65rem; border-radius: 4px; }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+        min-width: 800px;
+    }
+    .data-table thead th {
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: 700;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: white;
+        background: #0B5ED7;
+        border-bottom: 3px solid #0A4CA8;
+        white-space: nowrap;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    .data-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+    }
+    
+    .table-wrap {
+        overflow-x: auto;
+        max-height: 500px;
+        overflow-y: auto;
+    }
+    .table-wrap::-webkit-scrollbar { width: 5px; height: 5px; }
+    .table-wrap::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+    .table-wrap::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
     
     .empty-state {
         text-align: center;
-        padding: 50px 20px;
+        padding: 40px 20px;
         color: var(--text-secondary);
     }
-    
     .empty-state i {
         font-size: 3rem;
         color: var(--border-color);
         display: block;
-        margin-bottom: 12px;
+        margin-bottom: 10px;
     }
     
-    .empty-state .sub {
-        font-size: 0.8rem;
-        margin-top: 4px;
+    .update-badge {
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+        background: var(--bg-body);
+        padding: 2px 12px;
+        border-radius: 20px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .action-buttons {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
     }
     
     @media (max-width: 768px) {
-        .request-card .request-body {
-            grid-template-columns: 1fr;
-        }
-        .request-card .request-header {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-        .summary-grid {
-            grid-template-columns: repeat(2, 1fr);
-        }
-        .filter-section {
-            flex-direction: column;
-            align-items: stretch;
-        }
-        .filter-tabs {
-            flex-wrap: wrap;
-        }
-        .filter-tab {
-            font-size: 0.7rem;
-            padding: 4px 12px;
-        }
-    }
-    
-    @media (max-width: 480px) {
-        .summary-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        .btn-action {
-            font-size: 0.6rem;
-            padding: 3px 8px;
-        }
-        .request-card .request-actions {
-            justify-content: flex-start;
-        }
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        .data-table { font-size: 0.7rem; min-width: 650px; }
+        .action-buttons { flex-direction: column; }
     }
 </style>
 
@@ -614,34 +383,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
         </button>
-        
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search requests, patients..." 
-                   value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search pending tests..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
         </div>
     </div>
-    
     <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
+        <span class="branch-badge"><i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?></span>
         <span class="datetime" id="currentDateTime"></span>
-        
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
-        
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
-        
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
@@ -658,224 +418,210 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-clock mr-2" style="color: #D97706;"></i> Lab Requests
+                <i class="fas fa-clock mr-2" style="color: #D97706;"></i> Pending Tests
+                <span class="role-badge ml-2">LABORATORY</span>
+                <span class="update-badge ml-2" id="updateBadge">
+                    <i class="fas fa-sync-alt fa-spin"></i> Live
+                </span>
             </h1>
             <p class="page-subtitle">
-                Manage laboratory requests from doctors
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                Manage all pending laboratory tests
+                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
+                    <i class="fas fa-clock mr-1"></i> <?= $total_pending ?> Pending
                 </span>
-                <?php if ($counts['pending'] > 0): ?>
-                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
-                        <i class="fas fa-clock mr-1"></i> <?= $counts['pending'] ?> pending
-                    </span>
-                <?php endif; ?>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-spinner mr-1"></i> <?= $in_progress_total ?> In Progress
+                </span>
+                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
+                    <i class="fas fa-check-circle mr-1"></i> <?= $completed_today_total ?> Completed Today
+                </span>
             </p>
         </div>
         <div>
             <a href="dashboard.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back
+                <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
     </div>
 
-    <!-- Message -->
-    <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
-            <?= $message ?>
+    <!-- ================================================================ -->
+    <!-- STATS CARDS -->
+    <!-- ================================================================ -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <p class="number pending" id="statPending"><?= $total_pending ?></p>
+            <p class="label">⏳ Pending Tests</p>
         </div>
-    <?php endif; ?>
-
-    <!-- Summary Cards -->
-    <div class="summary-grid animate-fade-in-up">
-        <a href="?status=pending" class="summary-card pending">
-            <p class="number"><?= $counts['pending'] ?? 0 ?></p>
-            <p class="label"><i class="fas fa-clock mr-1"></i> Pending</p>
-        </a>
-        <a href="?status=in_progress" class="summary-card in_progress">
-            <p class="number"><?= $counts['in_progress'] ?? 0 ?></p>
-            <p class="label"><i class="fas fa-spinner mr-1"></i> In Progress</p>
-        </a>
-        <a href="?status=completed" class="summary-card completed">
-            <p class="number"><?= $counts['completed'] ?? 0 ?></p>
-            <p class="label"><i class="fas fa-check-circle mr-1"></i> Completed</p>
-        </a>
-        <a href="?status=cancelled" class="summary-card cancelled">
-            <p class="number"><?= $counts['cancelled'] ?? 0 ?></p>
-            <p class="label"><i class="fas fa-times-circle mr-1"></i> Cancelled</p>
-        </a>
+        <div class="stat-card">
+            <p class="number in-progress" id="statInProgress"><?= $in_progress_total ?></p>
+            <p class="label">🔬 In Progress</p>
+        </div>
+        <div class="stat-card">
+            <p class="number completed" id="statCompletedToday"><?= $completed_today_total ?></p>
+            <p class="label">✅ Completed Today</p>
+        </div>
+        <div class="stat-card">
+            <p class="number" id="statTotal" style="color: #7C3AED;"><?= count($pending_items) ?></p>
+            <p class="label">📋 Total Pending</p>
+        </div>
     </div>
 
-    <!-- Filter Tabs -->
-    <div class="filter-tabs animate-fade-in-up">
-        <a href="?status=all" class="filter-tab <?= $status_filter === 'all' ? 'active' : '' ?>">
-            <i class="fas fa-list mr-1"></i> All
-            <span class="count"><?= array_sum($counts) ?></span>
-        </a>
-        <a href="?status=pending" class="filter-tab pending <?= $status_filter === 'pending' ? 'active' : '' ?>">
-            <i class="fas fa-clock mr-1"></i> Pending
-            <span class="count"><?= $counts['pending'] ?? 0 ?></span>
-        </a>
-        <a href="?status=in_progress" class="filter-tab in_progress <?= $status_filter === 'in_progress' ? 'active' : '' ?>">
-            <i class="fas fa-spinner mr-1"></i> In Progress
-            <span class="count"><?= $counts['in_progress'] ?? 0 ?></span>
-        </a>
-        <a href="?status=completed" class="filter-tab completed <?= $status_filter === 'completed' ? 'active' : '' ?>">
-            <i class="fas fa-check-circle mr-1"></i> Completed
-            <span class="count"><?= $counts['completed'] ?? 0 ?></span>
-        </a>
-        <a href="?status=cancelled" class="filter-tab cancelled <?= $status_filter === 'cancelled' ? 'active' : '' ?>">
-            <i class="fas fa-times-circle mr-1"></i> Cancelled
-            <span class="count"><?= $counts['cancelled'] ?? 0 ?></span>
-        </a>
+    <!-- ================================================================ -->
+    <!-- FILTERS -->
+    <!-- ================================================================ -->
+    <div class="card mb-5">
+        <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium text-gray-600 mr-2">Date:</span>
+            <input type="date" id="dateFilter" value="<?= $date_filter ?>"
+                   onchange="window.location.href='pending_requests.php?date='+this.value+'&search=<?= urlencode($search) ?>'"
+                   class="form-control" style="width:auto;padding:4px 10px;font-size:0.8rem;border:2px solid var(--border-color);border-radius:8px;background:var(--bg-card);color:var(--text-primary);">
+            
+            <?php if (!empty($search)): ?>
+                <a href="pending_requests.php" class="btn btn-outline btn-sm">
+                    <i class="fas fa-times"></i> Clear Search
+                </a>
+            <?php endif; ?>
+        </div>
     </div>
 
-    <!-- Filter Section -->
-    <div class="filter-section animate-fade-in-up">
-        <form method="GET" action="" class="flex flex-wrap items-center gap-3 w-full">
-            <input type="hidden" name="status" value="<?= $status_filter ?>">
-            
-            <input type="text" name="search" class="form-control" placeholder="Search by patient, ID..." 
-                   value="<?= htmlspecialchars($search) ?>" style="flex:1; min-width:150px;">
-            
-            <input type="date" name="date_from" class="form-control" value="<?= $date_from ?>" style="width:140px;">
-            <span class="text-sm text-gray-400">to</span>
-            <input type="date" name="date_to" class="form-control" value="<?= $date_to ?>" style="width:140px;">
-            
-            <button type="submit" class="btn-filter">
-                <i class="fas fa-search mr-1"></i> Apply
-            </button>
-            
-            <a href="?status=<?= $status_filter ?>" class="btn-clear">
-                <i class="fas fa-times mr-1"></i> Clear
-            </a>
-        </form>
-    </div>
-
-    <!-- Requests List -->
-    <div class="animate-fade-in-up">
-        <?php if (count($requests) > 0): ?>
-            <?php foreach ($requests as $request): ?>
-                <div class="request-card">
-                    <div class="request-header">
-                        <div class="request-number">
-                            <?= htmlspecialchars($request['request_number']) ?>
-                            <span class="badge <?= 
-                                $request['status'] === 'pending' ? 'badge-pending' :
-                                ($request['status'] === 'in_progress' ? 'badge-in-progress' :
-                                ($request['status'] === 'completed' ? 'badge-completed' : 'badge-cancelled'))
-                            ?>">
-                                <?= ucfirst(str_replace('_', ' ', $request['status'] ?? 'Pending')) ?>
-                            </span>
-                        </div>
-                        <div class="text-sm text-gray-400">
-                            <i class="fas fa-calendar-alt mr-1"></i>
-                            <?= date('M d, Y h:i A', strtotime($request['requested_at'])) ?>
-                        </div>
-                    </div>
-                    
-                    <div class="request-body">
-                        <div class="info-item">
-                            <div class="label">Patient</div>
-                            <div class="value"><?= htmlspecialchars($request['patient_name'] ?? 'Unknown') ?></div>
-                            <div class="text-xs text-gray-400">ID: <?= htmlspecialchars($request['patient_id'] ?? 'N/A') ?></div>
-                        </div>
-                        <div class="info-item">
-                            <div class="label">Doctor</div>
-                            <div class="value"><?= htmlspecialchars($request['doctor_name'] ?? 'N/A') ?></div>
-                        </div>
-                        <div class="info-item">
-                            <div class="label">Tests</div>
-                            <div class="value"><?= $request['test_count'] ?> tests</div>
-                        </div>
-                    </div>
-                    
-                    <div class="request-tests">
-                        <?php 
-                            $stmt = $db->prepare("SELECT test_name, price FROM lab_request_items WHERE request_id = ?");
-                            $stmt->execute([$request['id']]);
-                            $items = $stmt->fetchAll();
-                            $total = 0;
+    <!-- ================================================================ -->
+    <!-- PENDING ITEMS TABLE -->
+    <!-- ================================================================ -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-list title-blue mr-2"></i> Pending Tests
+                <span class="text-sm font-normal text-gray-400" id="itemCount">(<?= count($pending_items) ?>)</span>
+            </h3>
+            <span class="text-sm text-gray-400">Scroll to view all</span>
+        </div>
+        
+        <div class="table-wrap">
+            <table class="data-table" id="pendingTable">
+                <thead>
+                    <tr>
+                        <th style="border-radius: 8px 0 0 0;">#</th>
+                        <th>Test Name</th>
+                        <th>Patient</th>
+                        <th>Doctor</th>
+                        <th>Visit #</th>
+                        <th>Source</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                        <th style="border-radius: 0 8px 0 0;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="pendingTableBody">
+                    <?php if (count($pending_items) > 0): ?>
+                        <?php $i = 1; foreach ($pending_items as $item): 
+                            $is_test = ($item['source_type'] === 'test');
+                            $source_label = $is_test ? '🔬 Test' : '📋 Request';
+                            $source_class = $is_test ? 'test' : 'request';
+                            $status = $item['status'] ?? 'pending';
+                            $status_label = $status === 'pending' ? '⏳ Pending' : ($status === 'in_progress' ? '🔬 In Progress' : ($status === 'completed' ? '✅ Completed' : $status));
+                            $id = $item['id'];
+                            $test_name = $item['test_name'] ?? ($item['request_number'] ?? 'N/A');
+                            
+                            // Determine links
+                            if ($is_test) {
+                                $view_link = "view_test.php?id=" . $id;
+                                $confirm_link = "update_test_status.php?action=confirm_test&id=" . $id;
+                                $cancel_link = "update_test_status.php?action=cancel_test&id=" . $id;
+                            } else {
+                                $view_link = "view_request.php?id=" . $id;
+                                $confirm_link = "update_test_status.php?action=accept&id=" . $id;
+                                $cancel_link = "update_test_status.php?action=cancel&id=" . $id;
+                            }
                         ?>
-                        <?php foreach ($items as $item): ?>
-                            <div class="test-item">
-                                <span><?= htmlspecialchars($item['test_name']) ?></span>
-                                <span class="test-price">TSh <?= number_format($item['price'] ?? 0) ?></span>
-                                <?php $total += $item['price'] ?? 0; ?>
-                            </div>
+                            <tr class="item-row" data-id="<?= $id ?>">
+                                <td><?= $i++ ?></td>
+                                <td>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($test_name) ?></div>
+                                    <?php if (!$is_test && isset($item['total_tests']) && $item['total_tests'] > 0): ?>
+                                        <div class="text-xs text-gray-400"><?= $item['total_tests'] ?> tests</div>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($item['patient_name'] ?? 'Unknown') ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($item['patient_id'] ?? 'N/A') ?></div>
+                                </td>
+                                <td>
+                                    <div class="text-sm"><?= htmlspecialchars($item['doctor_name'] ?? 'Not Assigned') ?></div>
+                                </td>
+                                <td class="font-mono text-xs"><?= htmlspecialchars($item['visit_number'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="source-badge <?= $source_class ?>"><?= $source_label ?></span>
+                                </td>
+                                <td>
+                                    <span class="status-badge <?= $status ?>"><?= $status_label ?></span>
+                                </td>
+                                <td class="text-xs">
+                                    <?php 
+                                        $date = $item['created_at'] ?? $item['requested_at'] ?? '';
+                                        if ($date) echo date('M d, Y h:i A', strtotime($date));
+                                        else echo 'N/A';
+                                    ?>
+                                </td>
+                                <td>
+                                    <div class="action-buttons">
+                                        <a href="<?= $view_link ?>" class="btn btn-blue btn-sm" title="View">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                        <?php if ($status === 'pending' || $status === '' || $status === null): ?>
+                                            <a href="<?= $confirm_link ?>" 
+                                               class="btn btn-green btn-sm" title="Confirm & Start"
+                                               onclick="return confirm('Confirm this test? It will be added to patient bill and moved to In Progress.')">
+                                                <i class="fas fa-check"></i> Confirm
+                                            </a>
+                                            <a href="<?= $cancel_link ?>" 
+                                               class="btn btn-red btn-sm" title="Cancel"
+                                               onclick="return confirm('Cancel this test?')">
+                                                <i class="fas fa-times"></i> Cancel
+                                            </a>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                            </tr>
                         <?php endforeach; ?>
-                        <div class="test-item" style="font-weight:700; border-top: 2px solid var(--border-color); margin-top:4px; padding-top:4px;">
-                            <span>Total</span>
-                            <span>TSh <?= number_format($total) ?></span>
-                        </div>
-                    </div>
-                    
-                    <div class="request-actions">
-                        <a href="view_request.php?id=<?= $request['id'] ?>" class="btn-action btn-view">
-                            <i class="fas fa-eye"></i> View
-                        </a>
-                        
-                        <?php if ($request['status'] === 'pending'): ?>
-                            <form method="POST" style="display:inline;" 
-                                  onsubmit="return confirm('Accept this request? Billing items will be created automatically.');">
-                                <input type="hidden" name="action" value="accept">
-                                <input type="hidden" name="request_id" value="<?= $request['id'] ?>">
-                                <button type="submit" class="btn-action btn-accept">
-                                    <i class="fas fa-check"></i> Accept
-                                </button>
-                            </form>
-                            <form method="POST" style="display:inline;" 
-                                  onsubmit="return confirm('Reject this request?');">
-                                <input type="hidden" name="action" value="reject">
-                                <input type="hidden" name="request_id" value="<?= $request['id'] ?>">
-                                <button type="submit" class="btn-action btn-reject">
-                                    <i class="fas fa-times"></i> Reject
-                                </button>
-                            </form>
-                        <?php endif; ?>
-                        
-                        <?php if ($request['status'] === 'in_progress'): ?>
-                            <a href="enter_results.php?request_id=<?= $request['id'] ?>" class="btn-action" style="background:#7C3AED; color:white;">
-                                <i class="fas fa-file-medical-alt"></i> Enter Results
-                            </a>
-                        <?php endif; ?>
-                        
-                        <?php if ($request['status'] === 'completed'): ?>
-                            <a href="view_results.php?request_id=<?= $request['id'] ?>" class="btn-action btn-view">
-                                <i class="fas fa-eye"></i> View Results
-                            </a>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-        <?php else: ?>
-            <div class="empty-state">
-                <i class="fas fa-flask"></i>
-                <p>No requests found</p>
-                <p class="sub">
-                    <?php if ($status_filter === 'pending'): ?>
-                        All requests have been processed. Great job! 🎉
-                    <?php elseif ($status_filter === 'in_progress'): ?>
-                        No requests are currently in progress.
-                    <?php elseif ($status_filter === 'completed'): ?>
-                        No completed requests yet.
-                    <?php elseif ($status_filter === 'cancelled'): ?>
-                        No cancelled requests.
                     <?php else: ?>
-                        No laboratory requests found.
+                        <tr>
+                            <td colspan="9">
+                                <div class="empty-state">
+                                    <i class="fas fa-check-circle" style="color: #059669; font-size: 3rem;"></i>
+                                    <p>No pending tests found</p>
+                                    <p class="text-sm mt-1">All tests have been processed</p>
+                                </div>
+                            </td>
+                        </tr>
                     <?php endif; ?>
-                </p>
-            </div>
-        <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="card-footer">
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-flask mr-1"></i> 
+                Showing <strong id="recordCount"><?= count($pending_items) ?></strong> pending item(s)
+            </span>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-store-alt mr-1"></i> 
+                Branch: <strong><?= htmlspecialchars($user_branch_name) ?></strong>
+            </span>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-clock mr-1"></i> 
+                <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
+            </span>
+        </div>
     </div>
 
-    <!-- Footer -->
-    <footer class="footer mt-5">
+    <!-- ================================================================ -->
+    <!-- FOOTER -->
+    <!-- ================================================================ -->
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Lab Requests
+            Pending Tests
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -894,9 +640,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
     // ================================================================
     // DARK MODE
@@ -934,34 +677,17 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    if (sidebarToggle) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
-    }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
+    sidebarToggle?.addEventListener('click', function() {
+        sidebar.classList.toggle('open');
+    });
     
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var status = '<?= $status_filter ?>';
-        var url = 'pending_requests.php?status=' + status;
-        if (query) url += '&search=' + encodeURIComponent(query);
-        window.location.href = url;
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                sidebar.classList.remove('open');
+            }
+        }
+    });
 
     // ================================================================
     // DATE & TIME
@@ -974,13 +700,27 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
+        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        var date = '<?= $date_filter ?>';
+        window.location.href = 'pending_requests.php?search=' + encodeURIComponent(query) + '&date=' + date;
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
 
     // ================================================================
     // TOAST
@@ -1005,25 +745,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
-        }
-        if (e.key === 'Escape' && document.activeElement === searchInput) {
-            searchInput.value = '';
-            performSearch();
-        }
-    });
-
-    console.log('%c🧪 Braick - Pending Lab Requests', 'font-size:18px; font-weight:bold; color:#D97706;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Pending: <?= $counts['pending'] ?? 0 ?> | In Progress: <?= $counts['in_progress'] ?? 0 ?> | Completed: <?= $counts['completed'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Total Requests: <?= count($requests) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🧪 Braick - Pending Tests (With Confirm & Cancel)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c📊 Pending: <?= $total_pending ?> | In Progress: <?= $in_progress_total ?> | Completed Today: <?= $completed_today_total ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

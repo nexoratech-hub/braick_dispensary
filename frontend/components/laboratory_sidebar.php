@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/components/laboratory_sidebar.php
-// LABORATORY - SHARED SIDEBAR
+// LABORATORY - SHARED SIDEBAR (FIXED - WITH REAL DATA FROM BOTH TABLES)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -17,28 +17,75 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
     $user_branch_id = $_SESSION['branch_id'] ?? 1;
     
     try {
-        // Pending Requests
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
-        $stmt->execute([$user_branch_id]);
-        $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        // ================================================================
+        // 1. PENDING: FROM lab_tests (status NULL or 'pending') + lab_requests (status 'pending')
+        // ================================================================
         
-        // In Progress Requests
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'in_progress'");
+        // Pending from lab_tests
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_tests 
+            WHERE branch_id = ? AND (status IS NULL OR status = 'pending' OR status = '')
+        ");
+        $stmt->execute([$user_branch_id]);
+        $pending_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Pending from lab_requests
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_requests 
+            WHERE branch_id = ? AND status = 'pending'
+        ");
+        $stmt->execute([$user_branch_id]);
+        $pending_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        $pending_count = $pending_tests + $pending_requests;
+        
+        // ================================================================
+        // 2. IN PROGRESS: FROM lab_requests (status 'accepted' or 'in_progress')
+        // ================================================================
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_requests 
+            WHERE branch_id = ? AND status IN ('accepted', 'in_progress')
+        ");
         $stmt->execute([$user_branch_id]);
         $in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // Completed Today
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()");
+        // ================================================================
+        // 3. COMPLETED TODAY: FROM lab_requests (completed today)
+        // ================================================================
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_requests 
+            WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
+        ");
         $stmt->execute([$user_branch_id]);
         $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // Today's Tests
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_request_items WHERE request_id IN (SELECT id FROM lab_requests WHERE branch_id = ?) AND DATE(completed_at) = CURDATE()");
+        // ================================================================
+        // 4. TODAY'S TESTS: FROM lab_tests (completed today) + lab_request_items (completed today)
+        // ================================================================
+        
+        // From lab_tests
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_tests 
+            WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
+        ");
         $stmt->execute([$user_branch_id]);
-        $today_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $tests_completed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // From lab_request_items
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM lab_request_items lri
+            JOIN lab_requests lr ON lri.request_id = lr.id
+            WHERE lr.branch_id = ? AND lri.status = 'completed' AND DATE(lri.completed_at) = CURDATE()
+        ");
+        $stmt->execute([$user_branch_id]);
+        $items_completed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        $today_tests = $tests_completed_today + $items_completed_today;
         
     } catch (Exception $e) {
         // Keep counts as 0
+        error_log("Sidebar stats error: " . $e->getMessage());
     }
 }
 
@@ -141,6 +188,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         margin: 2px 0;
         background: transparent;
         cursor: pointer;
+        position: relative;
     }
     
     .sidebar-link:hover {
@@ -171,6 +219,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         font-weight: 600;
         color: white;
         transition: all 0.3s ease;
+        min-width: 18px;
+        text-align: center;
     }
     
     .sidebar-link:hover .badge {
@@ -253,6 +303,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         50% { opacity: 0.4; }
     }
     
+    .mt-2 { margin-top: 8px; }
+    
     @media (max-width: 1024px) {
         .sidebar { 
             transform: translateX(-100%); 
@@ -290,16 +342,16 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <i class="fas fa-home"></i> Dashboard
         </a>
         
-        <!-- 2. Lab Requests -->
+        <!-- ===== LAB REQUESTS ===== -->
         <div class="nav-label mt-2">Lab Requests</div>
         
-        <!-- Pending -->
+        <!-- Pending (Counts BOTH lab_tests AND lab_requests) -->
         <a href="../laboratory/pending_requests.php" class="sidebar-link <?= isActive('pending_requests.php') ?>">
             <i class="fas fa-clock"></i> Pending
             <?php if ($pending_count > 0): ?>
-                <span class="badge danger"><?= $pending_count ?></span>
+                <span class="badge danger" id="sidebarPendingBadge"><?= $pending_count ?></span>
             <?php else: ?>
-                <span class="badge">0</span>
+                <span class="badge" id="sidebarPendingBadge">0</span>
             <?php endif; ?>
         </a>
         
@@ -307,9 +359,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <a href="../laboratory/in_progress.php" class="sidebar-link <?= isActive('in_progress.php') ?>">
             <i class="fas fa-spinner"></i> In Progress
             <?php if ($in_progress_count > 0): ?>
-                <span class="badge orange"><?= $in_progress_count ?></span>
+                <span class="badge orange" id="sidebarInProgressBadge"><?= $in_progress_count ?></span>
             <?php else: ?>
-                <span class="badge">0</span>
+                <span class="badge" id="sidebarInProgressBadge">0</span>
             <?php endif; ?>
         </a>
         
@@ -317,19 +369,22 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <a href="../laboratory/completed_requests.php" class="sidebar-link <?= isActive('completed_requests.php') ?>">
             <i class="fas fa-check-circle"></i> Completed
             <?php if ($completed_count > 0): ?>
-                <span class="badge green"><?= $completed_count ?></span>
+                <span class="badge green" id="sidebarCompletedBadge"><?= $completed_count ?></span>
             <?php else: ?>
-                <span class="badge">0</span>
+                <span class="badge" id="sidebarCompletedBadge">0</span>
             <?php endif; ?>
         </a>
         
-        <!-- 3. Results History -->
+        <!-- ===== RESULTS ===== -->
+        <div class="nav-label mt-2">Results</div>
+        
+        <!-- Results History -->
         <a href="../laboratory/results_history.php" class="sidebar-link <?= isActive('results_history.php') ?>">
             <i class="fas fa-history"></i> Results History
-            <span class="badge"><?= $today_tests ?></span>
+            <span class="badge" id="sidebarTodayTests"><?= $today_tests ?></span>
         </a>
         
-        <!-- 4. Reports -->
+        <!-- Reports -->
         <a href="../laboratory/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
             <i class="fas fa-chart-bar"></i> Reports
         </a>
@@ -386,47 +441,51 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     // UPDATE SIDEBAR BADGES (AJAX every 3 seconds)
     // ================================================================
     function updateSidebarBadges(pending, inProgress, completed, todayTests) {
-        var links = document.querySelectorAll('.sidebar-link');
-        links.forEach(function(link) {
-            var text = link.textContent.trim();
-            if (text.includes('Pending')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    if (pending > 0) {
-                        badge.textContent = pending;
-                        badge.className = 'badge danger';
-                    } else {
-                        badge.textContent = '0';
-                        badge.className = 'badge';
-                    }
-                }
+        // Update Pending Badge
+        var pendingBadge = document.getElementById('sidebarPendingBadge');
+        if (pendingBadge) {
+            pendingBadge.textContent = pending;
+            if (pending > 0) {
+                pendingBadge.className = 'badge danger';
+            } else {
+                pendingBadge.className = 'badge';
             }
-            if (text.includes('In Progress')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    if (inProgress > 0) {
-                        badge.textContent = inProgress;
-                        badge.className = 'badge orange';
-                    } else {
-                        badge.textContent = '0';
-                        badge.className = 'badge';
-                    }
-                }
-            }
-            if (text.includes('Completed')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    badge.textContent = completed;
-                }
-            }
-            if (text.includes('Results History')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    badge.textContent = todayTests;
-                }
-            }
-        });
+        }
         
+        // Update In Progress Badge
+        var inProgressBadge = document.getElementById('sidebarInProgressBadge');
+        if (inProgressBadge) {
+            inProgressBadge.textContent = inProgress;
+            if (inProgress > 0) {
+                inProgressBadge.className = 'badge orange';
+            } else {
+                inProgressBadge.className = 'badge';
+            }
+        }
+        
+        // Update Completed Badge
+        var completedBadge = document.getElementById('sidebarCompletedBadge');
+        if (completedBadge) {
+            completedBadge.textContent = completed;
+            if (completed > 0) {
+                completedBadge.className = 'badge green';
+            } else {
+                completedBadge.className = 'badge';
+            }
+        }
+        
+        // Update Today Tests Badge
+        var todayTestsBadge = document.getElementById('sidebarTodayTests');
+        if (todayTestsBadge) {
+            todayTestsBadge.textContent = todayTests;
+            if (todayTests > 0) {
+                todayTestsBadge.className = 'badge green';
+            } else {
+                todayTestsBadge.className = 'badge';
+            }
+        }
+        
+        // Update status time
         var timeEl = document.getElementById('sidebarStatusTime');
         if (timeEl) {
             var now = new Date();
@@ -444,15 +503,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         if (sidebarIsUpdating) return;
         sidebarIsUpdating = true;
         
-        fetch('../laboratory/get_sidebar_stats.php')
+        fetch('../laboratory/get_sidebar_stats.php?t=' + new Date().getTime())
             .then(function(response) { return response.json(); })
             .then(function(data) {
                 if (data.success) {
                     updateSidebarBadges(
-                        data.pending,
-                        data.in_progress,
-                        data.completed,
-                        data.today_tests
+                        data.pending || 0,
+                        data.in_progress || 0,
+                        data.completed || 0,
+                        data.today_tests || 0
                     );
                 }
                 sidebarIsUpdating = false;
@@ -467,8 +526,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
         fetchSidebarData();
+        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
     }
 
     function stopSidebarAutoUpdate() {
@@ -492,6 +551,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }, 2000);
     });
 
-    console.log('%c🧪 Laboratory Sidebar', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c🧪 Laboratory Sidebar (FIXED - Real Data from BOTH tables)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?> | Today: <?= $today_tests ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c🔄 Auto-updates every 3 seconds', 'font-size:12px; color:#34D399;');
 </script>

@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/components/laboratory_header.php
-// LABORATORY - SHARED HEADER
+// LABORATORY - SHARED HEADER (FIXED - Database connection)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -11,30 +11,34 @@
 require_once __DIR__ . '/../../backend/config/config.php';
 
 // ================================================================
-// SESSION - Default to lab.anna
+// SESSION - Default to Lab Technician Dodoma (ID: 8)
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 4;
-    $_SESSION['full_name'] = 'Anna Mushi';
+    $_SESSION['user_id'] = 8;
+    $_SESSION['full_name'] = 'Lab Technician Dodoma';
     $_SESSION['role'] = 'laboratory';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.anna';
+    $_SESSION['username'] = 'lab.dodoma';
     $_SESSION['is_admin'] = false;
 }
 
-$user_id = $_SESSION['user_id'] ?? 4;
-$user_full_name = $_SESSION['full_name'] ?? 'Anna Mushi';
+$user_id = $_SESSION['user_id'] ?? 8;
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
 $user_role = $_SESSION['role'] ?? 'laboratory';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS
+// GET UNREAD NOTIFICATIONS (with try-catch)
 // ================================================================
 $unread_notifications = 0;
 try {
-    $db = getDB();
+    // Only try to get DB if not already connected
+    if (!isset($db) || $db === null) {
+        require_once __DIR__ . '/../../backend/config/database.php';
+        $db = getDB();
+    }
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch()['total'] ?? 0;
@@ -84,6 +88,9 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     
     <style>
+        /* ================================================================
+           ROOT VARIABLES
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;

@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/get_lab_stats.php
-// LABORATORY STATS API - RETURNS JSON FOR AUTO-UPDATE
+// LABORATORY STATS API - USING lab_requests & lab_request_items
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -19,7 +19,6 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
     $_SESSION['username'] = 'lab.dodoma';
 }
 
-$user_id = $_SESSION['user_id'] ?? 8;
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
@@ -32,43 +31,42 @@ $db = Database::getInstance()->getConnection();
 // TODAY'S DATE
 // ================================================================
 $today = date('Y-m-d');
-$start_of_month = date('Y-m-01');
 
 // ================================================================
 // FETCH ALL STATISTICS
 // ================================================================
 
-// 1. Pending Requests
+// 1. Pending Requests (status = 'pending')
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
 $stmt->execute([$user_branch_id]);
-$pending = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$pending_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 2. In Progress Requests
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'in_progress'");
+// 2. In Progress Requests (status = 'in_progress' OR 'accepted')
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status IN ('in_progress', 'accepted')");
 $stmt->execute([$user_branch_id]);
-$in_progress = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$in_progress_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 3. Completed Today
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
 $stmt->execute([$user_branch_id, $today]);
 $completed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 4. Today's Tests
+// 4. Today's Tests (completed today)
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM lab_request_items lri
     JOIN lab_requests lr ON lri.request_id = lr.id
-    WHERE lr.branch_id = ? AND DATE(lri.completed_at) = ?
+    WHERE lr.branch_id = ? AND lri.status = 'completed' AND DATE(lri.completed_at) = ?
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 5. Total Tests (All Time)
+// 5. Total Tests (all time - completed)
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM lab_request_items lri
     JOIN lab_requests lr ON lri.request_id = lr.id
-    WHERE lr.branch_id = ?
+    WHERE lr.branch_id = ? AND lri.status = 'completed'
 ");
 $stmt->execute([$user_branch_id]);
 $total_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -95,10 +93,12 @@ $completion_rate = $total_requests_all > 0 ? round(($completed_requests / $total
 // 8. Recent Requests (Last 10)
 $stmt = $db->prepare("
     SELECT lr.*, 
-           p.full_name as patient_name, p.patient_id,
-           u.full_name as doctor_name,
+           p.full_name as patient_name, p.patient_id, p.phone,
+           u.full_name as doctor_name, u.specialty,
            (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as test_count,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'completed') as completed_count
+           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'completed') as completed_count,
+           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'in_progress') as in_progress_count,
+           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'pending') as pending_count
     FROM lab_requests lr
     JOIN patients p ON lr.patient_id = p.id
     JOIN users u ON lr.doctor_id = u.id
@@ -120,7 +120,7 @@ for ($i = 6; $i >= 0; $i--) {
         SELECT COUNT(*) as count 
         FROM lab_request_items lri
         JOIN lab_requests lr ON lri.request_id = lr.id
-        WHERE lr.branch_id = ? AND DATE(lri.completed_at) = ?
+        WHERE lr.branch_id = ? AND lri.status = 'completed' AND DATE(lri.completed_at) = ?
     ");
     $stmt->execute([$user_branch_id, $date]);
     $daily_tests[] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
@@ -140,7 +140,7 @@ for ($i = 5; $i >= 0; $i--) {
         SELECT COUNT(*) as count 
         FROM lab_request_items lri
         JOIN lab_requests lr ON lri.request_id = lr.id
-        WHERE lr.branch_id = ? AND DATE(lri.completed_at) BETWEEN ? AND ?
+        WHERE lr.branch_id = ? AND lri.status = 'completed' AND DATE(lri.completed_at) BETWEEN ? AND ?
     ");
     $stmt->execute([$user_branch_id, $start, $end]);
     $monthly_tests[] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
@@ -163,8 +163,8 @@ $most_requested = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // CREATE DATA HASH FOR CHANGE DETECTION
 // ================================================================
 $data_array = [
-    'pending' => $pending,
-    'in_progress' => $in_progress,
+    'pending_requests' => $pending_requests,
+    'in_progress_requests' => $in_progress_requests,
     'completed_today' => $completed_today,
     'today_tests' => $today_tests,
     'total_tests' => $total_tests,
@@ -187,8 +187,8 @@ echo json_encode([
     'hash' => $data_hash,
     'data' => [
         'stats' => [
-            'pending' => $pending,
-            'in_progress' => $in_progress,
+            'pending_requests' => $pending_requests,
+            'in_progress_requests' => $in_progress_requests,
             'completed_today' => $completed_today,
             'today_tests' => $today_tests,
             'total_tests' => $total_tests,
