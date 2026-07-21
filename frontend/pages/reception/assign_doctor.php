@@ -2,7 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/reception/assign_doctor.php
 // RECEPTION - ASSIGN / CHANGE DOCTOR OR REQUEST LAB TESTS
-// FIXED: Single dropdown for Doctor OR Lab Test
+// FIXED: Lab test uses NULL for doctor_id (foreign key constraint)
+// WITH CLOSE BUTTON FOR LAB TESTS MODAL
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -536,7 +537,7 @@ try {
         }
         
         // ================================================================
-        // LAB TEST REQUEST (No Doctor Required)
+        // LAB TEST REQUEST - USE NULL FOR doctor_id (FIXED)
         // ================================================================
         if ($action === 'assign_doctor' && $assignment_type === 'lab') {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -570,7 +571,7 @@ try {
                     if ($existing_visit) {
                         $visit_id = $existing_visit['id'];
                         
-                        // Update status to lab_test
+                        // Update status to lab_test - USE NULL
                         $stmt = $db->prepare("
                             UPDATE visits 
                             SET status = 'lab_test', 
@@ -587,7 +588,7 @@ try {
                         $visit_number = $visit['visit_number'] ?? '';
                         
                     } else {
-                        // Create new visit with lab_test status (no doctor)
+                        // Create new visit with lab_test status - USE NULL
                         $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                         
                         $stmt = $db->prepare("
@@ -605,7 +606,7 @@ try {
                         $visit_id = $db->lastInsertId();
                     }
                     
-                    // Create lab request
+                    // Create lab request - USE NULL
                     $request_number = 'LAB-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                     
                     $stmt = $db->prepare("
@@ -626,7 +627,6 @@ try {
                     
                     // Add lab test items
                     foreach ($lab_test_ids as $test_id) {
-                        // Get test details
                         $stmt = $db->prepare("
                             SELECT test_name, price FROM lab_tests_catalog WHERE id = ? AND is_active = 1
                         ");
@@ -1242,8 +1242,102 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           LAB TESTS LIST
+           LAB MODAL STYLES
            ================================================================ */
+        .lab-modal-container {
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 2px solid var(--primary);
+            overflow: hidden;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            margin-bottom: 16px;
+        }
+        
+        .lab-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 18px;
+            background: var(--primary-bg);
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .lab-modal-header .lab-modal-title {
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .lab-modal-header .lab-modal-title .lab-test-count {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+        
+        .lab-modal-close {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+        
+        .lab-modal-close:hover {
+            background: var(--danger-bg);
+            color: var(--danger);
+        }
+        
+        .lab-modal-body {
+            padding: 8px 12px;
+        }
+        
+        .lab-modal-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 16px;
+            border-top: 2px solid var(--border-color);
+            background: var(--bg-body);
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .lab-modal-footer .lab-modal-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .lab-modal-footer .lab-total-price {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--success);
+            padding: 4px 12px;
+            background: var(--success-bg);
+            border-radius: 20px;
+        }
+        
+        .lab-selected-summary {
+            background: var(--primary-bg);
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-top: 10px;
+            border: 1px solid var(--primary);
+        }
+        
+        .lab-selected-summary #labSelectedNames {
+            font-size: 0.85rem;
+            color: var(--text-primary);
+        }
+        
+        /* Lab test items */
         .lab-test-item {
             display: flex;
             align-items: center;
@@ -1658,6 +1752,17 @@ include_once '../../components/reception_sidebar.php';
             .vital-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
+            .lab-modal-footer {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .lab-modal-footer .lab-modal-actions {
+                justify-content: center;
+            }
+            .lab-modal-footer .btn {
+                flex: 1;
+                justify-content: center;
+            }
         }
         
         @media (max-width: 640px) {
@@ -1990,42 +2095,75 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- LAB TEST SECTION -->
+            <!-- LAB TEST SECTION - WITH CLOSE BUTTON -->
             <!-- ============================================================ -->
             <div id="labSection" style="display:none;">
-                <div class="form-row">
-                    <label class="form-label">
-                        <i class="fas fa-flask label-icon"></i> Select Lab Tests <span class="required">*</span>
-                        <span class="text-xs font-normal text-gray-400">(Select one or more tests - No doctor required)</span>
-                    </label>
-                    <div id="labTestsContainer" style="border:2px solid var(--border-color);border-radius:10px;padding:4px 0;max-height:250px;overflow-y:auto;background:var(--bg-body);">
-                        <div class="text-center py-4 text-gray-400">
-                            <i class="fas fa-spinner fa-spin"></i> Loading lab tests...
+                <!-- Lab Tests Modal Container -->
+                <div class="lab-modal-container">
+                    <div class="lab-modal-header">
+                        <div class="lab-modal-title">
+                            <i class="fas fa-flask" style="color:#7C3AED;"></i>
+                            <span>Select Lab Tests</span>
+                            <span class="lab-test-count" id="labSelectedCount">(0 selected)</span>
                         </div>
+                        <button type="button" class="lab-modal-close" onclick="closeLabTests()" title="Close Lab Tests">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="lab-modal-body">
+                        <div id="labTestsContainer" style="border:2px solid var(--border-color);border-radius:10px;padding:4px 0;max-height:300px;overflow-y:auto;background:var(--bg-body);">
+                            <div class="text-center py-4 text-gray-400">
+                                <i class="fas fa-spinner fa-spin"></i> Loading lab tests...
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="lab-modal-footer">
+                        <div class="lab-modal-actions">
+                            <button type="button" class="btn btn-outline btn-sm" onclick="selectAllLabTests()">
+                                <i class="fas fa-check-double"></i> Select All
+                            </button>
+                            <button type="button" class="btn btn-outline btn-sm" onclick="deselectAllLabTests()">
+                                <i class="fas fa-times"></i> Clear All
+                            </button>
+                            <span class="lab-total-price" id="labTotalPrice">Total: TSh 0</span>
+                        </div>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="closeLabTests()" style="background:var(--danger);">
+                            <i class="fas fa-times"></i> Close
+                        </button>
                     </div>
                 </div>
                 
+                <!-- Selected tests summary -->
+                <div class="lab-selected-summary" id="labSelectedSummary" style="display:none;">
+                    <span style="font-weight:600;color:var(--primary);">
+                        <i class="fas fa-check-circle"></i> Selected Tests:
+                    </span>
+                    <span id="labSelectedNames" style="color:var(--text-primary);"></span>
+                </div>
+                
+                <div class="form-row" style="margin-top:12px;">
+                    <label class="form-label">
+                        <i class="fas fa-notes-medical label-icon"></i> Lab Test Notes
+                    </label>
+                    <textarea name="lab_notes" class="form-control" placeholder="Any special instructions for lab tests..." rows="2" id="labNotes"></textarea>
+                </div>
+                
                 <div class="grid-2">
-                    <div class="form-row">
-                        <label class="form-label">
-                            <i class="fas fa-notes-medical label-icon"></i> Lab Test Notes
-                        </label>
-                        <textarea name="lab_notes" class="form-control" placeholder="Any special instructions for lab tests..." rows="2" id="labNotes"></textarea>
-                    </div>
-                    
                     <div class="form-row">
                         <label class="form-label">
                             <i class="fas fa-file-medical label-icon"></i> Symptoms Details
                         </label>
                         <textarea name="symptoms" class="form-control" placeholder="Describe patient symptoms..." id="symptomsTextareaLab" rows="2"></textarea>
                     </div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">
-                        <i class="fas fa-comment-medical label-icon"></i> Complaint / Reason
-                    </label>
-                    <textarea name="complaint" class="form-control" placeholder="Patient's main complaint..." id="complaintInputLab" rows="2"></textarea>
+                    
+                    <div class="form-row">
+                        <label class="form-label">
+                            <i class="fas fa-comment-medical label-icon"></i> Complaint / Reason
+                        </label>
+                        <textarea name="complaint" class="form-control" placeholder="Patient's main complaint..." id="complaintInputLab" rows="2"></textarea>
+                    </div>
                 </div>
             </div>
             
@@ -2395,7 +2533,6 @@ include_once '../../components/reception_sidebar.php';
         var doctorRequired = document.getElementById('doctorRequired');
         var assignBtn = document.getElementById('assignBtn');
         var helpText = document.getElementById('assignmentTypeHelp');
-        var visitTypeRow = document.getElementById('visitTypeRow');
         
         if (type === 'lab') {
             doctorSection.style.display = 'none';
@@ -2411,6 +2548,9 @@ include_once '../../components/reception_sidebar.php';
                 loadLabTests();
             }
             
+            // Open lab tests modal
+            openLabTests();
+            
         } else {
             doctorSection.style.display = 'block';
             labSection.style.display = 'none';
@@ -2421,113 +2561,174 @@ include_once '../../components/reception_sidebar.php';
         }
     }
 
-// ================================================================
-// LOAD LAB TESTS - FULL FIXED
-// ================================================================
-function loadLabTests() {
-    var container = document.getElementById('labTestsContainer');
-    if (!container) return;
-    
-    container.innerHTML = '<div class="text-center py-4 text-gray-400"><i class="fas fa-spinner fa-spin"></i> Loading lab tests...</div>';
-    
-    var branchId = <?= json_encode($selected_branch_id) ?>;
-    var apiUrl = '/dispensary_system/frontend/api/get_lab_tests.php?branch_id=' + branchId + '&t=' + new Date().getTime();
-    
-    console.log('Fetching lab tests from:', apiUrl);
-    
-    fetch(apiUrl)
-        .then(function(response) { 
-            console.log('Response status:', response.status);
-            if (!response.ok) {
-                throw new Error('HTTP ' + response.status + ': ' + response.statusText);
-            }
-            return response.json(); 
-        })
-        .then(function(data) {
-            console.log('Lab tests data:', data);
-            
-            if (data.success && data.tests && data.tests.length > 0) {
-                var html = '';
-                var totalPrice = 0;
+    // ================================================================
+    // OPEN / CLOSE LAB TESTS
+    // ================================================================
+    function openLabTests() {
+        var labSection = document.getElementById('labSection');
+        if (labSection) labSection.style.display = 'block';
+        
+        // Load lab tests if not loaded
+        var container = document.getElementById('labTestsContainer');
+        if (container && container.querySelectorAll('.lab-test-item').length === 0) {
+            loadLabTests();
+        }
+    }
+
+    function closeLabTests() {
+        var labSection = document.getElementById('labSection');
+        if (labSection) labSection.style.display = 'none';
+        
+        // Reset assignment type to doctor
+        var select = document.getElementById('assignmentTypeSelect');
+        if (select) {
+            select.value = 'doctor';
+            toggleAssignmentType('doctor');
+        }
+    }
+
+    // ================================================================
+    // LOAD LAB TESTS
+    // ================================================================
+    function loadLabTests() {
+        var container = document.getElementById('labTestsContainer');
+        if (!container) return;
+        
+        container.innerHTML = '<div class="text-center py-4 text-gray-400"><i class="fas fa-spinner fa-spin"></i> Loading lab tests...</div>';
+        
+        var branchId = <?= json_encode($selected_branch_id) ?>;
+        var apiUrl = '/dispensary_system/frontend/api/get_lab_tests.php?branch_id=' + branchId + '&t=' + new Date().getTime();
+        
+        fetch(apiUrl)
+            .then(function(response) { 
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+                }
+                return response.json(); 
+            })
+            .then(function(data) {
+                console.log('Lab tests response:', data);
                 
-                data.tests.forEach(function(test, index) {
-                    var price = Number(test.price) || 0;
-                    totalPrice += price;
-                    html += `
-                        <div class="lab-test-item">
-                            <input type="checkbox" name="lab_test_ids[]" value="${test.id}" id="lab_test_${test.id}" class="lab-test-checkbox" onchange="updateLabSelection()">
-                            <label for="lab_test_${test.id}">
-                                <strong>${escapeHtml(test.test_name)}</strong>
-                                ${test.category ? `<span class="lab-test-category">${escapeHtml(test.category)}</span>` : ''}
-                            </label>
-                            <span class="lab-test-price">TSh ${price.toLocaleString()}</span>
+                if (data.success && data.tests && data.tests.length > 0) {
+                    var html = '';
+                    var totalPrice = 0;
+                    
+                    data.tests.forEach(function(test) {
+                        var price = Number(test.price) || 0;
+                        totalPrice += price;
+                        html += `
+                            <div class="lab-test-item">
+                                <input type="checkbox" name="lab_test_ids[]" value="${test.id}" id="lab_test_${test.id}" class="lab-test-checkbox" onchange="updateLabSelection()">
+                                <label for="lab_test_${test.id}">
+                                    <strong>${escapeHtml(test.test_name)}</strong>
+                                    ${test.category ? `<span class="lab-test-category">${escapeHtml(test.category)}</span>` : ''}
+                                </label>
+                                <span class="lab-test-price">TSh ${price.toLocaleString()}</span>
+                            </div>
+                        `;
+                    });
+                    
+                    container.innerHTML = html;
+                    updateLabSelection();
+                    
+                    // Update total price in footer
+                    var totalPriceEl = document.getElementById('labTotalPrice');
+                    if (totalPriceEl) {
+                        totalPriceEl.textContent = 'Total: TSh ' + totalPrice.toLocaleString();
+                    }
+                    
+                } else {
+                    container.innerHTML = `
+                        <div class="text-center py-4 text-gray-400">
+                            <i class="fas fa-flask"></i>
+                            <p>No lab tests available</p>
+                            <p class="text-xs mt-1">Please add lab tests to the catalog first</p>
                         </div>
                     `;
-                });
-                
-                var selectAllHtml = `
-                    <div class="lab-test-item" style="background:var(--primary-bg);border-bottom:2px solid var(--border-color);">
-                        <input type="checkbox" id="selectAllLabTests" onchange="toggleAllLabTests(this.checked)" style="accent-color:#7C3AED;width:16px;height:16px;">
-                        <label for="selectAllLabTests" style="font-weight:600;color:var(--primary);cursor:pointer;">
-                            <i class="fas fa-check-double"></i> Select All Tests
-                        </label>
-                        <span class="lab-test-price" id="labTotalPrice">Total: TSh ${totalPrice.toLocaleString()}</span>
-                    </div>
-                `;
-                
-                container.innerHTML = selectAllHtml + html;
-                updateLabSelection();
-                
-            } else {
+                }
+            })
+            .catch(function(error) {
+                console.error('Error loading lab tests:', error);
                 container.innerHTML = `
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-flask"></i>
-                        <p>No lab tests available</p>
-                        <p class="text-xs mt-1">Please add lab tests to the catalog first</p>
+                    <div class="text-center py-4 text-red-400">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <p>Error loading lab tests</p>
+                        <p class="text-xs mt-1">${error.message}</p>
+                        <button onclick="loadLabTests()" class="btn btn-outline btn-sm mt-2" style="padding:4px 12px;font-size:0.7rem;border-radius:6px;border:1px solid #DC2626;color:#DC2626;background:transparent;cursor:pointer;">
+                            <i class="fas fa-sync-alt"></i> Retry
+                        </button>
                     </div>
                 `;
-            }
-        })
-        .catch(function(error) {
-            console.error('Error loading lab tests:', error);
-            container.innerHTML = `
-                <div class="text-center py-4 text-red-400">
-                    <i class="fas fa-exclamation-circle"></i>
-                    <p>Error loading lab tests</p>
-                    <p class="text-xs mt-1">${error.message}</p>
-                    <button onclick="loadLabTests()" class="btn btn-outline btn-sm mt-2" style="padding:4px 12px;font-size:0.7rem;border-radius:6px;border:1px solid #DC2626;color:#DC2626;background:transparent;cursor:pointer;">
-                        <i class="fas fa-sync-alt"></i> Retry
-                    </button>
-                </div>
-            `;
-        });
-}
+            });
+    }
 
-    function toggleAllLabTests(checked) {
+    // ================================================================
+    // SELECT / DESELECT ALL LAB TESTS
+    // ================================================================
+    function selectAllLabTests() {
         var checkboxes = document.querySelectorAll('.lab-test-checkbox');
         checkboxes.forEach(function(cb) {
-            cb.checked = checked;
+            cb.checked = true;
         });
         updateLabSelection();
     }
 
+    function deselectAllLabTests() {
+        var checkboxes = document.querySelectorAll('.lab-test-checkbox');
+        checkboxes.forEach(function(cb) {
+            cb.checked = false;
+        });
+        updateLabSelection();
+    }
+
+    // ================================================================
+    // UPDATE LAB SELECTION
+    // ================================================================
     function updateLabSelection() {
         var checkboxes = document.querySelectorAll('.lab-test-checkbox:checked');
         var count = checkboxes.length;
         var total = 0;
-        var totalPriceEl = document.getElementById('labTotalPrice');
+        var names = [];
         
         checkboxes.forEach(function(cb) {
             var item = cb.closest('.lab-test-item');
             if (item) {
+                var nameEl = item.querySelector('label strong');
+                if (nameEl) {
+                    names.push(nameEl.textContent);
+                }
                 var priceText = item.querySelector('.lab-test-price')?.textContent || '';
                 var price = parseFloat(priceText.replace(/[^0-9.]/g, ''));
                 if (!isNaN(price)) total += price;
             }
         });
         
+        // Update count badge
+        var countEl = document.getElementById('labSelectedCount');
+        if (countEl) {
+            countEl.textContent = '(' + count + ' selected)';
+        }
+        
+        // Update total price
+        var totalPriceEl = document.getElementById('labTotalPrice');
         if (totalPriceEl) {
-            totalPriceEl.textContent = 'Selected: ' + count + ' tests | Total: TSh ' + total.toLocaleString();
+            if (count > 0) {
+                totalPriceEl.textContent = 'Total: TSh ' + total.toLocaleString();
+            } else {
+                totalPriceEl.textContent = 'Total: TSh 0';
+            }
+        }
+        
+        // Update selected summary
+        var summaryEl = document.getElementById('labSelectedSummary');
+        var namesEl = document.getElementById('labSelectedNames');
+        if (summaryEl && namesEl) {
+            if (count > 0) {
+                summaryEl.style.display = 'block';
+                namesEl.textContent = names.join(', ');
+            } else {
+                summaryEl.style.display = 'none';
+            }
         }
     }
 
@@ -2704,8 +2905,6 @@ function loadLabTests() {
         
         // Calculate BMI on load
         calculateBMI();
-        
-        // Load lab tests if lab tab is active by default? No, load on demand
     });
 
     // ================================================================
@@ -2752,18 +2951,19 @@ function loadLabTests() {
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign Doctor OR Lab Test (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Assign Doctor OR Lab Test (FIXED - NULL)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 All Patients: <?= count($all_patients) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c⏳ Pending: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Assigned: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors: <?= count($doctors) ?> (<?= $online_doctors_count ?> online)', 'font-size:13px; color:#64748B;');
-    console.log('%c🧪 Lab Tests: Loaded via AJAX from lab_tests_catalog', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🧪 Lab Tests: Uses NULL for doctor_id (foreign key constraint fixed)', 'font-size:13px; color:#7C3AED;');
+    console.log('%c❌ Close button: Click to close lab tests modal', 'font-size:13px; color:#DC2626;');
     console.log('%c💓 6 Vital Signs: BP, Temp, Pulse, Weight, Height, BMI', 'font-size:13px; color:#DC2626;');
     console.log('%c📊 BMI Auto-calculated from Weight & Height', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Doctor dropdown auto-updates every 3 seconds', 'font-size:13px; color:#34D399;');
     console.log('%c📅 7 Days Rule: Fee waived if paid within last 7 days', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ Single dropdown: Choose Doctor OR Lab Test', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ doctor_id = NULL for lab tests (FIXED)', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
