@@ -2,12 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/assign_doctor.php
 // RECEPTION - ASSIGN / CHANGE DOCTOR FOR PATIENT
-// SHOWS ALL PATIENTS WITH ACTIVE VISIT (NEW + PENDING + ASSIGNED)
-// FEES ARE HIDDEN - TAKEN FROM DATABASE AUTOMATICALLY
-// WITH 7 DAYS FEE VALIDATION
-// BILLS GO TO CASHIER AUTOMATICALLY
-// AUTO-UPDATE DOCTOR DROPDOWN (3 SECONDS) - INSTANT STATUS CHANGE
-// FIXED: Dynamic fee mapping based on visit type
+// FIXED: Doctor name updates immediately after change
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -32,6 +27,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
+$user_id = $_SESSION['user_id'];
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $selected_branch_id = $user_branch_id;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
@@ -39,7 +35,7 @@ $message = '';
 $message_type = '';
 
 // Initialize variables
-$all_active_patients = [];
+$all_patients = [];
 $pending_patients = [];
 $assigned_patients = [];
 $doctors = [];
@@ -48,16 +44,18 @@ $total_doctors = 0;
 $visit_type_mapping = [];
 $pending_count = 0;
 $assigned_count = 0;
+$selected_patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
+$latest_vital_signs = null;
+$selected_patient_data = null;
 
 try {
     $db = getDB();
     
     // ================================================================
-    // GET CONSULTATION FEES FROM DATABASE (DYNAMIC MAPPING)
+    // GET CONSULTATION FEES FROM DATABASE
     // ================================================================
     $visit_type_mapping = [];
     
-    // Get all consultation services
     $stmt = $db->prepare("
         SELECT s.id, s.service_name, s.price, sc.category_name
         FROM services s
@@ -69,11 +67,9 @@ try {
     $stmt->execute();
     $services = $stmt->fetchAll();
     
-    // Map services to visit types based on service name
     foreach ($services as $service) {
         $service_name = strtolower($service['service_name']);
         
-        // Map service names to visit types
         if (strpos($service_name, 'general') !== false || strpos($service_name, 'new') !== false) {
             $visit_type_mapping['new'] = [
                 'fee' => $service['price'],
@@ -101,39 +97,19 @@ try {
         }
     }
     
-    // Fallback: if no mapping found, use default values
+    // Fallback if no mapping found
     if (empty($visit_type_mapping)) {
-        // Try to get any consultation services
-        $stmt = $db->prepare("
-            SELECT id, service_name, price 
-            FROM services 
-            WHERE category_id = (SELECT id FROM service_categories WHERE category_name = 'Consultation' LIMIT 1)
-            AND is_active = 1
-            LIMIT 4
-        ");
-        $stmt->execute();
-        $fallback_services = $stmt->fetchAll();
-        
-        if (count($fallback_services) >= 4) {
-            $visit_type_mapping = [
-                'new' => ['fee' => $fallback_services[0]['price'], 'id' => $fallback_services[0]['id'], 'name' => $fallback_services[0]['service_name']],
-                'follow-up' => ['fee' => $fallback_services[1]['price'], 'id' => $fallback_services[1]['id'], 'name' => $fallback_services[1]['service_name']],
-                'emergency' => ['fee' => $fallback_services[2]['price'], 'id' => $fallback_services[2]['id'], 'name' => $fallback_services[2]['service_name']],
-                'specialist' => ['fee' => $fallback_services[3]['price'], 'id' => $fallback_services[3]['id'], 'name' => $fallback_services[3]['service_name']]
-            ];
-        } else {
-            // Ultimate fallback - hardcoded values
-            $visit_type_mapping = [
-                'new' => ['fee' => 15000, 'id' => null, 'name' => 'General Consultation'],
-                'follow-up' => ['fee' => 10000, 'id' => null, 'name' => 'Follow-up Consultation'],
-                'emergency' => ['fee' => 25000, 'id' => null, 'name' => 'Emergency Consultation'],
-                'specialist' => ['fee' => 30000, 'id' => null, 'name' => 'Specialist Consultation']
-            ];
-        }
+        $visit_type_mapping = [
+            'new' => ['fee' => 15000, 'id' => null, 'name' => 'General Consultation'],
+            'follow-up' => ['fee' => 10000, 'id' => null, 'name' => 'Follow-up Consultation'],
+            'emergency' => ['fee' => 25000, 'id' => null, 'name' => 'Emergency Consultation'],
+            'specialist' => ['fee' => 30000, 'id' => null, 'name' => 'Specialist Consultation']
+        ];
     }
     
     // ================================================================
-    // GET ALL PATIENTS WITH ACTIVE VISIT
+    // GET ALL PATIENTS WITH CURRENT ASSIGNED DOCTOR
+    // FIXED: Always get fresh doctor name from database
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -141,6 +117,10 @@ try {
             p.full_name,
             p.patient_id,
             p.phone,
+            p.gender,
+            p.date_of_birth,
+            p.blood_group,
+            p.allergies,
             p.assigned_doctor_id,
             u.full_name as assigned_doctor_name,
             u.is_online as assigned_doctor_online,
@@ -154,31 +134,44 @@ try {
             v.registration_fee,
             v.payment_status
         FROM patients p
-        INNER JOIN visits v ON p.id = v.patient_id
-        LEFT JOIN users u ON p.assigned_doctor_id = u.id
-        WHERE p.branch_id = ? 
-        AND v.status IN ('new', 'pending', 'assigned')
+        LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor')
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE p.branch_id = ?
+        GROUP BY p.id
         ORDER BY 
             CASE 
                 WHEN v.status IN ('new', 'pending') THEN 0
                 WHEN v.status = 'assigned' THEN 1
-                ELSE 2
+                WHEN v.status = 'with_doctor' THEN 2
+                ELSE 3
             END,
             p.full_name
     ");
     $stmt->execute([$selected_branch_id]);
-    $all_active_patients = $stmt->fetchAll();
+    $all_patients = $stmt->fetchAll();
     
     // ================================================================
-    // CHECK 7 DAYS FEE VALIDITY FOR EACH PATIENT
+    // GET SELECTED PATIENT DATA - FRESH FROM DATABASE
+    // ================================================================
+    if ($selected_patient_id > 0) {
+        foreach ($all_patients as $p) {
+            if ($p['id'] == $selected_patient_id) {
+                $selected_patient_data = $p;
+                break;
+            }
+        }
+    }
+    
+    // ================================================================
+    // SEPARATE PATIENTS BY VISIT STATUS
     // ================================================================
     $pending_patients = [];
     $assigned_patients = [];
     $pending_count = 0;
     $assigned_count = 0;
     
-    foreach ($all_active_patients as $patient) {
-        // Check if patient has paid visit within last 7 days
+    foreach ($all_patients as $patient) {
+        // Check if patient has valid paid visit within 7 days
         $stmt = $db->prepare("
             SELECT pb.created_at as paid_date, pb.total_amount
             FROM patient_bills pb
@@ -195,18 +188,37 @@ try {
         $patient['has_valid_paid_visit'] = $paid_visit ? true : false;
         $patient['paid_visit_date'] = $paid_visit ? $paid_visit['paid_date'] : null;
         $patient['paid_amount'] = $paid_visit ? $paid_visit['total_amount'] : 0;
+        $patient['has_active_visit'] = !empty($patient['visit_id']);
         
-        if (in_array($patient['visit_status'], ['new', 'pending'])) {
-            $pending_patients[] = $patient;
-            $pending_count++;
-        } elseif ($patient['visit_status'] === 'assigned') {
-            $assigned_patients[] = $patient;
-            $assigned_count++;
+        if ($patient['has_active_visit']) {
+            if (in_array($patient['visit_status'], ['new', 'pending'])) {
+                $pending_patients[] = $patient;
+                $pending_count++;
+            } elseif ($patient['visit_status'] === 'assigned') {
+                $assigned_patients[] = $patient;
+                $assigned_count++;
+            }
         }
     }
     
     // ================================================================
-    // GET DOCTORS IN THIS BRANCH (Initial load)
+    // GET LATEST VITAL SIGNS FOR SELECTED PATIENT
+    // ================================================================
+    if ($selected_patient_id > 0) {
+        $stmt = $db->prepare("
+            SELECT vs.*, u.full_name as recorded_by_name
+            FROM vital_signs vs
+            LEFT JOIN users u ON vs.recorded_by = u.id
+            WHERE vs.patient_id = ?
+            ORDER BY vs.recorded_at DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$selected_patient_id]);
+        $latest_vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+    
+    // ================================================================
+    // GET DOCTORS
     // ================================================================
     $stmt = $db->prepare("
         SELECT id, full_name, specialty, is_online 
@@ -228,224 +240,332 @@ try {
     // HANDLE FORM SUBMISSION
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $patient_id = (int)($_POST['patient_id'] ?? 0);
-        $doctor_id = (int)($_POST['doctor_id'] ?? 0);
-        $visit_type = $_POST['visit_type'] ?? 'new';
-        $symptoms = trim($_POST['symptoms'] ?? '');
-        $notes = trim($_POST['notes'] ?? '');
+        $action = $_POST['action'] ?? '';
         
-        $errors = [];
-        if ($patient_id <= 0) $errors[] = 'Please select a patient';
-        if ($doctor_id <= 0) $errors[] = 'Please select a doctor';
-        
-        if (empty($errors)) {
-            $stmt = $db->prepare("SELECT id, is_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active' AND branch_id = ?");
-            $stmt->execute([$doctor_id, $selected_branch_id]);
-            $doctor_check = $stmt->fetch();
-            if (!$doctor_check) {
-                $errors[] = 'Selected doctor is not available.';
-            }
-        }
-        
-        if (empty($errors)) {
-            // ================================================================
-            // GET FEE BASED ON VISIT TYPE USING DYNAMIC MAPPING
-            // ================================================================
-            $fee_key = $visit_type;
-            $consultation_fee = $visit_type_mapping[$fee_key]['fee'] ?? 0;
-            $consultation_service_id = $visit_type_mapping[$fee_key]['id'] ?? null;
-            $consultation_service_name = $visit_type_mapping[$fee_key]['name'] ?? 'Consultation Fee';
+        // ================================================================
+        // ASSIGN / CHANGE DOCTOR
+        // ================================================================
+        if ($action === 'assign_doctor') {
+            $patient_id = (int)($_POST['patient_id'] ?? 0);
+            $doctor_id = (int)($_POST['doctor_id'] ?? 0);
+            $visit_type = $_POST['visit_type'] ?? 'new';
+            $symptoms = trim($_POST['symptoms'] ?? '');
+            $complaint = trim($_POST['complaint'] ?? '');
+            $notes = trim($_POST['notes'] ?? '');
             
-            // ================================================================
-            // CHECK 7 DAYS VALIDITY - WAIVE FEE IF PAID WITHIN 7 DAYS
-            // ================================================================
-            $charge_fee = true;
-            $stmt = $db->prepare("
-                SELECT pb.created_at as paid_date, pb.total_amount
-                FROM patient_bills pb
-                WHERE pb.patient_id = ? 
-                AND pb.branch_id = ? 
-                AND pb.status = 'paid'
-                AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                ORDER BY pb.created_at DESC
-                LIMIT 1
-            ");
-            $stmt->execute([$patient_id, $selected_branch_id]);
-            $paid_visit = $stmt->fetch();
+            // Vital Signs
+            $temperature = $_POST['temperature'] ?? null;
+            $bp_systolic = $_POST['bp_systolic'] ?? null;
+            $bp_diastolic = $_POST['bp_diastolic'] ?? null;
+            $pulse_rate = $_POST['pulse_rate'] ?? null;
+            $weight = $_POST['weight'] ?? null;
+            $height = $_POST['height'] ?? null;
+            $vital_notes = trim($_POST['vital_notes'] ?? '');
             
-            if ($paid_visit) {
-                $charge_fee = false; // Fee is waived (valid within 7 days)
-                $consultation_fee = 0;
-            }
+            $errors = [];
+            if ($patient_id <= 0) $errors[] = 'Please select a patient';
+            if ($doctor_id <= 0) $errors[] = 'Please select a doctor';
             
-            // Check if patient has existing active visit
-            $stmt = $db->prepare("
-                SELECT id, status, visit_type, doctor_id FROM visits 
-                WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned') 
-                AND branch_id = ?
-                ORDER BY id DESC LIMIT 1
-            ");
-            $stmt->execute([$patient_id, $selected_branch_id]);
-            $existing_visit = $stmt->fetch();
-            
-            $visit_id = null;
-            $visit_number = '';
-            $is_new_visit = false;
-            
-            if ($existing_visit) {
-                // Update existing visit
-                $visit_id = $existing_visit['id'];
-                $stmt = $db->prepare("
-                    UPDATE visits 
-                    SET doctor_id = ?, status = 'assigned', 
-                        visit_type = ?, symptoms = ?, notes = ?, updated_at = NOW(),
-                        consultation_fee = ?
-                    WHERE id = ?
-                ");
-                $stmt->execute([$doctor_id, $visit_type, $symptoms, $notes, $consultation_fee, $visit_id]);
-                
-                $stmt = $db->prepare("SELECT visit_number FROM visits WHERE id = ?");
-                $stmt->execute([$visit_id]);
-                $visit = $stmt->fetch();
-                $visit_number = $visit['visit_number'] ?? '';
-                
-                if ($charge_fee && $consultation_fee > 0) {
-                    $message = "✅ Doctor changed successfully! Visit #" . $visit_number . " - Fee: TSh " . number_format($consultation_fee) . " (" . $consultation_service_name . ")";
-                } else {
-                    $message = "✅ Doctor changed successfully! Visit #" . $visit_number . " - Fee WAIVED (valid paid visit within 7 days)";
-                }
-                $message_type = 'success';
-                
-            } else {
-                // Create new visit
-                $visit_number = 'V-' . date('Y') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
-                $is_new_visit = true;
-                
-                $stmt = $db->prepare("
-                    INSERT INTO visits (
-                        visit_number, patient_id, doctor_id, branch_id, 
-                        visit_type, status, symptoms, notes, created_at, updated_at,
-                        consultation_fee
-                    ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, NOW(), NOW(), ?)
-                ");
-                
-                if ($stmt->execute([$visit_number, $patient_id, $doctor_id, $selected_branch_id, 
-                    $visit_type, $symptoms, $notes, $consultation_fee])) {
-                    $visit_id = $db->lastInsertId();
-                    
-                    if ($charge_fee && $consultation_fee > 0) {
-                        $message = "✅ Doctor assigned successfully! Visit #$visit_number - Fee: TSh " . number_format($consultation_fee) . " (" . $consultation_service_name . ")";
-                    } else {
-                        $message = "✅ Doctor assigned successfully! Visit #$visit_number - Fee WAIVED (valid paid visit within 7 days)";
-                    }
-                    $message_type = 'success';
-                } else {
-                    $message = "❌ Failed to assign doctor!";
-                    $message_type = 'error';
+            // Check if doctor exists and is active
+            if ($doctor_id > 0) {
+                $stmt = $db->prepare("SELECT id, is_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active' AND branch_id = ?");
+                $stmt->execute([$doctor_id, $selected_branch_id]);
+                $doctor_check = $stmt->fetch();
+                if (!$doctor_check) {
+                    $errors[] = 'Selected doctor is not available.';
                 }
             }
             
-            // ================================================================
-            // CREATE BILL IF FEE IS CHARGED
-            // ================================================================
-            if ($message_type === 'success' && $consultation_fee > 0 && $visit_id) {
-                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT);
+            if (empty($errors)) {
+                // ================================================================
+                // GET FEE BASED ON VISIT TYPE
+                // ================================================================
+                $fee_key = $visit_type;
+                $consultation_fee = $visit_type_mapping[$fee_key]['fee'] ?? 0;
+                $consultation_service_id = $visit_type_mapping[$fee_key]['id'] ?? null;
+                $consultation_service_name = $visit_type_mapping[$fee_key]['name'] ?? 'Consultation Fee';
+                
+                // ================================================================
+                // CHECK 7 DAYS VALIDITY
+                // ================================================================
+                $charge_fee = true;
+                $stmt = $db->prepare("
+                    SELECT pb.created_at as paid_date, pb.total_amount
+                    FROM patient_bills pb
+                    WHERE pb.patient_id = ? 
+                    AND pb.branch_id = ? 
+                    AND pb.status = 'paid'
+                    AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                    ORDER BY pb.created_at DESC
+                    LIMIT 1
+                ");
+                $stmt->execute([$patient_id, $selected_branch_id]);
+                $paid_visit = $stmt->fetch();
+                
+                if ($paid_visit) {
+                    $charge_fee = false;
+                    $consultation_fee = 0;
+                }
+                
+                // ================================================================
+                // CHECK IF PATIENT HAS EXISTING ACTIVE VISIT
+                // ================================================================
+                $stmt = $db->prepare("
+                    SELECT id, status, visit_type, doctor_id FROM visits 
+                    WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor') 
+                    AND branch_id = ?
+                    ORDER BY id DESC LIMIT 1
+                ");
+                $stmt->execute([$patient_id, $selected_branch_id]);
+                $existing_visit = $stmt->fetch();
+                
+                $visit_id = null;
+                $visit_number = '';
+                $status_msg = '';
+                $new_doctor_name = '';
                 
                 try {
-                    // Check if bill already exists for this visit
-                    $stmt = $db->prepare("SELECT id FROM patient_bills WHERE visit_id = ?");
-                    $stmt->execute([$visit_id]);
-                    $existing_bill = $stmt->fetch();
+                    $db->beginTransaction();
                     
-                    if (!$existing_bill) {
-                        // Insert bill
+                    // Get doctor name for display
+                    $stmt = $db->prepare("SELECT full_name FROM users WHERE id = ?");
+                    $stmt->execute([$doctor_id]);
+                    $doctor_data = $stmt->fetch();
+                    $new_doctor_name = $doctor_data['full_name'] ?? '';
+                    
+                    if ($existing_visit) {
+                        // ================================================================
+                        // UPDATE EXISTING VISIT
+                        // ================================================================
+                        $visit_id = $existing_visit['id'];
+                        
+                        // If visit was with_doctor or completed, create new visit
+                        if ($existing_visit['status'] === 'with_doctor' || $existing_visit['status'] === 'completed') {
+                            // Create new visit
+                            $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+                            
+                            $stmt = $db->prepare("
+                                INSERT INTO visits (
+                                    visit_number, patient_id, doctor_id, branch_id, 
+                                    visit_type, status, symptoms, complaint, notes, 
+                                    created_at, updated_at, consultation_fee, receptionist_id
+                                ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, NOW(), NOW(), ?, ?)
+                            ");
+                            
+                            $stmt->execute([
+                                $visit_number, $patient_id, $doctor_id, $selected_branch_id, 
+                                $visit_type, $symptoms, $complaint, $notes, 
+                                $consultation_fee, $user_id
+                            ]);
+                            $visit_id = $db->lastInsertId();
+                            $status_msg = "created (new visit)";
+                            
+                        } else {
+                            // Update existing pending/assigned visit
+                            $stmt = $db->prepare("
+                                UPDATE visits 
+                                SET doctor_id = ?, status = 'assigned', 
+                                    visit_type = ?, symptoms = ?, complaint = ?, notes = ?, updated_at = NOW(),
+                                    consultation_fee = ?
+                                WHERE id = ?
+                            ");
+                            $stmt->execute([$doctor_id, $visit_type, $symptoms, $complaint, $notes, $consultation_fee, $visit_id]);
+                            
+                            $stmt = $db->prepare("SELECT visit_number FROM visits WHERE id = ?");
+                            $stmt->execute([$visit_id]);
+                            $visit = $stmt->fetch();
+                            $visit_number = $visit['visit_number'] ?? '';
+                            $status_msg = "updated";
+                        }
+                        
+                    } else {
+                        // ================================================================
+                        // CREATE NEW VISIT
+                        // ================================================================
+                        $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+                        
                         $stmt = $db->prepare("
-                            INSERT INTO patient_bills (
-                                bill_number, patient_id, visit_id, 
-                                consultation_fee, subtotal, total_amount, balance, 
-                                status, created_by, branch_id, created_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+                            INSERT INTO visits (
+                                visit_number, patient_id, doctor_id, branch_id, 
+                                visit_type, status, symptoms, complaint, notes, 
+                                created_at, updated_at, consultation_fee, receptionist_id
+                            ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, NOW(), NOW(), ?, ?)
                         ");
-                        $subtotal = $consultation_fee;
+                        
                         $stmt->execute([
-                            $bill_number,
+                            $visit_number, $patient_id, $doctor_id, $selected_branch_id, 
+                            $visit_type, $symptoms, $complaint, $notes, 
+                            $consultation_fee, $user_id
+                        ]);
+                        $visit_id = $db->lastInsertId();
+                        $status_msg = "created";
+                    }
+                    
+                    // ================================================================
+                    // INSERT VITAL SIGNS (6 signs)
+                    // ================================================================
+                    $has_vital = $temperature || $bp_systolic || $bp_diastolic || 
+                                 $pulse_rate || $weight || $height;
+                    
+                    if ($has_vital && $visit_id) {
+                        // Calculate BMI
+                        $bmi = null;
+                        if ($weight && $height && $height > 0) {
+                            $height_m = $height / 100;
+                            $bmi = round($weight / ($height_m * $height_m), 1);
+                        }
+                        
+                        $stmt = $db->prepare("
+                            INSERT INTO vital_signs (
+                                patient_id, visit_id, recorded_by, branch_id,
+                                temperature, blood_pressure_systolic, blood_pressure_diastolic,
+                                pulse_rate, weight, height, bmi, notes, recorded_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                        ");
+                        $stmt->execute([
                             $patient_id,
                             $visit_id,
-                            $consultation_fee,
-                            $subtotal,
-                            $subtotal,
-                            $subtotal,
-                            $_SESSION['user_id'],
-                            $selected_branch_id
+                            $user_id,
+                            $selected_branch_id,
+                            $temperature ?: null,
+                            $bp_systolic ?: null,
+                            $bp_diastolic ?: null,
+                            $pulse_rate ?: null,
+                            $weight ?: null,
+                            $height ?: null,
+                            $bmi,
+                            $vital_notes ?: null
                         ]);
-                        $bill_id = $db->lastInsertId();
-                        
-                        // Add bill item
-                        $stmt = $db->prepare("
-                            INSERT INTO bill_items (
-                                bill_id, item_type, item_id, item_name, 
-                                quantity, unit_price, total_price, created_at
-                            ) VALUES (?, 'consultation', ?, ?, 1, ?, ?, NOW())
-                        ");
-                        $type_labels = [
-                            'new' => 'New Patient',
-                            'follow-up' => 'Follow-up',
-                            'emergency' => 'Emergency',
-                            'specialist' => 'Specialist'
-                        ];
-                        $type_label = $type_labels[$visit_type] ?? ucfirst($visit_type);
-                        $item_name = $consultation_service_name . ' (' . $type_label . ')';
-                        
-                        $stmt->execute([
-                            $bill_id,
-                            $consultation_service_id,
-                            $item_name,
-                            $consultation_fee,
-                            $consultation_fee
-                        ]);
-                        
-                        $_SESSION['current_bill_id'] = $bill_id;
                     }
                     
+                    // ================================================================
+                    // CREATE BILL IF FEE IS CHARGED
+                    // ================================================================
+                    if ($consultation_fee > 0 && $visit_id) {
+                        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT);
+                        
+                        $stmt = $db->prepare("SELECT id FROM patient_bills WHERE visit_id = ?");
+                        $stmt->execute([$visit_id]);
+                        $existing_bill = $stmt->fetch();
+                        
+                        if (!$existing_bill) {
+                            $stmt = $db->prepare("
+                                INSERT INTO patient_bills (
+                                    bill_number, patient_id, visit_id, 
+                                    consultation_fee, subtotal, total_amount, balance, 
+                                    status, created_by, branch_id, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+                            ");
+                            $subtotal = $consultation_fee;
+                            $stmt->execute([
+                                $bill_number,
+                                $patient_id,
+                                $visit_id,
+                                $consultation_fee,
+                                $subtotal,
+                                $subtotal,
+                                $subtotal,
+                                $user_id,
+                                $selected_branch_id
+                            ]);
+                            $bill_id = $db->lastInsertId();
+                            
+                            // Add bill item
+                            $stmt = $db->prepare("
+                                INSERT INTO bill_items (
+                                    bill_id, item_type, item_id, item_name, 
+                                    quantity, unit_price, total_price, created_at
+                                ) VALUES (?, 'consultation', ?, ?, 1, ?, ?, NOW())
+                            ");
+                            $type_labels = [
+                                'new' => 'New Patient',
+                                'follow-up' => 'Follow-up',
+                                'emergency' => 'Emergency',
+                                'specialist' => 'Specialist'
+                            ];
+                            $type_label = $type_labels[$visit_type] ?? ucfirst($visit_type);
+                            $item_name = $consultation_service_name . ' (' . $type_label . ')';
+                            
+                            $stmt->execute([
+                                $bill_id,
+                                $consultation_service_id,
+                                $item_name,
+                                $consultation_fee,
+                                $consultation_fee
+                            ]);
+                            
+                            $_SESSION['current_bill_id'] = $bill_id;
+                        }
+                    }
+                    
+                    // ================================================================
+                    // UPDATE PATIENT ASSIGNED DOCTOR
+                    // ================================================================
+                    $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
+                    $stmt->execute([$doctor_id, $patient_id]);
+                    
+                    // ================================================================
+                    // CLEAR SESSION CACHE FOR THIS PATIENT
+                    // ================================================================
+                    if (isset($_SESSION['patient_doctor_cache'])) {
+                        unset($_SESSION['patient_doctor_cache'][$patient_id]);
+                    }
+                    
+                    // ================================================================
+                    // LOG ACTIVITY
+                    // ================================================================
+                    try {
+                        $stmt = $db->prepare("
+                            INSERT INTO activity_logs (user_id, action, details, created_at) 
+                            VALUES (?, 'doctor_assigned', ?, NOW())
+                        ");
+                        $stmt->execute([
+                            $user_id, 
+                            "Doctor assigned to patient ID: $patient_id - Doctor: $new_doctor_name - Visit: $visit_number"
+                        ]);
+                    } catch (Exception $e) {}
+                    
+                    $db->commit();
+                    
+                    // ================================================================
+                    // SUCCESS MESSAGE WITH NEW DOCTOR NAME
+                    // ================================================================
+                    if ($charge_fee && $consultation_fee > 0) {
+                        $message = "✅ Doctor <strong>$new_doctor_name</strong> assigned successfully! Visit #$visit_number - Fee: TSh " . number_format($consultation_fee);
+                    } else {
+                        $message = "✅ Doctor <strong>$new_doctor_name</strong> assigned successfully! Visit #$visit_number - Fee WAIVED (valid paid visit within 7 days)";
+                    }
+                    
+                    if ($has_vital) {
+                        $message .= " ✅ Vital Signs recorded!";
+                    }
+                    $message_type = 'success';
+                    
+                    // Redirect with success and patient_id to refresh page
+                    echo '<script>
+                        showToast("✅ Success", "' . addslashes($message) . '", "success");
+                        setTimeout(function(){ 
+                            window.location.href = "assign_doctor.php?patient_id=' . $patient_id . '&success=1"; 
+                        }, 2000);
+                    </script>';
+                    
                 } catch (Exception $e) {
-                    error_log("Bill creation failed: " . $e->getMessage());
+                    $db->rollBack();
+                    $message = "❌ Error: " . $e->getMessage();
+                    $message_type = 'error';
                 }
-            }
-            
-            // UPDATE PATIENT ASSIGNED DOCTOR
-            if ($message_type === 'success') {
-                $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
-                $stmt->execute([$doctor_id, $patient_id]);
                 
-                // Log activity
-                try {
-                    $stmt = $db->prepare("
-                        INSERT INTO activity_logs (user_id, action, details, created_at) 
-                        VALUES (?, 'doctor_assigned', ?, NOW())
-                    ");
-                    $stmt->execute([
-                        $_SESSION['user_id'], 
-                        "Doctor assigned/changed for patient ID: $patient_id in $branch_name - Visit: $visit_number - Fee: TSh " . number_format($consultation_fee)
-                    ]);
-                } catch (Exception $e) {}
-                
-                echo '<script>
-                    setTimeout(function(){ 
-                        window.location.href = "assign_doctor.php?success=1"; 
-                    }, 2000);
-                </script>';
+            } else {
+                $message = implode('<br>', $errors);
+                $message_type = 'error';
             }
-            
-        } else {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
         }
     }
     
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
-    $all_active_patients = [];
+    $all_patients = [];
     $pending_patients = [];
     $assigned_patients = [];
     $doctors = [];
@@ -476,7 +596,7 @@ $common_symptoms = [
 ];
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
@@ -975,6 +1095,81 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
+           VITAL SIGNS - 6 SIGNS
+           ================================================================ */
+        .vital-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+        
+        .vital-item {
+            background: var(--bg-body);
+            border-radius: 8px;
+            padding: 8px 12px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        
+        .vital-item:hover {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+        }
+        
+        .vital-item .vital-label {
+            font-size: 0.6rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: block;
+        }
+        
+        .vital-item .vital-input {
+            border: none;
+            background: transparent;
+            padding: 2px 0;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            outline: none;
+            width: 100%;
+        }
+        
+        .vital-item .vital-input:focus {
+            color: var(--primary);
+        }
+        
+        .vital-item .vital-input::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.4;
+            font-weight: 400;
+        }
+        
+        .vital-item .vital-unit {
+            font-size: 0.55rem;
+            color: var(--text-secondary);
+            display: block;
+        }
+        
+        .vital-item .vital-normal {
+            font-size: 0.55rem;
+            color: var(--success);
+            display: block;
+            margin-top: 2px;
+        }
+        
+        .vital-item.bmi-item {
+            background: var(--primary-bg);
+            border-color: var(--primary);
+        }
+        
+        .vital-item.bmi-item .vital-input {
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        /* ================================================================
            STATUS BADGE
            ================================================================ */
         .status-badge-dropdown {
@@ -996,6 +1191,11 @@ include_once '../../components/reception_sidebar.php';
             color: #0B5ED7;
         }
         
+        .status-badge-dropdown.with_doctor {
+            background: #E8F0FE;
+            color: #7C3AED;
+        }
+        
         [data-theme="dark"] .status-badge-dropdown.pending {
             background: #3D2E0A;
             color: #FBBF24;
@@ -1004,6 +1204,11 @@ include_once '../../components/reception_sidebar.php';
         [data-theme="dark"] .status-badge-dropdown.assigned {
             background: #1E3A5F;
             color: #6EA8FE;
+        }
+        
+        [data-theme="dark"] .status-badge-dropdown.with_doctor {
+            background: #2D1B5F;
+            color: #A78BFA;
         }
         
         /* ================================================================
@@ -1139,20 +1344,6 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           DOCTOR STATUS UPDATE ANIMATION
-           ================================================================ */
-        .doctor-status-updated {
-            animation: flashUpdate 0.6s ease;
-        }
-        
-        @keyframes flashUpdate {
-            0% { background-color: rgba(11, 94, 215, 0.05); }
-            30% { background-color: rgba(11, 94, 215, 0.25); }
-            70% { background-color: rgba(11, 94, 215, 0.15); }
-            100% { background-color: transparent; }
-        }
-        
-        /* ================================================================
            TOAST
            ================================================================ */
         .toast-custom {
@@ -1270,6 +1461,9 @@ include_once '../../components/reception_sidebar.php';
             .form-card .form-header .form-title { font-size: 1rem; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
+            .vital-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
         
         @media (max-width: 640px) {
@@ -1279,6 +1473,9 @@ include_once '../../components/reception_sidebar.php';
             .form-card { padding: 12px; }
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; justify-content: center; }
+            .vital-grid {
+                grid-template-columns: 1fr 1fr;
+            }
         }
         
         /* ================================================================
@@ -1292,15 +1489,6 @@ include_once '../../components/reception_sidebar.php';
         .animate-fade-in-up {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
-        }
-        
-        .online-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #059669;
-            animation: pulse-dot 1.5s infinite;
         }
         
         .spinner {
@@ -1380,7 +1568,7 @@ include_once '../../components/reception_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
-                Assign or change doctor for a patient in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                Select patient, choose doctor, fill details and assign in <strong><?= htmlspecialchars($branch_name) ?></strong>
                 
                 <span class="header-badge" id="onlineDoctorBadge">
                     <i class="fas fa-user-md"></i>
@@ -1426,11 +1614,18 @@ include_once '../../components/reception_sidebar.php';
             </div>
             <div>
                 <h3 class="form-title">Assign / Change Doctor</h3>
-                <p class="form-subtitle">Select a patient and a doctor to assign or change</p>
+                <p class="form-subtitle">
+                    <span class="text-yellow-500">Step 1:</span> Select Patient → 
+                    <span class="text-blue-500">Step 2:</span> Select Doctor → 
+                    <span class="text-green-500">Step 3:</span> Fill Details → 
+                    <span class="text-purple-500">Step 4:</span> Assign
+                </p>
             </div>
         </div>
         
         <form method="POST" action="" id="assignForm">
+            <input type="hidden" name="action" value="assign_doctor">
+            
             <!-- ============================================================ -->
             <!-- ROW 1: Patient + Doctor -->
             <!-- ============================================================ -->
@@ -1438,29 +1633,44 @@ include_once '../../components/reception_sidebar.php';
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-user label-icon"></i> Patient <span class="required">*</span>
+                        <span class="text-xs font-normal text-gray-400">(Select a patient first)</span>
                     </label>
                     <select name="patient_id" class="form-control" required id="patientSelect">
                         <option value="">-- Select Patient --</option>
                         
-                        <?php if (!empty($all_active_patients) && is_array($all_active_patients) && count($all_active_patients) > 0): ?>
-                            <?php foreach ($all_active_patients as $patient): 
-                                $is_pending = in_array($patient['visit_status'], ['new', 'pending']);
-                                $status_label = $is_pending ? '⏳ Pending' : '✅ Assigned';
-                                $status_class = $is_pending ? 'pending' : 'assigned';
+                        <?php if (!empty($all_patients) && is_array($all_patients) && count($all_patients) > 0): ?>
+                            <?php foreach ($all_patients as $patient): 
+                                $status_label = '🆕 No Visit';
+                                $status_class = '';
                                 $doctor_info = !empty($patient['assigned_doctor_name']) ? ' - Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) : '';
+                                
+                                if ($patient['has_active_visit']) {
+                                    if (in_array($patient['visit_status'], ['new', 'pending'])) {
+                                        $status_label = '⏳ Pending';
+                                        $status_class = 'pending';
+                                    } elseif ($patient['visit_status'] === 'assigned') {
+                                        $status_label = '✅ Assigned';
+                                        $status_class = 'assigned';
+                                    } elseif ($patient['visit_status'] === 'with_doctor') {
+                                        $status_label = '🔵 With Doctor';
+                                        $status_class = 'with_doctor';
+                                    }
+                                }
                             ?>
-                                <option value="<?= $patient['id'] ?>" <?= ($_GET['patient_id'] ?? 0) == $patient['id'] ? 'selected' : '' ?>>
+                                <option value="<?= $patient['id'] ?>" <?= $selected_patient_id == $patient['id'] ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($patient['full_name']) ?> 
                                     (<?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>)
                                     <?php if (!empty($patient['phone'])): ?>
                                         - <?= htmlspecialchars($patient['phone']) ?>
                                     <?php endif; ?>
                                     <?= $doctor_info ?>
-                                    <span class="status-badge-dropdown <?= $status_class ?>"><?= $status_label ?></span>
+                                    <?php if ($status_class): ?>
+                                        <span class="status-badge-dropdown <?= $status_class ?>"><?= $status_label ?></span>
+                                    <?php endif; ?>
                                 </option>
                             <?php endforeach; ?>
                         <?php else: ?>
-                            <option value="" disabled>No patients with active visits found</option>
+                            <option value="" disabled>No patients found</option>
                         <?php endif; ?>
                     </select>
                     
@@ -1471,10 +1681,9 @@ include_once '../../components/reception_sidebar.php';
                         <?php endif; ?>
                         <?php if ($assigned_count > 0): ?>
                             <span class="text-blue-500">✅ <?= $assigned_count ?> Assigned</span>
+                            <span class="mx-1">|</span>
                         <?php endif; ?>
-                        <?php if ($pending_count == 0 && $assigned_count == 0): ?>
-                            <span class="text-green-500">✅ No patients with active visits</span>
-                        <?php endif; ?>
+                        <span class="text-gray-400">Total: <?= count($all_patients) ?> patients</span>
                     </div>
                 </div>
                 
@@ -1513,14 +1722,13 @@ include_once '../../components/reception_sidebar.php';
                             <i class="fas fa-info-circle mr-1"></i> 
                             <?= count($doctors) ?> doctor(s) available
                             <span class="text-green-500" id="onlineCountDisplay">(<?= $online_doctors_count ?> online)</span>
-                            <span class="text-xs text-gray-400" id="doctorLastUpdate"></span>
                         </p>
                     <?php endif; ?>
                 </div>
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 2: Visit Type (Updated with dynamic fee mapping) -->
+            <!-- ROW 2: Visit Type + Symptoms Select -->
             <!-- ============================================================ -->
             <div class="grid-2">
                 <div class="form-row">
@@ -1553,7 +1761,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 3: Symptoms Details + Notes -->
+            <!-- ROW 3: Symptoms Details + Complaint -->
             <!-- ============================================================ -->
             <div class="grid-2">
                 <div class="form-row">
@@ -1565,17 +1773,122 @@ include_once '../../components/reception_sidebar.php';
                 
                 <div class="form-row">
                     <label class="form-label">
-                        <i class="fas fa-sticky-note label-icon"></i> Additional Notes
+                        <i class="fas fa-comment-medical label-icon"></i> Complaint / Reason
                     </label>
-                    <textarea name="notes" class="form-control" placeholder="Any additional notes..." id="notesInput" rows="3"></textarea>
+                    <textarea name="complaint" class="form-control" placeholder="Patient's main complaint or reason for visit..." id="complaintInput" rows="3"></textarea>
                 </div>
+            </div>
+            
+            <!-- ================================================================ -->
+            <!-- VITAL SIGNS - 6 SIGNS -->
+            <!-- ================================================================ -->
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-heartbeat label-icon" style="color:#DC2626;"></i> Vital Signs
+                    <span class="text-xs font-normal text-gray-400">(Optional - 6 signs)</span>
+                    <?php if ($selected_patient_id > 0 && $latest_vital_signs): ?>
+                        <span class="text-xs text-green-500 ml-2">
+                            <i class="fas fa-check-circle"></i> Latest: <?= date('d/m/Y H:i', strtotime($latest_vital_signs['recorded_at'])) ?>
+                        </span>
+                    <?php endif; ?>
+                </label>
+                <div class="vital-grid">
+                    
+                    <!-- 1. Temperature -->
+                    <div class="vital-item">
+                        <span class="vital-label">🌡️ Temperature</span>
+                        <input type="number" name="temperature" class="vital-input" 
+                               step="0.1" min="35" max="42" placeholder="36.5"
+                               value="<?= $latest_vital_signs['temperature'] ?? '' ?>">
+                        <span class="vital-unit">°C</span>
+                        <span class="vital-normal">Normal: 36.5-37.5</span>
+                    </div>
+                    
+                    <!-- 2. Blood Pressure -->
+                    <div class="vital-item">
+                        <span class="vital-label">💓 Blood Pressure</span>
+                        <div style="display:flex;gap:4px;align-items:center;">
+                            <input type="number" name="bp_systolic" class="vital-input" 
+                                   style="width:45%;" min="80" max="220" placeholder="120"
+                                   value="<?= $latest_vital_signs['blood_pressure_systolic'] ?? '' ?>">
+                            <span style="color:var(--text-secondary);font-weight:700;">/</span>
+                            <input type="number" name="bp_diastolic" class="vital-input" 
+                                   style="width:45%;" min="50" max="140" placeholder="80"
+                                   value="<?= $latest_vital_signs['blood_pressure_diastolic'] ?? '' ?>">
+                        </div>
+                        <span class="vital-unit">mmHg</span>
+                        <span class="vital-normal">Normal: 120/80</span>
+                    </div>
+                    
+                    <!-- 3. Pulse Rate -->
+                    <div class="vital-item">
+                        <span class="vital-label">❤️ Pulse Rate</span>
+                        <input type="number" name="pulse_rate" class="vital-input" 
+                               min="40" max="180" placeholder="72"
+                               value="<?= $latest_vital_signs['pulse_rate'] ?? '' ?>">
+                        <span class="vital-unit">bpm</span>
+                        <span class="vital-normal">Normal: 60-100</span>
+                    </div>
+                    
+                    <!-- 4. Weight -->
+                    <div class="vital-item">
+                        <span class="vital-label">⚖️ Weight</span>
+                        <input type="number" name="weight" class="vital-input" 
+                               step="0.1" min="2" max="300" placeholder="65"
+                               value="<?= $latest_vital_signs['weight'] ?? '' ?>"
+                               id="weightInput" oninput="calculateBMI()">
+                        <span class="vital-unit">kg</span>
+                        <span class="vital-normal">Recorded</span>
+                    </div>
+                    
+                    <!-- 5. Height -->
+                    <div class="vital-item">
+                        <span class="vital-label">📏 Height</span>
+                        <input type="number" name="height" class="vital-input" 
+                               step="0.1" min="40" max="250" placeholder="170"
+                               value="<?= $latest_vital_signs['height'] ?? '' ?>"
+                               id="heightInput" oninput="calculateBMI()">
+                        <span class="vital-unit">cm</span>
+                        <span class="vital-normal">Recorded</span>
+                    </div>
+                    
+                    <!-- 6. BMI (Auto-calculated) -->
+                    <div class="vital-item bmi-item">
+                        <span class="vital-label">📊 BMI</span>
+                        <input type="number" name="bmi" class="vital-input" 
+                               id="bmiOutput" readonly
+                               step="0.1" placeholder="22.5"
+                               value="<?= $latest_vital_signs['bmi'] ?? '' ?>">
+                        <span class="vital-unit">kg/m²</span>
+                        <span class="vital-normal" id="bmiCategory">Normal: 18.5-24.9</span>
+                    </div>
+                    
+                </div>
+                
+                <!-- Vital Signs Notes -->
+                <div class="mt-2">
+                    <input type="text" name="vital_notes" class="form-control" 
+                           placeholder="Vital signs notes (optional)" 
+                           value="<?= $latest_vital_signs['notes'] ?? '' ?>"
+                           style="font-size:0.8rem;padding:6px 12px;">
+                </div>
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- ROW 4: Additional Notes -->
+            <!-- ============================================================ -->
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-sticky-note label-icon"></i> Additional Notes
+                </label>
+                <textarea name="notes" class="form-control" placeholder="Any additional notes..." id="notesInput" rows="2"></textarea>
             </div>
             
             <!-- ============================================================ -->
             <!-- FORM ACTIONS -->
             <!-- ============================================================ -->
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary" id="assignBtn" <?= (empty($all_active_patients) || !is_array($all_active_patients) || count($all_active_patients) == 0) || empty($doctors) || !is_array($doctors) || count($doctors) == 0 ? 'disabled' : '' ?>>
+                <button type="submit" class="btn btn-primary" id="assignBtn" <?= (empty($all_patients) || !is_array($all_patients) || count($all_patients) == 0) || empty($doctors) || !is_array($doctors) || count($doctors) == 0 ? 'disabled' : '' ?>>
                     <i class="fas fa-user-md"></i> Assign / Change Doctor
                 </button>
                 <button type="reset" class="btn btn-outline" id="resetBtn">
@@ -1592,6 +1905,8 @@ include_once '../../components/reception_sidebar.php';
             <div class="mt-4 pt-3 text-xs text-gray-400 text-center border-t border-gray-200 dark:border-gray-700">
                 <i class="fas fa-info-circle mr-1"></i>
                 <strong>7 Days Rule:</strong> Consultation fee is waived if patient has a valid paid visit within the last 7 days.
+                <span class="mx-2">|</span>
+                <strong>Vital Signs:</strong> 6 signs recorded (BP, Temperature, Pulse, Weight, Height, BMI)
                 <span class="mx-2">|</span>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
             </div>
@@ -1732,7 +2047,7 @@ include_once '../../components/reception_sidebar.php';
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
+            window.location.href = 'assign_doctor.php?search=' + encodeURIComponent(query);
         }
     }
     
@@ -1785,6 +2100,43 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
+    // BMI CALCULATOR
+    // ================================================================
+    function calculateBMI() {
+        var weightInput = document.getElementById('weightInput');
+        var heightInput = document.getElementById('heightInput');
+        var bmiOutput = document.getElementById('bmiOutput');
+        var bmiCategory = document.getElementById('bmiCategory');
+        
+        if (!weightInput || !heightInput || !bmiOutput || !bmiCategory) return;
+        
+        var weight = parseFloat(weightInput.value);
+        var height = parseFloat(heightInput.value);
+        
+        if (weight && height && height > 0) {
+            var heightM = height / 100;
+            var bmi = weight / (heightM * heightM);
+            bmi = Math.round(bmi * 10) / 10;
+            
+            bmiOutput.value = bmi;
+            
+            var category = '';
+            var color = '';
+            if (bmi < 18.5) { category = 'Underweight'; color = '#D97706'; }
+            else if (bmi < 25) { category = 'Normal'; color = '#059669'; }
+            else if (bmi < 30) { category = 'Overweight'; color = '#D97706'; }
+            else { category = 'Obese'; color = '#DC2626'; }
+            
+            bmiCategory.textContent = category + ' (18.5-24.9 Normal)';
+            bmiCategory.style.color = color;
+        } else {
+            bmiOutput.value = '';
+            bmiCategory.textContent = 'Normal: 18.5-24.9';
+            bmiCategory.style.color = '';
+        }
+    }
+
+    // ================================================================
     // MANUAL REFRESH
     // ================================================================
     function manualRefresh() {
@@ -1817,7 +2169,6 @@ include_once '../../components/reception_sidebar.php';
         var branchId = <?= json_encode($selected_branch_id) ?>;
         var currentDoctorId = document.getElementById('doctorSelect').value;
         
-        // Use get_online_doctors.php API
         fetch('/dispensary_system/frontend/api/get_online_doctors.php?branch_id=' + branchId + '&t=' + new Date().getTime())
             .then(function(response) { return response.json(); })
             .then(function(data) {
@@ -1826,9 +2177,7 @@ include_once '../../components/reception_sidebar.php';
                     var onlineCount = data.online_count || 0;
                     var totalDoctors = data.total_doctors || 0;
                     
-                    // ================================================================
-                    // UPDATE ONLINE COUNT DISPLAY - INSTANT UPDATE
-                    // ================================================================
+                    // Update online count display
                     var onlineCountElement = document.getElementById('onlineDoctorCount');
                     if (onlineCountElement) {
                         onlineCountElement.textContent = onlineCount;
@@ -1844,29 +2193,21 @@ include_once '../../components/reception_sidebar.php';
                         availableDoctorsStat.textContent = totalDoctors;
                     }
                     
-                    // ================================================================
-                    // UPDATE DOCTOR AVAILABILITY MESSAGE
-                    // ================================================================
                     var onlineCountDisplay = document.getElementById('onlineCountDisplay');
                     if (onlineCountDisplay) {
                         onlineCountDisplay.textContent = '(' + onlineCount + ' online)';
                     }
                     
-                    // ================================================================
-                    // CREATE DATA HASH TO CHECK IF CHANGED
-                    // ================================================================
+                    // Create data hash to check if changed
                     var dataHash = JSON.stringify(allDoctors);
                     
                     if (dataHash !== lastDoctorData) {
                         lastDoctorData = dataHash;
                         
-                        // ================================================================
-                        // REBUILD DROPDOWN
-                        // ================================================================
+                        // Rebuild dropdown
                         var select = document.getElementById('doctorSelect');
                         var currentValue = select.value;
                         
-                        // Keep first option
                         var firstOption = select.options[0];
                         select.innerHTML = '';
                         select.appendChild(firstOption);
@@ -1891,9 +2232,7 @@ include_once '../../components/reception_sidebar.php';
                             select.appendChild(option);
                         }
                         
-                        // ================================================================
-                        // SHOW UPDATE NOTIFICATION
-                        // ================================================================
+                        // Show update notification
                         var updateStatus = document.getElementById('doctorUpdateStatus');
                         if (updateStatus) {
                             var now = new Date();
@@ -1905,9 +2244,7 @@ include_once '../../components/reception_sidebar.php';
                             }, 3000);
                         }
                         
-                        // ================================================================
-                        // FLASH EFFECT ON DROPDOWN
-                        // ================================================================
+                        // Flash effect on dropdown
                         select.classList.add('doctor-status-updated');
                         setTimeout(function() {
                             select.classList.remove('doctor-status-updated');
@@ -1927,7 +2264,7 @@ include_once '../../components/reception_sidebar.php';
             clearInterval(doctorUpdateInterval);
         }
         updateDoctorDropdown();
-        doctorUpdateInterval = setInterval(updateDoctorDropdown, 3000); // 3 seconds
+        doctorUpdateInterval = setInterval(updateDoctorDropdown, 3000);
     }
 
     function stopDoctorAutoUpdate() {
@@ -1936,6 +2273,13 @@ include_once '../../components/reception_sidebar.php';
             doctorUpdateInterval = null;
         }
     }
+
+    // ================================================================
+    // CALCULATE BMI ON LOAD
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        calculateBMI();
+    });
 
     // ================================================================
     // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
@@ -1957,18 +2301,18 @@ include_once '../../components/reception_sidebar.php';
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign/Change Doctor (FIXED - Dynamic Fees)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Assign/Change Doctor (FIXED - Doctor name updates properly)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c⏳ Pending Patients: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Assigned Patients: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👨‍⚕️ Doctors Available: <?= count($doctors) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Fee Mapping:', 'font-size:13px; color:#F59E0B;', <?= json_encode($visit_type_mapping) ?>);
-    console.log('%c✅ New Patient -> General Consultation', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Follow-up -> Follow-up Consultation', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Emergency -> Emergency Consultation', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Specialist -> Specialist Consultation', 'font-size:13px; color:#34D399;');
+    console.log('%c👥 All Patients: <?= count($all_patients) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c⏳ Pending: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Assigned: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👨‍⚕️ Doctors: <?= count($doctors) ?> (<?= $online_doctors_count ?> online)', 'font-size:13px; color:#64748B;');
+    console.log('%c💓 6 Vital Signs: BP, Temp, Pulse, Weight, Height, BMI', 'font-size:13px; color:#DC2626;');
+    console.log('%c📊 BMI Auto-calculated from Weight & Height', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Doctor dropdown auto-updates every 3 seconds', 'font-size:13px; color:#34D399;');
     console.log('%c📅 7 Days Rule: Fee waived if paid within last 7 days', 'font-size:13px; color:#F59E0B;');
+    console.log('%c🔑 FIXED: Doctor name updates immediately after change', 'font-size:13px; color:#DC2626;');
+    console.log('%c💡 Uses LEFT JOIN visits v ON p.id = v.patient_id to get current doctor', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
