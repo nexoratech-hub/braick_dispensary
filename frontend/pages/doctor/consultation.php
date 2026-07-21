@@ -5,6 +5,7 @@
 // FLOW: Lab Tests → Lab Results → Diagnosis → Medication → Procedures
 // SECTIONS FROZEN UNTIL LAB RESULTS AVAILABLE
 // AUTO-UPDATE: Lab results, sections status, stats every 3 seconds
+// FIXED: Uses lab_tests table (not lab_requests)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -230,7 +231,7 @@ try {
     $stmt = $db->prepare("
         SELECT id, medication, dosage, frequency, duration, route, quantity, instructions, status 
         FROM prescriptions 
-        WHERE visit_id = ? AND status IN ('pending_pharmacy', 'dispensed')
+        WHERE visit_id = ? AND status IN ('pending', 'dispensed')
         ORDER BY created_at DESC
     ");
     $stmt->execute([$visit_id]);
@@ -240,13 +241,13 @@ try {
 // Bill Items
 $bill_items = [];
 try {
-    $stmt = $db->prepare("SELECT id, item_name, item_type, quantity, total_price FROM bill_items WHERE bill_id = ? ORDER BY created_at DESC");
+    $stmt = $db->prepare("SELECT id, item_name, item_type, quantity, total_price, payment_status, is_paid, status FROM bill_items WHERE bill_id = ? ORDER BY created_at DESC");
     $stmt->execute([$bill_id]);
     $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $bill_items = []; }
 
 // ================================================================
-// GET LAB STATUS - AUTO-UPDATE ENABLED
+// GET LAB STATUS - USES lab_tests TABLE
 // ================================================================
 $lab_requests = [];
 $lab_results = [];
@@ -261,10 +262,10 @@ function fetchLabData($db, $visit_id) {
     $lab_status = 'none';
     
     try {
-        // Check pending lab tests
+        // Check pending lab tests from lab_tests table
         $stmt = $db->prepare("
             SELECT * FROM lab_tests 
-            WHERE visit_id = ? AND status IN ('pending_lab', 'in_progress')
+            WHERE visit_id = ? AND status IN ('pending', 'in_progress')
             ORDER BY created_at DESC
         ");
         $stmt->execute([$visit_id]);
@@ -285,6 +286,10 @@ function fetchLabData($db, $visit_id) {
         } elseif ($lab_results_available) {
             $lab_status = 'completed';
         }
+        
+        // DEBUG: Log what we found
+        error_log("Lab fetch - Visit: $visit_id, Pending: " . count($lab_requests) . ", Results: " . count($lab_results));
+        
     } catch (Exception $e) {
         error_log("Lab fetch error: " . $e->getMessage());
     }
@@ -408,7 +413,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         prescription_number, visit_id, patient_id, doctor_id, 
                         medication, dosage, frequency, duration, route, quantity, instructions,
                         status, branch_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_pharmacy', ?, NOW())
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW())
                 ");
                 $stmt->execute([
                     $prescription_number,
@@ -432,9 +437,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$new_stock, $inventory_id]);
                 
                 $med_total = $med['selling_price'] * $quantity;
+                
+                // Insert into bill_items with proper status columns
                 $stmt = $db->prepare("
-                    INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
-                    VALUES (?, 'medication', ?, ?, ?, ?)
+                    INSERT INTO bill_items (
+                        bill_id, item_type, item_name, quantity, unit_price, total_price,
+                        payment_status, is_paid, status, created_at
+                    ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
                 ");
                 $stmt->execute([$bill_id, $med['medication_name'], $quantity, $med['selling_price'], $med_total]);
                 
@@ -545,6 +554,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $item_name = $procedure['procedure_name'];
                 $item_price = $procedure['price'];
                 
+                // Check if already exists
                 $stmt = $db->prepare("
                     SELECT id, quantity FROM bill_items 
                     WHERE bill_id = ? AND item_name = ? AND item_type = 'procedure'
@@ -564,8 +574,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $proc_id = $existing['id'];
                 } else {
                     $stmt = $db->prepare("
-                        INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
-                        VALUES (?, 'procedure', ?, 1, ?, ?)
+                        INSERT INTO bill_items (
+                            bill_id, item_type, item_name, quantity, unit_price, total_price,
+                            payment_status, is_paid, status, created_at
+                        ) VALUES (?, 'procedure', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
                     ");
                     $stmt->execute([$bill_id, $item_name, $item_price, $item_price]);
                     $proc_id = $db->lastInsertId();
@@ -638,8 +650,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $tool_db_id = $existing['id'];
                 } else {
                     $stmt = $db->prepare("
-                        INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
-                        VALUES (?, 'tool', ?, 1, ?, ?)
+                        INSERT INTO bill_items (
+                            bill_id, item_type, item_name, quantity, unit_price, total_price,
+                            payment_status, is_paid, status, created_at
+                        ) VALUES (?, 'tool', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
                     ");
                     $stmt->execute([$bill_id, $item_name, $item_price, $item_price]);
                     $tool_db_id = $db->lastInsertId();
@@ -704,21 +718,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     
     // ================================================================
-    // 1. SEND LAB REQUESTS - FIXED (Removed 'price' column)
+    // 1. SEND LAB REQUESTS - Uses lab_tests table
     // ================================================================
     if (isset($_POST['send_lab']) && isset($_POST['lab_tests']) && is_array($_POST['lab_tests'])) {
-        $stmt = $db->prepare("DELETE FROM lab_tests WHERE visit_id = ? AND status IN ('pending_lab', 'in_progress')");
+        // Delete existing pending lab tests for this visit
+        $stmt = $db->prepare("DELETE FROM lab_tests WHERE visit_id = ? AND status IN ('pending', 'in_progress')");
         $stmt->execute([$visit_id]);
         
         $lab_tests_sent = 0;
         foreach ($_POST['lab_tests'] as $test_name) {
             $test_name = trim($test_name);
             if (!empty($test_name)) {
-                // FIXED: Removed 'price' and 'test_type' columns since they don't exist in lab_tests table
+                // Insert into lab_tests table
                 $stmt = $db->prepare("
                     INSERT INTO lab_tests (
                         visit_id, doctor_id, test_name, status, branch_id, created_at
-                    ) VALUES (?, ?, ?, 'pending_lab', ?, NOW())
+                    ) VALUES (?, ?, ?, 'pending', ?, NOW())
                 ");
                 $stmt->execute([$visit_id, $doctor_id, $test_name, $doctor_branch_id]);
                 $lab_tests_sent++;
@@ -728,6 +743,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = "✅ " . $lab_tests_sent . " lab request(s) sent to Laboratory!";
         $message_type = 'success';
         
+        // Update visit status to lab_test
+        $stmt = $db->prepare("UPDATE visits SET status = 'lab_test', updated_at = NOW() WHERE id = ?");
+        $stmt->execute([$visit_id]);
+        
         // Refresh lab data
         $lab_data = fetchLabData($db, $visit_id);
         $lab_requests = $lab_data['requests'];
@@ -735,6 +754,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $lab_results_available = $lab_data['available'];
         $lab_status = $lab_data['status'];
         $sections_frozen = $lab_data['frozen'];
+        
+        // If lab tests were sent, force frozen state
+        if ($lab_tests_sent > 0) {
+            $sections_frozen = true;
+        }
     }
     
     // ================================================================
@@ -771,6 +795,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = "❌ Cannot complete visit. Lab tests pending!";
             $message_type = 'error';
         } else {
+            // Update visit status
             $stmt = $db->prepare("
                 UPDATE visits 
                 SET status = 'completed', is_completed = 1, completed_at = NOW(), updated_at = NOW()
@@ -778,16 +803,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ");
             $stmt->execute([$visit_id, $doctor_id]);
             
+            // Update bill status
             if ($bill_id) {
                 $stmt = $db->prepare("
                     UPDATE patient_bills 
-                    SET status = 'pending_cashier', updated_at = NOW()
+                    SET status = 'pending', updated_at = NOW()
                     WHERE id = ?
                 ");
                 $stmt->execute([$bill_id]);
             }
             
-            $message = "✅ Visit completed! All bills sent to cashier.";
+            $message = "✅ Visit completed! Bills sent to cashier.";
             $message_type = 'success';
             
             echo '<script>setTimeout(function(){ window.location.href = "my_patients.php?completed=1"; }, 2000);</script>';
@@ -2570,7 +2596,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     console.log('%c🔄 Auto-update every 3 seconds (no refresh needed)', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Results appear automatically when lab completes', 'font-size:12px; color:#059669;');
     console.log('%c✅ Sections unlock automatically when results available', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c✅ FIXED: Removed price column from lab_tests insert', 'font-size:12px; color:#DC2626;');
+    console.log('%c✅ Fixed: Using lab_tests table (not lab_requests)', 'font-size:12px; color:#DC2626;');
 </script>
 
 </body>

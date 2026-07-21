@@ -1,150 +1,259 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/results_history.php
-// LABORATORY - RESULTS HISTORY
+// LABORATORY - RESULTS HISTORY (COMPLETED TESTS)
+// WITH REAL-TIME AUTO-UPDATE (3 SECONDS) - FIXED
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// INCLUDE CONFIG
-// ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to lab.anna
+// IF NO SESSION, USE LAB.DODOMA (ID: 8) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 4;
-    $_SESSION['full_name'] = 'Anna Mushi';
+    $_SESSION['user_id'] = 8;
+    $_SESSION['full_name'] = 'Lab Technician Dodoma';
     $_SESSION['role'] = 'laboratory';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.anna';
-    $_SESSION['is_admin'] = false;
+    $_SESSION['username'] = 'lab.dodoma';
 }
 
-$user_id = $_SESSION['user_id'] ?? 4;
-$user_full_name = $_SESSION['full_name'] ?? 'Anna Mushi';
+$user_id = $_SESSION['user_id'] ?? 8;
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
-$db = getDB();
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+$db = Database::getInstance()->getConnection();
 
 // ================================================================
 // GET FILTERS
 // ================================================================
-$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
-$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
+$date_filter = isset($_GET['date']) ? $_GET['date'] : '';
 $patient_filter = isset($_GET['patient']) ? (int)$_GET['patient'] : 0;
-$test_filter = isset($_GET['test']) ? trim($_GET['test']) : '';
+$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
 
 // ================================================================
-// GET COMPLETED REQUESTS WITH RESULTS
+// 1. COMPLETED TESTS FROM lab_tests (status = 'completed')
 // ================================================================
-$query = "
-    SELECT lr.*, 
-           p.full_name as patient_name, p.patient_id,
-           u.full_name as doctor_name,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as test_count,
-           GROUP_CONCAT(DISTINCT lri.test_name SEPARATOR ', ') as test_names
-    FROM lab_requests lr
-    LEFT JOIN patients p ON lr.patient_id = p.id
-    LEFT JOIN users u ON lr.doctor_id = u.id
-    LEFT JOIN lab_request_items lri ON lri.request_id = lr.id
-    WHERE lr.branch_id = ? AND lr.status = 'completed'
+$completed_tests_query = "
+    SELECT 
+        lt.id,
+        lt.visit_id,
+        lt.test_name,
+        lt.test_type,
+        lt.status,
+        lt.created_at,
+        lt.completed_at,
+        lt.results,
+        lt.notes,
+        lt.branch_id,
+        p.id as patient_id,
+        p.full_name as patient_name,
+        p.patient_id as patient_number,
+        COALESCE(u.full_name, 'Not Assigned') as doctor_name,
+        u.specialty,
+        v.visit_number,
+        lab.full_name as lab_technician_name,
+        'test' as source_type,
+        NULL as request_number,
+        NULL as total_tests,
+        NULL as test_names
+    FROM lab_tests lt
+    JOIN visits v ON lt.visit_id = v.id
+    JOIN patients p ON v.patient_id = p.id
+    LEFT JOIN users u ON lt.doctor_id = u.id
+    LEFT JOIN users lab ON lt.lab_technician_id = lab.id
+    WHERE lt.branch_id = ? AND lt.status = 'completed'
 ";
-
-// Filter by date
-if (!empty($date_from) && !empty($date_to)) {
-    $query .= " AND DATE(lr.completed_at) BETWEEN ? AND ?";
-}
-
-// Filter by patient
-if ($patient_filter > 0) {
-    $query .= " AND lr.patient_id = ?";
-}
-
-// Filter by test name
-if (!empty($test_filter)) {
-    $query .= " AND lri.test_name LIKE ?";
-}
-
-// Search filter
-if (!empty($search)) {
-    $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lr.request_number LIKE ?)";
-}
-
-$query .= " GROUP BY lr.id ORDER BY lr.completed_at DESC";
-
-$stmt = $db->prepare($query);
 
 $params = [$user_branch_id];
 
-if (!empty($date_from) && !empty($date_to)) {
-    $params[] = $date_from;
-    $params[] = $date_to;
-}
-
-if ($patient_filter > 0) {
-    $params[] = $patient_filter;
-}
-
-if (!empty($test_filter)) {
-    $params[] = "%$test_filter%";
-}
-
 if (!empty($search)) {
+    $completed_tests_query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lt.test_name LIKE ?)";
     $search_term = "%$search%";
     $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
 }
 
-$stmt->execute($params);
-$requests = $stmt->fetchAll();
-
-// ================================================================
-// GET PATIENTS FOR FILTER
-// ================================================================
-$patients = [];
-$stmt = $db->prepare("
-    SELECT DISTINCT p.id, p.full_name, p.patient_id 
-    FROM patients p
-    JOIN lab_requests lr ON p.id = lr.patient_id
-    WHERE lr.branch_id = ? AND lr.status = 'completed'
-    ORDER BY p.full_name
-");
-$stmt->execute([$user_branch_id]);
-$patients = $stmt->fetchAll();
-
-// ================================================================
-// GET UNIQUE TESTS FOR FILTER
-// ================================================================
-$tests = [];
-$stmt = $db->prepare("
-    SELECT DISTINCT test_name 
-    FROM lab_request_items 
-    WHERE request_id IN (SELECT id FROM lab_requests WHERE branch_id = ? AND status = 'completed')
-    ORDER BY test_name
-");
-$stmt->execute([$user_branch_id]);
-$tests = $stmt->fetchAll();
-
-// ================================================================
-// GET STATUS COUNTS
-// ================================================================
-$counts = [];
-$statuses = ['pending', 'in_progress', 'completed', 'cancelled'];
-foreach ($statuses as $status) {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = ?");
-    $stmt->execute([$user_branch_id, $status]);
-    $counts[$status] = $stmt->fetch()['count'] ?? 0;
+if (!empty($date_filter)) {
+    $completed_tests_query .= " AND DATE(lt.completed_at) = ?";
+    $params[] = $date_filter;
 }
+
+if ($patient_filter > 0) {
+    $completed_tests_query .= " AND p.id = ?";
+    $params[] = $patient_filter;
+}
+
+if ($filter === 'today') {
+    $completed_tests_query .= " AND DATE(lt.completed_at) = CURDATE()";
+} elseif ($filter === 'week') {
+    $completed_tests_query .= " AND lt.completed_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+} elseif ($filter === 'month') {
+    $completed_tests_query .= " AND lt.completed_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
+}
+
+$completed_tests_query .= " ORDER BY lt.completed_at DESC";
+
+$stmt = $db->prepare($completed_tests_query);
+$stmt->execute($params);
+$completed_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// 2. COMPLETED REQUESTS FROM lab_requests (status = 'completed')
+// ================================================================
+$completed_requests_query = "
+    SELECT 
+        lr.id,
+        lr.request_number,
+        lr.visit_id,
+        lr.patient_id,
+        lr.status,
+        lr.requested_at,
+        lr.completed_at,
+        lr.branch_id,
+        p.id as patient_id,
+        p.full_name as patient_name,
+        p.patient_id as patient_number,
+        COALESCE(u.full_name, 'Not Assigned') as doctor_name,
+        u.specialty,
+        v.visit_number,
+        lab.full_name as lab_technician_name,
+        'request' as source_type,
+        (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as total_tests,
+        (SELECT GROUP_CONCAT(test_name SEPARATOR ', ') FROM lab_request_items WHERE request_id = lr.id) as test_names,
+        NULL as results,
+        NULL as notes
+    FROM lab_requests lr
+    JOIN patients p ON lr.patient_id = p.id
+    LEFT JOIN visits v ON lr.visit_id = v.id
+    LEFT JOIN users u ON lr.doctor_id = u.id
+    LEFT JOIN users lab ON lr.lab_technician_id = lab.id
+    WHERE lr.branch_id = ? AND lr.status = 'completed'
+";
+
+$params2 = [$user_branch_id];
+
+if (!empty($search)) {
+    $completed_requests_query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lr.request_number LIKE ?)";
+    $search_term = "%$search%";
+    $params2[] = $search_term;
+    $params2[] = $search_term;
+    $params2[] = $search_term;
+}
+
+if (!empty($date_filter)) {
+    $completed_requests_query .= " AND DATE(lr.completed_at) = ?";
+    $params2[] = $date_filter;
+}
+
+if ($patient_filter > 0) {
+    $completed_requests_query .= " AND p.id = ?";
+    $params2[] = $patient_filter;
+}
+
+if ($filter === 'today') {
+    $completed_requests_query .= " AND DATE(lr.completed_at) = CURDATE()";
+} elseif ($filter === 'week') {
+    $completed_requests_query .= " AND lr.completed_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+} elseif ($filter === 'month') {
+    $completed_requests_query .= " AND lr.completed_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
+}
+
+$completed_requests_query .= " ORDER BY lr.completed_at DESC";
+
+$stmt = $db->prepare($completed_requests_query);
+$stmt->execute($params2);
+$completed_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// MERGE BOTH LISTS
+// ================================================================
+$completed_items = array_merge($completed_tests, $completed_requests);
+
+// Sort by completed_at (newest first)
+usort($completed_items, function($a, $b) {
+    $time_a = $a['completed_at'] ?? $a['created_at'] ?? 0;
+    $time_b = $b['completed_at'] ?? $b['created_at'] ?? 0;
+    return strtotime($time_b) - strtotime($time_a);
+});
+
+// ================================================================
+// GET STATISTICS
+// ================================================================
+
+// Total Completed Tests (from lab_tests)
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'completed'");
+$stmt->execute([$user_branch_id]);
+$completed_tests_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// Total Completed Requests (from lab_requests)
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed'");
+$stmt->execute([$user_branch_id]);
+$completed_requests_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$total_completed = $completed_tests_count + $completed_requests_count;
+
+// Completed Today
+$today = date('Y-m-d');
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
+$stmt->execute([$user_branch_id, $today]);
+$completed_tests_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
+$stmt->execute([$user_branch_id, $today]);
+$completed_requests_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$completed_today = $completed_tests_today + $completed_requests_today;
+
+// This Week
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'completed' AND completed_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)");
+$stmt->execute([$user_branch_id]);
+$completed_tests_week = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND completed_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)");
+$stmt->execute([$user_branch_id]);
+$completed_requests_week = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$completed_week = $completed_tests_week + $completed_requests_week;
+
+// This Month
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'completed' AND completed_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)");
+$stmt->execute([$user_branch_id]);
+$completed_tests_month = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND completed_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)");
+$stmt->execute([$user_branch_id]);
+$completed_requests_month = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$completed_month = $completed_tests_month + $completed_requests_month;
+
+// ================================================================
+// GET PATIENTS LIST FOR FILTER
+// ================================================================
+$patients_list = [];
+$stmt = $db->prepare("
+    SELECT DISTINCT p.id, p.full_name, p.patient_id
+    FROM lab_tests lt
+    JOIN visits v ON lt.visit_id = v.id
+    JOIN patients p ON v.patient_id = p.id
+    WHERE lt.branch_id = ? AND lt.status = 'completed'
+    UNION
+    SELECT DISTINCT p.id, p.full_name, p.patient_id
+    FROM lab_requests lr
+    JOIN patients p ON lr.patient_id = p.id
+    WHERE lr.branch_id = ? AND lr.status = 'completed'
+");
+$stmt->execute([$user_branch_id, $user_branch_id]);
+$patients_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -174,297 +283,194 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 ?>
 
 <style>
-    /* ================================================================
-       RESULTS HISTORY STYLES
-       ================================================================ */
-    
-    .filter-tabs {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-bottom: 16px;
-        border-bottom: 2px solid var(--border-color);
-        padding-bottom: 12px;
-    }
-    
-    .filter-tab {
-        padding: 6px 16px;
-        border-radius: 20px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        text-decoration: none;
-        transition: all 0.3s ease;
-        background: var(--bg-body);
-        color: var(--text-secondary);
-        border: 2px solid transparent;
-    }
-    
-    .filter-tab:hover {
-        background: var(--primary-bg);
-        color: var(--primary);
-    }
-    
-    .filter-tab.active {
-        background: var(--primary);
-        color: white;
-        border-color: var(--primary);
-    }
-    
-    .filter-tab .count {
-        background: rgba(255,255,255,0.2);
-        padding: 0 6px;
-        border-radius: 10px;
-        font-size: 0.6rem;
-        margin-left: 4px;
-    }
-    
-    .filter-tab.active .count {
-        background: rgba(255,255,255,0.25);
-    }
-    
-    .filter-tab.pending { background: #FEF3C7; color: #D97706; }
-    .filter-tab.pending.active { background: #D97706; color: white; }
-    
-    .filter-tab.in_progress { background: #E8F0FE; color: var(--primary); }
-    .filter-tab.in_progress.active { background: var(--primary); color: white; }
-    
-    .filter-tab.completed { background: #D1FAE5; color: #059669; }
-    .filter-tab.completed.active { background: #059669; color: white; }
-    
-    .filter-tab.cancelled { background: #FEE2E2; color: #DC2626; }
-    .filter-tab.cancelled.active { background: #DC2626; color: white; }
-    
-    [data-theme="dark"] .filter-tab.pending { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .filter-tab.in_progress { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .filter-tab.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .filter-tab.cancelled { background: #3A1A1A; color: #F87171; }
-    
-    /* Request Card */
-    .request-card {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 16px 20px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        margin-bottom: 16px;
-    }
-    
-    .request-card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
-    }
-    
-    .request-card .request-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin-bottom: 8px;
-        padding-bottom: 8px;
-        border-bottom: 2px solid var(--border-color);
-    }
-    
-    .request-card .request-header .request-number {
-        font-weight: 700;
-        font-size: 1rem;
-        color: var(--text-primary);
-        font-family: monospace;
-    }
-    
-    .request-card .request-header .completed-badge {
-        font-size: 0.7rem;
-        font-weight: 600;
-        padding: 4px 12px;
-        border-radius: 20px;
-        background: #D1FAE5;
-        color: #059669;
-    }
-    
-    [data-theme="dark"] .request-card .request-header .completed-badge {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    
-    .request-card .request-body {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr 1fr;
-        gap: 12px;
-        margin-bottom: 10px;
-    }
-    
-    .request-card .request-body .info-item .label {
-        font-size: 0.6rem;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-    
-    .request-card .request-body .info-item .value {
-        font-size: 0.9rem;
-        font-weight: 500;
-        color: var(--text-primary);
-    }
-    
-    .request-card .request-tests {
-        background: var(--bg-body);
-        border-radius: 8px;
-        padding: 10px 14px;
-        margin-bottom: 10px;
-        max-height: 100px;
-        overflow-y: auto;
-    }
-    
-    .request-card .request-tests::-webkit-scrollbar {
-        width: 4px;
-    }
-    
-    .request-card .request-tests::-webkit-scrollbar-thumb {
-        background: var(--primary);
-        border-radius: 4px;
-    }
-    
-    .request-card .request-tests .test-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 3px 0;
-        border-bottom: 1px solid var(--border-color);
-        font-size: 0.8rem;
-    }
-    
-    .request-card .request-tests .test-item:last-child {
-        border-bottom: none;
-    }
-    
-    .request-card .request-tests .test-item .test-status-small {
-        font-size: 0.6rem;
-        font-weight: 600;
-        padding: 1px 8px;
-        border-radius: 10px;
-    }
-    
-    .request-card .request-tests .test-item .test-status-small.completed {
-        background: #D1FAE5;
-        color: #059669;
-    }
-    
-    [data-theme="dark"] .request-card .request-tests .test-item .test-status-small.completed {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    
-    .request-card .request-actions {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-    }
-    
-    .btn-action {
-        padding: 5px 14px;
-        border-radius: 6px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .btn-action:hover {
-        transform: scale(1.05);
-    }
-    
-    .btn-view {
-        background: var(--primary);
-        color: white;
-    }
-    .btn-view:hover {
-        background: var(--primary-dark);
-    }
-    
-    .btn-print {
-        background: #64748B;
-        color: white;
-    }
-    .btn-print:hover {
-        background: #475569;
-    }
-    
-    .btn-pdf {
-        background: #DC2626;
-        color: white;
-    }
-    .btn-pdf:hover {
-        background: #B91C1C;
-    }
-    
-    .btn-results {
-        background: #7C3AED;
-        color: white;
-    }
-    .btn-results:hover {
-        background: #6D28D9;
-    }
-    
-    .summary-grid {
+    .stats-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 12px;
+        gap: 14px;
         margin-bottom: 20px;
     }
-    
-    .summary-card {
+    .stat-card {
         background: var(--bg-card);
         border-radius: 12px;
         padding: 14px 18px;
         border: 2px solid var(--border-color);
         text-align: center;
         transition: all 0.3s ease;
-        text-decoration: none;
-        color: var(--text-primary);
     }
-    
-    .summary-card:hover {
+    .stat-card:hover {
         border-color: var(--primary);
-        transform: translateY(-3px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.06);
     }
-    
-    .summary-card .number {
-        font-size: 1.5rem;
+    .stat-card .number {
+        font-size: 1.6rem;
         font-weight: 700;
+        line-height: 1.2;
     }
-    
-    .summary-card .label {
+    .stat-card .number.total { color: #7C3AED; }
+    .stat-card .number.today { color: #059669; }
+    .stat-card .number.week { color: #0B5ED7; }
+    .stat-card .number.month { color: #D97706; }
+    .stat-card .label {
         font-size: 0.7rem;
         color: var(--text-secondary);
         font-weight: 500;
-        margin-top: 2px;
     }
     
-    .summary-card.pending .number { color: #D97706; }
-    .summary-card.in_progress .number { color: var(--primary); }
-    .summary-card.completed .number { color: #059669; }
-    .summary-card.cancelled .number { color: #DC2626; }
-    
-    .filter-section {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 12px 16px;
+    .filter-btn {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
         border: 2px solid var(--border-color);
-        margin-bottom: 16px;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 10px;
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-block;
+    }
+    .filter-btn:hover {
+        border-color: var(--primary);
+        color: var(--primary);
+    }
+    .filter-btn.active {
+        background: var(--primary);
+        color: white;
+        border-color: var(--primary);
     }
     
-    .filter-section .form-control {
-        padding: 6px 12px;
+    .item-row td {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-color);
+        vertical-align: middle;
+    }
+    .item-row:hover td {
+        background: var(--table-hover);
+    }
+    
+    .source-badge {
+        font-size: 0.55rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 10px;
+    }
+    .source-badge.test { background: #E8F0FE; color: #0B5ED7; }
+    .source-badge.request { background: #FEF3C7; color: #D97706; }
+    
+    .status-badge-completed {
+        display: inline-block;
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 2px 12px;
+        border-radius: 12px;
+        background: #D1FAE5;
+        color: #059669;
+    }
+    
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.7rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    .btn-blue { background: #0B5ED7; color: white; }
+    .btn-blue:hover { background: #0A4CA8; transform: scale(1.05); }
+    .btn-green { background: #059669; color: white; }
+    .btn-green:hover { background: #047857; transform: scale(1.05); }
+    .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
+    .btn-outline:hover { background: var(--bg-body); border-color: #0B5ED7; color: #0B5ED7; }
+    .btn-sm { padding: 3px 8px; font-size: 0.65rem; border-radius: 4px; }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+        min-width: 900px;
+    }
+    .data-table thead th {
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: 700;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: white;
+        background: #0B5ED7;
+        border-bottom: 3px solid #0A4CA8;
+        white-space: nowrap;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    .data-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+    }
+    
+    .table-wrap {
+        overflow-x: auto;
+        max-height: 500px;
+        overflow-y: auto;
+    }
+    .table-wrap::-webkit-scrollbar { width: 5px; height: 5px; }
+    .table-wrap::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+    .table-wrap::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+    
+    .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--text-secondary);
+    }
+    .empty-state i {
+        font-size: 3rem;
+        color: var(--border-color);
+        display: block;
+        margin-bottom: 10px;
+    }
+    
+    .update-badge {
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+        background: var(--bg-body);
+        padding: 2px 12px;
+        border-radius: 20px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .result-preview {
+        max-width: 150px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+    
+    .result-preview.has-result {
+        color: var(--text-primary);
+        font-weight: 500;
+    }
+    
+    .action-buttons {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+    }
+    
+    .form-control {
+        padding: 4px 10px;
         border: 2px solid var(--border-color);
         border-radius: 8px;
         font-size: 0.8rem;
@@ -473,143 +479,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         outline: none;
         transition: all 0.3s ease;
     }
-    
-    .filter-section .form-control:focus {
+    .form-control:focus {
         border-color: var(--primary);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
     }
     
-    .filter-section .btn-filter {
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        background: var(--primary);
-        color: white;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    
-    .filter-section .btn-filter:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-    }
-    
-    .filter-section .btn-clear {
-        padding: 6px 16px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-    }
-    
-    .filter-section .btn-clear:hover {
-        border-color: var(--primary);
-        color: var(--primary);
-    }
-    
-    .empty-state {
-        text-align: center;
-        padding: 50px 20px;
-        color: var(--text-secondary);
-    }
-    
-    .empty-state i {
-        font-size: 3rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 12px;
-    }
-    
-    .empty-state .sub {
-        font-size: 0.8rem;
-        margin-top: 4px;
-    }
-    
-    /* Results Summary Stats */
-    .results-stats {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-        gap: 12px;
-        margin-bottom: 16px;
-    }
-    
-    .results-stats .stat-item {
-        background: var(--bg-card);
-        border-radius: 10px;
-        padding: 10px 14px;
-        border: 2px solid var(--border-color);
-        text-align: center;
-    }
-    
-    .results-stats .stat-item .stat-number {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: var(--primary);
-    }
-    
-    .results-stats .stat-item .stat-label {
-        font-size: 0.6rem;
-        color: var(--text-secondary);
-    }
-    
     @media (max-width: 768px) {
-        .request-card .request-body {
-            grid-template-columns: 1fr 1fr;
-        }
-        .request-card .request-header {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-        .summary-grid {
-            grid-template-columns: repeat(2, 1fr);
-        }
-        .filter-section {
-            flex-direction: column;
-            align-items: stretch;
-        }
-        .filter-tabs {
-            flex-wrap: wrap;
-        }
-        .filter-tab {
-            font-size: 0.7rem;
-            padding: 4px 12px;
-        }
-        .results-stats {
-            grid-template-columns: repeat(2, 1fr);
-        }
-    }
-    
-    @media (max-width: 480px) {
-        .summary-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        .btn-action {
-            font-size: 0.6rem;
-            padding: 3px 8px;
-        }
-        .request-card .request-actions {
-            justify-content: flex-start;
-        }
-        .request-card .request-body {
-            grid-template-columns: 1fr;
-        }
-        .results-stats {
-            grid-template-columns: 1fr 1fr;
-        }
-    }
-    
-    @media print {
-        .top-nav, .sidebar, .btn, .filter-section, .filter-tabs, .footer { display: none !important; }
-        .main-content { margin: 0 !important; padding: 20px !important; }
-        .request-card { border: 1px solid #ddd !important; page-break-inside: avoid; }
-        .page-header { border-bottom: 2px solid #0B5ED7 !important; }
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        .data-table { font-size: 0.7rem; min-width: 750px; }
+        .filter-group { flex-wrap: wrap; }
+        .action-buttons { flex-direction: column; }
     }
 </style>
 
@@ -621,34 +500,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
         </button>
-        
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search by patient, ID..." 
-                   value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search history..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
         </div>
     </div>
-    
     <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
+        <span class="branch-badge"><i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?></span>
         <span class="datetime" id="currentDateTime"></span>
-        
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
-        
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
-        
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
@@ -665,201 +535,231 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-history mr-2" style="color: var(--primary);"></i> Results History
+                <i class="fas fa-history mr-2" style="color: #7C3AED;"></i> Results History
+                <span class="role-badge ml-2">LABORATORY</span>
+                <span class="update-badge ml-2" id="updateBadge">
+                    <i class="fas fa-sync-alt fa-spin"></i> Live
+                </span>
             </h1>
             <p class="page-subtitle">
-                View all completed laboratory results
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                View all completed laboratory test results
+                <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
+                    <i class="fas fa-flask mr-1"></i> <?= $total_completed ?> Total Completed
                 </span>
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
-                    <i class="fas fa-check-circle mr-1"></i> <?= $counts['completed'] ?? 0 ?> completed
+                    <i class="fas fa-calendar-day mr-1"></i> <?= $completed_today ?> Today
                 </span>
             </p>
         </div>
         <div>
-            <button onclick="window.print()" class="btn btn-outline btn-sm">
-                <i class="fas fa-print"></i> Print
-            </button>
             <a href="dashboard.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back
+                <i class="fas fa-arrow-left"></i> Dashboard
+            </a>
+            <a href="javascript:window.print()" class="btn btn-blue btn-sm">
+                <i class="fas fa-print"></i> Print
             </a>
         </div>
     </div>
 
-    <!-- Summary Cards -->
-    <div class="summary-grid animate-fade-in-up">
-        <a href="pending_requests.php" class="summary-card pending">
-            <p class="number"><?= $counts['pending'] ?? 0 ?></p>
-            <p class="label"><i class="fas fa-clock mr-1"></i> Pending</p>
-        </a>
-        <a href="in_progress.php" class="summary-card in_progress">
-            <p class="number"><?= $counts['in_progress'] ?? 0 ?></p>
-            <p class="label"><i class="fas fa-spinner mr-1"></i> In Progress</p>
-        </a>
-        <a href="completed_requests.php" class="summary-card completed">
-            <p class="number"><?= $counts['completed'] ?? 0 ?></p>
-            <p class="label"><i class="fas fa-check-circle mr-1"></i> Completed</p>
-        </a>
-        <a href="pending_requests.php?status=cancelled" class="summary-card cancelled">
-            <p class="number"><?= $counts['cancelled'] ?? 0 ?></p>
-            <p class="label"><i class="fas fa-times-circle mr-1"></i> Cancelled</p>
-        </a>
-    </div>
-
-    <!-- Results Stats -->
-    <?php if (count($requests) > 0): 
-        $total_tests = 0;
-        foreach ($requests as $req) {
-            $total_tests += $req['test_count'];
-        }
-    ?>
-    <div class="results-stats animate-fade-in-up">
-        <div class="stat-item">
-            <p class="stat-number"><?= count($requests) ?></p>
-            <p class="stat-label">Total Requests</p>
+    <!-- ================================================================ -->
+    <!-- STATS CARDS -->
+    <!-- ================================================================ -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <p class="number total" id="statTotal"><?= $total_completed ?></p>
+            <p class="label">📊 Total Completed</p>
         </div>
-        <div class="stat-item">
-            <p class="stat-number"><?= $total_tests ?></p>
-            <p class="stat-label">Total Tests</p>
+        <div class="stat-card">
+            <p class="number today" id="statToday"><?= $completed_today ?></p>
+            <p class="label">📅 Today</p>
         </div>
-        <div class="stat-item">
-            <p class="stat-number"><?= count($patients) ?></p>
-            <p class="stat-label">Patients</p>
+        <div class="stat-card">
+            <p class="number week" id="statWeek"><?= $completed_week ?></p>
+            <p class="label">📆 This Week</p>
         </div>
-        <div class="stat-item">
-            <p class="stat-number"><?= count($tests) ?></p>
-            <p class="stat-label">Test Types</p>
+        <div class="stat-card">
+            <p class="number month" id="statMonth"><?= $completed_month ?></p>
+            <p class="label">📈 This Month</p>
         </div>
     </div>
-    <?php endif; ?>
 
-    <!-- Filter Section -->
-    <div class="filter-section animate-fade-in-up">
-        <form method="GET" action="" class="flex flex-wrap items-center gap-3 w-full">
+    <!-- ================================================================ -->
+    <!-- FILTERS -->
+    <!-- ================================================================ -->
+    <div class="card mb-5">
+        <div class="flex flex-wrap items-center gap-3 filter-group">
+            <span class="text-sm font-medium text-gray-600 mr-2">Filter:</span>
+            <a href="results_history.php" class="filter-btn <?= $filter === 'all' || empty($filter) ? 'active' : '' ?>">All</a>
+            <a href="results_history.php?filter=today" class="filter-btn <?= $filter === 'today' ? 'active' : '' ?>">Today</a>
+            <a href="results_history.php?filter=week" class="filter-btn <?= $filter === 'week' ? 'active' : '' ?>">This Week</a>
+            <a href="results_history.php?filter=month" class="filter-btn <?= $filter === 'month' ? 'active' : '' ?>">This Month</a>
             
-            <input type="text" name="search" class="form-control" placeholder="Search by patient, ID..." 
-                   value="<?= htmlspecialchars($search) ?>" style="flex:1; min-width:120px;">
+            <span class="text-sm font-medium text-gray-600 ml-4 mr-2">Date:</span>
+            <input type="date" id="dateFilter" value="<?= $date_filter ?>"
+                   onchange="window.location.href='results_history.php?date='+this.value+'&filter=<?= $filter ?>&search=<?= urlencode($search) ?>&patient=<?= $patient_filter ?>'"
+                   class="form-control" style="width:auto;">
             
-            <select name="patient" class="form-control" style="min-width:150px;">
-                <option value="">All Patients</option>
-                <?php foreach ($patients as $p): ?>
-                    <option value="<?= $p['id'] ?>" <?= $patient_filter == $p['id'] ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($p['full_name']) ?> (<?= htmlspecialchars($p['patient_id']) ?>)
-                    </option>
-                <?php endforeach; ?>
-            </select>
+            <?php if (!empty($patients_list)): ?>
+                <span class="text-sm font-medium text-gray-600 ml-4 mr-2">Patient:</span>
+                <select id="patientFilter" class="form-control" style="width:auto;min-width:120px;"
+                        onchange="window.location.href='results_history.php?patient='+this.value+'&filter=<?= $filter ?>&date=<?= $date_filter ?>&search=<?= urlencode($search) ?>'">
+                    <option value="0">All Patients</option>
+                    <?php foreach ($patients_list as $p): ?>
+                        <option value="<?= $p['id'] ?>" <?= $patient_filter == $p['id'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($p['full_name']) ?> (<?= htmlspecialchars($p['patient_id']) ?>)
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            <?php endif; ?>
             
-            <select name="test" class="form-control" style="min-width:130px;">
-                <option value="">All Tests</option>
-                <?php foreach ($tests as $t): ?>
-                    <option value="<?= htmlspecialchars($t['test_name']) ?>" <?= $test_filter == $t['test_name'] ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($t['test_name']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            
-            <input type="date" name="date_from" class="form-control" value="<?= $date_from ?>" style="width:140px;">
-            <span class="text-sm text-gray-400">to</span>
-            <input type="date" name="date_to" class="form-control" value="<?= $date_to ?>" style="width:140px;">
-            
-            <button type="submit" class="btn-filter">
-                <i class="fas fa-search mr-1"></i> Apply
-            </button>
-            
-            <a href="results_history.php" class="btn-clear">
-                <i class="fas fa-times mr-1"></i> Clear
-            </a>
-        </form>
+            <?php if (!empty($search) || !empty($date_filter) || $patient_filter > 0): ?>
+                <a href="results_history.php" class="btn btn-outline btn-sm">
+                    <i class="fas fa-times"></i> Clear
+                </a>
+            <?php endif; ?>
+        </div>
     </div>
 
-    <!-- Results List -->
-    <div class="animate-fade-in-up">
-        <?php if (count($requests) > 0): ?>
-            <?php foreach ($requests as $request): ?>
-                <div class="request-card">
-                    <div class="request-header">
-                        <div class="request-number">
-                            <?= htmlspecialchars($request['request_number']) ?>
-                            <span class="completed-badge">
-                                <i class="fas fa-check-circle mr-1"></i> Completed
-                            </span>
-                        </div>
-                        <div class="text-sm text-gray-400">
-                            <i class="fas fa-calendar-alt mr-1"></i>
-                            Completed: <?= date('M d, Y h:i A', strtotime($request['completed_at'] ?? $request['created_at'])) ?>
-                        </div>
-                    </div>
-                    
-                    <div class="request-body">
-                        <div class="info-item">
-                            <div class="label">Patient</div>
-                            <div class="value"><?= htmlspecialchars($request['patient_name'] ?? 'Unknown') ?></div>
-                            <div class="text-xs text-gray-400">ID: <?= htmlspecialchars($request['patient_id'] ?? 'N/A') ?></div>
-                        </div>
-                        <div class="info-item">
-                            <div class="label">Doctor</div>
-                            <div class="value"><?= htmlspecialchars($request['doctor_name'] ?? 'N/A') ?></div>
-                        </div>
-                        <div class="info-item">
-                            <div class="label">Tests</div>
-                            <div class="value"><?= $request['test_count'] ?> tests</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="label">Lab Technician</div>
-                            <div class="value"><?= htmlspecialchars($user_full_name) ?></div>
-                        </div>
-                    </div>
-                    
-                    <div class="request-tests">
-                        <?php 
-                            $stmt = $db->prepare("SELECT test_name, status, result FROM lab_request_items WHERE request_id = ?");
-                            $stmt->execute([$request['id']]);
-                            $items = $stmt->fetchAll();
+    <!-- ================================================================ -->
+    <!-- RESULTS TABLE -->
+    <!-- ================================================================ -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-list title-blue mr-2"></i> Completed Results
+                <span class="text-sm font-normal text-gray-400" id="itemCount">(<?= count($completed_items) ?>)</span>
+            </h3>
+            <span class="text-sm text-gray-400">Scroll to view all</span>
+        </div>
+        
+        <div class="table-wrap">
+            <table class="data-table" id="historyTable">
+                <thead>
+                    <tr>
+                        <th style="border-radius: 8px 0 0 0;">#</th>
+                        <th>Item</th>
+                        <th>Patient</th>
+                        <th>Doctor</th>
+                        <th>Source</th>
+                        <th>Status</th>
+                        <th>Result</th>
+                        <th>Completed</th>
+                        <th style="border-radius: 0 8px 0 0;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="historyTableBody">
+                    <?php if (count($completed_items) > 0): ?>
+                        <?php $i = 1; foreach ($completed_items as $item): 
+                            $is_test = ($item['source_type'] === 'test');
+                            $item_name = $is_test ? ($item['test_name'] ?? 'N/A') : ($item['request_number'] ?? 'N/A');
+                            $source_label = $is_test ? '🔬 Test' : '📋 Request';
+                            $source_class = $is_test ? 'test' : 'request';
+                            $has_result = !empty($item['results']);
+                            $result_preview = $has_result ? $item['results'] : 'No result';
+                            $completed_date = $item['completed_at'] ?? $item['created_at'] ?? '';
+                            $patient_name = $item['patient_name'] ?? 'Unknown';
+                            $patient_number = $item['patient_number'] ?? $item['patient_id'] ?? 'N/A';
+                            $doctor_name = $item['doctor_name'] ?? 'Not Assigned';
+                            $specialty = $item['specialty'] ?? 'GP';
+                            
+                            if ($is_test) {
+                                $view_link = "view_test.php?id=" . $item['id'];
+                                $print_link = "view_test.php?id=" . $item['id'] . "&print=1";
+                            } else {
+                                $view_link = "view_results.php?request_id=" . $item['id'];
+                                $print_link = "view_results.php?request_id=" . $item['id'] . "&print=1";
+                            }
                         ?>
-                        <?php foreach ($items as $item): ?>
-                            <div class="test-item">
-                                <span><?= htmlspecialchars($item['test_name']) ?></span>
-                                <span>
-                                    <?php if (!empty($item['result'])): ?>
-                                        <span class="text-xs text-gray-500 mr-2">Result: <?= htmlspecialchars(substr($item['result'], 0, 30)) ?><?= strlen($item['result'] ?? '') > 30 ? '...' : '' ?></span>
+                            <tr class="item-row" data-id="<?= $item['id'] ?>">
+                                <td><?= $i++ ?></td>
+                                <td>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($item_name) ?></div>
+                                    <?php if (!$is_test && isset($item['total_tests']) && $item['total_tests'] > 0): ?>
+                                        <div class="text-xs text-gray-400"><?= $item['total_tests'] ?> test(s)</div>
                                     <?php endif; ?>
-                                    <span class="test-status-small completed">Completed</span>
-                                </span>
-                            </div>
+                                </td>
+                                <td>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($patient_name) ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($patient_number) ?></div>
+                                </td>
+                                <td>
+                                    <div class="text-sm"><?= htmlspecialchars($doctor_name) ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($specialty) ?></div>
+                                </td>
+                                <td>
+                                    <span class="source-badge <?= $source_class ?>"><?= $source_label ?></span>
+                                </td>
+                                <td>
+                                    <span class="status-badge-completed">✅ Completed</span>
+                                </td>
+                                <td>
+                                    <div class="result-preview <?= $has_result ? 'has-result' : '' ?>">
+                                        <?php if ($has_result): ?>
+                                            <?= htmlspecialchars(substr($result_preview, 0, 50)) ?>
+                                            <?php if (strlen($result_preview) > 50): ?>...<?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="text-gray-400">No result</span>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                                <td class="text-xs">
+                                    <?php if ($completed_date): ?>
+                                        <?= date('M d, Y', strtotime($completed_date)) ?>
+                                        <br><span class="text-green-600"><?= date('h:i A', strtotime($completed_date)) ?></span>
+                                    <?php else: ?>
+                                        N/A
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <div class="action-buttons">
+                                        <a href="<?= $view_link ?>" class="btn btn-blue btn-sm" title="View">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                        <?php if ($has_result): ?>
+                                            <a href="<?= $print_link ?>" class="btn btn-outline btn-sm" title="Print" style="border-color:#059669;color:#059669;" target="_blank">
+                                                <i class="fas fa-print"></i>
+                                            </a>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                            </tr>
                         <?php endforeach; ?>
-                    </div>
-                    
-                    <div class="request-actions">
-                        <a href="view_results.php?request_id=<?= $request['id'] ?>" class="btn-action btn-view">
-                            <i class="fas fa-eye"></i> View Results
-                        </a>
-                        <a href="#" class="btn-action btn-print" onclick="printResults(<?= $request['id'] ?>); return false;">
-                            <i class="fas fa-print"></i> Print
-                        </a>
-                        <a href="#" class="btn-action btn-pdf" onclick="downloadPDF(<?= $request['id'] ?>); return false;">
-                            <i class="fas fa-file-pdf"></i> Download PDF
-                        </a>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-        <?php else: ?>
-            <div class="empty-state">
-                <i class="fas fa-history"></i>
-                <p>No completed results found</p>
-                <p class="sub">
-                    <?php if (!empty($search) || $patient_filter > 0 || !empty($test_filter)): ?>
-                        Try adjusting your filters.
                     <?php else: ?>
-                        No laboratory results have been completed yet.
+                        <tr>
+                            <td colspan="9">
+                                <div class="empty-state">
+                                    <i class="fas fa-history" style="font-size: 3rem;"></i>
+                                    <p>No completed results found</p>
+                                    <p class="text-sm mt-1">Completed tests will appear here</p>
+                                </div>
+                            </td>
+                        </tr>
                     <?php endif; ?>
-                </p>
-            </div>
-        <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Card Footer -->
+        <div class="card-footer">
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-flask mr-1"></i> 
+                Showing <strong id="recordCount"><?= count($completed_items) ?></strong> completed result(s)
+            </span>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-store-alt mr-1"></i> 
+                Branch: <strong><?= htmlspecialchars($user_branch_name) ?></strong>
+            </span>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-clock mr-1"></i> 
+                <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
+            </span>
+        </div>
     </div>
 
-    <!-- Footer -->
-    <footer class="footer mt-5">
+    <!-- ================================================================ -->
+    <!-- FOOTER -->
+    <!-- ================================================================ -->
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
@@ -882,28 +782,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // PRINT RESULTS
-    // ================================================================
-    function printResults(requestId) {
-        window.open('print_results.php?request_id=' + requestId, '_blank', 'width=800,height=600');
-    }
-
-    // ================================================================
-    // DOWNLOAD PDF
-    // ================================================================
-    function downloadPDF(requestId) {
-        showToast('Downloading PDF', 'Preparing PDF...', 'info');
-        window.location.href = 'download_pdf.php?request_id=' + requestId;
-        setTimeout(function() {
-            showToast('Success', 'PDF downloaded successfully!', 'success');
-        }, 3000);
-    }
-
     // ================================================================
     // DARK MODE
     // ================================================================
@@ -940,46 +819,17 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    if (sidebarToggle) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
-    }
-
-    // ================================================================
-    // SEARCH - Ctrl+K
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
+    sidebarToggle?.addEventListener('click', function() {
+        sidebar.classList.toggle('open');
+    });
     
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var url = 'results_history.php';
-        var params = [];
-        if (query) params.push('search=' + encodeURIComponent(query));
-        if (document.querySelector('select[name="patient"]')) {
-            var patient = document.querySelector('select[name="patient"]').value;
-            if (patient) params.push('patient=' + patient);
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                sidebar.classList.remove('open');
+            }
         }
-        if (document.querySelector('select[name="test"]')) {
-            var test = document.querySelector('select[name="test"]').value;
-            if (test) params.push('test=' + encodeURIComponent(test));
-        }
-        if (params.length > 0) {
-            window.location.href = url + '?' + params.join('&');
-        } else {
-            window.location.href = url;
-        }
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
+    });
 
     // ================================================================
     // DATE & TIME
@@ -992,13 +842,29 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
+        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        var filter = '<?= $filter ?>';
+        var date = '<?= $date_filter ?>';
+        var patient = '<?= $patient_filter ?>';
+        window.location.href = 'results_history.php?search=' + encodeURIComponent(query) + '&filter=' + filter + '&date=' + date + '&patient=' + patient;
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
 
     // ================================================================
     // TOAST
@@ -1024,24 +890,27 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
 
     // ================================================================
-    // KEYBOARD SHORTCUTS
+    // CHECK FOR SUCCESS/ERROR MESSAGES
     // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
+    (function() {
+        var urlParams = new URLSearchParams(window.location.search);
+        var success = urlParams.get('success');
+        var message = urlParams.get('message');
+        
+        if (success === '1' && message) {
+            setTimeout(function() {
+                showToast('✅ Success', decodeURIComponent(message), 'success');
+            }, 500);
+        } else if (success === '0' && message) {
+            setTimeout(function() {
+                showToast('❌ Error', decodeURIComponent(message), 'error');
+            }, 500);
         }
-        if (e.key === 'Escape' && document.activeElement === searchInput) {
-            searchInput.value = '';
-            performSearch();
-        }
-    });
+    })();
 
-    console.log('%c🧪 Braick - Results History', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Completed Requests: <?= count($requests) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📋 Total Tests: <?= $total_tests ?? 0 ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🧪 Braick - Results History (FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c📊 Total: <?= $total_completed ?> | Today: <?= $completed_today ?> | Week: <?= $completed_week ?> | Month: <?= $completed_month ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Showing: <?= count($completed_items) ?> items', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

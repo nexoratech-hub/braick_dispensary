@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/view_test.php
-// LABORATORY - VIEW & UPDATE SINGLE TEST (FROM lab_tests)
+// LABORATORY - VIEW & UPDATE SINGLE TEST (WITH QUICK RESULTS)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -43,13 +43,18 @@ if ($test_id <= 0) {
 // ================================================================
 // HANDLE FORM SUBMISSION - Update test
 // ================================================================
-$message = '';
-$message_type = '';
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_test'])) {
     $status = $_POST['status'] ?? 'pending';
     $results = trim($_POST['results'] ?? '');
+    $quick_result = $_POST['quick_result'] ?? '';
     $notes = trim($_POST['notes'] ?? '');
+    
+    // Combine quick result with custom result
+    if (!empty($quick_result) && empty($results)) {
+        $results = $quick_result;
+    } elseif (!empty($quick_result) && !empty($results)) {
+        $results = $quick_result . "\n\n" . $results;
+    }
     
     $stmt = $db->prepare("
         UPDATE lab_tests 
@@ -60,20 +65,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_test'])) {
     ");
     
     if ($stmt->execute([$status, $results, $notes, $status, $user_id, $test_id, $user_branch_id])) {
-        $message = "Test updated successfully!";
-        $message_type = 'success';
-        
         // If completed, create bill
         if ($status === 'completed') {
             createTestBill($db, $test_id, $user_id, $user_branch_id);
         }
         
-        header('Location: view_test.php?id=' . $test_id . '&success=1&message=' . urlencode($message));
+        $_SESSION['success_message'] = 'Test updated successfully!';
+        header('Location: view_test.php?id=' . $test_id);
         exit;
     } else {
-        $message = "Failed to update test!";
-        $message_type = 'error';
-        header('Location: view_test.php?id=' . $test_id . '&success=0&message=' . urlencode($message));
+        $_SESSION['error_message'] = 'Failed to update test!';
+        header('Location: view_test.php?id=' . $test_id);
         exit;
     }
 }
@@ -82,6 +84,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_test'])) {
 // HANDLE ACTIONS (GET parameters)
 // ================================================================
 $action = isset($_GET['action']) ? $_GET['action'] : '';
+$message = '';
+$message_type = '';
 
 if ($action === 'start') {
     $stmt = $db->prepare("
@@ -90,9 +94,8 @@ if ($action === 'start') {
         WHERE id = ? AND branch_id = ?
     ");
     if ($stmt->execute([$user_id, $test_id, $user_branch_id])) {
-        $message = "Test started successfully!";
-        $message_type = 'success';
-        header('Location: view_test.php?id=' . $test_id . '&success=1&message=' . urlencode($message));
+        $_SESSION['success_message'] = 'Test started successfully!';
+        header('Location: view_test.php?id=' . $test_id);
         exit;
     }
 } elseif ($action === 'complete') {
@@ -102,13 +105,10 @@ if ($action === 'start') {
         WHERE id = ? AND branch_id = ?
     ");
     if ($stmt->execute([$user_id, $test_id, $user_branch_id])) {
-        $message = "Test completed successfully! Results sent to doctor.";
-        $message_type = 'success';
-        
         // Create bill
         createTestBill($db, $test_id, $user_id, $user_branch_id);
-        
-        header('Location: view_test.php?id=' . $test_id . '&success=1&message=' . urlencode($message));
+        $_SESSION['success_message'] = 'Test completed successfully! Results sent to doctor.';
+        header('Location: view_test.php?id=' . $test_id);
         exit;
     }
 } elseif ($action === 'cancel') {
@@ -118,9 +118,8 @@ if ($action === 'start') {
         WHERE id = ? AND branch_id = ?
     ");
     if ($stmt->execute([$test_id, $user_branch_id])) {
-        $message = "Test cancelled!";
-        $message_type = 'warning';
-        header('Location: view_test.php?id=' . $test_id . '&success=1&message=' . urlencode($message));
+        $_SESSION['success_message'] = 'Test cancelled!';
+        header('Location: view_test.php?id=' . $test_id);
         exit;
     }
 }
@@ -198,7 +197,7 @@ function createTestBill($db, $test_id, $user_id, $branch_id) {
         if ($bill) {
             $bill_id = $bill['id'];
             
-            // Check if this test is already in bill_items
+            // Check if already added
             $stmt = $db->prepare("
                 SELECT id FROM bill_items 
                 WHERE bill_id = ? AND item_name = ? AND item_type = 'lab_test'
@@ -207,7 +206,6 @@ function createTestBill($db, $test_id, $user_id, $branch_id) {
             $existing = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$existing) {
-                // Add to bill_items
                 $stmt = $db->prepare("
                     INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price, department)
                     VALUES (?, 'lab_test', ?, 1, ?, ?, 'Laboratory')
@@ -248,6 +246,20 @@ function createTestBill($db, $test_id, $user_id, $branch_id) {
     } catch (Exception $e) {
         error_log("Bill creation error: " . $e->getMessage());
     }
+}
+
+// ================================================================
+// GET SESSION MESSAGES
+// ================================================================
+if (isset($_SESSION['success_message'])) {
+    $message = $_SESSION['success_message'];
+    $message_type = 'success';
+    unset($_SESSION['success_message']);
+}
+if (isset($_SESSION['error_message'])) {
+    $message = $_SESSION['error_message'];
+    $message_type = 'error';
+    unset($_SESSION['error_message']);
 }
 
 // ================================================================
@@ -361,6 +373,28 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         word-wrap: break-word;
     }
     
+    .quick-result-btn {
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        border: 2px solid var(--border-color);
+        background: var(--bg-card);
+        color: var(--text-primary);
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    .quick-result-btn:hover {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: white;
+    }
+    .quick-result-btn.active {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: white;
+    }
+    
     .toast-custom {
         position: fixed;
         bottom: 24px;
@@ -393,43 +427,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         color: var(--text-secondary);
     }
     .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    
+    .quick-results-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 4px;
+    }
 </style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        <span class="datetime" id="currentDateTime"></span>
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        <a href="profile.php">
-            <img src="/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -467,16 +472,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- ================================================================ -->
     <!-- SUCCESS/ERROR MESSAGE -->
     <!-- ================================================================ -->
-    <?php if (isset($_GET['success']) && isset($_GET['message'])): ?>
-        <?php if ($_GET['success'] == '1'): ?>
-            <div class="p-4 rounded-xl mb-4 bg-green-100 text-green-700 border border-green-200">
-                <i class="fas fa-check-circle mr-2"></i> <?= htmlspecialchars(urldecode($_GET['message'])) ?>
-            </div>
-        <?php else: ?>
-            <div class="p-4 rounded-xl mb-4 bg-red-100 text-red-700 border border-red-200">
-                <i class="fas fa-exclamation-circle mr-2"></i> <?= htmlspecialchars(urldecode($_GET['message'])) ?>
-            </div>
-        <?php endif; ?>
+    <?php if ($message): ?>
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : ($message_type === 'warning' ? 'bg-yellow-100 text-yellow-700 border border-yellow-200' : 'bg-red-100 text-red-700 border border-red-200') ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'warning' ? 'fa-exclamation-triangle' : 'fa-exclamation-circle') ?> mr-2"></i>
+            <?= htmlspecialchars($message) ?>
+        </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
@@ -645,10 +645,30 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     <label class="form-label">Lab Technician</label>
                     <input type="text" class="form-control" value="<?= htmlspecialchars($user_full_name) ?>" disabled>
                 </div>
+                
+                <!-- Quick Results -->
                 <div class="md:col-span-2">
-                    <label class="form-label">Results</label>
-                    <textarea name="results" class="form-control" rows="4" placeholder="Enter test results..."><?= htmlspecialchars($test['results'] ?? '') ?></textarea>
+                    <label class="form-label">Quick Results</label>
+                    <div class="quick-results-grid">
+                        <button type="button" class="quick-result-btn" onclick="setResult('Negative')">❌ Negative</button>
+                        <button type="button" class="quick-result-btn" onclick="setResult('Positive')">✅ Positive</button>
+                        <button type="button" class="quick-result-btn" onclick="setResult('Normal')">✅ Normal</button>
+                        <button type="button" class="quick-result-btn" onclick="setResult('Abnormal')">⚠️ Abnormal</button>
+                        <button type="button" class="quick-result-btn" onclick="setResult('Reactive')">🔄 Reactive</button>
+                        <button type="button" class="quick-result-btn" onclick="setResult('Non-Reactive')">⛔ Non-Reactive</button>
+                        <button type="button" class="quick-result-btn" onclick="setResult('Indeterminate')">❓ Indeterminate</button>
+                        <button type="button" class="quick-result-btn" onclick="setResult('Pending Review')">⏳ Pending Review</button>
+                    </div>
+                    <input type="hidden" id="quick_result" name="quick_result" value="">
                 </div>
+                
+                <!-- Results -->
+                <div class="md:col-span-2">
+                    <label class="form-label">Results <span class="text-xs text-gray-400">(or type below)</span></label>
+                    <textarea name="results" id="resultsTextarea" class="form-control" rows="4" placeholder="Enter test results..."><?= htmlspecialchars($test['results'] ?? '') ?></textarea>
+                </div>
+                
+                <!-- Notes -->
                 <div class="md:col-span-2">
                     <label class="form-label">Notes / Comments</label>
                     <textarea name="notes" class="form-control" rows="2" placeholder="Additional notes..."><?= htmlspecialchars($test['notes'] ?? '') ?></textarea>
@@ -708,10 +728,42 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
+    // ================================================================
+    // QUICK RESULT FUNCTION
+    // ================================================================
+    function setResult(value) {
+        // Set hidden input
+        document.getElementById('quick_result').value = value;
+        
+        // Set textarea
+        var textarea = document.getElementById('resultsTextarea');
+        var current = textarea.value.trim();
+        
+        // If textarea has content, append with newline
+        if (current.length > 0) {
+            // Check if the value is already in the textarea
+            if (!current.includes(value)) {
+                textarea.value = current + '\n' + value;
+            }
+        } else {
+            textarea.value = value;
+        }
+        
+        // Highlight selected button
+        var buttons = document.querySelectorAll('.quick-result-btn');
+        buttons.forEach(function(btn) {
+            btn.classList.remove('active');
+            if (btn.textContent.trim().includes(value) || btn.textContent.trim() === value) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Trigger input event for any listeners
+        var event = new Event('input', { bubbles: true });
+        textarea.dispatchEvent(event);
+    }
+
     // ================================================================
     // DARK MODE
     // ================================================================
@@ -817,7 +869,18 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c🧪 Braick - View Test', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    // ================================================================
+    // CHECK FOR SESSION MESSAGES
+    // ================================================================
+    <?php if ($message): ?>
+    setTimeout(function() {
+        showToast('<?= $message_type === 'success' ? '✅ Success' : ($message_type === 'warning' ? '⚠️ Warning' : '❌ Error') ?>', 
+                  '<?= addslashes($message) ?>', 
+                  '<?= $message_type ?>');
+    }, 500);
+    <?php endif; ?>
+
+    console.log('%c🧪 Braick - View Test (With Quick Results)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c📋 Test: <?= htmlspecialchars($test['test_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Status: <?= ucfirst($test['status'] ?? 'Pending') ?>', 'font-size:13px; color:#D97706;');
