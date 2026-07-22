@@ -1,149 +1,167 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/view_prescriptions.php
-// DOCTOR - VIEW PRESCRIPTIONS (BLUE & GREEN CARDS, NO EDIT)
+// DOCTOR - VIEW PRESCRIPTIONS
+// SHOWS ALL PRESCRIPTIONS FOR THE LOGGED IN DOCTOR
+// WITH FILTERS AND AUTO-UPDATE
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
+    $_SESSION['user_id'] = 5;
+    $_SESSION['doctor_id'] = 5;
+    $_SESSION['full_name'] = 'Dr. John Mushi';
+    $_SESSION['username'] = 'dr.john';
+    $_SESSION['email'] = 'john@braick.com';
+    $_SESSION['phone'] = '+255 700 000 011';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
+    $_SESSION['specialty'] = 'General Medicine';
     $_SESSION['profile_pic'] = '';
+    $_SESSION['is_online'] = 1;
 }
 
-$doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_id = $_SESSION['user_id'] ?? 5;
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found at: " . $db_path);
-}
+require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET ALL PRESCRIPTIONS FOR THIS DOCTOR
+// GET FILTER PARAMETERS
 // ================================================================
+$filter_status = isset($_GET['status']) ? $_GET['status'] : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$status_filter = isset($_GET['status']) ? $_GET['status'] : '';
+$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
+$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
-$sql = "
-    SELECT 
-        pr.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_code,
-        p.phone as patient_phone,
-        v.visit_number,
-        (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = pr.id) as item_count
-    FROM prescriptions pr
-    JOIN patients p ON pr.patient_id = p.id
-    LEFT JOIN visits v ON pr.visit_id = v.id
-    WHERE pr.doctor_id = ?
-";
-
+// ================================================================
+// BUILD QUERY
+// ================================================================
+$conditions = ["p.doctor_id = ?"];
 $params = [$doctor_id];
 
+if ($filter_status !== 'all') {
+    $conditions[] = "p.status = ?";
+    $params[] = $filter_status;
+}
+
 if (!empty($search)) {
-    $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pr.prescription_number LIKE ?)";
+    $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR p.medication LIKE ?)";
+    $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
 }
 
-if (!empty($status_filter)) {
-    $sql .= " AND pr.status = ?";
-    $params[] = $status_filter;
+if (!empty($date_from)) {
+    $conditions[] = "DATE(p.created_at) >= ?";
+    $params[] = $date_from;
 }
 
-$sql .= " ORDER BY pr.created_at DESC";
+if (!empty($date_to)) {
+    $conditions[] = "DATE(p.created_at) <= ?";
+    $params[] = $date_to;
+}
+
+$where_clause = implode(" AND ", $conditions);
+
+// ================================================================
+// GET PRESCRIPTIONS
+// ================================================================
+$sql = "
+    SELECT 
+        p.*,
+        pat.full_name as patient_name,
+        pat.patient_id as patient_code,
+        pat.phone,
+        u.full_name as doctor_name,
+        ph.full_name as pharmacy_name,
+        v.visit_number,
+        (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = p.id) as item_count
+    FROM prescriptions p
+    LEFT JOIN patients pat ON p.patient_id = pat.id
+    LEFT JOIN users u ON p.doctor_id = u.id
+    LEFT JOIN users ph ON p.pharmacy_id = ph.id
+    LEFT JOIN visits v ON p.visit_id = v.id
+    WHERE $where_clause
+    ORDER BY p.created_at DESC
+";
 
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATUS COUNTS
 // ================================================================
-$total_prescriptions = count($prescriptions);
-$pending_count = 0;
-$dispensed_count = 0;
-$cancelled_count = 0;
-
-foreach ($prescriptions as $pr) {
-    if ($pr['status'] === 'pending') {
-        $pending_count++;
-    } elseif ($pr['status'] === 'dispensed') {
-        $dispensed_count++;
-    } elseif ($pr['status'] === 'cancelled') {
-        $cancelled_count++;
-    }
+$status_counts = [];
+$statuses = ['pending', 'dispensed', 'cancelled'];
+foreach ($statuses as $status) {
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM prescriptions 
+        WHERE doctor_id = ? AND status = ?
+    ");
+    $stmt->execute([$doctor_id, $status]);
+    $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
 
-// ================================================================
-// GET DOCTOR'S BRANCH NAME
-// ================================================================
-$doctor_branch_name = 'Not Assigned';
-try {
-    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
-    $stmt->execute([$doctor_branch_id]);
-    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($branch_data) {
-        $doctor_branch_name = $branch_data['name'];
-    }
-} catch (Exception $e) {
-    $doctor_branch_name = 'Branch';
-}
+// Total prescriptions
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ?");
+$stmt->execute([$doctor_id]);
+$total_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // ================================================================
-// FUNCTIONS
+// GET PATIENT LIST FOR FILTER
+// ================================================================
+$patients_list = [];
+$stmt = $db->prepare("
+    SELECT DISTINCT p.patient_id, pat.full_name, pat.patient_id as patient_code
+    FROM prescriptions p
+    JOIN patients pat ON p.patient_id = pat.id
+    WHERE p.doctor_id = ?
+    ORDER BY pat.full_name ASC
+");
+$stmt->execute([$doctor_id]);
+$patients_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// HELPER FUNCTIONS
 // ================================================================
 function getStatusBadgeClass($status) {
-    switch ($status) {
-        case 'dispensed': return 'badge-success';
-        case 'cancelled': return 'badge-danger';
-        case 'pending': return 'badge-warning';
-        default: return 'badge-info';
-    }
+    $map = [
+        'pending' => 'badge-warning',
+        'dispensed' => 'badge-success',
+        'cancelled' => 'badge-danger',
+        'pending_pharmacy' => 'badge-warning'
+    ];
+    return $map[$status] ?? 'badge-info';
 }
 
-function time_ago($timestamp) {
-    if (empty($timestamp)) return 'N/A';
-    $time = strtotime($timestamp);
-    if ($time === false) return 'N/A';
-    $diff = time() - $time;
-    if ($diff < 60) return 'Just now';
-    if ($diff < 3600) return floor($diff / 60) . 'm ago';
-    if ($diff < 86400) return floor($diff / 3600) . 'h ago';
-    if ($diff < 604800) return floor($diff / 86400) . 'd ago';
-    if ($diff < 2592000) return floor($diff / 604800) . 'w ago';
-    return date('M d, Y', $time);
+function getStatusLabel($status) {
+    $map = [
+        'pending' => '⏳ Pending',
+        'dispensed' => '✅ Dispensed',
+        'cancelled' => '❌ Cancelled',
+        'pending_pharmacy' => '⏳ Pending Pharmacy'
+    ];
+    return $map[$status] ?? ucfirst($status);
 }
 
-// ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = $pending_count;
+function formatDate($datetime) {
+    if (empty($datetime)) return 'N/A';
+    return date('d/m/Y h:i A', strtotime($datetime));
+}
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -152,232 +170,769 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_heade
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
 ?>
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>View Prescriptions - Braick Dispensary</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    
+    <style>
+        /* ================================================================
+           ROOT VARIABLES
+           ================================================================ */
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-dark: #047857;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --radius: 10px;
+            --radius-lg: 14px;
+            --transition: all 0.3s ease;
+            
+            /* Summary Card Colors */
+            --card-total: #0B5ED7;
+            --card-total-bg: #E8F0FE;
+            --card-pending: #D97706;
+            --card-pending-bg: #FEF3C7;
+            --card-dispensed: #059669;
+            --card-dispensed-bg: #D1FAE5;
+            --card-cancelled: #DC2626;
+            --card-cancelled-bg: #FEE2E2;
+        }
+        
+        [data-theme="dark"] {
+            --card-total: #6EA8FE;
+            --card-total-bg: #1E3A5F;
+            --card-pending: #FBBF24;
+            --card-pending-bg: #3D2E0A;
+            --card-dispensed: #34D399;
+            --card-dispensed-bg: #1A3A2A;
+            --card-cancelled: #F87171;
+            --card-cancelled-bg: #3A1A1A;
+        }
+        
+        * { box-sizing: border-box; }
+        
+        body {
+            background: var(--gray-50);
+            color: var(--gray-800);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        [data-theme="dark"] body {
+            background: var(--gray-900);
+            color: var(--gray-100);
+        }
+        
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+        
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 24px;
+            padding: 20px 24px;
+            background: #ffffff;
+            border-radius: var(--radius-lg);
+            border-bottom: 3px solid var(--primary);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        [data-theme="dark"] .page-header { background: var(--gray-800); }
+        
+        .page-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--gray-800);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        [data-theme="dark"] .page-title { color: var(--gray-100); }
+        .page-title i { color: var(--primary); }
+        .page-badge {
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: var(--primary-bg);
+            color: var(--primary);
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-family: monospace;
+        }
+        .page-subtitle {
+            font-size: 0.9rem;
+            color: var(--gray-500);
+            margin-top: 6px;
+        }
+        
+        /* ================================================================
+           STATS CARDS - COLORED
+           ================================================================ */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card {
+            border-radius: var(--radius-lg);
+            padding: 20px 24px;
+            border: none;
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.12);
+        }
+        
+        .stat-card .stat-icon {
+            font-size: 1.6rem;
+            margin-bottom: 6px;
+            opacity: 0.8;
+        }
+        
+        .stat-card .stat-number {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        
+        .stat-card .stat-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            opacity: 0.8;
+            margin-top: 2px;
+        }
+        
+        .stat-card .stat-sub {
+            font-size: 0.65rem;
+            opacity: 0.6;
+            margin-top: 4px;
+        }
+        
+        /* Total Card - Blue */
+        .stat-card.total {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+        }
+        [data-theme="dark"] .stat-card.total {
+            background: linear-gradient(135deg, #1A3A5F, #0A3D7A);
+        }
+        .stat-card.total .stat-icon { color: rgba(255,255,255,0.9); }
+        
+        /* Pending Card - Yellow/Orange */
+        .stat-card.pending {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+        }
+        [data-theme="dark"] .stat-card.pending {
+            background: linear-gradient(135deg, #3D2E0A, #5C3D0A);
+        }
+        .stat-card.pending .stat-icon { color: rgba(255,255,255,0.9); }
+        
+        /* Dispensed Card - Green */
+        .stat-card.dispensed {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+        }
+        [data-theme="dark"] .stat-card.dispensed {
+            background: linear-gradient(135deg, #1A3A2A, #0D3D2A);
+        }
+        .stat-card.dispensed .stat-icon { color: rgba(255,255,255,0.9); }
+        
+        /* Cancelled Card - Red */
+        .stat-card.cancelled {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+        }
+        [data-theme="dark"] .stat-card.cancelled {
+            background: linear-gradient(135deg, #3A1A1A, #5C1A1A);
+        }
+        .stat-card.cancelled .stat-icon { color: rgba(255,255,255,0.9); }
+        
+        /* ================================================================
+           FILTERS
+           ================================================================ */
+        .filter-section {
+            background: #ffffff;
+            border-radius: var(--radius-lg);
+            padding: 16px 20px;
+            border: 1px solid var(--gray-200);
+            margin-bottom: 24px;
+        }
+        [data-theme="dark"] .filter-section { background: var(--gray-800); border-color: var(--gray-700); }
+        
+        .filter-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+        }
+        
+        .filter-btn {
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border: 2px solid var(--gray-200);
+            background: transparent;
+            color: var(--gray-600);
+            cursor: pointer;
+            transition: var(--transition);
+            text-decoration: none;
+        }
+        .filter-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: var(--primary-bg);
+        }
+        .filter-btn.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+        .filter-btn.active:hover {
+            background: var(--primary-dark);
+            border-color: var(--primary-dark);
+        }
+        
+        .filter-input {
+            padding: 8px 14px;
+            border: 2px solid var(--gray-200);
+            border-radius: var(--radius);
+            font-size: 0.8rem;
+            background: #ffffff;
+            color: var(--gray-800);
+            outline: none;
+            transition: var(--transition);
+        }
+        [data-theme="dark"] .filter-input { background: var(--gray-700); color: var(--gray-100); border-color: var(--gray-600); }
+        .filter-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11,94,215,0.12); }
+        
+        .btn-search {
+            padding: 8px 20px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .btn-search:hover { background: var(--primary-dark); transform: translateY(-2px); }
+        
+        /* ================================================================
+           TABLE - BLUE HEADER
+           ================================================================ */
+        .table-container {
+            background: #ffffff;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--gray-200);
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+        [data-theme="dark"] .table-container { background: var(--gray-800); border-color: var(--gray-700); }
+        
+        .table-scroll {
+            overflow-x: auto;
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        
+        /* TABLE HEADER - BLUE BACKGROUND */
+        .data-table thead th {
+            text-align: left;
+            padding: 14px 18px;
+            font-weight: 700;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #ffffff;
+            background: var(--primary);
+            border-bottom: 3px solid var(--primary-dark);
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+        
+        [data-theme="dark"] .data-table thead th {
+            background: #0A3D7A;
+            border-bottom-color: #0B4EA8;
+        }
+        
+        .data-table thead th:first-child {
+            border-radius: 0;
+        }
+        
+        .data-table thead th i {
+            margin-right: 6px;
+            opacity: 0.7;
+        }
+        
+        .data-table tbody td {
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--gray-100);
+            color: var(--gray-700);
+            vertical-align: middle;
+        }
+        [data-theme="dark"] .data-table tbody td {
+            border-color: var(--gray-700);
+            color: var(--gray-300);
+        }
+        
+        .data-table tbody tr {
+            transition: var(--transition);
+        }
+        
+        .data-table tbody tr:hover td {
+            background: var(--primary-bg);
+        }
+        [data-theme="dark"] .data-table tbody tr:hover td {
+            background: #1A3A5F;
+        }
+        
+        .data-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Zebra striping - light */
+        .data-table tbody tr:nth-child(even) td {
+            background: var(--gray-50);
+        }
+        [data-theme="dark"] .data-table tbody tr:nth-child(even) td {
+            background: #1A1A2E;
+        }
+        
+        .data-table tbody tr:nth-child(even):hover td {
+            background: var(--primary-bg);
+        }
+        [data-theme="dark"] .data-table tbody tr:nth-child(even):hover td {
+            background: #1A3A5F;
+        }
+        
+        /* ================================================================
+           STATUS BADGES
+           ================================================================ */
+        .badge-status {
+            display: inline-block;
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: capitalize;
+        }
+        .badge-warning { 
+            background: var(--warning-bg); 
+            color: var(--warning);
+            border: 1px solid var(--warning);
+        }
+        .badge-success { 
+            background: var(--success-bg); 
+            color: var(--success);
+            border: 1px solid var(--success);
+        }
+        .badge-danger { 
+            background: var(--danger-bg); 
+            color: var(--danger);
+            border: 1px solid var(--danger);
+        }
+        .badge-info { 
+            background: var(--primary-bg); 
+            color: var(--primary);
+            border: 1px solid var(--primary);
+        }
+        
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
+        .btn-view {
+            padding: 4px 12px;
+            border-radius: 6px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            font-size: 0.7rem;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: var(--transition);
+        }
+        .btn-view:hover { background: var(--primary-dark); transform: translateY(-1px); }
+        
+        .btn-print {
+            padding: 4px 12px;
+            border-radius: 6px;
+            background: var(--success);
+            color: white;
+            border: none;
+            font-size: 0.7rem;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: var(--transition);
+        }
+        .btn-print:hover { background: var(--success-dark); transform: translateY(-1px); }
+        
+        .btn-primary {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: var(--success);
+            color: white;
+            border-radius: var(--radius);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.85rem;
+            border: none;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .btn-primary:hover { 
+            background: var(--success-dark); 
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5,150,105,0.3);
+        }
+        
+        .btn-outline {
+            padding: 8px 14px;
+            border: 2px solid var(--gray-200);
+            border-radius: var(--radius);
+            text-decoration: none;
+            color: var(--gray-600);
+            font-size: 0.75rem;
+            background: transparent;
+            cursor: pointer;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .btn-outline:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: var(--primary-bg);
+        }
+        
+        /* ================================================================
+           EMPTY STATE
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 50px 20px;
+            color: var(--gray-500);
+        }
+        .empty-state i {
+            font-size: 3.5rem;
+            color: var(--gray-300);
+            display: block;
+            margin-bottom: 16px;
+        }
+        .empty-state p { font-size: 1rem; }
+        .empty-state .sub-text {
+            font-size: 0.85rem;
+            color: var(--gray-400);
+            margin-top: 4px;
+        }
+        
+        /* ================================================================
+           TABLE FOOTER
+           ================================================================ */
+        .table-footer {
+            padding: 12px 18px;
+            border-top: 1px solid var(--gray-200);
+            font-size: 0.75rem;
+            color: var(--gray-500);
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            background: var(--gray-50);
+        }
+        [data-theme="dark"] .table-footer {
+            border-color: var(--gray-700);
+            color: var(--gray-400);
+            background: var(--gray-800);
+        }
+        
+        .table-footer .count-badge {
+            background: var(--primary);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+        }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 768px) {
+            .main-content { margin-left: 0; padding: 16px; }
+            .filter-row { flex-direction: column; align-items: stretch; }
+            .filter-input { width: 100%; }
+            .stats-row { grid-template-columns: 1fr 1fr; }
+            .page-header { flex-direction: column; }
+            .stat-card .stat-number { font-size: 1.5rem; }
+            .stat-card { padding: 14px 18px; }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 12px; }
+            .stats-row { grid-template-columns: 1fr; }
+            .page-title { font-size: 1.1rem; }
+            .data-table { font-size: 0.75rem; }
+            .data-table thead th, .data-table tbody td { padding: 8px 10px; }
+            .data-table thead th { font-size: 0.6rem; }
+        }
+    </style>
+</head>
+<body>
+
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-6">
+    <!-- Page Header -->
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-prescription mr-2" style="color: #0B5ED7;"></i> My Prescriptions
+                <i class="fas fa-prescription"></i> My Prescriptions
+                <span class="page-badge"><?= $total_count ?> Total</span>
             </h1>
             <p class="page-subtitle">
-                View all prescriptions you have created
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?>
-                </span>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-list mr-1"></i> <?= $total_prescriptions ?> prescriptions
-                </span>
-                <?php if ($pending_count > 0): ?>
-                    <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
-                        <i class="fas fa-clock mr-1"></i> <?= $pending_count ?> pending
-                    </span>
-                <?php endif; ?>
+                View all prescriptions you have written
+                <span class="text-xs text-gray-400 ml-2"><?= date('F d, Y') ?></span>
             </p>
         </div>
         <div>
-            <a href="prescribe.php" class="btn btn-blue btn-sm">
+            <a href="prescribe.php" class="btn-primary">
                 <i class="fas fa-plus"></i> New Prescription
             </a>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - 2 BLUE + 2 GREEN -->
-    <!-- ================================================================ -->
-    <div class="stats-grid">
+    <!-- Stats Cards - Colored -->
+    <div class="stats-row">
+        <!-- Total Card - Blue -->
+        <div class="stat-card total">
+            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+            <div class="stat-number"><?= $total_count ?></div>
+            <div class="stat-label">Total Prescriptions</div>
+            <div class="stat-sub"><i class="fas fa-clock"></i> All time</div>
+        </div>
         
-        <!-- CARD 1: BLUE - Total Prescriptions -->
-        <div class="stat-card stat-card-blue">
-            <div class="stat-card-inner">
-                <div class="stat-card-left">
-                    <div class="stat-card-icon"><i class="fas fa-prescription"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-label">Total Prescriptions</span>
-                        <span class="stat-card-number"><?= $total_prescriptions ?></span>
-                        <span class="stat-card-trend">
-                            <i class="fas fa-prescription"></i> All time
-                        </span>
-                    </div>
-                </div>
-            </div>
-            <div class="stat-card-progress" style="width: <?= $total_prescriptions > 0 ? min(100, ($total_prescriptions / 50) * 100) : 0 ?>%;"></div>
+        <!-- Pending Card - Yellow/Orange -->
+        <div class="stat-card pending">
+            <div class="stat-icon"><i class="fas fa-clock"></i></div>
+            <div class="stat-number"><?= $status_counts['pending'] ?? 0 ?></div>
+            <div class="stat-label">Pending</div>
+            <div class="stat-sub"><i class="fas fa-hourglass-half"></i> Awaiting pharmacy</div>
         </div>
-
-        <!-- CARD 2: BLUE - Dispensed -->
-        <div class="stat-card stat-card-blue">
-            <div class="stat-card-inner">
-                <div class="stat-card-left">
-                    <div class="stat-card-icon"><i class="fas fa-check-circle"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-label">Dispensed</span>
-                        <span class="stat-card-number"><?= $dispensed_count ?></span>
-                        <span class="stat-card-trend">
-                            <i class="fas fa-check-circle"></i> Completed
-                        </span>
-                    </div>
-                </div>
-            </div>
-            <div class="stat-card-progress" style="width: <?= $total_prescriptions > 0 ? min(100, ($dispensed_count / $total_prescriptions) * 100) : 0 ?>%;"></div>
+        
+        <!-- Dispensed Card - Green -->
+        <div class="stat-card dispensed">
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+            <div class="stat-number"><?= $status_counts['dispensed'] ?? 0 ?></div>
+            <div class="stat-label">Dispensed</div>
+            <div class="stat-sub"><i class="fas fa-check"></i> Completed</div>
         </div>
-
-        <!-- CARD 3: GREEN - Pending -->
-        <div class="stat-card stat-card-green <?= $pending_count > 0 ? 'has-badge' : '' ?>">
-            <div class="stat-card-inner">
-                <div class="stat-card-left">
-                    <div class="stat-card-icon"><i class="fas fa-clock"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-label">Pending</span>
-                        <span class="stat-card-number <?= $pending_count > 0 ? 'text-orange' : '' ?>">
-                            <?= $pending_count ?>
-                        </span>
-                        <span class="stat-card-trend">
-                            <?php if ($pending_count > 0): ?>
-                                <i class="fas fa-clock"></i> Waiting for pharmacy
-                            <?php else: ?>
-                                <i class="fas fa-check-circle"></i> All dispensed
-                            <?php endif; ?>
-                        </span>
-                    </div>
-                </div>
-                <?php if ($pending_count > 0): ?>
-                    <div class="stat-card-right">
-                        <span class="stat-card-badge danger"><?= $pending_count ?></span>
-                    </div>
-                <?php endif; ?>
-            </div>
-            <div class="stat-card-progress" style="width: <?= $total_prescriptions > 0 ? min(100, ($pending_count / $total_prescriptions) * 100) : 0 ?>%; background: #059669;"></div>
+        
+        <!-- Cancelled Card - Red -->
+        <div class="stat-card cancelled">
+            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
+            <div class="stat-number"><?= $status_counts['cancelled'] ?? 0 ?></div>
+            <div class="stat-label">Cancelled</div>
+            <div class="stat-sub"><i class="fas fa-ban"></i> Not dispensed</div>
         </div>
-
-        <!-- CARD 4: GREEN - Cancelled -->
-        <div class="stat-card stat-card-green <?= $cancelled_count > 0 ? 'has-badge' : '' ?>">
-            <div class="stat-card-inner">
-                <div class="stat-card-left">
-                    <div class="stat-card-icon"><i class="fas fa-times-circle"></i></div>
-                    <div class="stat-card-info">
-                        <span class="stat-card-label">Cancelled</span>
-                        <span class="stat-card-number <?= $cancelled_count > 0 ? 'text-red' : '' ?>">
-                            <?= $cancelled_count ?>
-                        </span>
-                        <span class="stat-card-trend">
-                            <?php if ($cancelled_count > 0): ?>
-                                <i class="fas fa-times-circle"></i> Cancelled
-                            <?php else: ?>
-                                <i class="fas fa-check-circle"></i> No cancellations
-                            <?php endif; ?>
-                        </span>
-                    </div>
-                </div>
-                <?php if ($cancelled_count > 0): ?>
-                    <div class="stat-card-right">
-                        <span class="stat-card-badge danger"><?= $cancelled_count ?></span>
-                    </div>
-                <?php endif; ?>
-            </div>
-            <div class="stat-card-progress" style="width: <?= $total_prescriptions > 0 ? min(100, ($cancelled_count / $total_prescriptions) * 100) : 0 ?>%; background: #059669;"></div>
-        </div>
-
     </div>
 
-    <!-- Search & Filter -->
-    <div class="card mb-6">
-        <form method="GET" class="flex flex-wrap items-center gap-3">
-            <div class="flex-1 min-w-[200px]">
-                <input type="text" name="search" class="form-control" placeholder="Search by patient, prescription #..." value="<?= htmlspecialchars($search) ?>">
-            </div>
-            <select name="status" class="form-control w-auto min-w-[120px]">
-                <option value="">All Status</option>
-                <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Pending</option>
-                <option value="dispensed" <?= $status_filter === 'dispensed' ? 'selected' : '' ?>>Dispensed</option>
-                <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
-            </select>
-            <button type="submit" class="btn btn-blue btn-sm">
-                <i class="fas fa-search"></i> Search
-            </button>
-            <?php if ($search || $status_filter): ?>
-                <a href="view_prescriptions.php" class="btn btn-outline btn-sm">
-                    <i class="fas fa-times"></i> Clear
-                </a>
-            <?php endif; ?>
-        </form>
+    <!-- Filters -->
+    <div class="filter-section">
+        <div class="filter-row">
+            <a href="?status=all" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
+            <a href="?status=pending" class="filter-btn <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
+            <a href="?status=dispensed" class="filter-btn <?= $filter_status === 'dispensed' ? 'active' : '' ?>">✅ Dispensed</a>
+            <a href="?status=cancelled" class="filter-btn <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
+            
+            <div style="flex:1;"></div>
+            
+            <form method="GET" class="filter-row" style="flex:1;gap:8px;">
+                <input type="hidden" name="status" value="<?= htmlspecialchars($filter_status) ?>">
+                <input type="text" name="search" class="filter-input" placeholder="Search patient, medication..." value="<?= htmlspecialchars($search) ?>" style="flex:1;min-width:150px;">
+                <button type="submit" class="btn-search">
+                    <i class="fas fa-search"></i> Search
+                </button>
+                <?php if (!empty($search) || $filter_status !== 'all'): ?>
+                    <a href="view_prescriptions.php" class="btn-outline">
+                        <i class="fas fa-times"></i> Clear
+                    </a>
+                <?php endif; ?>
+            </form>
+        </div>
     </div>
 
-    <!-- Prescriptions Table -->
-    <div class="card">
-        <div class="table-wrap">
+    <!-- Table - Blue Header -->
+    <div class="table-container">
+        <div class="table-scroll">
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th style="border-radius: 8px 0 0 0;">#</th>
-                        <th>Prescription #</th>
-                        <th>Patient</th>
-                        <th>Visit</th>
-                        <th>Items</th>
-                        <th>Status</th>
-                        <th>Date</th>
-                        <th style="border-radius: 0 8px 0 0;">Action</th>
+                        <th><i class="fas fa-hashtag"></i> #</th>
+                        <th><i class="fas fa-receipt"></i> Prescription #</th>
+                        <th><i class="fas fa-user"></i> Patient</th>
+                        <th><i class="fas fa-pills"></i> Medication</th>
+                        <th><i class="fas fa-cubes"></i> Qty</th>
+                        <th><i class="fas fa-info-circle"></i> Status</th>
+                        <th><i class="fas fa-calendar"></i> Date</th>
+                        <th><i class="fas fa-cog"></i> Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if (count($prescriptions) > 0): ?>
-                        <?php foreach ($prescriptions as $index => $pr): ?>
+                        <?php $i = 1; foreach ($prescriptions as $pres): ?>
                             <tr>
-                                <td><?= $index + 1 ?></td>
+                                <td><?= $i++ ?></td>
                                 <td>
-                                    <span class="font-mono text-sm font-semibold text-blue-600">
-                                        <?= htmlspecialchars($pr['prescription_number']) ?>
+                                    <span class="font-mono text-xs font-semibold" style="color:var(--primary);">
+                                        <?= htmlspecialchars($pres['prescription_number'] ?? 'N/A') ?>
                                     </span>
+                                    <?php if (($pres['item_count'] ?? 0) > 0): ?>
+                                        <span class="text-xs text-gray-400 block">(<?= $pres['item_count'] ?> items)</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="font-medium"><?= htmlspecialchars($pr['patient_name']) ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($pr['patient_code'] ?? '') ?></div>
-                                </td>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($pr['visit_number'] ?? 'N/A') ?></td>
-                                <td>
-                                    <span class="badge badge-info"><?= $pr['item_count'] ?? 0 ?> item(s)</span>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($pres['patient_name'] ?? 'Unknown') ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($pres['patient_code'] ?? 'N/A') ?></div>
                                 </td>
                                 <td>
-                                    <span class="badge <?= getStatusBadgeClass($pr['status']) ?>">
-                                        <?= ucfirst($pr['status'] ?? 'Pending') ?>
+                                    <span class="text-sm"><?= htmlspecialchars($pres['medication'] ?? 'N/A') ?></span>
+                                    <?php if (!empty($pres['dosage'])): ?>
+                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['dosage']) ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="text-sm font-semibold"><?= $pres['quantity'] ?? 0 ?></span>
+                                    <?php if (!empty($pres['frequency'])): ?>
+                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['frequency']) ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="badge-status <?= getStatusBadgeClass($pres['status'] ?? 'pending') ?>">
+                                        <?= getStatusLabel($pres['status'] ?? 'pending') ?>
                                     </span>
+                                    <?php if (!empty($pres['dispensed_at'])): ?>
+                                        <span class="text-xs text-gray-400 block">
+                                            <?= date('d/m/Y', strtotime($pres['dispensed_at'])) ?>
+                                        </span>
+                                    <?php endif; ?>
                                 </td>
-                                <td><?= date('M d, Y', strtotime($pr['created_at'])) ?></td>
                                 <td>
-                                    <div class="action-buttons">
-                                        <a href="view_prescription.php?id=<?= $pr['id'] ?>" class="btn btn-view btn-sm" title="View Details">
+                                    <span class="text-xs"><?= formatDate($pres['created_at'] ?? '') ?></span>
+                                    <?php if (!empty($pres['visit_number'])): ?>
+                                        <span class="text-xs text-gray-400 block">Visit: <?= htmlspecialchars($pres['visit_number']) ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <div class="flex flex-wrap gap-1">
+                                        <a href="view_prescription.php?id=<?= $pres['id'] ?>" class="btn-view" title="View Details">
                                             <i class="fas fa-eye"></i> View
                                         </a>
+                                        <?php if (($pres['status'] ?? '') === 'dispensed'): ?>
+                                            <a href="print_prescription.php?id=<?= $pres['id'] ?>" class="btn-print" title="Print Prescription" target="_blank">
+                                                <i class="fas fa-print"></i> Print
+                                            </a>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" class="text-center py-8 text-gray-400">
-                                <i class="fas fa-prescription text-3xl block mb-2"></i>
-                                <?php if ($search): ?>
-                                    No prescriptions found matching "<strong><?= htmlspecialchars($search) ?></strong>"
-                                <?php else: ?>
-                                    No prescriptions found. Click "New Prescription" to create one.
-                                <?php endif; ?>
+                            <td colspan="8">
+                                <div class="empty-state">
+                                    <i class="fas fa-prescription"></i>
+                                    <p>No prescriptions found</p>
+                                    <p class="sub-text">
+                                        <?php if (!empty($search)): ?>
+                                            No results for "<strong><?= htmlspecialchars($search) ?></strong>"
+                                        <?php elseif ($filter_status !== 'all'): ?>
+                                            No <?= ucfirst($filter_status) ?> prescriptions
+                                        <?php else: ?>
+                                            You haven't written any prescriptions yet.
+                                            <br><a href="prescribe.php" style="color:var(--primary);text-decoration:underline;">Write your first prescription</a>
+                                        <?php endif; ?>
+                                    </p>
+                                </div>
                             </td>
                         </tr>
                     <?php endif; ?>
                 </tbody>
             </table>
         </div>
+        
+        <!-- Table Footer -->
+        <div class="table-footer">
+            <span>
+                <i class="fas fa-list"></i> Showing <strong><?= count($prescriptions) ?></strong> prescriptions
+            </span>
+            <span>
+                <span class="count-badge"><?= $total_count ?></span> Total prescriptions
+            </span>
+        </div>
     </div>
 
     <!-- Footer -->
-    <footer class="footer">
+    <footer class="footer" style="padding:16px 0;border-top:2px solid var(--gray-200);margin-top:24px;text-align:center;font-size:0.7rem;color:var(--gray-500);">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
+            <span class="footer-brand" style="color:var(--primary);font-weight:600;">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             My Prescriptions
-            <span class="text-gray-300 mx-2">|</span>
-            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -388,466 +943,56 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <!-- TOAST -->
 <!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
+<div id="toast" class="toast-custom" style="position:fixed;bottom:30px;right:30px;padding:14px 22px;border-radius:10px;z-index:9999;max-width:380px;transform:translateY(100px);opacity:0;transition:all 0.4s ease;display:flex;align-items:center;gap:12px;color:#ffffff;box-shadow:0 10px 40px rgba(0,0,0,0.15);display:none;">
     <i class="fas fa-info-circle"></i>
     <div>
-        <p id="toastTitle">Notification</p>
-        <p id="toastMessage"></p>
+        <p id="toastTitle" style="font-weight:600;font-size:0.85rem;margin:0;">Notification</p>
+        <p id="toastMessage" style="font-size:0.75rem;opacity:0.9;margin:0;"></p>
     </div>
 </div>
-
-<!-- ================================================================ -->
-<!-- STYLES - BLUE & GREEN THEME -->
-<!-- ================================================================ -->
-<style>
-    /* ================================================================
-       STATS GRID - 4 CARDS
-       ================================================================ */
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 18px;
-        margin-bottom: 24px;
-    }
-    
-    .stat-card {
-        background: var(--bg-card);
-        border-radius: 16px;
-        padding: 20px 22px;
-        border: 1px solid var(--border-color);
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
-    }
-    
-    .stat-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 12px 40px rgba(0,0,0,0.08);
-    }
-    
-    .stat-card-inner {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-    }
-    
-    .stat-card-left {
-        display: flex;
-        align-items: flex-start;
-        gap: 14px;
-        flex: 1;
-    }
-    
-    .stat-card-icon {
-        width: 48px;
-        height: 48px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.2rem;
-        color: white;
-        flex-shrink: 0;
-    }
-    
-    .stat-card-blue .stat-card-icon { background: linear-gradient(135deg, #0B5ED7, #1A73E8); }
-    .stat-card-green .stat-card-icon { background: linear-gradient(135deg, #059669, #0AA84F); }
-    
-    .stat-card-info {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        flex: 1;
-    }
-    
-    .stat-card-label {
-        font-size: 0.75rem;
-        font-weight: 500;
-        color: #94A3B8;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    
-    .stat-card-number {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #1E293B;
-        line-height: 1.2;
-    }
-    
-    .stat-card-number.text-orange { color: #D97706; }
-    .stat-card-number.text-red { color: #EF4444; }
-    
-    .stat-card-trend {
-        font-size: 0.65rem;
-        color: #94A3B8;
-        font-weight: 500;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .stat-card-trend .fa-prescription { color: #0B5ED7; }
-    .stat-card-trend .fa-check-circle { color: #059669; }
-    .stat-card-trend .fa-clock { color: #D97706; }
-    .stat-card-trend .fa-times-circle { color: #EF4444; }
-    
-    .stat-card-right {
-        display: flex;
-        align-items: flex-start;
-        flex-shrink: 0;
-    }
-    
-    .stat-card-badge {
-        font-size: 0.65rem;
-        font-weight: 700;
-        color: white;
-        background: #0B5ED7;
-        padding: 2px 12px;
-        border-radius: 20px;
-        min-width: 24px;
-        text-align: center;
-    }
-    
-    .stat-card-badge.danger {
-        background: #EF4444;
-        animation: pulse-badge 2s infinite;
-    }
-    
-    @keyframes pulse-badge {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.1); }
-    }
-    
-    .stat-card-progress {
-        height: 3px;
-        background: #0B5ED7;
-        border-radius: 0 0 16px 16px;
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        transition: width 1s ease;
-        opacity: 0.3;
-    }
-    
-    .stat-card-green .stat-card-progress { background: #059669; }
-    
-    /* ================================================================
-       CARD
-       ================================================================ */
-    .card {
-        background: var(--bg-card);
-        border-radius: 16px;
-        padding: 20px 24px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-    }
-    
-    .card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
-    }
-    
-    .table-wrap { overflow-x: auto; }
-    
-    .data-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.85rem;
-    }
-    
-    .data-table thead th {
-        text-align: left;
-        padding: 10px 14px;
-        font-weight: 700;
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: white;
-        background: var(--primary);
-        border-bottom: 3px solid var(--primary-dark);
-        white-space: nowrap;
-    }
-    
-    .data-table tbody tr:nth-child(even) {
-        background: var(--primary-bg);
-    }
-    
-    .data-table tbody tr:nth-child(odd) {
-        background: var(--bg-card);
-    }
-    
-    .data-table tbody tr:hover {
-        background: #D1FAE5;
-    }
-    
-    .data-table td {
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-        vertical-align: middle;
-    }
-    
-    .badge {
-        padding: 3px 12px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        color: white;
-        border: none;
-    }
-    
-    .badge-success { background: #059669; }
-    .badge-danger { background: #EF4444; }
-    .badge-warning { background: #D97706; }
-    .badge-info { background: var(--primary); }
-    
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 7px 16px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.78rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-    }
-    
-    .btn-blue {
-        background: var(--primary);
-        color: white;
-    }
-    .btn-blue:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: var(--primary);
-        color: var(--primary);
-        transform: translateY(-2px);
-    }
-    
-    .btn-view {
-        background: var(--primary);
-        color: white;
-        padding: 4px 12px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        border: none;
-        cursor: pointer;
-    }
-    .btn-view:hover {
-        background: var(--primary-dark);
-        transform: scale(1.05);
-    }
-    
-    .btn-sm {
-        padding: 4px 10px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-    }
-    
-    .action-buttons {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex-wrap: nowrap;
-        justify-content: center;
-    }
-    
-    .form-control {
-        width: 100%;
-        padding: 8px 14px;
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        font-size: 0.85rem;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        outline: none;
-        transition: all 0.3s;
-    }
-    
-    .form-control:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
-    }
-    
-    .form-control::placeholder {
-        color: var(--text-secondary);
-        opacity: 0.6;
-    }
-    
-    .page-header {
-        border-bottom: 3px solid var(--primary);
-        padding-bottom: 12px;
-    }
-    
-    .page-header .page-title {
-        color: var(--primary-dark);
-        font-size: 1.8rem;
-        font-weight: 700;
-    }
-    
-    [data-theme="dark"] .page-header .page-title {
-        color: var(--primary-light);
-    }
-    
-    .page-header .page-subtitle {
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-    }
-    
-    .branch-tag {
-        background: #059669;
-        color: white;
-        padding: 3px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .footer {
-        padding: 14px 0;
-        border-top: 2px solid var(--border-color);
-        margin-top: 20px;
-        text-align: center;
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    
-    .footer .footer-brand {
-        color: var(--primary);
-        font-weight: 600;
-    }
-    
-    .text-xs { font-size: 0.75rem; }
-    .text-sm { font-size: 0.875rem; }
-    .text-gray-400 { color: var(--text-muted); }
-    .font-mono { font-family: monospace; }
-    .font-medium { font-weight: 500; }
-    .font-semibold { font-weight: 600; }
-    .min-w-[120px] { min-width: 120px; }
-    .min-w-[200px] { min-width: 200px; }
-    .w-auto { width: auto; }
-    .flex-1 { flex: 1; }
-    .mb-6 { margin-bottom: 1.5rem; }
-    .ml-2 { margin-left: 0.5rem; }
-    .mr-1 { margin-right: 0.25rem; }
-    .mr-2 { margin-right: 0.5rem; }
-    .gap-2 { gap: 0.5rem; }
-    .gap-3 { gap: 0.75rem; }
-    .gap-4 { gap: 1rem; }
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .items-center { align-items: center; }
-    .justify-between { justify-content: space-between; }
-    .text-center { text-align: center; }
-    .py-8 { padding-top: 2rem; padding-bottom: 2rem; }
-    .text-3xl { font-size: 1.875rem; }
-    .block { display: block; }
-    .mb-2 { margin-bottom: 0.5rem; }
-    
-    /* ================================================================
-       DARK MODE
-       ================================================================ */
-    [data-theme="dark"] .stat-card {
-        background: #1E293B;
-        border-color: #334155;
-    }
-    [data-theme="dark"] .stat-card-number {
-        color: #F1F5F9;
-    }
-    [data-theme="dark"] .stat-card-label {
-        color: #94A3B8;
-    }
-    [data-theme="dark"] .stat-card-trend {
-        color: #64748B;
-    }
-    [data-theme="dark"] .stat-card:hover {
-        box-shadow: 0 12px 40px rgba(0,0,0,0.3);
-    }
-    [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: #1E293B; }
-    [data-theme="dark"] .data-table tbody tr:nth-child(odd) { background: #1E293B; }
-    [data-theme="dark"] .data-table tbody tr:hover { background: #1A3A2A; }
-    [data-theme="dark"] .card { background: #1E293B; border-color: #334155; }
-    [data-theme="dark"] .page-header .page-title { color: #6EA8FE; }
-    
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
-    @media (max-width: 1200px) {
-        .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
-        }
-    }
-    
-    @media (max-width: 768px) {
-        .stats-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        .card { padding: 14px 16px; }
-        .data-table { font-size: 0.75rem; }
-        .data-table th, .data-table td { padding: 6px 10px; }
-        .action-buttons { flex-wrap: wrap; }
-        .btn-sm { padding: 3px 8px; font-size: 0.6rem; }
-        .page-header .page-title { font-size: 1.2rem; }
-        .stat-card { padding: 14px 16px; }
-        .stat-card-number { font-size: 1.4rem; }
-        .stat-card-icon { width: 40px; height: 40px; font-size: 1rem; }
-    }
-    
-    @media (max-width: 480px) {
-        .stats-grid {
-            grid-template-columns: 1fr;
-        }
-        .stat-card-number { font-size: 1.2rem; }
-    }
-</style>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+
+    // ================================================================
+    // TOAST
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
-        toast.className = 'toast-custom ' + type;
+        if (!toast) return;
+        toast.className = 'toast-custom';
+        if (type === 'success') { toast.style.background = '#059669'; }
+        else if (type === 'error') { toast.style.background = '#DC2626'; }
+        else { toast.style.background = '#0B5ED7'; }
         toastTitle.textContent = title;
         toastMessage.textContent = message;
         toast.style.display = 'flex';
-        toast.classList.add('show');
+        setTimeout(function() { toast.style.transform = 'translateY(0)'; toast.style.opacity = '1'; }, 50);
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
+            toast.style.transform = 'translateY(100px)';
+            toast.style.opacity = '0';
             setTimeout(function() { toast.style.display = 'none'; }, 400);
-        }, 3500);
+        }, 4000);
     }
-    
-    console.log('%c💊 My Prescriptions - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Total: <?= $total_prescriptions ?> | Pending: <?= $pending_count ?> | Dispensed: <?= $dispensed_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🔒 Doctor: View Only - No Edit Button', 'font-size:12px; color:#EF4444;');
+
+    console.log('%c💊 View Prescriptions - With Colors', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Summary Cards: Blue (Total), Yellow (Pending), Green (Dispensed), Red (Cancelled)', 'font-size:12px; color:#6EA8FE;');
+    console.log('%c📋 Table Header: Blue Background', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📋 Total Prescriptions: <?= $total_count ?>', 'font-size:12px; color:#059669;');
+    console.log('%c⏳ Pending: <?= $status_counts['pending'] ?? 0 ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Dispensed: <?= $status_counts['dispensed'] ?? 0 ?>', 'font-size:12px; color:#059669;');
+    console.log('%c❌ Cancelled: <?= $status_counts['cancelled'] ?? 0 ?>', 'font-size:12px; color:#DC2626;');
 </script>
 
 </body>
