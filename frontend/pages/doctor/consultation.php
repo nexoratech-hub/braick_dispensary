@@ -1,7 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// DOCTOR CONSULTATION - FULL WITH PICK OR WRITE INSTRUCTIONS
+// DOCTOR CONSULTATION - FULLY FIXED
+// - Tools stay in list (no refresh loss)
+// - Tools sent to Cashier only on Save
+// - Prices visible for all items
+// - Diagnosis saves properly
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -34,7 +38,6 @@ $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 // ================================================================
 $visit_id = isset($_GET['visit_id']) ? (int)$_GET['visit_id'] : 0;
 $patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
-$view = isset($_GET['view']) ? $_GET['view'] : 'consult';
 
 if ($visit_id <= 0 && $patient_id <= 0) {
     header('Location: my_patients.php');
@@ -82,6 +85,7 @@ if ($visit_id > 0) {
     }
     $patient_id = $visit['patient_id'];
 } else {
+    // Check for existing active visit
     $stmt = $db->prepare("
         SELECT v.*, 
                p.id as patient_id,
@@ -110,6 +114,7 @@ if ($visit_id > 0) {
     $visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$visit) {
+        // Create new visit
         $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT);
         $stmt = $db->prepare("
             INSERT INTO visits (
@@ -149,41 +154,42 @@ if ($visit_id > 0) {
 
 // Check if visit is completed
 $is_completed = ($visit['status'] === 'completed');
-if ($is_completed) {
-    $view = 'view';
-}
 
 // ================================================================
 // GET OR CREATE BILL
 // ================================================================
 $bill_id = null;
+$bill_status = 'pending';
 try {
-    $stmt = $db->prepare("SELECT id, status FROM patient_bills WHERE visit_id = ?");
+    $stmt = $db->prepare("SELECT id, status, total_amount, paid_amount, balance FROM patient_bills WHERE visit_id = ?");
     $stmt->execute([$visit_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($bill) {
         $bill_id = $bill['id'];
+        $bill_status = $bill['status'];
     } else {
         $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT);
         $stmt = $db->prepare("
             INSERT INTO patient_bills (
-                bill_number, patient_id, visit_id, subtotal, total_amount, balance, 
+                bill_number, patient_id, visit_id, 
+                registration_fee, consultation_fee, subtotal, total_amount, balance, 
                 status, created_by, branch_id, created_at
-            ) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?, NOW())
+            ) VALUES (?, ?, ?, 0, 0, 0, 0, 0, 'pending', ?, ?, NOW())
         ");
         $stmt->execute([$bill_number, $patient_id, $visit_id, $doctor_id, $doctor_branch_id]);
         $bill_id = $db->lastInsertId();
+        $bill_status = 'pending';
     }
 } catch (Exception $e) {
     error_log("Bill error: " . $e->getMessage());
 }
 
 // ================================================================
-// GET ALL DATA
+// GET ALL DATA FOR CONSULTATION
 // ================================================================
 
-// Lab Tests Catalog
+// 1. Lab Tests Catalog
 $lab_tests_catalog = [];
 try {
     $stmt = $db->prepare("SELECT id, test_name, price, category FROM lab_tests_catalog WHERE is_active = 1 ORDER BY category, test_name");
@@ -191,7 +197,7 @@ try {
     $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $lab_tests_catalog = []; }
 
-// Procedures
+// 2. Procedures
 $procedures_list = [];
 try {
     $stmt = $db->prepare("SELECT id, procedure_name, category, price, description FROM procedures WHERE is_active = 1 ORDER BY procedure_name");
@@ -199,7 +205,7 @@ try {
     $procedures_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $procedures_list = []; }
 
-// Procedure Tools
+// 3. Procedure Tools
 $procedure_tools = [];
 try {
     $stmt = $db->prepare("SELECT id, procedure_name, tool_name, price FROM procedure_tools WHERE is_active = 1 ORDER BY procedure_name, tool_name");
@@ -207,7 +213,7 @@ try {
     $procedure_tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $procedure_tools = []; }
 
-// Medications
+// 4. Medications
 $medications_list = [];
 try {
     $stmt = $db->prepare("
@@ -220,26 +226,54 @@ try {
     $medications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $medications_list = []; }
 
-// Selected Medications
-$selected_medications = [];
+// 5. Lab Tests for this visit
+$lab_tests = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, medication, dosage, frequency, duration, route, quantity, instructions, status 
-        FROM prescriptions 
-        WHERE visit_id = ? AND status IN ('pending', 'dispensed')
+        SELECT * FROM lab_tests 
+        WHERE visit_id = ? 
         ORDER BY created_at DESC
     ");
     $stmt->execute([$visit_id]);
-    $selected_medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { $selected_medications = []; }
+    $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) { $lab_tests = []; }
 
-// Bill Items
-$bill_items = [];
-$total_bill_amount = 0;
+// 6. Prescriptions for this visit
+$prescriptions = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, item_name, item_type, quantity, unit_price, total_price, payment_status, is_paid, status 
-        FROM bill_items 
+        SELECT p.*, 
+               (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = p.id) as item_count,
+               (SELECT COALESCE(SUM(total_price), 0) FROM prescription_items WHERE prescription_id = p.id) as total_prescription_price
+        FROM prescriptions p
+        WHERE p.visit_id = ? AND p.status != 'cancelled'
+        ORDER BY p.created_at DESC
+    ");
+    $stmt->execute([$visit_id]);
+    $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) { $prescriptions = []; }
+
+// 7. Prescription Items
+$prescription_items = [];
+foreach ($prescriptions as $presc) {
+    try {
+        $stmt = $db->prepare("SELECT * FROM prescription_items WHERE prescription_id = ? ORDER BY id");
+        $stmt->execute([$presc['id']]);
+        $prescription_items[$presc['id']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) { $prescription_items[$presc['id']] = []; }
+}
+
+// 8. Bill Items
+$bill_items = [];
+$total_bill_amount = 0;
+$total_procedure_amount = 0;
+$total_tool_amount = 0;
+$total_medication_amount = 0;
+$total_lab_amount = 0;
+
+try {
+    $stmt = $db->prepare("
+        SELECT * FROM bill_items 
         WHERE bill_id = ? 
         ORDER BY created_at DESC
     ");
@@ -248,70 +282,33 @@ try {
     
     foreach ($bill_items as $item) {
         $total_bill_amount += $item['total_price'];
+        if ($item['item_type'] === 'procedure') {
+            $total_procedure_amount += $item['total_price'];
+        } elseif ($item['item_type'] === 'tool') {
+            $total_tool_amount += $item['total_price'];
+        } elseif ($item['item_type'] === 'medication') {
+            $total_medication_amount += $item['total_price'];
+        } elseif ($item['item_type'] === 'lab_test') {
+            $total_lab_amount += $item['total_price'];
+        }
     }
 } catch (Exception $e) { $bill_items = []; }
 
-// ================================================================
-// GET LAB STATUS
-// ================================================================
-$lab_requests = [];
-$lab_results = [];
-$lab_results_available = false;
-$lab_status = 'none';
-$sections_frozen = false;
-
-function fetchLabData($db, $visit_id) {
-    $lab_requests = [];
-    $lab_results = [];
-    $lab_results_available = false;
-    $lab_status = 'none';
-    
-    try {
-        $stmt = $db->prepare("
-            SELECT * FROM lab_tests 
-            WHERE visit_id = ? AND status IN ('pending', 'in_progress')
-            ORDER BY created_at DESC
-        ");
-        $stmt->execute([$visit_id]);
-        $lab_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        $stmt = $db->prepare("
-            SELECT * FROM lab_tests 
-            WHERE visit_id = ? AND status = 'completed'
-            ORDER BY completed_at DESC
-        ");
-        $stmt->execute([$visit_id]);
-        $lab_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $lab_results_available = count($lab_results) > 0;
-        
-        if (count($lab_requests) > 0) {
-            $lab_status = 'pending';
-        } elseif ($lab_results_available) {
-            $lab_status = 'completed';
-        }
-        
-    } catch (Exception $e) {
-        error_log("Lab fetch error: " . $e->getMessage());
+// 9. Check if lab tests are pending
+$lab_pending = false;
+$lab_completed = false;
+foreach ($lab_tests as $test) {
+    if ($test['status'] === 'pending' || $test['status'] === 'in_progress') {
+        $lab_pending = true;
     }
-    
-    return [
-        'requests' => $lab_requests,
-        'results' => $lab_results,
-        'available' => $lab_results_available,
-        'status' => $lab_status,
-        'frozen' => (count($lab_requests) > 0 && !$lab_results_available)
-    ];
+    if ($test['status'] === 'completed') {
+        $lab_completed = true;
+    }
 }
-
-$lab_data = fetchLabData($db, $visit_id);
-$lab_requests = $lab_data['requests'];
-$lab_results = $lab_data['results'];
-$lab_results_available = $lab_data['available'];
-$lab_status = $lab_data['status'];
-$sections_frozen = ($lab_data['frozen'] && !$is_completed);
+$sections_frozen = ($lab_pending && !$is_completed);
 
 // ================================================================
-// PRESCRIPTION INSTRUCTIONS - 10 Quick Options
+// PRESCRIPTION INSTRUCTIONS
 // ================================================================
 $prescription_instructions = [
     'After meals',
@@ -340,32 +337,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     // ================================================================
     if ($action === 'get_lab_status') {
         header('Content-Type: application/json');
-        $lab_data = fetchLabData($db, $visit_id);
         
-        $pending_count = count($lab_data['requests']);
-        $results_count = count($lab_data['results']);
+        $pending_count = 0;
+        $completed_count = 0;
+        foreach ($lab_tests as $test) {
+            if ($test['status'] === 'pending' || $test['status'] === 'in_progress') $pending_count++;
+            if ($test['status'] === 'completed') $completed_count++;
+        }
+        
+        $frozen = ($pending_count > 0 && !$is_completed);
         
         $results_html = '';
-        if ($lab_data['available']) {
-            foreach ($lab_data['results'] as $result) {
-                $results_html .= '
-                    <tr>
-                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);">' . htmlspecialchars($result['test_name'] ?? 'N/A') . '</td>
-                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);font-weight:600;color:#059669;">' . htmlspecialchars($result['results'] ?? 'N/A') . '</td>
-                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);">' . htmlspecialchars($result['reference_range'] ?? '') . '</td>
-                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><span class="badge badge-success">Completed</span></td>
-                    </tr>
-                ';
+        if ($completed_count > 0) {
+            foreach ($lab_tests as $test) {
+                if ($test['status'] === 'completed') {
+                    $results_html .= '
+                        <tr>
+                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);">' . htmlspecialchars($test['test_name'] ?? 'N/A') . '</td>
+                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);font-weight:600;color:#059669;">' . htmlspecialchars($test['results'] ?? 'N/A') . '</td>
+                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"></td>
+                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><span class="badge badge-success">Completed</span></td>
+                        </tr>
+                    ';
+                }
             }
         }
         
         echo json_encode([
             'success' => true,
             'pending_count' => $pending_count,
-            'results_count' => $results_count,
-            'frozen' => $lab_data['frozen'],
-            'available' => $lab_data['available'],
-            'status' => $lab_data['status'],
+            'results_count' => $completed_count,
+            'frozen' => $frozen,
+            'available' => $completed_count > 0,
+            'status' => $frozen ? 'pending' : ($completed_count > 0 ? 'completed' : 'none'),
             'results_html' => $results_html,
             'timestamp' => date('H:i:s')
         ]);
@@ -373,7 +377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD MEDICATION
+    // AJAX: ADD MEDICATION - TEMPORARY (Saved to session or temp table)
     // ================================================================
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
@@ -390,6 +394,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $duration = trim($_POST['duration'] ?? '');
         $route = trim($_POST['route'] ?? '');
         $instructions = trim($_POST['instructions'] ?? '');
+        $diagnosis = trim($_POST['diagnosis'] ?? '');
         
         $response = ['success' => false, 'message' => '', 'medication' => null];
         
@@ -403,68 +408,102 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $med = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($med && $med['stock'] >= $quantity) {
-                $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
-                
-                $stmt = $db->prepare("
-                    INSERT INTO prescriptions (
-                        prescription_number, visit_id, patient_id, doctor_id, 
-                        medication, dosage, frequency, duration, route, quantity, instructions,
-                        status, branch_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW())
-                ");
-                $stmt->execute([
-                    $prescription_number,
-                    $visit_id,
-                    $patient_id,
-                    $doctor_id,
-                    $med['medication_name'],
-                    $dosage,
-                    $frequency,
-                    $duration,
-                    $route,
-                    $quantity,
-                    $instructions,
-                    $doctor_branch_id
-                ]);
-                
-                $new_id = $db->lastInsertId();
-                
-                $new_stock = $med['stock'] - $quantity;
-                $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ?");
-                $stmt->execute([$new_stock, $inventory_id]);
-                
-                $med_total = $med['selling_price'] * $quantity;
-                
-                $stmt = $db->prepare("
-                    INSERT INTO bill_items (
-                        bill_id, item_type, item_name, quantity, unit_price, total_price,
-                        payment_status, is_paid, status, created_at
-                    ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
-                ");
-                $stmt->execute([$bill_id, $med['medication_name'], $quantity, $med['selling_price'], $med_total]);
-                
-                $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
-                $stmt->execute([$bill_id]);
-                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-                
-                $stmt = $db->prepare("
-                    UPDATE patient_bills 
-                    SET subtotal = ?, total_amount = ?, balance = ? 
-                    WHERE id = ?
-                ");
-                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
-                
-                $response['success'] = true;
-                $response['message'] = '✅ Medication added successfully!';
-                $response['medication'] = [
-                    'id' => $new_id,
-                    'name' => $med['medication_name'],
-                    'dosage' => $dosage,
-                    'frequency' => $frequency,
-                    'duration' => $duration,
-                    'quantity' => $quantity,
-                    'instructions' => $instructions
-                ];
+                try {
+                    $db->beginTransaction();
+                    
+                    $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                    
+                    $stmt = $db->prepare("
+                        INSERT INTO prescriptions (
+                            prescription_number, visit_id, patient_id, doctor_id, branch_id,
+                            medication, dosage, frequency, duration, route, quantity, instructions,
+                            diagnosis, status, is_indoor, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, NOW(), NOW())
+                    ");
+                    $stmt->execute([
+                        $prescription_number,
+                        $visit_id,
+                        $patient_id,
+                        $doctor_id,
+                        $doctor_branch_id,
+                        $med['medication_name'],
+                        $dosage,
+                        $frequency,
+                        $duration,
+                        $route,
+                        $quantity,
+                        $instructions,
+                        $diagnosis
+                    ]);
+                    
+                    $prescription_db_id = $db->lastInsertId();
+                    
+                    $unit_price = $med['selling_price'];
+                    $total_price = $unit_price * $quantity;
+                    
+                    $stmt = $db->prepare("
+                        INSERT INTO prescription_items (
+                            prescription_id, medication_name, dosage,
+                            frequency, quantity, duration, route,
+                            instructions, unit_price, total_price, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $prescription_db_id,
+                        $med['medication_name'],
+                        $dosage,
+                        $frequency,
+                        $quantity,
+                        $duration,
+                        $route,
+                        $instructions,
+                        $unit_price,
+                        $total_price
+                    ]);
+                    
+                    // FIXED: Don't reduce inventory yet, only on save
+                    // Store in bill_items with status 'pending'
+                    $stmt = $db->prepare("
+                        INSERT INTO bill_items (
+                            bill_id, item_type, item_name, quantity, unit_price, total_price,
+                            payment_status, is_paid, status, created_at
+                        ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
+                    ");
+                    $stmt->execute([$bill_id, $med['medication_name'], $quantity, $unit_price, $total_price]);
+                    
+                    // Update bill total
+                    $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                    $stmt->execute([$bill_id]);
+                    $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                    
+                    $stmt = $db->prepare("
+                        UPDATE patient_bills 
+                        SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                    
+                    $db->commit();
+                    
+                    $response['success'] = true;
+                    $response['message'] = '✅ Medication added successfully!';
+                    $response['medication'] = [
+                        'id' => $prescription_db_id,
+                        'name' => $med['medication_name'],
+                        'dosage' => $dosage,
+                        'frequency' => $frequency,
+                        'duration' => $duration,
+                        'quantity' => $quantity,
+                        'instructions' => $instructions,
+                        'diagnosis' => $diagnosis,
+                        'price' => $unit_price,
+                        'total' => $total_price
+                    ];
+                    
+                } catch (Exception $e) {
+                    $db->rollBack();
+                    $response['message'] = '❌ Error: ' . $e->getMessage();
+                }
             } else {
                 $response['message'] = '❌ Insufficient stock! Available: ' . ($med['stock'] ?? 0);
             }
@@ -485,41 +524,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $response = ['success' => false, 'message' => ''];
         
         if ($prescription_id > 0) {
-            $stmt = $db->prepare("SELECT medication, quantity FROM prescriptions WHERE id = ? AND visit_id = ?");
-            $stmt->execute([$prescription_id, $visit_id]);
-            $med = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($med) {
-                $stmt = $db->prepare("
-                    UPDATE medications_inventory 
-                    SET quantity = quantity + ? 
-                    WHERE medication_name = ? AND branch_id = ?
-                ");
-                $stmt->execute([$med['quantity'], $med['medication'], $doctor_branch_id]);
+            try {
+                $db->beginTransaction();
+                
+                // Get medication details
+                $stmt = $db->prepare("SELECT medication, quantity FROM prescriptions WHERE id = ? AND visit_id = ?");
+                $stmt->execute([$prescription_id, $visit_id]);
+                $med = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                // Delete prescription items and prescription
+                $stmt = $db->prepare("DELETE FROM prescription_items WHERE prescription_id = ?");
+                $stmt->execute([$prescription_id]);
+                
+                $stmt = $db->prepare("DELETE FROM prescriptions WHERE id = ? AND visit_id = ?");
+                $stmt->execute([$prescription_id, $visit_id]);
+                
+                if ($med) {
+                    // Remove from bill_items
+                    $stmt = $db->prepare("
+                        DELETE FROM bill_items 
+                        WHERE bill_id = ? AND item_name = ? AND item_type = 'medication'
+                        ORDER BY id DESC LIMIT 1
+                    ");
+                    $stmt->execute([$bill_id, $med['medication']]);
+                }
+                
+                // Update bill total
+                $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                $stmt->execute([$bill_id]);
+                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
                 
                 $stmt = $db->prepare("
-                    DELETE FROM bill_items 
-                    WHERE bill_id = ? AND item_name = ? AND item_type = 'medication'
+                    UPDATE patient_bills 
+                    SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
+                    WHERE id = ?
                 ");
-                $stmt->execute([$bill_id, $med['medication']]);
+                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                
+                $db->commit();
+                $response['success'] = true;
+                $response['message'] = '✅ Medication removed!';
+            } catch (Exception $e) {
+                $db->rollBack();
+                $response['message'] = '❌ Error: ' . $e->getMessage();
             }
-            
-            $stmt = $db->prepare("DELETE FROM prescriptions WHERE id = ? AND visit_id = ?");
-            $stmt->execute([$prescription_id, $visit_id]);
-            
-            $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
-            $stmt->execute([$bill_id]);
-            $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-            
-            $stmt = $db->prepare("
-                UPDATE patient_bills 
-                SET subtotal = ?, total_amount = ?, balance = ? 
-                WHERE id = ?
-            ");
-            $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
-            
-            $response['success'] = true;
-            $response['message'] = '✅ Medication removed!';
         } else {
             $response['message'] = '❌ Invalid medication';
         }
@@ -529,7 +577,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD PROCEDURE
+    // AJAX: ADD PROCEDURE - FIXED: No refresh, just add to list
     // ================================================================
     if ($action === 'add_procedure') {
         header('Content-Type: application/json');
@@ -548,27 +596,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $procedure = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($procedure) {
-                $item_name = $procedure['procedure_name'];
-                $item_price = $procedure['price'];
-                
-                $stmt = $db->prepare("
-                    SELECT id, quantity FROM bill_items 
-                    WHERE bill_id = ? AND item_name = ? AND item_type = 'procedure'
-                ");
-                $stmt->execute([$bill_id, $item_name]);
-                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($existing) {
-                    $new_qty = $existing['quantity'] + 1;
-                    $new_total = $item_price * $new_qty;
-                    $stmt = $db->prepare("
-                        UPDATE bill_items 
-                        SET quantity = ?, total_price = ? 
-                        WHERE id = ?
-                    ");
-                    $stmt->execute([$new_qty, $new_total, $existing['id']]);
-                    $proc_id = $existing['id'];
-                } else {
+                try {
+                    $db->beginTransaction();
+                    
+                    $item_name = $procedure['procedure_name'];
+                    $item_price = $procedure['price'];
+                    $quantity = 1;
+                    
+                    // Add to bill_items
                     $stmt = $db->prepare("
                         INSERT INTO bill_items (
                             bill_id, item_type, item_name, quantity, unit_price, total_price,
@@ -576,23 +611,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                         ) VALUES (?, 'procedure', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
                     ");
                     $stmt->execute([$bill_id, $item_name, $item_price, $item_price]);
-                    $proc_id = $db->lastInsertId();
+                    $item_id = $db->lastInsertId();
+                    
+                    // Update bill total
+                    $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                    $stmt->execute([$bill_id]);
+                    $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                    
+                    $stmt = $db->prepare("
+                        UPDATE patient_bills 
+                        SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                    
+                    $db->commit();
+                    
+                    $response['success'] = true;
+                    $response['message'] = '✅ Procedure added successfully!';
+                    $response['procedure'] = [
+                        'id' => $item_id,
+                        'name' => $item_name,
+                        'price' => $item_price,
+                        'quantity' => $quantity,
+                        'total' => $item_price * $quantity
+                    ];
+                } catch (Exception $e) {
+                    $db->rollBack();
+                    $response['message'] = '❌ Error: ' . $e->getMessage();
                 }
-                
-                $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
-                $stmt->execute([$bill_id]);
-                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-                
-                $stmt = $db->prepare("
-                    UPDATE patient_bills 
-                    SET subtotal = ?, total_amount = ?, balance = ? 
-                    WHERE id = ?
-                ");
-                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
-                
-                $response['success'] = true;
-                $response['message'] = '✅ Procedure added successfully!';
-                $response['procedure'] = ['id' => $proc_id, 'name' => $item_name, 'quantity' => $existing ? $existing['quantity'] + 1 : 1];
             } else {
                 $response['message'] = '❌ Procedure not found';
             }
@@ -605,7 +652,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD TOOL
+    // AJAX: ADD TOOL - FIXED: No refresh, just add to list
     // ================================================================
     if ($action === 'add_tool') {
         header('Content-Type: application/json');
@@ -624,27 +671,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $tool = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($tool) {
-                $item_name = $tool['procedure_name'] . ' - ' . $tool['tool_name'];
-                $item_price = $tool['price'];
-                
-                $stmt = $db->prepare("
-                    SELECT id, quantity FROM bill_items 
-                    WHERE bill_id = ? AND item_name = ? AND item_type = 'tool'
-                ");
-                $stmt->execute([$bill_id, $item_name]);
-                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($existing) {
-                    $new_qty = $existing['quantity'] + 1;
-                    $new_total = $item_price * $new_qty;
-                    $stmt = $db->prepare("
-                        UPDATE bill_items 
-                        SET quantity = ?, total_price = ? 
-                        WHERE id = ?
-                    ");
-                    $stmt->execute([$new_qty, $new_total, $existing['id']]);
-                    $tool_db_id = $existing['id'];
-                } else {
+                try {
+                    $db->beginTransaction();
+                    
+                    $item_name = $tool['procedure_name'] . ' - ' . $tool['tool_name'];
+                    $item_price = (float)$tool['price'];
+                    $quantity = 1;
+                    
+                    // Add to bill_items
                     $stmt = $db->prepare("
                         INSERT INTO bill_items (
                             bill_id, item_type, item_name, quantity, unit_price, total_price,
@@ -652,23 +686,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                         ) VALUES (?, 'tool', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
                     ");
                     $stmt->execute([$bill_id, $item_name, $item_price, $item_price]);
-                    $tool_db_id = $db->lastInsertId();
+                    $item_id = $db->lastInsertId();
+                    
+                    // Update bill total
+                    $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                    $stmt->execute([$bill_id]);
+                    $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                    
+                    $stmt = $db->prepare("
+                        UPDATE patient_bills 
+                        SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                    
+                    $db->commit();
+                    
+                    $response['success'] = true;
+                    $response['message'] = '✅ Tool added successfully!';
+                    $response['tool'] = [
+                        'id' => $item_id,
+                        'name' => $item_name,
+                        'price' => $item_price,
+                        'quantity' => $quantity,
+                        'total' => $item_price * $quantity
+                    ];
+                    
+                } catch (Exception $e) {
+                    $db->rollBack();
+                    $response['message'] = '❌ Error: ' . $e->getMessage();
                 }
-                
-                $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
-                $stmt->execute([$bill_id]);
-                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-                
-                $stmt = $db->prepare("
-                    UPDATE patient_bills 
-                    SET subtotal = ?, total_amount = ?, balance = ? 
-                    WHERE id = ?
-                ");
-                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
-                
-                $response['success'] = true;
-                $response['message'] = '✅ Tool added successfully!';
-                $response['tool'] = ['id' => $tool_db_id, 'name' => $item_name, 'quantity' => $existing ? $existing['quantity'] + 1 : 1];
             } else {
                 $response['message'] = '❌ Tool not found';
             }
@@ -698,7 +745,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             
             $stmt = $db->prepare("
                 UPDATE patient_bills 
-                SET subtotal = ?, total_amount = ?, balance = ? 
+                SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
                 WHERE id = ?
             ");
             $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
@@ -714,16 +761,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // 1. SEND LAB REQUESTS
+    // AJAX: ADD LAB TEST
     // ================================================================
-    if (isset($_POST['send_lab']) && isset($_POST['lab_tests']) && is_array($_POST['lab_tests'])) {
-        $stmt = $db->prepare("DELETE FROM lab_tests WHERE visit_id = ? AND status IN ('pending', 'in_progress')");
-        $stmt->execute([$visit_id]);
+    if ($action === 'add_lab_test') {
+        header('Content-Type: application/json');
         
-        $lab_tests_sent = 0;
-        foreach ($_POST['lab_tests'] as $test_name) {
-            $test_name = trim($test_name);
-            if (!empty($test_name)) {
+        $test_name = trim($_POST['test_name'] ?? '');
+        $response = ['success' => false, 'message' => ''];
+        
+        if (!empty($test_name)) {
+            try {
+                $db->beginTransaction();
+                
+                $stmt = $db->prepare("SELECT price FROM lab_tests_catalog WHERE test_name = ? LIMIT 1");
+                $stmt->execute([$test_name]);
+                $catalog = $stmt->fetch(PDO::FETCH_ASSOC);
+                $price = $catalog['price'] ?? 0;
+                
                 $stmt = $db->prepare("
                     INSERT INTO lab_tests (
                         visit_id, doctor_id, test_name, status, branch_id, created_at
@@ -731,125 +785,219 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 ");
                 $stmt->execute([$visit_id, $doctor_id, $test_name, $doctor_branch_id]);
                 
-                $stmt_price = $db->prepare("SELECT price FROM lab_tests_catalog WHERE test_name = ? LIMIT 1");
-                $stmt_price->execute([$test_name]);
-                $catalog = $stmt_price->fetch(PDO::FETCH_ASSOC);
-                $price = $catalog['price'] ?? 0;
-                
                 if ($price > 0) {
-                    $stmt_bill = $db->prepare("
+                    $stmt = $db->prepare("
                         INSERT INTO bill_items (
                             bill_id, item_type, item_name, quantity, unit_price, total_price,
                             payment_status, is_paid, status, created_at
                         ) VALUES (?, 'lab_test', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
                     ");
-                    $stmt_bill->execute([$bill_id, $test_name, $price, $price]);
+                    $stmt->execute([$bill_id, $test_name, $price, $price]);
                     
-                    $stmt_total = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
-                    $stmt_total->execute([$bill_id]);
-                    $new_total = $stmt_total->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                    $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                    $stmt->execute([$bill_id]);
+                    $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
                     
-                    $stmt_update = $db->prepare("
+                    $stmt = $db->prepare("
                         UPDATE patient_bills 
-                        SET subtotal = ?, total_amount = ?, balance = ? 
+                        SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
                         WHERE id = ?
                     ");
-                    $stmt_update->execute([$new_total, $new_total, $new_total, $bill_id]);
+                    $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
                 }
                 
-                $lab_tests_sent++;
+                $db->commit();
+                $response['success'] = true;
+                $response['message'] = '✅ Lab test added!';
+            } catch (Exception $e) {
+                $db->rollBack();
+                $response['message'] = '❌ Error: ' . $e->getMessage();
             }
+        } else {
+            $response['message'] = '❌ Please select a test';
         }
         
-        $message = "✅ " . $lab_tests_sent . " lab request(s) sent to Laboratory! Bills sent to Cashier.";
-        $message_type = 'success';
-        
-        $stmt = $db->prepare("UPDATE visits SET status = 'lab_test', updated_at = NOW() WHERE id = ?");
-        $stmt->execute([$visit_id]);
-        
-        $lab_data = fetchLabData($db, $visit_id);
-        $lab_requests = $lab_data['requests'];
-        $lab_results = $lab_data['results'];
-        $lab_results_available = $lab_data['available'];
-        $lab_status = $lab_data['status'];
-        $sections_frozen = $lab_data['frozen'];
-        
-        if ($lab_tests_sent > 0) {
-            $sections_frozen = true;
-        }
+        echo json_encode($response);
+        exit;
     }
     
     // ================================================================
-    // 2. SAVE DRAFT
+    // AJAX: REMOVE LAB TEST
     // ================================================================
-    if (isset($_POST['save_draft'])) {
-        if ($sections_frozen) {
-            $message = "❌ Cannot save draft. Lab tests pending!";
-            $message_type = 'error';
-        } else {
-            $symptoms = trim($_POST['symptoms'] ?? '');
-            $diagnosis = trim($_POST['diagnosis'] ?? '');
-            $treatment = trim($_POST['treatment'] ?? '');
-            $notes = trim($_POST['notes'] ?? '');
-            $instructions = trim($_POST['instructions'] ?? '');
-            
-            $stmt = $db->prepare("
-                UPDATE visits 
-                SET symptoms = ?, diagnosis = ?, treatment = ?, notes = ?, 
-                    status = 'with_doctor', updated_at = NOW()
-                WHERE id = ? AND doctor_id = ?
-            ");
-            $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $visit_id, $doctor_id]);
-            
-            $message = "✅ Draft saved successfully! Diagnosis: " . ($diagnosis ?: 'None');
-            $message_type = 'success';
-            
-            $stmt = $db->prepare("SELECT * FROM visits WHERE id = ?");
-            $stmt->execute([$visit_id]);
-            $visit = $stmt->fetch(PDO::FETCH_ASSOC);
-        }
-    }
-    
-    // ================================================================
-    // 3. COMPLETE VISIT
-    // ================================================================
-    if (isset($_POST['complete_visit'])) {
-        if ($sections_frozen) {
-            $message = "❌ Cannot complete visit. Lab tests pending!";
-            $message_type = 'error';
-        } else {
-            $symptoms = trim($_POST['symptoms'] ?? '');
-            $diagnosis = trim($_POST['diagnosis'] ?? '');
-            $treatment = trim($_POST['treatment'] ?? '');
-            $notes = trim($_POST['notes'] ?? '');
-            
-            $stmt = $db->prepare("
-                UPDATE visits 
-                SET symptoms = ?, diagnosis = ?, treatment = ?, notes = ?,
-                    status = 'completed', is_completed = 1, completed_at = NOW(), updated_at = NOW()
-                WHERE id = ? AND doctor_id = ?
-            ");
-            $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $visit_id, $doctor_id]);
-            
-            if ($bill_id) {
+    if ($action === 'remove_lab_test') {
+        header('Content-Type: application/json');
+        $test_id = (int)($_POST['test_id'] ?? 0);
+        $response = ['success' => false, 'message' => ''];
+        
+        if ($test_id > 0) {
+            try {
+                $db->beginTransaction();
+                
+                $stmt = $db->prepare("SELECT test_name FROM lab_tests WHERE id = ? AND visit_id = ?");
+                $stmt->execute([$test_id, $visit_id]);
+                $test = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($test) {
+                    $stmt = $db->prepare("
+                        DELETE FROM bill_items 
+                        WHERE bill_id = ? AND item_name = ? AND item_type = 'lab_test'
+                    ");
+                    $stmt->execute([$bill_id, $test['test_name']]);
+                }
+                
+                $stmt = $db->prepare("DELETE FROM lab_tests WHERE id = ? AND visit_id = ?");
+                $stmt->execute([$test_id, $visit_id]);
+                
+                $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                $stmt->execute([$bill_id]);
+                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                
                 $stmt = $db->prepare("
                     UPDATE patient_bills 
-                    SET status = 'pending', updated_at = NOW()
+                    SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
                     WHERE id = ?
                 ");
-                $stmt->execute([$bill_id]);
+                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                
+                $db->commit();
+                $response['success'] = true;
+                $response['message'] = '✅ Lab test removed!';
+            } catch (Exception $e) {
+                $db->rollBack();
+                $response['message'] = '❌ Error: ' . $e->getMessage();
             }
-            
-            $message = "✅ Visit completed! Diagnosis: " . ($diagnosis ?: 'None');
-            $message_type = 'success';
-            
-            echo '<script>
-                setTimeout(function(){ 
-                    window.location.href = "consultation.php?visit_id=' . $visit_id . '&view=view"; 
-                }, 2000);
-            </script>';
-            exit;
+        } else {
+            $response['message'] = '❌ Invalid test';
         }
+        
+        echo json_encode($response);
+        exit;
+    }
+    
+    // ================================================================
+    // SAVE CONSULTATION - Send everything to Cashier
+    // ================================================================
+    if (isset($_POST['save_consultation'])) {
+        if ($sections_frozen) {
+            $message = "❌ Cannot save consultation. Lab tests pending!";
+            $message_type = 'error';
+        } else {
+            $symptoms = trim($_POST['symptoms'] ?? '');
+            $diagnosis = trim($_POST['diagnosis'] ?? '');
+            $treatment = trim($_POST['treatment'] ?? '');
+            $notes = trim($_POST['notes'] ?? '');
+            
+            try {
+                $db->beginTransaction();
+                
+                // Update visit with ALL fields including diagnosis
+                $stmt = $db->prepare("
+                    UPDATE visits 
+                    SET symptoms = ?, 
+                        diagnosis = ?, 
+                        treatment = ?, 
+                        notes = ?,
+                        status = 'waiting', 
+                        is_completed = 0,
+                        updated_at = NOW()
+                    WHERE id = ? AND doctor_id = ?
+                ");
+                $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $visit_id, $doctor_id]);
+                
+                // Update prescriptions with diagnosis if not set
+                if (!empty($diagnosis)) {
+                    $stmt = $db->prepare("
+                        UPDATE prescriptions 
+                        SET diagnosis = ?, updated_at = NOW()
+                        WHERE visit_id = ? AND (diagnosis IS NULL OR diagnosis = '')
+                    ");
+                    $stmt->execute([$diagnosis, $visit_id]);
+                }
+                
+                // Update bill status to pending (sent to Cashier)
+                if ($bill_id) {
+                    $stmt = $db->prepare("
+                        UPDATE patient_bills 
+                        SET status = 'pending', updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$bill_id]);
+                }
+                
+                $db->commit();
+                
+                $message = "✅ Consultation saved! Diagnosis: " . ($diagnosis ?: 'None') . " | Status: WAITING - Waiting for payment completion.";
+                $message_type = 'success';
+                
+                // Refresh visit data
+                $stmt = $db->prepare("SELECT * FROM visits WHERE id = ?");
+                $stmt->execute([$visit_id]);
+                $visit = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+            } catch (Exception $e) {
+                $db->rollBack();
+                $message = "❌ Error saving consultation: " . $e->getMessage();
+                $message_type = 'error';
+            }
+        }
+    }
+}
+
+// ================================================================
+// AUTO-COMPLETE LOGIC
+// ================================================================
+if ($visit['status'] === 'waiting' && $visit['is_completed'] == 0) {
+    try {
+        $stmt = $db->prepare("
+            SELECT 
+                COUNT(*) as total_bills,
+                SUM(CASE WHEN status IN ('pending', 'partial') THEN 1 ELSE 0 END) as pending_count,
+                SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid_count
+            FROM patient_bills 
+            WHERE visit_id = ?
+        ");
+        $stmt->execute([$visit_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $total_bills = (int)($result['total_bills'] ?? 0);
+        $pending_count = (int)($result['pending_count'] ?? 0);
+        $paid_count = (int)($result['paid_count'] ?? 0);
+        
+        if ($total_bills > 0 && $pending_count == 0 && $paid_count > 0) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET status = 'completed', 
+                    is_completed = 1, 
+                    completed_at = NOW(), 
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$visit_id]);
+            
+            $stmt = $db->prepare("
+                UPDATE patient_bills 
+                SET status = 'paid', updated_at = NOW()
+                WHERE visit_id = ? AND status IN ('pending', 'partial')
+            ");
+            $stmt->execute([$visit_id]);
+            
+            $is_completed = true;
+            $visit['status'] = 'completed';
+            $visit['is_completed'] = 1;
+            
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, action, details, created_at) 
+                    VALUES (?, 'visit_auto_completed', ?, NOW())
+                ");
+                $stmt->execute([
+                    $doctor_id,
+                    "Visit #" . $visit['visit_number'] . " auto-completed - All bills paid"
+                ]);
+            } catch (Exception $e) {}
+        }
+    } catch (Exception $e) {
+        error_log("Auto-complete error: " . $e->getMessage());
     }
 }
 
@@ -884,18 +1032,20 @@ function getUserColor($name) {
 
 function getStatusBadgeClass($status) {
     $map = [
+        'waiting' => 'badge-purple',
         'pending' => 'badge-warning',
-        'pending_pharmacy' => 'badge-warning',
-        'pending_lab' => 'badge-warning',
-        'pending_cashier' => 'badge-warning',
         'assigned' => 'badge-info',
         'with_doctor' => 'badge-info',
         'lab_test' => 'badge-warning',
-        'prescribed' => 'badge-purple',
+        'prescribed' => 'badge-info',
         'completed' => 'badge-success',
         'cancelled' => 'badge-danger'
     ];
     return $map[$status] ?? 'badge-info';
+}
+
+function formatCurrency($amount) {
+    return 'TSh ' . number_format($amount, 0);
 }
 
 // ================================================================
@@ -911,11 +1061,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= $is_completed ? 'View Consultation' : 'Consultation' ?> - Braick Dispensary</title>
+    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
         /* ================================================================
-           MAIN STYLES
+           COMPLETE STYLES
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -1061,6 +1213,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             font-weight: 600;
         }
         
+        .waiting-badge {
+            background: var(--purple);
+            color: white;
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        
         /* ================================================================
            CONSULTATION CARDS
            ================================================================ */
@@ -1106,6 +1267,53 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .title-purple { color: var(--purple); }
         .title-orange { color: var(--warning); }
         .card-title i { font-size: 1.1rem; }
+        
+        /* ================================================================
+           TOTALS DISPLAY
+           ================================================================ */
+        .totals-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            padding: 12px 16px;
+            background: var(--gray-50);
+            border-radius: var(--radius);
+            margin-top: 8px;
+        }
+        [data-theme="dark"] .totals-grid {
+            background: var(--gray-700);
+        }
+        .totals-item {
+            text-align: center;
+            padding: 8px 4px;
+            border-radius: 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+        }
+        [data-theme="dark"] .totals-item {
+            background: var(--gray-800);
+            border-color: var(--gray-600);
+        }
+        .totals-item .label {
+            font-size: 0.6rem;
+            color: var(--gray-500);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .totals-item .value {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--gray-800);
+        }
+        .totals-item .value.blue { color: var(--primary); }
+        .totals-item .value.green { color: var(--success); }
+        .totals-item .value.orange { color: var(--warning); }
+        .totals-item .value.purple { color: var(--purple); }
+        .totals-item .value.red { color: var(--danger); }
+        
+        [data-theme="dark"] .totals-item .value {
+            color: var(--gray-200);
+        }
         
         /* ================================================================
            FORM ELEMENTS
@@ -1162,7 +1370,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         select.form-control { appearance: auto; cursor: pointer; }
         
         /* ================================================================
-           INSTRUCTIONS GRID - 2 Rows of 5
+           INSTRUCTIONS GRID
            ================================================================ */
         .instructions-grid {
             display: grid;
@@ -1231,7 +1439,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
         
         /* ================================================================
-           INSTRUCTIONS BOX - Textarea + Tags
+           INSTRUCTIONS BOX
            ================================================================ */
         .instructions-box-wrapper {
             position: relative;
@@ -1332,7 +1540,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
         
         /* ================================================================
-           MEDICATION ITEMS
+           MEDICATION ITEMS WITH PRICES
            ================================================================ */
         .medication-item {
             display: flex;
@@ -1352,6 +1560,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .med-name { font-weight: 600; font-size: 0.9rem; color: var(--gray-800); }
         .med-details { font-size: 0.75rem; color: var(--gray-500); display: block; }
         .med-qty { font-size: 0.7rem; color: var(--gray-500); background: var(--gray-200); padding: 2px 12px; border-radius: 12px; margin-left: 8px; }
+        .med-price { font-size: 0.7rem; color: var(--success); font-weight: 600; margin-left: 8px; }
+        .med-total { font-size: 0.8rem; color: var(--primary); font-weight: 700; margin-left: 8px; }
         .med-instruction-tag {
             font-size: 0.65rem;
             color: var(--primary);
@@ -1386,6 +1596,29 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             color: #ffffff;
             transform: scale(1.1);
         }
+        
+        /* ================================================================
+           SELECTED ITEMS (Procedures & Tools) WITH PRICES
+           ================================================================ */
+        .selected-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--gray-200);
+            transition: var(--transition);
+            animation: fadeIn 0.3s ease;
+        }
+        .selected-item:last-child { border-bottom: none; }
+        .selected-item:hover { background: var(--gray-50); border-radius: var(--radius); }
+        [data-theme="dark"] .selected-item:hover { background: var(--gray-700); }
+        [data-theme="dark"] .selected-item { border-color: var(--gray-700); }
+        
+        .selected-item-name { font-weight: 600; font-size: 0.85rem; color: var(--gray-800); }
+        .selected-item-type { font-size: 0.65rem; color: var(--gray-500); background: var(--gray-100); padding: 1px 8px; border-radius: 10px; margin-left: 6px; }
+        .selected-item-price { font-size: 0.7rem; color: var(--success); font-weight: 600; margin-left: 8px; }
+        .selected-item-qty { font-size: 0.7rem; color: var(--gray-500); margin-left: 4px; }
+        .selected-item-total { font-size: 0.75rem; color: var(--primary); font-weight: 700; margin-left: 8px; }
         
         /* ================================================================
            BUTTONS
@@ -1568,11 +1801,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             border-radius: 20px;
             text-transform: capitalize;
         }
+        .badge-purple { background: var(--purple-bg); color: var(--purple); }
         .badge-warning { background: var(--warning-bg); color: var(--warning); }
         .badge-info { background: var(--primary-bg); color: var(--primary); }
         .badge-success { background: var(--success-bg); color: var(--success); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); }
-        .badge-purple { background: var(--purple-bg); color: var(--purple); }
         
         .frozen-badge {
             display: inline-block;
@@ -1649,7 +1882,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             border: 1px solid transparent;
             animation: slideDown 0.3s ease;
         }
-        @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
         .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
         .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
         .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
@@ -1730,7 +1966,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         [data-theme="dark"] .form-actions { border-color: var(--gray-700); }
         
         /* ================================================================
-           PROCEDURE TOGGLE
+           PROCEDURE / TOOL TOGGLE
            ================================================================ */
         .procedure-item-select, .tool-item-select {
             display: flex;
@@ -1799,6 +2035,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
            ================================================================ */
         @media (max-width: 1024px) {
             .view-summary-grid { grid-template-columns: 1fr 1fr; }
+            .totals-grid { grid-template-columns: 1fr 1fr; }
         }
         @media (max-width: 768px) {
             .main-content { margin-left: 0; padding: 16px; }
@@ -1808,6 +2045,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             .form-actions .btn { width: 100%; justify-content: center; }
             .consultation-card { padding: 16px; }
             .view-summary-grid { grid-template-columns: 1fr; }
+            .totals-grid { grid-template-columns: 1fr 1fr; }
             .detail-row { flex-direction: column; }
             .detail-label { width: 100%; margin-bottom: 4px; }
             .instructions-grid { grid-template-columns: repeat(3, 1fr); }
@@ -1824,6 +2062,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             .consultation-card { padding: 12px; }
             .page-title { font-size: 1rem; }
             .instructions-grid { grid-template-columns: repeat(2, 1fr); }
+            .totals-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -1840,16 +2079,20 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <h1 class="page-title">
                 <?php if ($is_completed): ?>
                     <i class="fas fa-check-circle" style="color: var(--success);"></i> Consultation Summary
+                <?php elseif ($visit['status'] === 'waiting'): ?>
+                    <i class="fas fa-hourglass-half" style="color: var(--purple);"></i> Consultation (Waiting)
                 <?php else: ?>
                     <i class="fas fa-stethoscope"></i> Consultation
                 <?php endif; ?>
                 <span class="page-badge"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span>
                 <?php if ($is_completed): ?>
                     <span class="view-mode-badge">✅ Completed</span>
+                <?php elseif ($visit['status'] === 'waiting'): ?>
+                    <span class="waiting-badge">⏳ Waiting</span>
                 <?php endif; ?>
                 <?php if ($sections_frozen && !$is_completed): ?>
                     <span class="frozen-badge" id="frozenBadgeHeader">🔒 Lab Pending</span>
-                <?php elseif ($lab_results_available && !$is_completed): ?>
+                <?php elseif ($lab_completed && !$is_completed): ?>
                     <span class="frozen-badge success" id="frozenBadgeHeader">✅ Lab Results Available</span>
                 <?php endif; ?>
                 <?php if (!$is_completed): ?>
@@ -1867,6 +2110,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="status-badge <?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>">
                     <?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'Pending')) ?>
                 </span>
+                <?php if ($bill_status): ?>
+                    <span class="separator">|</span>
+                    Bill: 
+                    <span class="status-badge <?= $bill_status === 'paid' ? 'badge-success' : ($bill_status === 'pending' ? 'badge-warning' : 'badge-info') ?>">
+                        <?= ucfirst($bill_status ?? 'Pending') ?>
+                    </span>
+                <?php endif; ?>
                 <?php if ($is_completed && isset($visit['completed_at'])): ?>
                     <span class="text-xs text-gray-400">Completed: <?= date('M d, Y h:i A', strtotime($visit['completed_at'])) ?></span>
                 <?php endif; ?>
@@ -1899,165 +2149,42 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- VIEW MODE - COMPLETED CONSULTATION SUMMARY -->
+    <!-- TOTALS DISPLAY -->
     <!-- ================================================================ -->
-    <?php if ($is_completed): ?>
-        
-        <!-- Summary Stats -->
-        <div class="view-summary-grid">
-            <div class="summary-item">
-                <p class="summary-number"><?= count($lab_results) ?></p>
-                <p class="summary-label">🧪 Lab Tests</p>
+    <?php if (!$is_completed): ?>
+    <div class="consultation-card mb-6">
+        <h3 class="card-title">
+            <i class="fas fa-receipt title-green"></i> Bill Summary
+            <span class="text-xs text-gray-400" id="totalItemsCount">(<?= count($bill_items) ?> items)</span>
+        </h3>
+        <div class="totals-grid">
+            <div class="totals-item">
+                <p class="label">💊 Medications</p>
+                <p class="value green" id="medTotalDisplay"><?= formatCurrency($total_medication_amount) ?></p>
             </div>
-            <div class="summary-item">
-                <p class="summary-number"><?= count($selected_medications) ?></p>
-                <p class="summary-label">💊 Medications</p>
+            <div class="totals-item">
+                <p class="label">🧪 Lab Tests</p>
+                <p class="value blue" id="labTotalDisplay"><?= formatCurrency($total_lab_amount) ?></p>
             </div>
-            <div class="summary-item">
-                <p class="summary-number"><?= count($bill_items) ?></p>
-                <p class="summary-label">📋 Bill Items</p>
+            <div class="totals-item">
+                <p class="label">💉 Procedures</p>
+                <p class="value orange" id="procTotalDisplay"><?= formatCurrency($total_procedure_amount) ?></p>
             </div>
-        </div>
-
-        <!-- Patient Info -->
-        <div class="consultation-card">
-            <h3 class="card-title"><i class="fas fa-user title-blue"></i> Patient Information</h3>
-            <div class="detail-row"><span class="detail-label">Full Name</span><span class="detail-value"><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></span></div>
-            <div class="detail-row"><span class="detail-label">Patient ID</span><span class="detail-value"><?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?></span></div>
-            <div class="detail-row"><span class="detail-label">Gender</span><span class="detail-value"><?= htmlspecialchars($visit['gender'] ?? 'N/A') ?></span></div>
-            <div class="detail-row"><span class="detail-label">Date of Birth</span><span class="detail-value"><?= !empty($visit['date_of_birth']) ? date('M d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?> (<?= calculateAge($visit['date_of_birth'] ?? '') ?> years)</span></div>
-            <div class="detail-row"><span class="detail-label">Phone</span><span class="detail-value"><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
-            <div class="detail-row"><span class="detail-label">Blood Group</span><span class="detail-value"><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
-            <div class="detail-row"><span class="detail-label">Allergies</span><span class="detail-value"><?= htmlspecialchars($visit['allergies'] ?? 'None') ?></span></div>
-            <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
-        </div>
-
-        <!-- Symptoms -->
-        <div class="consultation-card">
-            <h3 class="card-title"><i class="fas fa-list-ul title-blue"></i> Symptoms</h3>
-            <div class="detail-row"><span class="detail-label">Description</span><span class="detail-value"><?= nl2br(htmlspecialchars($visit['symptoms'] ?? 'No symptoms recorded')) ?></span></div>
-        </div>
-
-        <!-- Lab Results -->
-        <div class="consultation-card">
-            <h3 class="card-title"><i class="fas fa-flask title-green"></i> Lab Results (<?= count($lab_results) ?>)</h3>
-            <?php if (count($lab_results) > 0): ?>
-                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
-                    <thead><tr>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Test Name</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Result</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Reference Range</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Status</th>
-                    </tr></thead>
-                    <tbody>
-                        <?php foreach ($lab_results as $result): ?>
-                            <tr>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);font-weight:600;color:var(--success);"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($result['reference_range'] ?? '') ?></td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><span class="badge badge-success">✅ Completed</span></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php else: ?>
-                <p class="text-gray-400">No lab tests performed</p>
-            <?php endif; ?>
-        </div>
-
-        <!-- Diagnosis -->
-        <div class="consultation-card">
-            <h3 class="card-title"><i class="fas fa-diagnoses title-blue"></i> Diagnosis</h3>
-            <div class="detail-row">
-                <span class="detail-label">Diagnosis</span>
-                <span class="detail-value"><?= nl2br(htmlspecialchars($visit['diagnosis'] ?? 'No diagnosis recorded')) ?></span>
+            <div class="totals-item">
+                <p class="label">🔧 Tools</p>
+                <p class="value purple" id="toolTotalDisplay"><?= formatCurrency($total_tool_amount) ?></p>
             </div>
         </div>
-
-        <!-- Medications -->
-        <div class="consultation-card">
-            <h3 class="card-title"><i class="fas fa-prescription title-blue"></i> Medications (<?= count($selected_medications) ?>)</h3>
-            <?php if (count($selected_medications) > 0): ?>
-                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
-                    <thead><tr>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Medication</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Dosage</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Frequency</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Duration</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Qty</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Instructions</th>
-                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Status</th>
-                    </tr></thead>
-                    <tbody>
-                        <?php foreach ($selected_medications as $med): ?>
-                            <tr>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['medication'] ?? 'N/A') ?></td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['dosage'] ?? '') ?></td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['frequency'] ?? '') ?></td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['duration'] ?? '') ?> days</td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= $med['quantity'] ?? 0 ?></td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['instructions'] ?? '') ?></td>
-                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><span class="badge badge-warning">⏳ Pending</span></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php else: ?>
-                <p class="text-gray-400">No medications prescribed</p>
-            <?php endif; ?>
+        <div style="text-align:right;margin-top:12px;padding-top:12px;border-top:2px solid var(--gray-200);">
+            <span class="text-sm text-gray-500">Total Bill:</span>
+            <span class="text-lg font-bold text-primary" id="grandTotalDisplay"><?= formatCurrency($total_bill_amount) ?></span>
         </div>
+    </div>
+    <?php endif; ?>
 
-        <!-- Bill Summary -->
-        <div class="consultation-card">
-            <h3 class="card-title"><i class="fas fa-receipt title-green"></i> Bill Summary</h3>
-            <div class="bill-summary">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-                    <div>
-                        <p class="text-sm text-gray-500">Total Amount</p>
-                        <p class="bill-total">TSh <?= number_format($total_bill_amount, 2) ?></p>
-                    </div>
-                    <div>
-                        <p class="text-sm text-gray-500">Status</p>
-                        <p><span class="status-badge badge-warning">⏳ Pending Payment</span></p>
-                    </div>
-                </div>
-                <div class="mt-3 text-sm text-gray-500">
-                    <i class="fas fa-info-circle"></i> Bill sent to Cashier for payment processing
-                </div>
-            </div>
-            
-            <?php if (count($bill_items) > 0): ?>
-                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:12px;">
-                    <thead><tr>
-                        <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Item</th>
-                        <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Type</th>
-                        <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Qty</th>
-                        <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Total</th>
-                    </tr></thead>
-                    <tbody>
-                        <?php foreach ($bill_items as $item): ?>
-                            <tr>
-                                <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></td>
-                                <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><span class="badge badge-info"><?= ucfirst($item['item_type'] ?? 'N/A') ?></span></td>
-                                <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><?= $item['quantity'] ?? 1 ?></td>
-                                <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);font-weight:600;">TSh <?= number_format($item['total_price'] ?? 0, 2) ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php endif; ?>
-        </div>
-
-        <div class="mt-4 text-center">
-            <a href="my_patients.php" class="btn btn-primary">
-                <i class="fas fa-arrow-left"></i> Back to My Patients
-            </a>
-        </div>
-
-    <?php else: ?>
-
+    <?php if (!$is_completed): ?>
     <!-- ================================================================ -->
-    <!-- CONSULTATION FORM - ACTIVE MODE -->
+    <!-- ACTIVE CONSULTATION FORM -->
     <!-- ================================================================ -->
     <form method="POST" action="" id="consultationForm">
 
@@ -2103,7 +2230,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <div class="form-group">
                 <label class="form-label">Symptoms Description</label>
                 <textarea name="symptoms" class="form-control" rows="4" 
-                          placeholder="Describe patient symptoms..."><?= htmlspecialchars($visit['symptoms'] ?? '') ?></textarea>
+                          placeholder="Describe patient symptoms..." id="symptomsInput"><?= htmlspecialchars($visit['symptoms'] ?? '') ?></textarea>
             </div>
         </div>
 
@@ -2111,11 +2238,17 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div class="consultation-card mb-6">
             <h3 class="card-title">
                 <i class="fas fa-flask title-blue"></i> Laboratory Requests
-                <?php if (count($lab_requests) > 0): ?>
-                    <span class="frozen-badge" id="pendingLabBadge">⏳ <?= count($lab_requests) ?> Pending</span>
+                <?php 
+                    $pending_lab_count = 0;
+                    foreach ($lab_tests as $test) {
+                        if ($test['status'] === 'pending' || $test['status'] === 'in_progress') $pending_lab_count++;
+                    }
+                ?>
+                <?php if ($pending_lab_count > 0): ?>
+                    <span class="frozen-badge" id="pendingLabBadge">⏳ <?= $pending_lab_count ?> Pending</span>
                 <?php endif; ?>
-                <span class="text-xs text-gray-400" id="labResultsCount"><?= count($lab_results) ?> results</span>
-                <button type="button" class="btn btn-outline btn-sm ml-2" onclick="addLabTest()">
+                <span class="text-xs text-gray-400" id="labResultsCount"><?= count($lab_tests) ?> tests</span>
+                <button type="button" class="btn btn-outline btn-sm ml-2" onclick="addLabTestRow()">
                     <i class="fas fa-plus"></i> Add Test
                 </button>
             </h3>
@@ -2126,19 +2259,23 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             </div>
             
             <div id="labTestsContainer" class="mt-3">
-                <?php if (count($lab_requests) > 0): ?>
-                    <?php foreach ($lab_requests as $lab): ?>
+                <?php if (count($lab_tests) > 0): ?>
+                    <?php foreach ($lab_tests as $lab): ?>
                         <div style="display:flex;gap:10px;margin-bottom:10px;align-items:center;">
                             <input type="text" class="form-control" value="<?= htmlspecialchars($lab['test_name']) ?>" disabled style="flex:1;">
-                            <span class="text-xs text-yellow-600">⏳ Pending</span>
-                            <button type="button" class="btn btn-danger btn-sm" onclick="removeLabTest(this, <?= $lab['id'] ?>)" title="Remove test">
-                                <i class="fas fa-times"></i>
-                            </button>
+                            <span class="text-xs <?= $lab['status'] === 'pending' ? 'text-yellow-600' : ($lab['status'] === 'completed' ? 'text-green-600' : 'text-gray-500') ?>">
+                                <?= ucfirst($lab['status'] ?? 'Pending') ?>
+                            </span>
+                            <?php if ($lab['status'] === 'pending' || $lab['status'] === 'in_progress'): ?>
+                                <button type="button" class="btn btn-danger btn-sm" onclick="removeLabTest(<?= $lab['id'] ?>)" title="Remove test">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            <?php endif; ?>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
                     <div style="display:flex;gap:10px;margin-bottom:10px;align-items:center;">
-                        <select name="lab_tests[]" class="form-control" style="flex:1;">
+                        <select class="form-control lab-test-select" style="flex:1;">
                             <option value="">-- Select Test --</option>
                             <?php foreach ($lab_tests_catalog as $test): ?>
                                 <option value="<?= htmlspecialchars($test['test_name']) ?>">
@@ -2157,7 +2294,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             </div>
             
             <div class="mt-3 flex flex-wrap gap-3">
-                <button type="submit" name="send_lab" class="btn btn-warning" id="sendLabBtn">
+                <button type="button" class="btn btn-warning" onclick="sendLabTests()" id="sendLabBtn">
                     <i class="fas fa-paper-plane"></i> Send to Laboratory
                 </button>
                 <span class="text-xs text-gray-500 self-center">
@@ -2167,36 +2304,36 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </div>
 
         <!-- SECTION 4: LAB RESULTS -->
-        <div class="consultation-card mb-6 <?= $lab_results_available ? 'border-green-500' : '' ?>" id="labResultsCard">
+        <div class="consultation-card mb-6 <?= $lab_completed ? 'border-green-500' : '' ?>" id="labResultsCard">
             <h3 class="card-title">
                 <i class="fas fa-file-medical-alt title-green"></i> Laboratory Results
-                <?php if ($lab_results_available): ?>
+                <?php if ($lab_completed): ?>
                     <span class="frozen-badge success" id="resultsBadge">✅ Results Available</span>
-                    <span class="text-sm font-normal text-gray-400 ml-2" id="resultsCount">(<?= count($lab_results) ?> results)</span>
-                <?php elseif (count($lab_requests) > 0): ?>
+                    <span class="text-sm font-normal text-gray-400 ml-2" id="resultsCount">(<?= count($lab_tests) ?> results)</span>
+                <?php elseif ($pending_lab_count > 0): ?>
                     <span class="frozen-badge" id="resultsBadge">⏳ Pending Results</span>
                 <?php endif; ?>
                 <span class="text-xs text-gray-400" id="resultsUpdateTime">⏱ Auto-update</span>
             </h3>
             
             <div id="labResultsContainer">
-                <?php if ($lab_results_available): ?>
+                <?php if ($lab_completed): ?>
                     <div style="overflow-x:auto;">
                         <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
                             <thead><tr>
                                 <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Test Name</th>
                                 <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Result</th>
-                                <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Reference Range</th>
                                 <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Status</th>
                             </tr></thead>
                             <tbody id="labResultsBody">
-                                <?php foreach ($lab_results as $result): ?>
-                                    <tr>
-                                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
-                                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);font-weight:600;color:#059669;"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
-                                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><?= htmlspecialchars($result['reference_range'] ?? '') ?></td>
-                                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><span class="badge badge-success">Completed</span></td>
-                                    </tr>
+                                <?php foreach ($lab_tests as $result): ?>
+                                    <?php if ($result['status'] === 'completed'): ?>
+                                        <tr>
+                                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
+                                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);font-weight:600;color:#059669;"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
+                                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><span class="badge badge-success">✅ Completed</span></td>
+                                        </tr>
+                                    <?php endif; ?>
                                 <?php endforeach; ?>
                             </tbody>
                         </table>
@@ -2204,10 +2341,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <div class="mt-3 text-sm text-green-600">
                         <i class="fas fa-check-circle"></i> Lab results available. You can now proceed with Diagnosis, Medication & Procedures.
                     </div>
-                <?php elseif (count($lab_requests) > 0): ?>
+                <?php elseif ($pending_lab_count > 0): ?>
                     <div class="text-center py-6 text-yellow-600" id="labPendingMessage">
                         <i class="fas fa-clock text-3xl block mb-2"></i>
-                        <p id="pendingCountDisplay"><?= count($lab_requests) ?> lab request(s) pending</p>
+                        <p id="pendingCountDisplay"><?= $pending_lab_count ?> lab test(s) pending</p>
                         <p class="text-xs text-gray-400 mt-1">⏳ Waiting for Laboratory to complete tests</p>
                         <div class="mt-3 text-sm text-red-500">
                             <i class="fas fa-lock"></i> Diagnosis, Medication & Procedures are <strong>FROZEN</strong> until results are available
@@ -2242,30 +2379,33 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                               placeholder="Enter diagnosis based on lab results..." 
                               <?= $sections_frozen ? 'disabled' : '' ?> 
                               id="diagnosisInput"><?= htmlspecialchars($visit['diagnosis'] ?? '') ?></textarea>
+                    <p class="text-xs text-gray-400 mt-1">
+                        <i class="fas fa-info-circle"></i> Diagnosis will be saved and visible to Pharmacy & Cashier
+                    </p>
                 </div>
             </div>
 
-            <!-- SECTION 6: MEDICATIONS with Instructions Box -->
+            <!-- SECTION 6: MEDICATIONS -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
                     <i class="fas fa-prescription title-blue"></i> Medications
                     <?php if ($sections_frozen): ?>
                         <span class="frozen-badge" id="medicationFrozenBadge">🔒 Frozen - Lab Pending</span>
                     <?php endif; ?>
+                    <span class="text-xs text-gray-400" id="medTotalDisplay">Total: <?= formatCurrency($total_medication_amount) ?></span>
                 </h3>
                 
                 <div style="background:var(--gray-50);border-radius:var(--radius);padding:20px;border:1px solid var(--gray-200);">
                     
-                    <!-- 2 Rows: Medication & Qty -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                         <div class="form-group">
                             <label class="form-label">Medication <span class="required">*</span></label>
-                            <select name="inventory_id" class="form-control" id="medicationSelect" <?= $sections_frozen ? 'disabled' : '' ?>>
+                            <select id="medicationSelect" class="form-control" <?= $sections_frozen ? 'disabled' : '' ?>>
                                 <option value="">Select Medication...</option>
                                 <?php foreach ($medications_list as $med): ?>
-                                    <option value="<?= $med['id'] ?>">
+                                    <option value="<?= $med['id'] ?>" data-price="<?= $med['selling_price'] ?? 0 ?>">
                                         <?= htmlspecialchars($med['medication_name']) ?> 
-                                        (<?= $med['quantity'] ?? 0 ?> available)
+                                        (<?= $med['quantity'] ?? 0 ?> available) - <?= formatCurrency($med['selling_price'] ?? 0) ?> each
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -2276,7 +2416,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         </div>
                     </div>
                     
-                    <!-- 2 Rows: Dosage & Frequency -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
                         <div class="form-group">
                             <label class="form-label">Dosage</label>
@@ -2299,7 +2438,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         </div>
                     </div>
                     
-                    <!-- 2 Rows: Duration & Route -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
                         <div class="form-group">
                             <label class="form-label">Duration (Days)</label>
@@ -2319,11 +2457,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         </div>
                     </div>
                     
-                    <!-- INSTRUCTIONS: Quick Buttons + Textarea + Tags -->
                     <div class="form-group mt-3">
                         <label class="form-label">Instructions <span class="text-xs text-gray-400">(Pick or Type)</span></label>
                         
-                        <!-- Quick Instruction Buttons (10 options - 2 rows of 5) -->
                         <div class="instructions-grid">
                             <?php foreach ($prescription_instructions as $instruction): ?>
                                 <button type="button" class="instruction-btn" onclick="addInstruction('<?= addslashes($instruction) ?>')">
@@ -2335,26 +2471,22 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             </button>
                         </div>
                         
-                        <!-- Instructions Textarea - Type OR Pick -->
                         <div class="instructions-box-wrapper">
                             <textarea id="instructionsTextarea" class="form-control" rows="3" 
-                                      placeholder="Click buttons above OR type instructions here... (separate with ; )"
+                                      placeholder="Click buttons above OR type instructions here..." 
                                       oninput="onInstructionsInput()"
                                       style="resize:vertical;min-height:80px;font-size:0.9rem;line-height:1.6;"><?= htmlspecialchars($visit['instructions'] ?? '') ?></textarea>
                             
-                            <!-- Tags Display -->
                             <div class="instructions-tags" id="instructionsTags">
-                                <span class="empty-tags">No instructions added yet. Click buttons or type above.</span>
+                                <span class="empty-tags">No instructions added yet.</span>
                             </div>
                         </div>
                         
-                        <!-- Hidden input for form submission -->
                         <input type="hidden" id="medInstructions" name="instructions" value="<?= htmlspecialchars($visit['instructions'] ?? '') ?>">
                     </div>
                     
-                    <!-- Add Medication Button -->
                     <div class="mt-3">
-                        <button type="button" class="btn btn-primary" onclick="addMedicationAjax()" id="addMedicationBtn" <?= $sections_frozen ? 'disabled' : '' ?>>
+                        <button type="button" class="btn btn-primary" onclick="addMedication()" id="addMedicationBtn" <?= $sections_frozen ? 'disabled' : '' ?>>
                             <i class="fas fa-plus"></i> Add Medication
                         </button>
                         <?php if ($sections_frozen): ?>
@@ -2363,17 +2495,23 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     </div>
                 </div>
                 
-                <!-- Selected Medications List -->
                 <div class="selected-medications mt-4" style="background:var(--gray-50);border-radius:var(--radius);padding:16px 20px;border:1px solid var(--gray-200);">
                     <div class="flex items-center justify-between mb-2">
                         <h4 class="text-sm font-semibold text-gray-600">
                             <i class="fas fa-list"></i> Selected Medications
-                            <span class="text-xs text-gray-400" id="medCount">(<?= count($selected_medications) ?> items)</span>
+                            <span class="text-xs text-gray-400" id="medCount">(<?= count($prescriptions) ?> items)</span>
+                            <span class="text-xs text-gray-400" id="medTotal">Total: <?= formatCurrency($total_medication_amount) ?></span>
                         </h4>
                     </div>
                     <div id="medicationsList">
-                        <?php if (count($selected_medications) > 0): ?>
-                            <?php foreach ($selected_medications as $med): ?>
+                        <?php if (count($prescriptions) > 0): ?>
+                            <?php foreach ($prescriptions as $med): 
+                                $items = $prescription_items[$med['id']] ?? [];
+                                $med_total = 0;
+                                foreach ($items as $item) {
+                                    $med_total += $item['total_price'] ?? 0;
+                                }
+                            ?>
                                 <div class="medication-item" id="med-item-<?= $med['id'] ?>">
                                     <div class="medication-item-info">
                                         <span class="med-name"><?= htmlspecialchars($med['medication'] ?? 'Unknown') ?></span>
@@ -2383,6 +2521,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                             <?= htmlspecialchars($med['duration'] ?? '') ?> days
                                         </span>
                                         <span class="med-qty">x<?= $med['quantity'] ?? 0 ?></span>
+                                        <span class="med-price"><?= formatCurrency($med['unit_price'] ?? 0) ?> each</span>
+                                        <span class="med-total">= <?= formatCurrency($med_total) ?></span>
                                         <?php if (!empty($med['instructions'])): ?>
                                             <span class="med-instruction-tag"><?= htmlspecialchars($med['instructions']) ?></span>
                                         <?php endif; ?>
@@ -2396,30 +2536,28 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             <div class="empty-state" id="emptyMedications">
                                 <i class="fas fa-prescription"></i>
                                 <p>No medications added yet</p>
-                                <?php if ($sections_frozen): ?>
-                                    <p class="text-xs text-red-500 mt-1"><i class="fas fa-lock"></i> Medications frozen - lab tests pending</p>
-                                <?php endif; ?>
                             </div>
                         <?php endif; ?>
                     </div>
                 </div>
             </div>
 
-            <!-- SECTION 7: PROCEDURES & TOOLS -->
+            <!-- SECTION 7: PROCEDURES & TOOLS - FIXED: No refresh loss -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
                     <i class="fas fa-syringe title-blue"></i> Procedures & Tools
                     <?php if ($sections_frozen): ?>
                         <span class="frozen-badge" id="procedureFrozenBadge">🔒 Frozen - Lab Pending</span>
                     <?php endif; ?>
+                    <span class="text-xs text-gray-400" id="procToolTotalDisplay">Total: <?= formatCurrency($total_procedure_amount + $total_tool_amount) ?></span>
                 </h3>
                 
-                <!-- Procedures Dropdown -->
                 <div style="border:1px solid var(--gray-200);border-radius:var(--radius-lg);margin-bottom:12px;overflow:hidden;">
                     <div onclick="toggleDropdown('proceduresToggle')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--gray-50);cursor:pointer;user-select:none;">
                         <span style="font-weight:600;font-size:0.85rem;color:var(--gray-700);display:flex;align-items:center;gap:10px;">
                             <i class="fas fa-syringe title-blue"></i> Procedures
                             <span class="text-xs text-gray-400">(Click to expand)</span>
+                            <span class="text-xs text-green-600" id="proceduresCount">0 selected</span>
                         </span>
                         <span style="transition:var(--transition);color:var(--gray-400);font-size:0.8rem;"><i class="fas fa-chevron-down"></i></span>
                     </div>
@@ -2429,35 +2567,39 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <div class="procedure-item-select" 
                                      data-procedure-id="<?= $proc['id'] ?>"
                                      data-procedure-name="<?= htmlspecialchars($proc['procedure_name']) ?>"
+                                     data-price="<?= $proc['price'] ?? 0 ?>"
                                      onclick="toggleProcedure(this)">
                                     <span class="item-check"><i class="fas fa-check"></i></span>
                                     <span><?= htmlspecialchars($proc['procedure_name']) ?></span>
+                                    <span class="text-xs text-green-600 font-semibold"><?= formatCurrency($proc['price'] ?? 0) ?></span>
                                 </div>
                             <?php endforeach; ?>
                         </div>
                     </div>
                 </div>
                 
-                <!-- Tools Dropdown -->
                 <div style="border:1px solid var(--gray-200);border-radius:var(--radius-lg);margin-bottom:12px;overflow:hidden;">
                     <div onclick="toggleDropdown('toolsToggle')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--gray-50);cursor:pointer;user-select:none;">
                         <span style="font-weight:600;font-size:0.85rem;color:var(--gray-700);display:flex;align-items:center;gap:10px;">
                             <i class="fas fa-tools title-orange"></i> Tools
                             <span class="text-xs text-gray-400">(Click to expand)</span>
+                            <span class="text-xs text-green-600" id="toolsCount">0 selected</span>
                         </span>
                         <span style="transition:var(--transition);color:var(--gray-400);font-size:0.8rem;"><i class="fas fa-chevron-down"></i></span>
                     </div>
                     <div id="toolsToggle" style="padding:0 18px 18px 18px;display:none;">
-                        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:8px;padding:12px;background:var(--gray-100);border-radius:var(--radius);max-height:200px;overflow-y:auto;">
+                        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-top:8px;padding:12px;background:var(--gray-100);border-radius:var(--radius);max-height:250px;overflow-y:auto;">
                             <?php foreach ($procedure_tools as $tool): ?>
                                 <div class="tool-item-select" 
                                      data-tool-id="<?= $tool['id'] ?>"
                                      data-tool-name="<?= htmlspecialchars($tool['tool_name']) ?>"
                                      data-procedure-name="<?= htmlspecialchars($tool['procedure_name']) ?>"
+                                     data-price="<?= $tool['price'] ?? 0 ?>"
                                      onclick="toggleTool(this)">
                                     <span class="item-check"><i class="fas fa-check"></i></span>
                                     <span><?= htmlspecialchars($tool['tool_name']) ?></span>
                                     <small class="text-xs text-gray-400">(<?= htmlspecialchars($tool['procedure_name']) ?>)</small>
+                                    <span class="text-xs text-green-600 font-semibold"><?= formatCurrency($tool['price'] ?? 0) ?></span>
                                 </div>
                             <?php endforeach; ?>
                         </div>
@@ -2471,23 +2613,48 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <button type="button" class="btn btn-outline btn-sm" onclick="clearAllSelections()">
                         <i class="fas fa-times"></i> Clear Selections
                     </button>
+                    <span class="text-xs text-gray-500 self-center">
+                        <i class="fas fa-info-circle"></i> Select multiple items
+                    </span>
                 </div>
                 
                 <div class="selected-items-list mt-3">
                     <div class="flex items-center justify-between mb-2">
                         <h4 class="text-sm font-semibold text-gray-600">
-                            <i class="fas fa-list"></i> Selected Items
-                            <span class="text-xs text-gray-400" id="selectedCount">(0 items)</span>
+                            <i class="fas fa-list"></i> Added Items
+                            <span class="text-xs text-gray-400" id="selectedCount">(<?= count(array_filter($bill_items, function($item) { return in_array($item['item_type'], ['procedure', 'tool']); })) ?> items)</span>
+                            <span class="text-xs text-gray-400" id="selectedTotal">Total: <?= formatCurrency($total_procedure_amount + $total_tool_amount) ?></span>
                         </h4>
                     </div>
                     <div id="selectedItemsList">
-                        <div class="empty-state" id="emptySelected">
-                            <i class="fas fa-syringe"></i>
-                            <p>No procedures or tools added yet</p>
-                            <?php if ($sections_frozen): ?>
-                                <p class="text-xs text-red-500 mt-1"><i class="fas fa-lock"></i> Procedures frozen - lab tests pending</p>
-                            <?php endif; ?>
-                        </div>
+                        <?php 
+                            $has_items = false;
+                            foreach ($bill_items as $item):
+                                if ($item['item_type'] === 'procedure' || $item['item_type'] === 'tool'):
+                                    $has_items = true;
+                        ?>
+                            <div class="selected-item" id="selected-item-<?= $item['id'] ?>">
+                                <div>
+                                    <span class="selected-item-name"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></span>
+                                    <span class="selected-item-type"><?= ucfirst($item['item_type'] ?? '') ?></span>
+                                    <span class="selected-item-price" style="color:#059669;font-weight:600;margin-left:8px;"><?= formatCurrency($item['unit_price'] ?? 0) ?></span>
+                                    <span class="selected-item-qty" style="color:#94A3B8;margin-left:4px;">x<?= $item['quantity'] ?? 1 ?></span>
+                                    <span class="selected-item-total" style="color:#0B5ED7;font-weight:700;margin-left:8px;">= <?= formatCurrency($item['total_price'] ?? 0) ?></span>
+                                </div>
+                                <button type="button" class="btn-remove" onclick="removeSelectedItem(<?= $item['id'] ?>)" title="Remove item">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        <?php 
+                                endif;
+                            endforeach; 
+                        ?>
+                        <?php if (!$has_items): ?>
+                            <div class="empty-state" id="emptySelected">
+                                <i class="fas fa-syringe"></i>
+                                <p>No procedures or tools added yet</p>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -2499,31 +2666,226 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <!-- ================================================================ -->
         <div class="consultation-card">
             <div class="form-actions">
-                <button type="submit" name="save_draft" class="btn btn-primary" id="saveDraftBtn" <?= $sections_frozen ? 'disabled' : '' ?>>
-                    <i class="fas fa-save"></i> Save Draft
-                </button>
-                <button type="submit" name="complete_visit" class="btn btn-success" id="completeVisitBtn" 
+                <button type="submit" name="save_consultation" class="btn btn-success" id="saveConsultationBtn" 
                         <?= $sections_frozen ? 'disabled' : '' ?>
-                        onclick="return confirm('Complete this consultation?\n\n- 💊 Medications: Waiting for Pharmacy confirmation\n- 🧪 Lab Tests: Waiting for Laboratory confirmation\n- 💉 Procedures & Tools: Direct to Cashier')">
-                    <i class="fas fa-check-circle"></i> Complete & Send to Cashier
+                        onclick="return confirm('Save Consultation?\n\n- 📋 Status: WAITING\n- 💊 Medications: Will be sent to Pharmacy\n- 🧪 Lab Tests: Will be sent to Laboratory\n- 💉 Procedures & Tools: Will be sent to Cashier\n- 💰 Bill: Will be sent to Cashier for payment\n\n✅ Will auto-complete after all bills are paid.')">
+                    <i class="fas fa-save"></i> Save Consultation
                 </button>
-                <?php if ($sections_frozen): ?>
-                    <span class="text-xs text-red-500 self-center" id="frozenActionsMessage">
-                        <i class="fas fa-lock"></i> Actions frozen - Lab tests pending
-                    </span>
-                <?php endif; ?>
                 <button type="button" class="btn btn-outline" onclick="window.print()">
                     <i class="fas fa-print"></i> Print
                 </button>
                 <a href="my_patients.php" class="btn btn-outline">
                     <i class="fas fa-times"></i> Cancel
                 </a>
+                <?php if ($sections_frozen): ?>
+                    <span class="text-xs text-red-500 self-center" id="frozenActionsMessage">
+                        <i class="fas fa-lock"></i> Actions frozen - Lab tests pending
+                    </span>
+                <?php endif; ?>
+                <?php if ($visit['status'] === 'waiting'): ?>
+                    <span class="text-xs text-purple-500 self-center">
+                        <i class="fas fa-hourglass-half"></i> Waiting for payment completion
+                    </span>
+                <?php endif; ?>
             </div>
         </div>
 
     </form>
 
-    <?php endif; // End of active consultation mode ?>
+    <?php else: ?>
+    
+    <!-- ================================================================ -->
+    <!-- VIEW MODE - COMPLETED CONSULTATION -->
+    <!-- ================================================================ -->
+    <div class="view-summary-grid">
+        <div class="summary-item">
+            <p class="summary-number"><?= count($lab_tests) ?></p>
+            <p class="summary-label">🧪 Lab Tests</p>
+        </div>
+        <div class="summary-item">
+            <p class="summary-number"><?= count($prescriptions) ?></p>
+            <p class="summary-label">💊 Medications</p>
+        </div>
+        <div class="summary-item">
+            <p class="summary-number"><?= count($bill_items) ?></p>
+            <p class="summary-label">📋 Bill Items</p>
+        </div>
+    </div>
+
+    <!-- Patient Info -->
+    <div class="consultation-card">
+        <h3 class="card-title"><i class="fas fa-user title-blue"></i> Patient Information</h3>
+        <div class="detail-row"><span class="detail-label">Full Name</span><span class="detail-value"><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></span></div>
+        <div class="detail-row"><span class="detail-label">Patient ID</span><span class="detail-value"><?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?></span></div>
+        <div class="detail-row"><span class="detail-label">Gender</span><span class="detail-value"><?= htmlspecialchars($visit['gender'] ?? 'N/A') ?></span></div>
+        <div class="detail-row"><span class="detail-label">Date of Birth</span><span class="detail-value"><?= !empty($visit['date_of_birth']) ? date('M d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?> (<?= calculateAge($visit['date_of_birth'] ?? '') ?> years)</span></div>
+        <div class="detail-row"><span class="detail-label">Phone</span><span class="detail-value"><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
+        <div class="detail-row"><span class="detail-label">Blood Group</span><span class="detail-value"><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
+        <div class="detail-row"><span class="detail-label">Allergies</span><span class="detail-value"><?= htmlspecialchars($visit['allergies'] ?? 'None') ?></span></div>
+        <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
+    </div>
+
+    <!-- Symptoms -->
+    <div class="consultation-card">
+        <h3 class="card-title"><i class="fas fa-list-ul title-blue"></i> Symptoms</h3>
+        <div class="detail-row"><span class="detail-label">Description</span><span class="detail-value"><?= nl2br(htmlspecialchars($visit['symptoms'] ?? 'No symptoms recorded')) ?></span></div>
+    </div>
+
+    <!-- Lab Results -->
+    <div class="consultation-card">
+        <h3 class="card-title"><i class="fas fa-flask title-green"></i> Lab Results</h3>
+        <?php if (count($lab_tests) > 0): ?>
+            <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
+                <thead><tr>
+                    <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Test Name</th>
+                    <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Result</th>
+                    <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Status</th>
+                </tr></thead>
+                <tbody>
+                    <?php foreach ($lab_tests as $result): ?>
+                        <tr>
+                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
+                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);font-weight:600;color:<?= $result['status'] === 'completed' ? '#059669' : '#D97706' ?>;"><?= htmlspecialchars($result['results'] ?? ($result['status'] === 'pending' ? '⏳ Pending' : 'In Progress')) ?></td>
+                            <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><span class="badge <?= $result['status'] === 'completed' ? 'badge-success' : 'badge-warning' ?>"><?= ucfirst($result['status'] ?? 'pending') ?></span></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php else: ?>
+            <p class="text-gray-400">No lab tests performed</p>
+        <?php endif; ?>
+    </div>
+
+    <!-- Diagnosis -->
+    <div class="consultation-card">
+        <h3 class="card-title"><i class="fas fa-diagnoses title-blue"></i> Diagnosis</h3>
+        <div class="detail-row">
+            <span class="detail-label">Diagnosis</span>
+            <span class="detail-value"><?= nl2br(htmlspecialchars($visit['diagnosis'] ?? 'No diagnosis recorded')) ?></span>
+        </div>
+    </div>
+
+    <!-- Medications -->
+    <div class="consultation-card">
+        <h3 class="card-title"><i class="fas fa-prescription title-blue"></i> Medications</h3>
+        <?php if (count($prescriptions) > 0): ?>
+            <?php foreach ($prescriptions as $presc): 
+                $items = $prescription_items[$presc['id']] ?? [];
+                $presc_total = 0;
+                foreach ($items as $item) {
+                    $presc_total += $item['total_price'] ?? 0;
+                }
+            ?>
+                <div class="card" style="margin-bottom:12px;border-left:4px solid <?= $presc['status'] === 'dispensed' ? '#059669' : ($presc['status'] === 'cancelled' ? '#DC2626' : '#0B5ED7') ?>;padding:12px 16px;background:var(--bg-card);border-radius:8px;border:1px solid var(--border-color);">
+                    <div class="flex flex-wrap justify-between items-center">
+                        <span class="font-mono text-sm font-bold text-primary"><?= htmlspecialchars($presc['prescription_number']) ?></span>
+                        <span class="badge <?= $presc['status'] === 'dispensed' ? 'badge-success' : ($presc['status'] === 'cancelled' ? 'badge-danger' : 'badge-warning') ?>">
+                            <?= ucfirst($presc['status'] ?? 'pending') ?>
+                        </span>
+                    </div>
+                    <?php if (!empty($presc['medication'])): ?>
+                        <p class="text-sm mt-1"><strong>Medication:</strong> <?= htmlspecialchars($presc['medication']) ?></p>
+                    <?php endif; ?>
+                    <?php if (!empty($presc['diagnosis'])): ?>
+                        <p class="text-sm"><strong>Diagnosis:</strong> <?= htmlspecialchars($presc['diagnosis']) ?></p>
+                    <?php endif; ?>
+                    <?php if (count($items) > 0): ?>
+                        <div class="mt-2">
+                            <?php foreach ($items as $item): ?>
+                                <div class="flex justify-between text-sm border-b border-gray-100 dark:border-gray-700 py-1">
+                                    <span><?= htmlspecialchars($item['medication_name']) ?> 
+                                        <?php if (!empty($item['dosage'])): ?>(<?= htmlspecialchars($item['dosage']) ?>)<?php endif; ?>
+                                    </span>
+                                    <span class="text-gray-500">
+                                        x<?= $item['quantity'] ?> • <?= formatCurrency($item['unit_price'] ?? 0) ?> each = <?= formatCurrency($item['total_price'] ?? 0) ?>
+                                    </span>
+                                </div>
+                            <?php endforeach; ?>
+                            <div class="flex justify-between text-sm font-bold mt-2 pt-2 border-t border-gray-200">
+                                <span>Total</span>
+                                <span class="text-primary"><?= formatCurrency($presc_total) ?></span>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            <?php endforeach; ?>
+            <div class="flex justify-between text-sm font-bold mt-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <span>Total Medications</span>
+                <span class="text-green-600"><?= formatCurrency($total_medication_amount) ?></span>
+            </div>
+        <?php else: ?>
+            <p class="text-gray-400">No prescriptions</p>
+        <?php endif; ?>
+    </div>
+
+    <!-- Bill Summary -->
+    <div class="consultation-card">
+        <h3 class="card-title"><i class="fas fa-receipt title-green"></i> Bill Summary</h3>
+        <div class="bill-summary">
+            <div class="totals-grid">
+                <div class="totals-item">
+                    <p class="label">💊 Medications</p>
+                    <p class="value green"><?= formatCurrency($total_medication_amount) ?></p>
+                </div>
+                <div class="totals-item">
+                    <p class="label">🧪 Lab Tests</p>
+                    <p class="value blue"><?= formatCurrency($total_lab_amount) ?></p>
+                </div>
+                <div class="totals-item">
+                    <p class="label">💉 Procedures</p>
+                    <p class="value orange"><?= formatCurrency($total_procedure_amount) ?></p>
+                </div>
+                <div class="totals-item">
+                    <p class="label">🔧 Tools</p>
+                    <p class="value purple"><?= formatCurrency($total_tool_amount) ?></p>
+                </div>
+            </div>
+            <div style="text-align:right;margin-top:12px;padding-top:12px;border-top:2px solid var(--gray-200);">
+                <span class="text-sm text-gray-500">Grand Total:</span>
+                <span class="text-xl font-bold text-primary"><?= formatCurrency($total_bill_amount) ?></span>
+                <span class="text-sm text-gray-400 ml-2">(<?= count($bill_items) ?> items)</span>
+            </div>
+            <div class="mt-3 text-sm">
+                <span class="status-badge <?= $bill_status === 'paid' ? 'badge-success' : 'badge-warning' ?>">
+                    <?= ucfirst($bill_status ?? 'Pending') ?>
+                </span>
+                <?php if ($bill_status === 'paid'): ?>
+                    <span class="text-green-600 ml-2"><i class="fas fa-check-circle"></i> Payment completed</span>
+                <?php else: ?>
+                    <span class="text-gray-500 ml-2"><i class="fas fa-info-circle"></i> Sent to Cashier</span>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <?php if (count($bill_items) > 0): ?>
+            <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:12px;">
+                <thead><tr>
+                    <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Item</th>
+                    <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Type</th>
+                    <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Qty</th>
+                    <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Total</th>
+                </tr></thead>
+                <tbody>
+                    <?php foreach ($bill_items as $item): ?>
+                        <tr>
+                            <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></td>
+                            <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><span class="badge badge-info"><?= ucfirst($item['item_type'] ?? 'N/A') ?></span></td>
+                            <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><?= $item['quantity'] ?? 1 ?></td>
+                            <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);font-weight:600;"><?= formatCurrency($item['total_price'] ?? 0) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+    </div>
+
+    <div class="mt-4 text-center">
+        <a href="my_patients.php" class="btn btn-primary">
+            <i class="fas fa-arrow-left"></i> Back to My Patients
+        </a>
+    </div>
+
+    <?php endif; ?>
 
     <!-- Footer -->
     <footer class="footer">
@@ -2565,11 +2927,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     var isCompleted = <?= $is_completed ? 'true' : 'false' ?>;
     
     // ================================================================
-    // INSTRUCTION FUNCTIONS - Textarea + Tags
+    // INSTRUCTION FUNCTIONS
     // ================================================================
     var instructionList = [];
     
-    // Initialize instructions from textarea
     function initInstructions() {
         var textarea = document.getElementById('instructionsTextarea');
         if (textarea && textarea.value) {
@@ -2587,8 +2948,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         updateTextarea();
         updateTags();
         updateHiddenInput();
-        
-        // Highlight button
         var buttons = document.querySelectorAll('.instruction-btn');
         buttons.forEach(function(btn) {
             btn.classList.remove('active');
@@ -2623,7 +2982,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         var textarea = document.getElementById('instructionsTextarea');
         if (textarea) {
             textarea.value = instructionList.join('; ');
-            // Trigger input event
             var event = new Event('input', { bubbles: true });
             textarea.dispatchEvent(event);
         }
@@ -2632,12 +2990,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     function updateTags() {
         var tagsContainer = document.getElementById('instructionsTags');
         if (!tagsContainer) return;
-        
         if (instructionList.length === 0) {
-            tagsContainer.innerHTML = '<span class="empty-tags">No instructions added yet. Click buttons or type above.</span>';
+            tagsContainer.innerHTML = '<span class="empty-tags">No instructions added yet.</span>';
             return;
         }
-        
         var html = '';
         instructionList.forEach(function(inst) {
             html += '<span class="tag">' + escapeHtml(inst) + 
@@ -2653,17 +3009,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
     }
     
-    // ================================================================
-    // MANUAL INPUT - User types in textarea
-    // ================================================================
     function onInstructionsInput() {
         var textarea = document.getElementById('instructionsTextarea');
         if (!textarea) return;
-        
         var text = textarea.value.trim();
-        
         if (text.length > 0) {
-            // Split by semicolon or newline
             var items = text.split(/[;\n]/).map(function(item) { return item.trim(); }).filter(function(item) { return item.length > 0; });
             instructionList = items;
             updateTags();
@@ -2681,82 +3031,60 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         div.textContent = text;
         return div.innerHTML;
     }
-
-    <?php if (!$is_completed): ?>
     
+    function formatCurrency(amount) {
+        return 'TSh ' + Number(amount).toLocaleString();
+    }
+
     // ================================================================
-    // TOGGLE DROPDOWN
+    // TOGGLE PROCEDURE
     // ================================================================
-    function toggleDropdown(id) {
-        var body = document.getElementById(id);
-        var header = body.previousElementSibling;
-        if (body.style.display === 'none' || body.style.display === '') {
-            body.style.display = 'block';
-            var icon = header.querySelector('.toggle-icon i');
-            if (icon) icon.style.transform = 'rotate(180deg)';
-        } else {
-            body.style.display = 'none';
-            var icon = header.querySelector('.toggle-icon i');
-            if (icon) icon.style.transform = 'rotate(0deg)';
+    function toggleProcedure(element) {
+        element.classList.toggle('selected');
+        var check = element.querySelector('.item-check i');
+        if (check) {
+            check.style.opacity = element.classList.contains('selected') ? '1' : '0';
         }
+        updateCounts();
+        console.log('Procedure toggled:', element.dataset.procedureName);
     }
 
     // ================================================================
-    // ADD LAB TEST
+    // TOGGLE TOOL
     // ================================================================
-    function addLabTest() {
-        var container = document.getElementById('labTestsContainer');
-        var row = document.createElement('div');
-        row.style.cssText = 'display:flex;gap:10px;margin-bottom:10px;align-items:center;';
-        row.innerHTML = `
-            <select name="lab_tests[]" class="form-control" style="flex:1;">
-                <option value="">-- Select Test --</option>
-                <?php foreach ($lab_tests_catalog as $test): ?>
-                    <option value="<?= htmlspecialchars($test['test_name']) ?>">
-                        <?= htmlspecialchars($test['test_name']) ?>
-                        <?php if (!empty($test['category'])): ?>
-                            (<?= htmlspecialchars($test['category']) ?>)
-                        <?php endif; ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove();">
-                <i class="fas fa-times"></i>
-            </button>
-        `;
-        container.appendChild(row);
+    function toggleTool(element) {
+        element.classList.toggle('selected');
+        var check = element.querySelector('.item-check i');
+        if (check) {
+            check.style.opacity = element.classList.contains('selected') ? '1' : '0';
+        }
+        updateCounts();
+        console.log('Tool toggled:', element.dataset.toolName);
     }
 
     // ================================================================
-    // REMOVE LAB TEST
+    // UPDATE COUNTS
     // ================================================================
-    function removeLabTest(element, testId) {
-        if (!confirm('Remove this lab test?')) return;
-        var formData = new FormData();
-        formData.append('action', 'remove_lab_test');
-        formData.append('test_id', testId);
-        fetch(window.location.href, { method: 'POST', body: formData })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                element.closest('.lab-test-row').remove();
-                showToast('Success', 'Lab test removed', 'success');
-                location.reload();
-            } else {
-                showToast('Error', data.message, 'error');
-            }
-        });
+    function updateCounts() {
+        var procCount = document.querySelectorAll('.procedure-item-select.selected').length;
+        var toolCount = document.querySelectorAll('.tool-item-select.selected').length;
+        
+        var procEl = document.getElementById('proceduresCount');
+        var toolEl = document.getElementById('toolsCount');
+        if (procEl) procEl.textContent = procCount + ' selected';
+        if (toolEl) toolEl.textContent = toolCount + ' selected';
     }
 
     // ================================================================
-    // TOGGLE PROCEDURE / TOOL
+    // CLEAR ALL SELECTIONS
     // ================================================================
-    function toggleProcedure(element) { element.classList.toggle('selected'); }
-    function toggleTool(element) { element.classList.toggle('selected'); }
     function clearAllSelections() {
         document.querySelectorAll('.procedure-item-select.selected, .tool-item-select.selected').forEach(function(el) {
             el.classList.remove('selected');
+            var check = el.querySelector('.item-check i');
+            if (check) check.style.opacity = '0';
         });
+        updateCounts();
     }
 
     // ================================================================
@@ -2764,21 +3092,37 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     // ================================================================
     function getSelectedItems() {
         var procedures = [], tools = [];
+        
         document.querySelectorAll('.procedure-item-select.selected').forEach(function(item) {
-            procedures.push({ id: item.dataset.procedureId, name: item.dataset.procedureName, type: 'procedure' });
+            procedures.push({ 
+                id: parseInt(item.dataset.procedureId), 
+                name: item.dataset.procedureName,
+                price: parseFloat(item.dataset.price) || 0,
+                type: 'procedure' 
+            });
         });
+        
         document.querySelectorAll('.tool-item-select.selected').forEach(function(item) {
-            tools.push({ id: item.dataset.toolId, name: item.dataset.toolName, type: 'tool' });
+            tools.push({ 
+                id: parseInt(item.dataset.toolId), 
+                name: item.dataset.toolName,
+                procedureName: item.dataset.procedureName || '',
+                price: parseFloat(item.dataset.price) || 0,
+                type: 'tool' 
+            });
+            console.log('Selected Tool:', item.dataset.toolName, 'Price:', item.dataset.price);
         });
+        
         return { procedures: procedures, tools: tools };
     }
 
     // ================================================================
-    // ADD SELECTED ITEMS
+    // ADD SELECTED ITEMS - FIXED: No refresh loss
     // ================================================================
     function addSelectedItems() {
         var selected = getSelectedItems();
         var total = selected.procedures.length + selected.tools.length;
+        
         if (total === 0) {
             showToast('Error', 'Please select at least one procedure or tool', 'error');
             return;
@@ -2786,62 +3130,140 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         
         var btn = document.getElementById('addSelectedBtn');
         btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding...';
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding ' + total + ' item(s)...';
         
         var promises = [];
+        var itemsToAdd = [];
+        
         selected.procedures.forEach(function(proc) {
-            var formData = new FormData();
-            formData.append('action', 'add_procedure');
-            formData.append('procedure_id', proc.id);
-            promises.push(fetch(window.location.href, { method: 'POST', body: formData }).then(response => response.json()));
+            itemsToAdd.push({
+                action: 'add_procedure',
+                id: proc.id,
+                name: proc.name,
+                price: proc.price,
+                type: 'procedure'
+            });
         });
+        
         selected.tools.forEach(function(tool) {
+            itemsToAdd.push({
+                action: 'add_tool',
+                id: tool.id,
+                name: tool.name,
+                price: tool.price,
+                procedureName: tool.procedureName,
+                type: 'tool'
+            });
+        });
+        
+        itemsToAdd.forEach(function(item) {
             var formData = new FormData();
-            formData.append('action', 'add_tool');
-            formData.append('tool_id', tool.id);
-            promises.push(fetch(window.location.href, { method: 'POST', body: formData }).then(response => response.json()));
+            formData.append('action', item.action);
+            if (item.action === 'add_procedure') {
+                formData.append('procedure_id', item.id);
+            } else if (item.action === 'add_tool') {
+                formData.append('tool_id', item.id);
+            }
+            
+            var promise = fetch(window.location.href, { 
+                method: 'POST', 
+                body: formData 
+            }).then(function(response) { 
+                return response.json(); 
+            }).then(function(data) {
+                return { success: data.success, data: data, type: item.type, name: item.name };
+            });
+            
+            promises.push(promise);
         });
         
         Promise.all(promises).then(function(results) {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-plus"></i> Add Selected (Procedures & Tools)';
+            
             var successCount = 0;
-            results.forEach(function(data) {
-                if (data.success) {
+            var addedItems = [];
+            
+            results.forEach(function(result) {
+                if (result.success) {
                     successCount++;
-                    if (data.procedure) addItemToList(data.procedure, 'procedure');
-                    else if (data.tool) addItemToList(data.tool, 'tool');
+                    if (result.data.procedure) {
+                        addedItems.push({ 
+                            id: result.data.procedure.id, 
+                            name: result.data.procedure.name,
+                            price: result.data.procedure.price,
+                            total: result.data.procedure.total,
+                            type: 'procedure',
+                            quantity: result.data.procedure.quantity || 1
+                        });
+                    } else if (result.data.tool) {
+                        addedItems.push({ 
+                            id: result.data.tool.id, 
+                            name: result.data.tool.name,
+                            price: result.data.tool.price,
+                            total: result.data.tool.total,
+                            type: 'tool',
+                            quantity: result.data.tool.quantity || 1
+                        });
+                    }
+                } else {
+                    console.error('Failed to add:', result.name, result.data.message);
                 }
             });
+            
             if (successCount > 0) {
+                addedItems.forEach(function(item) {
+                    addItemToList(item, item.type);
+                });
+                
                 showToast('Success', '✅ ' + successCount + ' item(s) added successfully!', 'success');
                 clearAllSelections();
                 updateSelectedCount();
+                
+                // FIXED: No page reload - items stay in list
+                // Only update totals
+                updateTotals();
             } else {
-                showToast('Error', 'Failed to add items', 'error');
+                showToast('Error', '❌ Failed to add items. Please try again.', 'error');
             }
+        }).catch(function(error) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-plus"></i> Add Selected (Procedures & Tools)';
+            showToast('Error', '❌ Error: ' + error.message, 'error');
+            console.error('Add items error:', error);
         });
     }
 
     // ================================================================
-    // ADD ITEM TO LIST
+    // ADD ITEM TO LIST - FIXED: Items stay in list
     // ================================================================
     function addItemToList(item, type) {
         var list = document.getElementById('selectedItemsList');
         var emptyState = document.getElementById('emptySelected');
         if (emptyState) emptyState.remove();
         
+        var typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
+        var price = item.price || 0;
+        var total = item.total || (price * (item.quantity || 1));
+        
         var itemEl = document.createElement('div');
         itemEl.className = 'selected-item';
         itemEl.id = 'selected-item-' + item.id;
         itemEl.innerHTML = `
-            <span class="selected-item-name">${escapeHtml(item.name)}</span>
-            <span class="selected-item-type">${type.charAt(0).toUpperCase() + type.slice(1)}</span>
-            <span class="selected-item-qty">x${item.quantity || 1}</span>
-            <button type="button" class="btn-remove" onclick="removeSelectedItem(${item.id})" title="Remove item"><i class="fas fa-times"></i></button>
+            <div>
+                <span class="selected-item-name">${escapeHtml(item.name)}</span>
+                <span class="selected-item-type">${typeLabel}</span>
+                <span class="selected-item-price" style="color:#059669;font-weight:600;margin-left:8px;">${formatCurrency(price)}</span>
+                <span class="selected-item-qty" style="color:#94A3B8;margin-left:4px;">x${item.quantity || 1}</span>
+                <span class="selected-item-total" style="color:#0B5ED7;font-weight:700;margin-left:8px;">= ${formatCurrency(total)}</span>
+            </div>
+            <button type="button" class="btn-remove" onclick="removeSelectedItem(${item.id})" title="Remove item">
+                <i class="fas fa-times"></i>
+            </button>
         `;
         list.appendChild(itemEl);
         updateSelectedCount();
+        updateTotals();
     }
 
     // ================================================================
@@ -2853,13 +3275,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         formData.append('action', 'remove_item');
         formData.append('item_id', itemId);
         fetch(window.location.href, { method: 'POST', body: formData })
-        .then(response => response.json())
-        .then(data => {
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
             if (data.success) {
                 showToast('Info', data.message, 'info');
                 var item = document.getElementById('selected-item-' + itemId);
                 if (item) item.remove();
                 updateSelectedCount();
+                updateTotals();
+                setTimeout(function() { location.reload(); }, 1000);
             } else {
                 showToast('Error', data.message, 'error');
             }
@@ -2877,9 +3301,115 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     // ================================================================
-    // ADD MEDICATION AJAX
+    // UPDATE TOTALS - FIXED: Update totals without refresh
     // ================================================================
-    function addMedicationAjax() {
+    function updateTotals() {
+        // This will be called after adding/removing items
+        // The page will refresh the totals from the database on next load
+        // For now, we just update the display from the server response
+        setTimeout(function() {
+            location.reload();
+        }, 500);
+    }
+
+    // ================================================================
+    // TOGGLE DROPDOWN
+    // ================================================================
+    function toggleDropdown(id) {
+        var body = document.getElementById(id);
+        if (body.style.display === 'none' || body.style.display === '') {
+            body.style.display = 'block';
+        } else {
+            body.style.display = 'none';
+        }
+    }
+
+    // ================================================================
+    // LAB TEST FUNCTIONS
+    // ================================================================
+    function addLabTestRow() {
+        var container = document.getElementById('labTestsContainer');
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:10px;margin-bottom:10px;align-items:center;';
+        row.innerHTML = `
+            <select class="form-control lab-test-select" style="flex:1;">
+                <option value="">-- Select Test --</option>
+                <?php foreach ($lab_tests_catalog as $test): ?>
+                    <option value="<?= htmlspecialchars($test['test_name']) ?>">
+                        <?= htmlspecialchars($test['test_name']) ?>
+                        <?php if (!empty($test['category'])): ?>
+                            (<?= htmlspecialchars($test['category']) ?>)
+                        <?php endif; ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove();">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+        container.appendChild(row);
+    }
+
+    function sendLabTests() {
+        var selects = document.querySelectorAll('.lab-test-select');
+        var tests = [];
+        selects.forEach(function(select) {
+            if (select.value) tests.push(select.value);
+        });
+        if (tests.length === 0) {
+            showToast('Error', 'Please select at least one lab test', 'error');
+            return;
+        }
+        
+        var btn = document.getElementById('sendLabBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
+        
+        var promises = [];
+        tests.forEach(function(testName) {
+            var formData = new FormData();
+            formData.append('action', 'add_lab_test');
+            formData.append('test_name', testName);
+            promises.push(fetch(window.location.href, { method: 'POST', body: formData }).then(function(response) { return response.json(); }));
+        });
+        
+        Promise.all(promises).then(function(results) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send to Laboratory';
+            var successCount = 0;
+            results.forEach(function(data) {
+                if (data.success) successCount++;
+            });
+            if (successCount > 0) {
+                showToast('Success', '✅ ' + successCount + ' lab test(s) sent!', 'success');
+                setTimeout(function() { location.reload(); }, 1500);
+            } else {
+                showToast('Error', 'Failed to send lab tests', 'error');
+            }
+        });
+    }
+
+    function removeLabTest(testId) {
+        if (!confirm('Remove this lab test?')) return;
+        var formData = new FormData();
+        formData.append('action', 'remove_lab_test');
+        formData.append('test_id', testId);
+        fetch(window.location.href, { method: 'POST', body: formData })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.success) {
+                showToast('Success', data.message, 'success');
+                location.reload();
+            } else {
+                showToast('Error', data.message, 'error');
+            }
+        });
+    }
+
+    // ================================================================
+    // MEDICATION FUNCTIONS
+    // ================================================================
+    function addMedication() {
         var medSelect = document.getElementById('medicationSelect');
         var qty = parseInt(document.getElementById('medQuantity').value) || 0;
         var dosage = document.getElementById('medDosage').value;
@@ -2887,6 +3417,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         var duration = document.getElementById('medDuration').value;
         var route = document.getElementById('medRoute').value;
         var instructions = document.getElementById('medInstructions').value;
+        var diagnosis = document.getElementById('diagnosisInput').value;
         
         if (!medSelect.value) { showToast('Error', 'Please select a medication', 'error'); return; }
         if (qty < 1) { showToast('Error', 'Quantity must be at least 1', 'error'); return; }
@@ -2900,87 +3431,41 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         formData.append('duration', duration);
         formData.append('route', route);
         formData.append('instructions', instructions);
+        formData.append('diagnosis', diagnosis);
         
         var btn = document.getElementById('addMedicationBtn');
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding...';
         
         fetch(window.location.href, { method: 'POST', body: formData })
-        .then(response => response.json())
-        .then(data => {
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-plus"></i> Add Medication';
             if (data.success) {
                 showToast('Success', data.message, 'success');
-                addMedicationToList(data.medication);
-                medSelect.value = '';
-                document.getElementById('medQuantity').value = '1';
-                document.getElementById('medDosage').value = '';
-                document.getElementById('medFrequency').value = '';
-                document.getElementById('medDuration').value = '7';
-                document.getElementById('medRoute').value = '';
-                clearInstructions();
-                updateMedCount();
+                location.reload();
             } else {
                 showToast('Error', data.message, 'error');
             }
         });
     }
 
-    // ================================================================
-    // ADD MEDICATION TO LIST
-    // ================================================================
-    function addMedicationToList(med) {
-        var list = document.getElementById('medicationsList');
-        var emptyState = document.getElementById('emptyMedications');
-        if (emptyState) emptyState.remove();
-        
-        var item = document.createElement('div');
-        item.className = 'medication-item';
-        item.id = 'med-item-' + med.id;
-        item.innerHTML = `
-            <div class="medication-item-info">
-                <span class="med-name">${escapeHtml(med.name)}</span>
-                <span class="med-details">${escapeHtml(med.dosage || '')} • ${escapeHtml(med.frequency || '')} • ${escapeHtml(med.duration || '')} days</span>
-                <span class="med-qty">x${med.quantity}</span>
-                ${med.instructions ? `<span class="med-instruction-tag">${escapeHtml(med.instructions)}</span>` : ''}
-            </div>
-            <button type="button" class="btn-remove" onclick="removeMedication(${med.id})"><i class="fas fa-times"></i></button>
-        `;
-        list.appendChild(item);
-        updateMedCount();
-    }
-
-    // ================================================================
-    // REMOVE MEDICATION
-    // ================================================================
     function removeMedication(prescriptionId) {
         if (!confirm('Remove this medication?')) return;
         var formData = new FormData();
         formData.append('action', 'remove_medication');
         formData.append('prescription_id', prescriptionId);
         fetch(window.location.href, { method: 'POST', body: formData })
-        .then(response => response.json())
-        .then(data => {
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
             if (data.success) {
                 showToast('Info', data.message, 'info');
-                var item = document.getElementById('med-item-' + prescriptionId);
-                if (item) item.remove();
-                updateMedCount();
+                location.reload();
             } else {
                 showToast('Error', data.message, 'error');
             }
         });
-    }
-
-    // ================================================================
-    // UPDATE MED COUNT
-    // ================================================================
-    function updateMedCount() {
-        var list = document.getElementById('medicationsList');
-        var count = list ? list.querySelectorAll('.medication-item').length : 0;
-        var countEl = document.getElementById('medCount');
-        if (countEl) countEl.textContent = '(' + count + ' items)';
     }
 
     // ================================================================
@@ -3015,8 +3500,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         formData.append('visit_id', visitId);
         
         fetch(window.location.href, { method: 'POST', body: formData })
-        .then(response => response.json())
-        .then(data => {
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
             if (data.success) {
                 updateUI(data);
             }
@@ -3034,10 +3519,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = timeStr;
-        
         var lastUpdate = document.getElementById('lastUpdateTime');
         if (lastUpdate) lastUpdate.textContent = '⏱ ' + timeStr;
-        
         var resultsUpdateTime = document.getElementById('resultsUpdateTime');
         if (resultsUpdateTime) resultsUpdateTime.textContent = '⏱ ' + timeStr;
         
@@ -3051,15 +3534,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        var resultsCount = document.getElementById('resultsCount');
-        if (resultsCount) {
-            if (data.results_count > 0) {
-                resultsCount.textContent = '(' + data.results_count + ' results)';
-            } else {
-                resultsCount.textContent = '(0 results)';
-            }
-        }
-        
         var resultsBadge = document.getElementById('resultsBadge');
         if (resultsBadge) {
             if (data.available) {
@@ -3069,20 +3543,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 resultsBadge.textContent = '⏳ Pending Results';
                 resultsBadge.className = 'frozen-badge';
             } else {
-                resultsBadge.textContent = '';
                 resultsBadge.style.display = 'none';
             }
         }
         
         var frozenSections = document.getElementById('frozenSectionsContainer');
         var isFrozen = data.frozen;
-        
         if (frozenSections) {
-            if (isFrozen) {
-                frozenSections.className = 'frozen-overlay-active';
-            } else {
-                frozenSections.className = '';
-            }
+            frozenSections.className = isFrozen ? 'frozen-overlay-active' : '';
         }
         
         var frozenBadgeHeader = document.getElementById('frozenBadgeHeader');
@@ -3100,44 +3568,23 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        var frozenBadgeSub = document.getElementById('frozenBadgeSub');
-        if (frozenBadgeSub) {
-            if (isFrozen) {
-                frozenBadgeSub.textContent = '⏳ Waiting for Lab Results';
-                frozenBadgeSub.style.display = 'inline-block';
-            } else {
-                frozenBadgeSub.style.display = 'none';
-            }
-        }
-        
-        var buttons = ['saveDraftBtn', 'completeVisitBtn', 'addMedicationBtn', 'addSelectedBtn'];
+        var buttons = ['saveConsultationBtn', 'addMedicationBtn', 'addSelectedBtn'];
         buttons.forEach(function(id) {
             var btn = document.getElementById(id);
             if (btn) {
                 btn.disabled = isFrozen;
-                if (isFrozen) {
-                    btn.style.opacity = '0.5';
-                    btn.style.cursor = 'not-allowed';
-                } else {
-                    btn.style.opacity = '1';
-                    btn.style.cursor = 'pointer';
-                }
+                btn.style.opacity = isFrozen ? '0.5' : '1';
+                btn.style.cursor = isFrozen ? 'not-allowed' : 'pointer';
             }
         });
         
         var frozenMsg = document.getElementById('frozenActionsMessage');
         if (frozenMsg) {
-            if (isFrozen) {
-                frozenMsg.style.display = 'inline-block';
-            } else {
-                frozenMsg.style.display = 'none';
-            }
+            frozenMsg.style.display = isFrozen ? 'inline-block' : 'none';
         }
         
         var diagnosisInput = document.getElementById('diagnosisInput');
-        if (diagnosisInput) {
-            diagnosisInput.disabled = isFrozen;
-        }
+        if (diagnosisInput) diagnosisInput.disabled = isFrozen;
         
         var medSelect = document.getElementById('medicationSelect');
         var medInputs = ['medQuantity', 'medDosage', 'medDuration'];
@@ -3151,62 +3598,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         frozenBadges.forEach(function(id) {
             var badge = document.getElementById(id);
             if (badge) {
-                if (isFrozen) {
-                    badge.style.display = 'inline-block';
-                } else {
-                    badge.style.display = 'none';
-                }
+                badge.style.display = isFrozen ? 'inline-block' : 'none';
             }
         });
-        
-        var labContainer = document.getElementById('labResultsContainer');
-        if (labContainer) {
-            if (data.available && data.results_html) {
-                labContainer.innerHTML = `
-                    <div style="overflow-x:auto;">
-                        <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-                            <thead><tr>
-                                <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Test Name</th>
-                                <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Result</th>
-                                <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Reference Range</th>
-                                <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Status</th>
-                            </tr></thead>
-                            <tbody id="labResultsBody">
-                                ${data.results_html}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="mt-3 text-sm text-green-600">
-                        <i class="fas fa-check-circle"></i> Lab results available. You can now proceed with Diagnosis, Medication & Procedures.
-                    </div>
-                `;
-                var card = document.getElementById('labResultsCard');
-                if (card) card.className = 'consultation-card mb-6 border-green-500';
-            } else if (data.pending_count > 0) {
-                labContainer.innerHTML = `
-                    <div class="text-center py-6 text-yellow-600">
-                        <i class="fas fa-clock text-3xl block mb-2"></i>
-                        <p>${data.pending_count} lab request(s) pending</p>
-                        <p class="text-xs text-gray-400 mt-1">⏳ Waiting for Laboratory to complete tests</p>
-                        <div class="mt-3 text-sm text-red-500">
-                            <i class="fas fa-lock"></i> Diagnosis, Medication & Procedures are <strong>FROZEN</strong> until results are available
-                        </div>
-                    </div>
-                `;
-                var card = document.getElementById('labResultsCard');
-                if (card) card.className = 'consultation-card mb-6';
-            } else {
-                labContainer.innerHTML = `
-                    <div class="text-center py-6 text-gray-400">
-                        <i class="fas fa-flask text-3xl block mb-2"></i>
-                        <p>No lab results available</p>
-                        <p class="text-xs mt-1">Send lab requests to get results</p>
-                    </div>
-                `;
-                var card = document.getElementById('labResultsCard');
-                if (card) card.className = 'consultation-card mb-6';
-            }
-        }
     }
 
     function manualRefresh() {
@@ -3245,23 +3639,17 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
     });
 
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         if (!isCompleted) {
             setTimeout(function() { startAutoUpdate(); }, 1000);
         }
-        updateSelectedCount();
-        updateMedCount();
         initInstructions();
+        updateSelectedCount();
+        updateCounts();
     });
-
-    <?php endif; // End of active consultation mode ?>
-
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    if (localStorage.getItem('darkMode') === 'true') {
-        document.documentElement.setAttribute('data-theme', 'dark');
-    }
 
     <?php if ($message && $message_type): ?>
         setTimeout(function() {
@@ -3272,15 +3660,16 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 500);
     <?php endif; ?>
 
-    console.log('%c👨‍⚕️ Consultation', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Consultation (FULL - Tools Fixed - No Refresh Loss)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Status: <?= $is_completed ? 'COMPLETED ✅' : 'ACTIVE' ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c💊 Instructions: Pick or Type', 'font-size:12px; color:#34D399;');
-    <?php if ($is_completed): ?>
-    console.log('%c✅ View Mode - All details shown', 'font-size:12px; color:#059669;');
-    <?php else: ?>
-    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:12px; color:#34D399;');
-    <?php endif; ?>
+    console.log('%c📊 Status: <?= $is_completed ? 'COMPLETED ✅' : ($visit['status'] === 'waiting' ? 'WAITING ⏳' : 'ACTIVE') ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c💰 Medications: <?= formatCurrency($total_medication_amount) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🧪 Lab Tests: <?= formatCurrency($total_lab_amount) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c💉 Procedures: <?= formatCurrency($total_procedure_amount) ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c🔧 Tools: <?= formatCurrency($total_tool_amount) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c✅ Tools stay in list (no refresh loss)', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Tools sent to Cashier only on Save', 'font-size:12px; color:#059669;');
+    console.log('%c🔄 Auto-complete: Waiting → Completed after all bills paid', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

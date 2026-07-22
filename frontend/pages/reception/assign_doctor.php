@@ -2,8 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/reception/assign_doctor.php
 // RECEPTION - ASSIGN / CHANGE DOCTOR OR REQUEST LAB TESTS
-// FIXED: Lab test uses NULL for doctor_id (foreign key constraint)
-// WITH CLOSE BUTTON FOR LAB TESTS MODAL
+// WITH AUTO-UPDATE (3 SECONDS)
+// FIXED: Duplicate bill_number error fixed
+// FIXED: doctor_id = NULL for lab tests
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -424,10 +425,28 @@ try {
                         ]);
                     }
                     
-                    // Create bill if fee is charged
+                    // ================================================================
+                    // CREATE BILL - FIXED: Unique bill_number
+                    // ================================================================
                     if ($consultation_fee > 0 && $visit_id) {
-                        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT);
+                        // Generate UNIQUE bill number
+                        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
                         
+                        // Check if bill number exists
+                        $stmt = $db->prepare("SELECT id FROM patient_bills WHERE bill_number = ?");
+                        $stmt->execute([$bill_number]);
+                        $existing_bill_num = $stmt->fetch();
+                        
+                        $counter = 0;
+                        while ($existing_bill_num && $counter < 10) {
+                            $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
+                            $stmt = $db->prepare("SELECT id FROM patient_bills WHERE bill_number = ?");
+                            $stmt->execute([$bill_number]);
+                            $existing_bill_num = $stmt->fetch();
+                            $counter++;
+                        }
+                        
+                        // Check if bill already exists for this visit
                         $stmt = $db->prepare("SELECT id FROM patient_bills WHERE visit_id = ?");
                         $stmt->execute([$visit_id]);
                         $existing_bill = $stmt->fetch();
@@ -537,7 +556,7 @@ try {
         }
         
         // ================================================================
-        // LAB TEST REQUEST - USE NULL FOR doctor_id (FIXED)
+        // LAB TEST REQUEST - USE NULL FOR doctor_id
         // ================================================================
         if ($action === 'assign_doctor' && $assignment_type === 'lab') {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -726,6 +745,7 @@ $common_symptoms = [
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -2467,7 +2487,6 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     var symptomsSelect = document.getElementById('symptomsSelect');
     var symptomsTextarea = document.getElementById('symptomsTextarea');
-    var symptomsTextareaLab = document.getElementById('symptomsTextareaLab');
     
     symptomsSelect?.addEventListener('change', function() {
         var value = this.value;
@@ -2951,7 +2970,7 @@ include_once '../../components/reception_sidebar.php';
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign Doctor OR Lab Test (FIXED - NULL)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Assign Doctor OR Lab Test (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 All Patients: <?= count($all_patients) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c⏳ Pending: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
@@ -2964,6 +2983,7 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c🔄 Doctor dropdown auto-updates every 3 seconds', 'font-size:13px; color:#34D399;');
     console.log('%c📅 7 Days Rule: Fee waived if paid within last 7 days', 'font-size:13px; color:#F59E0B;');
     console.log('%c✅ doctor_id = NULL for lab tests (FIXED)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Duplicate bill_number FIXED - Uses timestamp + random', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
