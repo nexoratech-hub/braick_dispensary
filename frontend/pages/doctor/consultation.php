@@ -1,11 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// DOCTOR CONSULTATION - WITH AUTO-UPDATE (3 SECONDS)
+// DOCTOR CONSULTATION - FULL WITH VIEW MODE
 // FLOW: Lab Tests → Lab Results → Diagnosis → Medication → Procedures
-// SECTIONS FROZEN UNTIL LAB RESULTS AVAILABLE
-// AUTO-UPDATE: Lab results, sections status, stats every 3 seconds
-// FIXED: Uses lab_tests table (not lab_requests)
+// FIXED: Bills to cashier, Save Draft to pending, View mode on complete
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -38,6 +36,7 @@ $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 // ================================================================
 $visit_id = isset($_GET['visit_id']) ? (int)$_GET['visit_id'] : 0;
 $patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
+$view = isset($_GET['view']) ? $_GET['view'] : 'consult'; // consult or view
 
 if ($visit_id <= 0 && $patient_id <= 0) {
     header('Location: my_patients.php');
@@ -150,6 +149,12 @@ if ($visit_id > 0) {
     $visit_id = $visit['id'];
 }
 
+// Check if visit is completed - if yes, force view mode
+$is_completed = ($visit['status'] === 'completed');
+if ($is_completed) {
+    $view = 'view';
+}
+
 // ================================================================
 // GET OR CREATE BILL
 // ================================================================
@@ -240,10 +245,20 @@ try {
 
 // Bill Items
 $bill_items = [];
+$total_bill_amount = 0;
 try {
-    $stmt = $db->prepare("SELECT id, item_name, item_type, quantity, total_price, payment_status, is_paid, status FROM bill_items WHERE bill_id = ? ORDER BY created_at DESC");
+    $stmt = $db->prepare("
+        SELECT id, item_name, item_type, quantity, unit_price, total_price, payment_status, is_paid, status 
+        FROM bill_items 
+        WHERE bill_id = ? 
+        ORDER BY created_at DESC
+    ");
     $stmt->execute([$bill_id]);
     $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($bill_items as $item) {
+        $total_bill_amount += $item['total_price'];
+    }
 } catch (Exception $e) { $bill_items = []; }
 
 // ================================================================
@@ -287,7 +302,6 @@ function fetchLabData($db, $visit_id) {
             $lab_status = 'completed';
         }
         
-        // DEBUG: Log what we found
         error_log("Lab fetch - Visit: $visit_id, Pending: " . count($lab_requests) . ", Results: " . count($lab_results));
         
     } catch (Exception $e) {
@@ -308,7 +322,7 @@ $lab_requests = $lab_data['requests'];
 $lab_results = $lab_data['results'];
 $lab_results_available = $lab_data['available'];
 $lab_status = $lab_data['status'];
-$sections_frozen = $lab_data['frozen'];
+$sections_frozen = ($lab_data['frozen'] && !$is_completed);
 
 // ================================================================
 // GET PATIENT HISTORY
@@ -333,21 +347,19 @@ try {
 $message = '';
 $message_type = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     $action = $_POST['action'] ?? '';
     
     // ================================================================
-    // AJAX: GET LAB STATUS (For auto-update)
+    // AJAX: GET LAB STATUS
     // ================================================================
     if ($action === 'get_lab_status') {
         header('Content-Type: application/json');
         $lab_data = fetchLabData($db, $visit_id);
         
-        // Get pending count
         $pending_count = count($lab_data['requests']);
         $results_count = count($lab_data['results']);
         
-        // Build results HTML
         $results_html = '';
         if ($lab_data['available']) {
             foreach ($lab_data['results'] as $result) {
@@ -438,7 +450,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 $med_total = $med['selling_price'] * $quantity;
                 
-                // Insert into bill_items with proper status columns
+                // Insert into bill_items
                 $stmt = $db->prepare("
                     INSERT INTO bill_items (
                         bill_id, item_type, item_name, quantity, unit_price, total_price,
@@ -554,7 +566,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $item_name = $procedure['procedure_name'];
                 $item_price = $procedure['price'];
                 
-                // Check if already exists
                 $stmt = $db->prepare("
                     SELECT id, quantity FROM bill_items 
                     WHERE bill_id = ? AND item_name = ? AND item_type = 'procedure'
@@ -736,11 +747,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ) VALUES (?, ?, ?, 'pending', ?, NOW())
                 ");
                 $stmt->execute([$visit_id, $doctor_id, $test_name, $doctor_branch_id]);
+                
+                // Get test price and create bill item
+                $stmt_price = $db->prepare("SELECT price FROM lab_tests_catalog WHERE test_name = ? LIMIT 1");
+                $stmt_price->execute([$test_name]);
+                $catalog = $stmt_price->fetch(PDO::FETCH_ASSOC);
+                $price = $catalog['price'] ?? 0;
+                
+                if ($price > 0) {
+                    $stmt_bill = $db->prepare("
+                        INSERT INTO bill_items (
+                            bill_id, item_type, item_name, quantity, unit_price, total_price,
+                            payment_status, is_paid, status, created_at
+                        ) VALUES (?, 'lab_test', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
+                    ");
+                    $stmt_bill->execute([$bill_id, $test_name, $price, $price]);
+                    
+                    // Update bill total
+                    $stmt_total = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ?");
+                    $stmt_total->execute([$bill_id]);
+                    $new_total = $stmt_total->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                    
+                    $stmt_update = $db->prepare("
+                        UPDATE patient_bills 
+                        SET subtotal = ?, total_amount = ?, balance = ? 
+                        WHERE id = ?
+                    ");
+                    $stmt_update->execute([$new_total, $new_total, $new_total, $bill_id]);
+                }
+                
                 $lab_tests_sent++;
             }
         }
         
-        $message = "✅ " . $lab_tests_sent . " lab request(s) sent to Laboratory!";
+        $message = "✅ " . $lab_tests_sent . " lab request(s) sent to Laboratory! Bills sent to Cashier.";
         $message_type = 'success';
         
         // Update visit status to lab_test
@@ -755,14 +795,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $lab_status = $lab_data['status'];
         $sections_frozen = $lab_data['frozen'];
         
-        // If lab tests were sent, force frozen state
         if ($lab_tests_sent > 0) {
             $sections_frozen = true;
         }
     }
     
     // ================================================================
-    // 2. SAVE DRAFT
+    // 2. SAVE DRAFT - Goes to pending consultations
     // ================================================================
     if (isset($_POST['save_draft'])) {
         if ($sections_frozen) {
@@ -773,22 +812,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $diagnosis = trim($_POST['diagnosis'] ?? '');
             $treatment = trim($_POST['treatment'] ?? '');
             $notes = trim($_POST['notes'] ?? '');
-            $status = $_POST['status'] ?? 'with_doctor';
             
             $stmt = $db->prepare("
                 UPDATE visits 
-                SET symptoms = ?, diagnosis = ?, treatment = ?, notes = ?, status = ?, updated_at = NOW()
+                SET symptoms = ?, diagnosis = ?, treatment = ?, notes = ?, 
+                    status = 'with_doctor', updated_at = NOW()
                 WHERE id = ? AND doctor_id = ?
             ");
-            $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $status, $visit_id, $doctor_id]);
+            $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $visit_id, $doctor_id]);
             
-            $message = "✅ Draft saved successfully!";
+            $message = "✅ Draft saved successfully! It will appear in your pending consultations.";
             $message_type = 'success';
+            
+            // Refresh visit data
+            $stmt = $db->prepare("SELECT * FROM visits WHERE id = ?");
+            $stmt->execute([$visit_id]);
+            $visit = $stmt->fetch(PDO::FETCH_ASSOC);
         }
     }
     
     // ================================================================
-    // 3. COMPLETE VISIT
+    // 3. COMPLETE VISIT - Sends everything to cashier
     // ================================================================
     if (isset($_POST['complete_visit'])) {
         if ($sections_frozen) {
@@ -813,10 +857,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$bill_id]);
             }
             
-            $message = "✅ Visit completed! Bills sent to cashier.";
+            $message = "✅ Visit completed! All items sent to Cashier.";
             $message_type = 'success';
             
-            echo '<script>setTimeout(function(){ window.location.href = "my_patients.php?completed=1"; }, 2000);</script>';
+            // Redirect to view mode
+            echo '<script>
+                setTimeout(function(){ 
+                    window.location.href = "consultation.php?visit_id=' . $visit_id . '&view=view"; 
+                }, 2000);
+            </script>';
+            exit;
         }
     }
 }
@@ -878,7 +928,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Consultation - Braick Dispensary</title>
+    <title><?= $is_completed ? 'View Consultation' : 'Consultation' ?> - Braick Dispensary</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
@@ -1009,6 +1059,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .badge-danger { background: var(--danger-bg); color: var(--danger); }
         .badge-purple { background: var(--purple-bg); color: var(--purple); }
         
+        .view-mode-badge {
+            background: var(--success);
+            color: white;
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        
         .frozen-badge {
             display: inline-block;
             background: var(--warning);
@@ -1038,18 +1097,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             font-weight: 600;
             animation: pulse-dot 1.5s infinite;
         }
-        .live-badge i {
-            font-size: 0.4rem;
-        }
+        .live-badge i { font-size: 0.4rem; }
         
-        @keyframes pulse-badge {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
-        }
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
-        }
+        @keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+        @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         
         .alert {
             padding: 14px 20px;
@@ -1062,10 +1113,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             border: 1px solid transparent;
             animation: slideDown 0.3s ease;
         }
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
         .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
         .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
@@ -1102,7 +1150,49 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .title-orange { color: var(--warning); }
         
         /* ================================================================
-           FROZEN OVERLAY - SECTIONS ZINAFUNGWA
+           VIEW MODE - READ ONLY
+           ================================================================ */
+        .view-mode .consultation-card {
+            border-color: var(--success);
+            border-left: 4px solid var(--success);
+        }
+        .view-mode .consultation-card:hover {
+            border-color: var(--success);
+        }
+        
+        .view-mode .form-control,
+        .view-mode select.form-control,
+        .view-mode textarea.form-control {
+            background: var(--gray-100);
+            color: var(--gray-700);
+            cursor: default;
+            border-color: var(--gray-300);
+            opacity: 0.9;
+        }
+        [data-theme="dark"] .view-mode .form-control {
+            background: var(--gray-700);
+            color: var(--gray-300);
+            border-color: var(--gray-600);
+        }
+        
+        .view-mode .btn,
+        .view-mode .btn-remove,
+        .view-mode .quick-result-btn,
+        .view-mode .procedure-item-select,
+        .view-mode .tool-item-select {
+            display: none !important;
+        }
+        
+        .view-mode .frozen-overlay-active {
+            opacity: 1 !important;
+            pointer-events: none !important;
+        }
+        .view-mode .frozen-overlay-active::after {
+            display: none !important;
+        }
+        
+        /* ================================================================
+           FROZEN OVERLAY
            ================================================================ */
         .frozen-overlay-active {
             position: relative;
@@ -1132,14 +1222,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .frozen-overlay-active .consultation-card {
             border-color: var(--warning);
         }
-        
         .frozen-overlay-active .consultation-card .card-title {
             border-color: var(--warning);
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1164,16 +1250,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .btn-outline:hover { background: var(--gray-50); border-color: var(--primary); color: var(--primary); }
         .btn-sm { padding: 6px 14px; font-size: 0.75rem; border-radius: 8px; }
         .btn-xs { padding: 4px 10px; font-size: 0.65rem; border-radius: 6px; }
-        .btn:disabled { 
-            opacity: 0.5; 
-            cursor: not-allowed; 
-            transform: none !important; 
-            pointer-events: none;
-        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; pointer-events: none; }
         
-        /* ================================================================
-           FORM ELEMENTS
-           ================================================================ */
         .form-group { margin-bottom: 16px; }
         .form-label { display: block; font-size: 0.75rem; font-weight: 600; color: var(--gray-600); margin-bottom: 5px; }
         .required { color: var(--danger); margin-left: 2px; }
@@ -1190,125 +1268,49 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             transition: var(--transition);
         }
         .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11,94,215,0.12); }
-        .form-control:disabled { 
-            opacity: 0.6; 
-            cursor: not-allowed; 
-            background: var(--gray-100);
-        }
-        [data-theme="dark"] .form-control:disabled {
-            background: var(--gray-700);
-        }
-        
-        .lab-test-row {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 10px;
-            align-items: center;
-        }
-        .lab-test-row .form-control { flex: 1; }
-        
-        .procedure-grid, .tools-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 8px;
-            margin-top: 8px;
-            padding: 12px;
-            background: var(--gray-100);
-            border-radius: var(--radius);
-            max-height: 250px;
-            overflow-y: auto;
-        }
-        [data-theme="dark"] .procedure-grid, [data-theme="dark"] .tools-grid { background: var(--gray-800); }
-        
-        .procedure-item-select, .tool-item-select {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            border-radius: var(--radius);
-            font-size: 0.8rem;
-            background: #ffffff;
-            border: 2px solid var(--gray-200);
-            cursor: pointer;
-            transition: var(--transition);
-            user-select: none;
-        }
-        .procedure-item-select:hover, .tool-item-select:hover {
-            background: var(--primary-bg);
-            border-color: var(--primary);
-            transform: translateY(-1px);
-        }
-        .procedure-item-select.selected, .tool-item-select.selected {
-            background: var(--primary-bg);
-            border-color: var(--primary);
-            color: var(--primary);
-            box-shadow: 0 0 0 2px rgba(11,94,215,0.2);
-        }
-        .procedure-item-select .item-check, .tool-item-select .item-check {
-            width: 18px;
-            height: 18px;
-            border: 2px solid var(--gray-300);
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            transition: var(--transition);
-        }
-        .procedure-item-select.selected .item-check, .tool-item-select.selected .item-check {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
-        }
-        .procedure-item-select .item-check i, .tool-item-select .item-check i {
-            font-size: 0.6rem;
-            opacity: 0;
-            transition: var(--transition);
-        }
-        .procedure-item-select.selected .item-check i, .tool-item-select.selected .item-check i {
-            opacity: 1;
-        }
-        
-        .selected-item {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--gray-200);
-            transition: var(--transition);
-            animation: fadeIn 0.3s ease;
-        }
-        [data-theme="dark"] .selected-item { border-color: var(--gray-700); }
-        .selected-item:last-child { border-bottom: none; }
-        .selected-item:hover { background: var(--gray-100); }
-        [data-theme="dark"] .selected-item:hover { background: var(--gray-700); }
-        
-        .selected-item-name { font-weight: 500; font-size: 0.85rem; color: var(--gray-800); flex: 1; }
-        .selected-item-type { font-size: 0.65rem; color: var(--gray-500); background: var(--gray-200); padding: 2px 10px; border-radius: 12px; }
-        .selected-item-qty { font-size: 0.7rem; color: var(--gray-500); background: var(--gray-200); padding: 2px 12px; border-radius: 12px; }
-        
-        .btn-remove {
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            border: none;
-            background: var(--danger-bg);
-            color: var(--danger);
-            cursor: pointer;
-            transition: var(--transition);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-        .btn-remove:hover { background: var(--danger); color: #ffffff; transform: scale(1.1); }
-        
-        .empty-state { text-align: center; padding: 24px 16px; color: var(--gray-500); }
-        .empty-state i { font-size: 2rem; color: var(--gray-300); display: block; margin-bottom: 8px; }
+        .form-control:disabled { opacity: 0.6; cursor: not-allowed; background: var(--gray-100); }
+        [data-theme="dark"] .form-control:disabled { background: var(--gray-700); }
         
         /* ================================================================
-           TOAST
+           VIEW MODE DETAILS
            ================================================================ */
+        .detail-row {
+            display: flex;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--gray-200);
+        }
+        .detail-row:last-child { border-bottom: none; }
+        .detail-label { font-weight: 600; color: var(--gray-500); width: 140px; flex-shrink: 0; font-size: 0.85rem; }
+        .detail-value { flex: 1; color: var(--gray-800); font-size: 0.9rem; }
+        [data-theme="dark"] .detail-value { color: var(--gray-200); }
+        
+        .view-summary-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+            margin-top: 16px;
+        }
+        .summary-item {
+            background: var(--gray-50);
+            padding: 16px 20px;
+            border-radius: var(--radius);
+            text-align: center;
+            border: 1px solid var(--gray-200);
+        }
+        [data-theme="dark"] .summary-item { background: var(--gray-700); border-color: var(--gray-600); }
+        .summary-number { font-size: 1.8rem; font-weight: 700; color: var(--primary); }
+        .summary-label { font-size: 0.75rem; color: var(--gray-500); margin-top: 4px; }
+        
+        .bill-summary {
+            background: var(--primary-bg);
+            padding: 16px 20px;
+            border-radius: var(--radius);
+            margin-top: 16px;
+            border: 2px solid var(--primary);
+        }
+        [data-theme="dark"] .bill-summary { background: #1E3A5F; border-color: var(--primary-light); }
+        .bill-total { font-size: 1.4rem; font-weight: 700; color: var(--primary); }
+        
         .toast-custom {
             position: fixed;
             bottom: 30px;
@@ -1332,9 +1334,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 16px 0;
             border-top: 2px solid var(--gray-200);
@@ -1355,13 +1354,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             border-top: 2px solid var(--gray-200);
         }
         
-        .row-2col {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-        }
-        
-        .grid { display: grid; }
+        .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .grid-cols-2 { grid-template-columns: 1fr 1fr; }
         .gap-4 { gap: 16px; }
         .mb-6 { margin-bottom: 24px; }
@@ -1381,10 +1374,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .text-green-600 { color: var(--success); }
         .text-yellow-600 { color: var(--warning); }
         .text-red-500 { color: var(--danger); }
+        .font-mono { font-family: monospace; }
+        .font-medium { font-weight: 500; }
+        .font-semibold { font-weight: 600; }
+        .font-bold { font-weight: 700; }
+        
+        .border-green-500 { border-color: var(--success) !important; }
         
         /* ================================================================
            RESPONSIVE
            ================================================================ */
+        @media (max-width: 1024px) {
+            .view-summary-grid { grid-template-columns: 1fr 1fr; }
+        }
         @media (max-width: 768px) {
             .main-content { margin-left: 0; padding: 16px; }
             .row-2col { grid-template-columns: 1fr; }
@@ -1393,7 +1395,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; justify-content: center; }
             .consultation-card { padding: 16px; }
-            .procedure-grid, .tools-grid { grid-template-columns: 1fr 1fr; }
+            .view-summary-grid { grid-template-columns: 1fr; }
+            .detail-row { flex-direction: column; }
+            .detail-label { width: 100%; margin-bottom: 4px; }
             .frozen-overlay-active::after {
                 font-size: 0.7rem;
                 padding: 8px 16px;
@@ -1401,15 +1405,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 text-align: center;
                 width: 80%;
             }
-            .lab-test-row { flex-direction: column; }
-            .lab-test-row .form-control { width: 100%; }
         }
-        
         @media (max-width: 480px) {
             .main-content { padding: 12px; }
             .consultation-card { padding: 12px; }
             .page-title { font-size: 1rem; }
-            .procedure-grid, .tools-grid { grid-template-columns: 1fr; }
+            .view-summary-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -1418,23 +1419,32 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
-<main class="main-content">
+<main class="main-content <?= $is_completed ? 'view-mode' : '' ?>">
 
     <!-- Page Header -->
     <div class="page-header">
         <div class="page-header-left">
             <h1 class="page-title">
-                <i class="fas fa-stethoscope"></i> Consultation
+                <?php if ($is_completed): ?>
+                    <i class="fas fa-check-circle" style="color: var(--success);"></i> Consultation Summary
+                <?php else: ?>
+                    <i class="fas fa-stethoscope"></i> Consultation
+                <?php endif; ?>
                 <span class="page-badge"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span>
-                <?php if ($sections_frozen): ?>
+                <?php if ($is_completed): ?>
+                    <span class="view-mode-badge">✅ Completed</span>
+                <?php endif; ?>
+                <?php if ($sections_frozen && !$is_completed): ?>
                     <span class="frozen-badge" id="frozenBadgeHeader">🔒 Lab Pending</span>
-                <?php elseif ($lab_results_available): ?>
+                <?php elseif ($lab_results_available && !$is_completed): ?>
                     <span class="frozen-badge success" id="frozenBadgeHeader">✅ Lab Results Available</span>
                 <?php endif; ?>
-                <span class="live-badge" id="liveBadge">
-                    <i class="fas fa-circle"></i> Live
-                    <span id="liveTime" style="font-weight:400;font-size:0.55rem;"><?= date('H:i:s') ?></span>
-                </span>
+                <?php if (!$is_completed): ?>
+                    <span class="live-badge" id="liveBadge">
+                        <i class="fas fa-circle"></i> Live
+                        <span id="liveTime" style="font-weight:400;font-size:0.55rem;"><?= date('H:i:s') ?></span>
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Patient: <strong><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></strong>
@@ -1444,18 +1454,25 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="status-badge <?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>">
                     <?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'Pending')) ?>
                 </span>
-                <?php if ($sections_frozen): ?>
-                    <span class="frozen-badge" style="font-size:0.6rem;" id="frozenBadgeSub">⏳ Waiting for Lab Results</span>
+                <?php if ($is_completed && isset($visit['completed_at'])): ?>
+                    <span class="text-xs text-gray-400">Completed: <?= date('M d, Y h:i A', strtotime($visit['completed_at'])) ?></span>
                 <?php endif; ?>
-                <span class="text-xs text-gray-400" id="lastUpdateTime">⏱ <?= date('H:i:s') ?></span>
+                <?php if (!$is_completed): ?>
+                    <span class="text-xs text-gray-400" id="lastUpdateTime">⏱ <?= date('H:i:s') ?></span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="page-header-right">
             <a href="my_patients.php" class="btn btn-outline btn-sm">
                 <i class="fas fa-arrow-left"></i> My Patients
             </a>
-            <button onclick="manualRefresh()" class="btn btn-outline btn-sm" id="refreshBtn">
-                <i class="fas fa-sync-alt"></i> Refresh
+            <?php if (!$is_completed): ?>
+                <button onclick="manualRefresh()" class="btn btn-outline btn-sm" id="refreshBtn">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            <?php endif; ?>
+            <button onclick="window.print()" class="btn btn-outline btn-sm">
+                <i class="fas fa-print"></i> Print
             </button>
         </div>
     </div>
@@ -1469,58 +1486,211 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- CONSULTATION FORM -->
+    <!-- VIEW MODE - COMPLETED CONSULTATION SUMMARY -->
+    <!-- ================================================================ -->
+    <?php if ($is_completed): ?>
+        
+        <!-- Summary Stats -->
+        <div class="view-summary-grid">
+            <div class="summary-item">
+                <p class="summary-number"><?= count($lab_results) ?></p>
+                <p class="summary-label">🧪 Lab Tests</p>
+            </div>
+            <div class="summary-item">
+                <p class="summary-number"><?= count($selected_medications) ?></p>
+                <p class="summary-label">💊 Medications</p>
+            </div>
+            <div class="summary-item">
+                <p class="summary-number"><?= count($bill_items) ?></p>
+                <p class="summary-label">📋 Bill Items</p>
+            </div>
+        </div>
+
+        <!-- Patient Info -->
+        <div class="consultation-card">
+            <h3 class="card-title"><i class="fas fa-user title-blue"></i> Patient Information</h3>
+            <div class="detail-row"><span class="detail-label">Full Name</span><span class="detail-value"><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Patient ID</span><span class="detail-value"><?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Gender</span><span class="detail-value"><?= htmlspecialchars($visit['gender'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Date of Birth</span><span class="detail-value"><?= !empty($visit['date_of_birth']) ? date('M d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?> (<?= calculateAge($visit['date_of_birth'] ?? '') ?> years)</span></div>
+            <div class="detail-row"><span class="detail-label">Phone</span><span class="detail-value"><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Blood Group</span><span class="detail-value"><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Allergies</span><span class="detail-value"><?= htmlspecialchars($visit['allergies'] ?? 'None') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
+        </div>
+
+        <!-- Symptoms -->
+        <div class="consultation-card">
+            <h3 class="card-title"><i class="fas fa-list-ul title-blue"></i> Symptoms</h3>
+            <div class="detail-row"><span class="detail-label">Description</span><span class="detail-value"><?= nl2br(htmlspecialchars($visit['symptoms'] ?? 'No symptoms recorded')) ?></span></div>
+        </div>
+
+        <!-- Lab Results -->
+        <div class="consultation-card">
+            <h3 class="card-title"><i class="fas fa-flask title-green"></i> Lab Results (<?= count($lab_results) ?>)</h3>
+            <?php if (count($lab_results) > 0): ?>
+                <table class="data-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Test Name</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Result</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Reference Range</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($lab_results as $result): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);font-weight:600;color:var(--success);"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($result['reference_range'] ?? '') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><span class="badge badge-success">✅ Completed</span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php else: ?>
+                <p class="text-gray-400">No lab tests performed</p>
+            <?php endif; ?>
+        </div>
+
+        <!-- Diagnosis -->
+        <div class="consultation-card">
+            <h3 class="card-title"><i class="fas fa-diagnoses title-blue"></i> Diagnosis</h3>
+            <div class="detail-row"><span class="detail-label">Diagnosis</span><span class="detail-value"><?= nl2br(htmlspecialchars($visit['diagnosis'] ?? 'No diagnosis recorded')) ?></span></div>
+        </div>
+
+        <!-- Medications -->
+        <div class="consultation-card">
+            <h3 class="card-title"><i class="fas fa-prescription title-blue"></i> Medications (<?= count($selected_medications) ?>)</h3>
+            <?php if (count($selected_medications) > 0): ?>
+                <table class="data-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Medication</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Dosage</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Frequency</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Duration</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Qty</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($selected_medications as $med): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['medication'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['dosage'] ?? '') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['frequency'] ?? '') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($med['duration'] ?? '') ?> days</td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><?= $med['quantity'] ?? 0 ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);"><span class="badge badge-warning">⏳ Pending</span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php else: ?>
+                <p class="text-gray-400">No medications prescribed</p>
+            <?php endif; ?>
+        </div>
+
+        <!-- Bill Summary -->
+        <div class="consultation-card">
+            <h3 class="card-title"><i class="fas fa-receipt title-green"></i> Bill Summary</h3>
+            <div class="bill-summary">
+                <div class="row-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                    <div>
+                        <p class="text-sm text-gray-500">Total Amount</p>
+                        <p class="bill-total">TSh <?= number_format($total_bill_amount, 2) ?></p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-500">Status</p>
+                        <p><span class="status-badge badge-warning">⏳ Pending Payment</span></p>
+                    </div>
+                </div>
+                <div class="mt-3 text-sm text-gray-500">
+                    <i class="fas fa-info-circle"></i> Bill sent to Cashier for payment processing
+                </div>
+            </div>
+            
+            <?php if (count($bill_items) > 0): ?>
+                <table class="data-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:12px;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Item</th>
+                            <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Type</th>
+                            <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Qty</th>
+                            <th style="text-align:left;padding:8px 12px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($bill_items as $item): ?>
+                            <tr>
+                                <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></td>
+                                <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><span class="badge badge-info"><?= ucfirst($item['item_type'] ?? 'N/A') ?></span></td>
+                                <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);"><?= $item['quantity'] ?? 1 ?></td>
+                                <td style="padding:8px 12px;border-bottom:1px solid var(--gray-200);font-weight:600;">TSh <?= number_format($item['total_price'] ?? 0, 2) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </div>
+
+        <div class="mt-4 text-center">
+            <a href="my_patients.php" class="btn btn-primary">
+                <i class="fas fa-arrow-left"></i> Back to My Patients
+            </a>
+            <a href="consultation.php?visit_id=<?= $visit_id ?>&view=consult" class="btn btn-outline" style="<?= $is_completed ? 'display:none;' : '' ?>">
+                <i class="fas fa-edit"></i> Edit Consultation
+            </a>
+        </div>
+
+    <?php else: ?>
+
+    <!-- ================================================================ -->
+    <!-- CONSULTATION FORM - ACTIVE MODE -->
     <!-- ================================================================ -->
     <form method="POST" action="" id="consultationForm">
 
         <!-- SECTION 1: PATIENT INFORMATION -->
         <div class="row-2col mb-6">
             <div class="consultation-card">
-                <h3 class="card-title">
-                    <i class="fas fa-user title-blue"></i> Patient Information
-                </h3>
+                <h3 class="card-title"><i class="fas fa-user title-blue"></i> Patient Information</h3>
                 <div class="patient-header" style="display:flex;align-items:center;gap:20px;padding:16px 20px;background:var(--primary-bg);border-radius:var(--radius);margin-bottom:18px;">
                     <div class="patient-avatar-large" style="width:70px;height:70px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:700;color:white;flex-shrink:0;background:<?= getUserColor($visit['patient_name'] ?? 'Unknown') ?>;">
                         <?= strtoupper(substr($visit['patient_name'] ?? 'U', 0, 1)) ?>
                     </div>
                     <div class="patient-header-info">
-                        <h4 class="patient-name" style="font-size:1.2rem;font-weight:600;color:var(--gray-800);"><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></h4>
-                        <p class="patient-id" style="font-size:0.8rem;color:var(--gray-500);font-family:monospace;">ID: <?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?></p>
-                        <p class="patient-gender-age" style="font-size:0.85rem;color:var(--gray-500);">
-                            <?= htmlspecialchars($visit['gender'] ?? 'N/A') ?> • 
-                            <?= calculateAge($visit['date_of_birth'] ?? '') ?> years
-                        </p>
+                        <h4 style="font-size:1.2rem;font-weight:600;color:var(--gray-800);"><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></h4>
+                        <p style="font-size:0.8rem;color:var(--gray-500);font-family:monospace;">ID: <?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?></p>
+                        <p style="font-size:0.85rem;color:var(--gray-500);"><?= htmlspecialchars($visit['gender'] ?? 'N/A') ?> • <?= calculateAge($visit['date_of_birth'] ?? '') ?> years</p>
                     </div>
                 </div>
-                <div class="patient-info-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;">
-                    <div><span class="info-label" style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Date of Birth</span><span class="info-value" style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= !empty($visit['date_of_birth']) ? date('M d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?></span></div>
-                    <div><span class="info-label">Phone</span><span class="info-value"><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
-                    <div><span class="info-label">Blood Group</span><span class="info-value"><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
-                    <div><span class="info-label">Allergies</span><span class="info-value"><?= htmlspecialchars($visit['allergies'] ?? 'None') ?></span></div>
-                    <div class="col-span-2"><span class="info-label">Address</span><span class="info-value"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;">
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Date of Birth</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= !empty($visit['date_of_birth']) ? date('M d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?></span></div>
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Phone</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Blood Group</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Allergies</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= htmlspecialchars($visit['allergies'] ?? 'None') ?></span></div>
+                    <div class="col-span-2"><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Address</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
                 </div>
             </div>
 
             <div class="consultation-card">
-                <h3 class="card-title">
-                    <i class="fas fa-clinic-medical title-green"></i> Visit Information
-                </h3>
-                <div class="visit-info-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 20px;">
-                    <div><span class="info-label">Visit Number</span><span class="info-value font-mono"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span></div>
-                    <div><span class="info-label">Visit Type</span><span class="info-value"><?= ucfirst($visit['visit_type'] ?? 'New') ?></span></div>
-                    <div><span class="info-label">Date</span><span class="info-value"><?= date('M d, Y', strtotime($visit['created_at'])) ?></span></div>
-                    <div><span class="info-label">Time</span><span class="info-value"><?= date('h:i A', strtotime($visit['created_at'])) ?></span></div>
-                    <div><span class="info-label">Branch</span><span class="info-value"><?= htmlspecialchars($visit['branch_name'] ?? 'N/A') ?></span></div>
-                    <div><span class="info-label">Queue</span><span class="info-value">#<?= sprintf('%03d', $visit['id'] ?? 1) ?></span></div>
+                <h3 class="card-title"><i class="fas fa-clinic-medical title-green"></i> Visit Information</h3>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 20px;">
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Visit Number</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);font-family:monospace;"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span></div>
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Visit Type</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= ucfirst($visit['visit_type'] ?? 'New') ?></span></div>
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Date</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= date('M d, Y', strtotime($visit['created_at'])) ?></span></div>
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Time</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= date('h:i A', strtotime($visit['created_at'])) ?></span></div>
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Branch</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);"><?= htmlspecialchars($visit['branch_name'] ?? 'N/A') ?></span></div>
+                    <div><span style="display:block;font-size:0.65rem;color:var(--gray-500);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Queue</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--gray-800);">#<?= sprintf('%03d', $visit['id'] ?? 1) ?></span></div>
                 </div>
             </div>
         </div>
 
         <!-- SECTION 2: SYMPTOMS -->
         <div class="consultation-card mb-6">
-            <h3 class="card-title">
-                <i class="fas fa-list-ul title-blue"></i> Symptoms
-            </h3>
+            <h3 class="card-title"><i class="fas fa-list-ul title-blue"></i> Symptoms</h3>
             <div class="form-group">
                 <label class="form-label">Symptoms Description</label>
                 <textarea name="symptoms" class="form-control" rows="4" 
@@ -1549,8 +1719,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <div id="labTestsContainer" class="mt-3">
                 <?php if (count($lab_requests) > 0): ?>
                     <?php foreach ($lab_requests as $lab): ?>
-                        <div class="lab-test-row">
-                            <input type="text" class="form-control" value="<?= htmlspecialchars($lab['test_name']) ?>" disabled>
+                        <div class="lab-test-row" style="display:flex;gap:10px;margin-bottom:10px;align-items:center;">
+                            <input type="text" class="form-control" value="<?= htmlspecialchars($lab['test_name']) ?>" disabled style="flex:1;">
                             <span class="text-xs text-yellow-600">⏳ Pending</span>
                             <button type="button" class="btn btn-danger btn-sm" onclick="removeLabTest(this, <?= $lab['id'] ?>)" title="Remove test">
                                 <i class="fas fa-times"></i>
@@ -1558,8 +1728,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div class="lab-test-row">
-                        <select name="lab_tests[]" class="form-control">
+                    <div class="lab-test-row" style="display:flex;gap:10px;margin-bottom:10px;align-items:center;">
+                        <select name="lab_tests[]" class="form-control" style="flex:1;">
                             <option value="">-- Select Test --</option>
                             <?php foreach ($lab_tests_catalog as $test): ?>
                                 <option value="<?= htmlspecialchars($test['test_name']) ?>">
@@ -1587,7 +1757,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             </div>
         </div>
 
-        <!-- SECTION 4: LAB RESULTS - AUTO-UPDATE -->
+        <!-- SECTION 4: LAB RESULTS -->
         <div class="consultation-card mb-6 <?= $lab_results_available ? 'border-green-500' : '' ?>" id="labResultsCard">
             <h3 class="card-title">
                 <i class="fas fa-file-medical-alt title-green"></i> Laboratory Results
@@ -1603,7 +1773,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <div id="labResultsContainer">
                 <?php if ($lab_results_available): ?>
                     <div class="table-wrap" style="overflow-x:auto;">
-                        <table class="data-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                        <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
                             <thead>
                                 <tr>
                                     <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Test Name</th>
@@ -1616,7 +1786,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <?php foreach ($lab_results as $result): ?>
                                     <tr>
                                         <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
-                                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);font-weight:600;color:var(--success);"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
+                                        <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);font-weight:600;color:#059669;"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
                                         <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><?= htmlspecialchars($result['reference_range'] ?? '') ?></td>
                                         <td style="padding:10px 14px;border-bottom:1px solid var(--gray-200);color:var(--gray-700);"><span class="badge badge-success">Completed</span></td>
                                     </tr>
@@ -1647,11 +1817,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </div>
 
         <!-- ================================================================ -->
-        <!-- SECTIONS BELOW ARE FROZEN IF LAB PENDING -->
+        <!-- FROZEN SECTIONS -->
         <!-- ================================================================ -->
         <div id="frozenSectionsContainer" class="<?= $sections_frozen ? 'frozen-overlay-active' : '' ?>">
 
-            <!-- SECTION 5: DIAGNOSIS - FROZEN IF LAB PENDING -->
+            <!-- SECTION 5: DIAGNOSIS -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
                     <i class="fas fa-diagnoses title-blue"></i> Diagnosis
@@ -1668,7 +1838,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </div>
             </div>
 
-            <!-- SECTION 6: MEDICATIONS - FROZEN IF LAB PENDING -->
+            <!-- SECTION 6: MEDICATIONS -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
                     <i class="fas fa-prescription title-blue"></i> Medications
@@ -1677,8 +1847,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <?php endif; ?>
                 </h3>
                 
-                <div class="medication-form" style="background:var(--gray-50);border-radius:var(--radius);padding:20px;border:1px solid var(--gray-200);">
-                    <div class="row-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div style="background:var(--gray-50);border-radius:var(--radius);padding:20px;border:1px solid var(--gray-200);">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                         <div class="form-group">
                             <label class="form-label">Medication <span class="required">*</span></label>
                             <select name="inventory_id" class="form-control" id="medicationSelect" <?= $sections_frozen ? 'disabled' : '' ?>>
@@ -1696,7 +1866,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             <input type="number" id="medQuantity" class="form-control" value="1" min="1" max="99" <?= $sections_frozen ? 'disabled' : '' ?>>
                         </div>
                     </div>
-                    <div class="row-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
                         <div class="form-group">
                             <label class="form-label">Dosage</label>
                             <input type="text" id="medDosage" class="form-control" placeholder="e.g. 500mg" <?= $sections_frozen ? 'disabled' : '' ?>>
@@ -1715,7 +1885,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             </select>
                         </div>
                     </div>
-                    <div class="row-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
                         <div class="form-group">
                             <label class="form-label">Duration (Days)</label>
                             <input type="number" id="medDuration" class="form-control" value="7" min="1" max="90" <?= $sections_frozen ? 'disabled' : '' ?>>
@@ -1758,22 +1928,22 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             <?php foreach ($selected_medications as $med): ?>
                                 <div class="medication-item" id="med-item-<?= $med['id'] ?>" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--gray-200);">
                                     <div class="medication-item-info" style="flex:1;">
-                                        <span class="med-name" style="font-weight:600;font-size:0.9rem;"><?= htmlspecialchars($med['medication'] ?? 'Unknown') ?></span>
-                                        <span class="med-details" style="font-size:0.75rem;color:var(--gray-500);display:block;">
+                                        <span style="font-weight:600;font-size:0.9rem;"><?= htmlspecialchars($med['medication'] ?? 'Unknown') ?></span>
+                                        <span style="font-size:0.75rem;color:var(--gray-500);display:block;">
                                             <?= htmlspecialchars($med['dosage'] ?? '') ?> • 
                                             <?= htmlspecialchars($med['frequency'] ?? '') ?> • 
                                             <?= htmlspecialchars($med['duration'] ?? '') ?> days
                                         </span>
-                                        <span class="med-qty" style="font-size:0.7rem;color:var(--gray-500);background:var(--gray-200);padding:2px 12px;border-radius:12px;margin-left:8px;">x<?= $med['quantity'] ?? 0 ?></span>
+                                        <span style="font-size:0.7rem;color:var(--gray-500);background:var(--gray-200);padding:2px 12px;border-radius:12px;margin-left:8px;">x<?= $med['quantity'] ?? 0 ?></span>
                                     </div>
-                                    <button type="button" class="btn-remove" onclick="removeMedication(<?= $med['id'] ?>)" title="Remove medication">
+                                    <button type="button" class="btn-remove" onclick="removeMedication(<?= $med['id'] ?>)" title="Remove medication" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--danger-bg);color:var(--danger);cursor:pointer;transition:var(--transition);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                         <i class="fas fa-times"></i>
                                     </button>
                                 </div>
                             <?php endforeach; ?>
                         <?php else: ?>
-                            <div class="empty-state" id="emptyMedications">
-                                <i class="fas fa-prescription"></i>
+                            <div class="empty-state" id="emptyMedications" style="text-align:center;padding:16px;color:var(--gray-500);">
+                                <i class="fas fa-prescription" style="font-size:1.5rem;color:var(--gray-300);display:block;margin-bottom:8px;"></i>
                                 <p>No medications added yet</p>
                                 <?php if ($sections_frozen): ?>
                                     <p class="text-xs text-red-500 mt-1"><i class="fas fa-lock"></i> Medications frozen - lab tests pending</p>
@@ -1784,7 +1954,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </div>
             </div>
 
-            <!-- SECTION 7: PROCEDURES & TOOLS - FROZEN IF LAB PENDING -->
+            <!-- SECTION 7: PROCEDURES & TOOLS -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
                     <i class="fas fa-syringe title-blue"></i> Procedures & Tools
@@ -1794,26 +1964,26 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </h3>
                 
                 <!-- Procedures -->
-                <div class="toggle-section" style="border:1px solid var(--gray-200);border-radius:var(--radius-lg);margin-bottom:12px;overflow:hidden;">
-                    <div class="toggle-header" onclick="toggleDropdown('proceduresToggle')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--gray-50);cursor:pointer;user-select:none;">
-                        <span class="toggle-title" style="font-weight:600;font-size:0.85rem;color:var(--gray-700);display:flex;align-items:center;gap:10px;">
+                <div style="border:1px solid var(--gray-200);border-radius:var(--radius-lg);margin-bottom:12px;overflow:hidden;">
+                    <div onclick="toggleDropdown('proceduresToggle')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--gray-50);cursor:pointer;user-select:none;">
+                        <span style="font-weight:600;font-size:0.85rem;color:var(--gray-700);display:flex;align-items:center;gap:10px;">
                             <i class="fas fa-syringe title-blue"></i>
                             Procedures
                             <span class="text-xs text-gray-400">(Click to expand)</span>
                         </span>
-                        <span class="toggle-icon" style="transition:var(--transition);color:var(--gray-400);font-size:0.8rem;"><i class="fas fa-chevron-down"></i></span>
+                        <span style="transition:var(--transition);color:var(--gray-400);font-size:0.8rem;"><i class="fas fa-chevron-down"></i></span>
                     </div>
-                    <div class="toggle-body" id="proceduresToggle" style="padding:0 18px 18px 18px;display:none;">
+                    <div id="proceduresToggle" style="padding:0 18px 18px 18px;display:none;">
                         <div class="mt-2">
-                            <div class="procedure-grid" id="procedureGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-top:8px;padding:12px;background:var(--gray-100);border-radius:var(--radius);max-height:250px;overflow-y:auto;">
+                            <div id="procedureGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-top:8px;padding:12px;background:var(--gray-100);border-radius:var(--radius);max-height:250px;overflow-y:auto;">
                                 <?php foreach ($procedures_list as $proc): ?>
                                     <div class="procedure-item-select" 
                                          data-procedure-id="<?= $proc['id'] ?>"
                                          data-procedure-name="<?= htmlspecialchars($proc['procedure_name']) ?>"
                                          onclick="toggleProcedure(this)"
                                          style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius);font-size:0.8rem;background:#ffffff;border:2px solid var(--gray-200);cursor:pointer;transition:var(--transition);user-select:none;">
-                                        <span class="item-check" style="width:18px;height:18px;border:2px solid var(--gray-300);border-radius:4px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:var(--transition);"><i class="fas fa-check" style="font-size:0.6rem;opacity:0;transition:var(--transition);"></i></span>
-                                        <span class="item-name"><?= htmlspecialchars($proc['procedure_name']) ?></span>
+                                        <span style="width:18px;height:18px;border:2px solid var(--gray-300);border-radius:4px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:var(--transition);"><i class="fas fa-check" style="font-size:0.6rem;opacity:0;transition:var(--transition);"></i></span>
+                                        <span><?= htmlspecialchars($proc['procedure_name']) ?></span>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -1822,18 +1992,18 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </div>
                 
                 <!-- Tools -->
-                <div class="toggle-section" style="border:1px solid var(--gray-200);border-radius:var(--radius-lg);margin-bottom:12px;overflow:hidden;">
-                    <div class="toggle-header" onclick="toggleDropdown('toolsToggle')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--gray-50);cursor:pointer;user-select:none;">
-                        <span class="toggle-title" style="font-weight:600;font-size:0.85rem;color:var(--gray-700);display:flex;align-items:center;gap:10px;">
+                <div style="border:1px solid var(--gray-200);border-radius:var(--radius-lg);margin-bottom:12px;overflow:hidden;">
+                    <div onclick="toggleDropdown('toolsToggle')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--gray-50);cursor:pointer;user-select:none;">
+                        <span style="font-weight:600;font-size:0.85rem;color:var(--gray-700);display:flex;align-items:center;gap:10px;">
                             <i class="fas fa-tools title-orange"></i>
                             Tools
                             <span class="text-xs text-gray-400">(Click to expand)</span>
                         </span>
-                        <span class="toggle-icon" style="transition:var(--transition);color:var(--gray-400);font-size:0.8rem;"><i class="fas fa-chevron-down"></i></span>
+                        <span style="transition:var(--transition);color:var(--gray-400);font-size:0.8rem;"><i class="fas fa-chevron-down"></i></span>
                     </div>
-                    <div class="toggle-body" id="toolsToggle" style="padding:0 18px 18px 18px;display:none;">
+                    <div id="toolsToggle" style="padding:0 18px 18px 18px;display:none;">
                         <div class="mt-2">
-                            <div class="tools-grid" id="toolsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:8px;padding:12px;background:var(--gray-100);border-radius:var(--radius);max-height:200px;overflow-y:auto;">
+                            <div id="toolsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:8px;padding:12px;background:var(--gray-100);border-radius:var(--radius);max-height:200px;overflow-y:auto;">
                                 <?php foreach ($procedure_tools as $tool): ?>
                                     <div class="tool-item-select" 
                                          data-tool-id="<?= $tool['id'] ?>"
@@ -1841,8 +2011,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                          data-procedure-name="<?= htmlspecialchars($tool['procedure_name']) ?>"
                                          onclick="toggleTool(this)"
                                          style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius);font-size:0.8rem;background:#ffffff;border:2px solid var(--gray-200);cursor:pointer;transition:var(--transition);user-select:none;">
-                                        <span class="item-check" style="width:18px;height:18px;border:2px solid var(--gray-300);border-radius:4px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:var(--transition);"><i class="fas fa-check" style="font-size:0.6rem;opacity:0;transition:var(--transition);"></i></span>
-                                        <span class="item-name"><?= htmlspecialchars($tool['tool_name']) ?></span>
+                                        <span style="width:18px;height:18px;border:2px solid var(--gray-300);border-radius:4px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:var(--transition);"><i class="fas fa-check" style="font-size:0.6rem;opacity:0;transition:var(--transition);"></i></span>
+                                        <span><?= htmlspecialchars($tool['tool_name']) ?></span>
                                         <small class="text-xs text-gray-400">(<?= htmlspecialchars($tool['procedure_name']) ?>)</small>
                                     </div>
                                 <?php endforeach; ?>
@@ -1851,7 +2021,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     </div>
                 </div>
                 
-                <!-- Add Selected Buttons -->
                 <div class="mt-3 flex flex-wrap gap-3">
                     <button type="button" class="btn btn-primary" onclick="addSelectedItems()" id="addSelectedBtn" <?= $sections_frozen ? 'disabled' : '' ?>>
                         <i class="fas fa-plus"></i> Add Selected (Procedures & Tools)
@@ -1861,7 +2030,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     </button>
                 </div>
                 
-                <!-- Selected Items List -->
                 <div class="selected-items-list mt-3">
                     <div class="flex items-center justify-between mb-2">
                         <h4 class="text-sm font-semibold text-gray-600">
@@ -1870,8 +2038,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         </h4>
                     </div>
                     <div id="selectedItemsList">
-                        <div class="empty-state" id="emptySelected">
-                            <i class="fas fa-syringe"></i>
+                        <div class="empty-state" id="emptySelected" style="text-align:center;padding:16px;color:var(--gray-500);">
+                            <i class="fas fa-syringe" style="font-size:1.5rem;color:var(--gray-300);display:block;margin-bottom:8px;"></i>
                             <p>No procedures or tools added yet</p>
                             <?php if ($sections_frozen): ?>
                                 <p class="text-xs text-red-500 mt-1"><i class="fas fa-lock"></i> Procedures frozen - lab tests pending</p>
@@ -1884,7 +2052,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         </div><!-- END FROZEN OVERLAY -->
 
         <!-- ================================================================ -->
-        <!-- FORM ACTIONS - BUTTONS FROZEN IF LAB PENDING -->
+        <!-- FORM ACTIONS -->
         <!-- ================================================================ -->
         <div class="consultation-card">
             <div class="form-actions">
@@ -1912,12 +2080,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 
     </form>
 
+    <?php endif; // End of active consultation mode ?>
+
     <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Consultation
+            <?= $is_completed ? 'Consultation Summary' : 'Consultation' ?>
             <span class="text-gray-300 mx-2">|</span>
             <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
             <span class="text-gray-300 mx-2">|</span>
@@ -1939,26 +2109,28 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
     // CONFIGURATION
     // ================================================================
-    var AUTO_UPDATE_INTERVAL = 3000; // 3 seconds
+    var AUTO_UPDATE_INTERVAL = 3000;
     var updateInterval = null;
     var isUpdating = false;
     var visitId = <?= $visit_id ?>;
+    var isCompleted = <?= $is_completed ? 'true' : 'false' ?>;
     
     // ================================================================
-    // TOGGLE DROPDOWN
+    // FUNCTIONS - Only run if not completed
     // ================================================================
+    <?php if (!$is_completed): ?>
+    
     function toggleDropdown(id) {
         var body = document.getElementById(id);
         var header = body.previousElementSibling;
         if (body.style.display === 'none' || body.style.display === '') {
             body.style.display = 'block';
-            body.style.animation = 'slideDown 0.3s ease';
             var icon = header.querySelector('.toggle-icon i');
             if (icon) icon.style.transform = 'rotate(180deg)';
         } else {
@@ -1966,12 +2138,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             var icon = header.querySelector('.toggle-icon i');
             if (icon) icon.style.transform = 'rotate(0deg)';
         }
-        header.classList.toggle('open');
     }
 
-    // ================================================================
-    // ADD LAB TEST
-    // ================================================================
     function addLabTest() {
         var container = document.getElementById('labTestsContainer');
         var row = document.createElement('div');
@@ -1996,16 +2164,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         container.appendChild(row);
     }
 
-    // ================================================================
-    // REMOVE LAB TEST
-    // ================================================================
     function removeLabTest(element, testId) {
         if (!confirm('Remove this lab test?')) return;
-        
         var formData = new FormData();
         formData.append('action', 'remove_lab_test');
         formData.append('test_id', testId);
-        
         fetch(window.location.href, { method: 'POST', body: formData })
         .then(response => response.json())
         .then(data => {
@@ -2016,15 +2179,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             } else {
                 showToast('Error', data.message, 'error');
             }
-        })
-        .catch(error => {
-            showToast('Error', 'Failed to remove test', 'error');
         });
     }
 
-    // ================================================================
-    // TOGGLE PROCEDURE / TOOL
-    // ================================================================
     function toggleProcedure(element) { element.classList.toggle('selected'); }
     function toggleTool(element) { element.classList.toggle('selected'); }
     function clearAllSelections() {
@@ -2033,9 +2190,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         });
     }
 
-    // ================================================================
-    // GET SELECTED ITEMS
-    // ================================================================
     function getSelectedItems() {
         var procedures = [], tools = [];
         document.querySelectorAll('.procedure-item-select.selected').forEach(function(item) {
@@ -2047,9 +2201,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         return { procedures: procedures, tools: tools };
     }
 
-    // ================================================================
-    // ADD SELECTED ITEMS
-    // ================================================================
     function addSelectedItems() {
         var selected = getSelectedItems();
         var total = selected.procedures.length + selected.tools.length;
@@ -2081,7 +2232,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             btn.innerHTML = '<i class="fas fa-plus"></i> Add Selected (Procedures & Tools)';
             var successCount = 0;
             results.forEach(function(data) {
-                if (data.success) { successCount++;
+                if (data.success) {
+                    successCount++;
                     if (data.procedure) addItemToList(data.procedure, 'procedure');
                     else if (data.tool) addItemToList(data.tool, 'tool');
                 }
@@ -2093,17 +2245,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             } else {
                 showToast('Error', 'Failed to add items', 'error');
             }
-        }).catch(function(error) {
-            console.error('Error:', error);
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-plus"></i> Add Selected (Procedures & Tools)';
-            showToast('Error', 'Failed to add items', 'error');
         });
     }
 
-    // ================================================================
-    // ADD ITEM TO LIST
-    // ================================================================
     function addItemToList(item, type) {
         var list = document.getElementById('selectedItemsList');
         var emptyState = document.getElementById('emptySelected');
@@ -2122,9 +2266,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         updateSelectedCount();
     }
 
-    // ================================================================
-    // REMOVE SELECTED ITEM
-    // ================================================================
     function removeSelectedItem(itemId) {
         if (!confirm('Remove this item from bill?')) return;
         var formData = new FormData();
@@ -2144,9 +2285,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         });
     }
 
-    // ================================================================
-    // UPDATE SELECTED COUNT
-    // ================================================================
     function updateSelectedCount() {
         var list = document.getElementById('selectedItemsList');
         var count = list ? list.querySelectorAll('.selected-item').length : 0;
@@ -2154,9 +2292,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         if (countEl) countEl.textContent = '(' + count + ' items)';
     }
 
-    // ================================================================
-    // ESCAPE HTML
-    // ================================================================
     function escapeHtml(text) {
         if (!text) return '';
         var div = document.createElement('div');
@@ -2164,9 +2299,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         return div.innerHTML;
     }
 
-    // ================================================================
-    // AJAX: ADD MEDICATION
-    // ================================================================
     function addMedicationAjax() {
         var medSelect = document.getElementById('medicationSelect');
         var qty = parseInt(document.getElementById('medQuantity').value) || 0;
@@ -2262,7 +2394,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     // ================================================================
-    // SHOW TOAST
+    // TOAST
     // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
@@ -2282,10 +2414,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     // ================================================================
-    // FETCH LAB STATUS - AUTO-UPDATE
+    // AUTO-UPDATE - Only when not completed
     // ================================================================
     function fetchLabStatus() {
-        if (isUpdating) return;
+        if (isUpdating || isCompleted) return;
         isUpdating = true;
         
         var formData = new FormData();
@@ -2306,14 +2438,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         });
     }
 
-    // ================================================================
-    // UPDATE UI WITH NEW DATA
-    // ================================================================
     function updateUI(data) {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         
-        // Update live time
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = timeStr;
         
@@ -2323,7 +2451,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         var resultsUpdateTime = document.getElementById('resultsUpdateTime');
         if (resultsUpdateTime) resultsUpdateTime.textContent = '⏱ ' + timeStr;
         
-        // Update pending badge
         var pendingBadge = document.getElementById('pendingLabBadge');
         if (pendingBadge) {
             if (data.pending_count > 0) {
@@ -2334,7 +2461,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        // Update results count
         var resultsCount = document.getElementById('resultsCount');
         if (resultsCount) {
             if (data.results_count > 0) {
@@ -2344,7 +2470,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        // Update results badge
         var resultsBadge = document.getElementById('resultsBadge');
         if (resultsBadge) {
             if (data.available) {
@@ -2359,7 +2484,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        // Update frozen state - HII NDIO SEHEMU MUHIMU KWA FROZEN SECTIONS
+        // Update frozen state
         var frozenSections = document.getElementById('frozenSectionsContainer');
         var isFrozen = data.frozen;
         
@@ -2371,7 +2496,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        // Update header frozen badge
         var frozenBadgeHeader = document.getElementById('frozenBadgeHeader');
         if (frozenBadgeHeader) {
             if (isFrozen) {
@@ -2387,7 +2511,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        // Update sub frozen badge
         var frozenBadgeSub = document.getElementById('frozenBadgeSub');
         if (frozenBadgeSub) {
             if (isFrozen) {
@@ -2398,7 +2521,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        // Update buttons - DISABLED WAKATI FROZEN
+        // Disable/enable buttons
         var buttons = ['saveDraftBtn', 'completeVisitBtn', 'addMedicationBtn', 'addSelectedBtn'];
         buttons.forEach(function(id) {
             var btn = document.getElementById(id);
@@ -2414,7 +2537,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         });
         
-        // Update frozen action message
         var frozenMsg = document.getElementById('frozenActionsMessage');
         if (frozenMsg) {
             if (isFrozen) {
@@ -2424,13 +2546,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             }
         }
         
-        // Update diagnosis input - DISABLED WAKATI FROZEN
         var diagnosisInput = document.getElementById('diagnosisInput');
         if (diagnosisInput) {
             diagnosisInput.disabled = isFrozen;
         }
         
-        // Update medication select and inputs - DISABLED WAKATI FROZEN
         var medSelect = document.getElementById('medicationSelect');
         var medInputs = ['medQuantity', 'medDosage', 'medDuration', 'medInstructions'];
         if (medSelect) medSelect.disabled = isFrozen;
@@ -2439,7 +2559,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             if (input) input.disabled = isFrozen;
         });
         
-        // Update frozen badges in sections
         var frozenBadges = ['diagnosisFrozenBadge', 'medicationFrozenBadge', 'procedureFrozenBadge'];
         frozenBadges.forEach(function(id) {
             var badge = document.getElementById(id);
@@ -2458,7 +2577,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             if (data.available && data.results_html) {
                 labContainer.innerHTML = `
                     <div class="table-wrap" style="overflow-x:auto;">
-                        <table class="data-table" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                        <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
                             <thead>
                                 <tr>
                                     <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--gray-500);border-bottom:2px solid var(--gray-200);">Test Name</th>
@@ -2476,7 +2595,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <i class="fas fa-check-circle"></i> Lab results available. You can now proceed with Diagnosis, Medication & Procedures.
                     </div>
                 `;
-                // Update card border
                 var card = document.getElementById('labResultsCard');
                 if (card) card.className = 'consultation-card mb-6 border-green-500';
             } else if (data.pending_count > 0) {
@@ -2506,16 +2624,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
     function manualRefresh() {
         var btn = document.getElementById('refreshBtn');
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
         btn.disabled = true;
-        
         fetchLabStatus();
-        
         setTimeout(function() {
             btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
             btn.disabled = false;
@@ -2523,16 +2636,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 1500);
     }
 
-    // ================================================================
-    // START / STOP AUTO-UPDATE
-    // ================================================================
     function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        // Fetch immediately
+        if (isCompleted) return;
+        if (updateInterval) clearInterval(updateInterval);
         fetchLabStatus();
-        // Then every 3 seconds
         updateInterval = setInterval(fetchLabStatus, AUTO_UPDATE_INTERVAL);
         console.log('%c🔄 Auto-update started (every ' + AUTO_UPDATE_INTERVAL/1000 + 's)', 'font-size:12px; color:#34D399;');
     }
@@ -2545,9 +2652,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
     }
 
-    // ================================================================
-    // PAUSE AUTO-UPDATE WHEN PAGE NOT VISIBLE
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopAutoUpdate();
@@ -2556,19 +2660,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
     });
 
-    // ================================================================
-    // INITIALIZE
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Start auto-update after 1 second
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 1000);
-        
-        // Update selected count initially
+        if (!isCompleted) {
+            setTimeout(function() { startAutoUpdate(); }, 1000);
+        }
         updateSelectedCount();
         updateMedCount();
     });
+
+    <?php endif; // End of active consultation mode ?>
 
     // ================================================================
     // DARK MODE
@@ -2577,9 +2677,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         document.documentElement.setAttribute('data-theme', 'dark');
     }
 
-    // ================================================================
-    // SHOW TOAST FOR MESSAGES
-    // ================================================================
     <?php if ($message && $message_type): ?>
         setTimeout(function() {
             showToast('<?= $message_type === 'success' ? '✅ Success' : ($message_type === 'warning' ? '⚠️ Notice' : '❌ Error') ?>', 
@@ -2589,14 +2686,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 500);
     <?php endif; ?>
 
-    console.log('%c👨‍⚕️ Consultation (Auto-Update Every 3s)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Consultation', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🧪 Lab Status: <?= $lab_status ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c🔒 Sections Frozen: <?= $sections_frozen ? 'YES' : 'NO' ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c🔄 Auto-update every 3 seconds (no refresh needed)', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Results appear automatically when lab completes', 'font-size:12px; color:#059669;');
-    console.log('%c✅ Sections unlock automatically when results available', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c✅ Fixed: Using lab_tests table (not lab_requests)', 'font-size:12px; color:#DC2626;');
+    console.log('%c📊 Status: <?= $is_completed ? 'COMPLETED ✅' : 'ACTIVE' ?>', 'font-size:12px; color:#7C3AED;');
+    <?php if ($is_completed): ?>
+    console.log('%c✅ View Mode - All details shown', 'font-size:12px; color:#059669;');
+    <?php else: ?>
+    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:12px; color:#34D399;');
+    <?php endif; ?>
 </script>
 
 </body>
