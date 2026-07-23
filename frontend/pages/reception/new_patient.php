@@ -6,6 +6,9 @@
 // - General Consultation Fee is BACKGROUND ONLY (not shown to reception)
 // - Bill sent to Cashier as Pending (Background)
 // - NO FEE DISPLAYED TO RECEPTION
+// - DUPLICATE CHECK: Phone, Email, Name+Phone, Name+DOB
+// - FULL NAME ALONE IS NOT CHECKED (to allow different patients with same name)
+// - RESET FORM BUTTON WORKS PROPERLY
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -80,7 +83,7 @@ try {
     $patient_id_number = 'P-' . date('Y') . '-' . $next_id;
     
     // Handle form submission
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_patient'])) {
         $full_name = trim($_POST['full_name'] ?? '');
         $date_of_birth = $_POST['date_of_birth'] ?? null;
         $gender = $_POST['gender'] ?? null;
@@ -98,7 +101,67 @@ try {
         if (empty($gender)) $errors[] = 'Gender is required';
         if (empty($phone)) $errors[] = 'Phone number is required';
         
+        // ================================================================
+        // CHECK FOR DUPLICATE PATIENT
+        // NOTE: Full Name ALONE is NOT checked to allow different patients with same name
+        // ================================================================
+        $duplicate_error = '';
+        
         if (empty($errors)) {
+            // 1. PRIMARY CHECK: Phone number (Most important - UNIQUE)
+            if (!empty($phone)) {
+                $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE phone = ? AND branch_id = ?");
+                $stmt->execute([$phone, $branch_id]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($existing) {
+                    $duplicate_error = "❌ A patient with phone number <strong>" . htmlspecialchars($phone) . "</strong> already exists.<br>
+                                       👤 Name: <strong>" . htmlspecialchars($existing['full_name']) . "</strong><br>
+                                       🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
+                }
+            }
+            
+            // 2. SECONDARY CHECK: Email (if provided - UNIQUE)
+            if (empty($duplicate_error) && !empty($email)) {
+                $stmt = $db->prepare("SELECT id, full_name, patient_id, email FROM patients WHERE email = ? AND branch_id = ?");
+                $stmt->execute([$email, $branch_id]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($existing) {
+                    $duplicate_error = "❌ A patient with email <strong>" . htmlspecialchars($email) . "</strong> already exists.<br>
+                                       👤 Name: <strong>" . htmlspecialchars($existing['full_name']) . "</strong><br>
+                                       🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
+                }
+            }
+            
+            // 3. TERTIARY CHECK: Full Name + Phone (Same person trying to register again)
+            // NOTE: This catches if someone tries to register with same name and phone
+            if (empty($duplicate_error) && !empty($full_name) && !empty($phone)) {
+                $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE full_name = ? AND phone = ? AND branch_id = ?");
+                $stmt->execute([$full_name, $phone, $branch_id]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($existing) {
+                    $duplicate_error = "❌ A patient with name <strong>" . htmlspecialchars($full_name) . "</strong> and phone <strong>" . htmlspecialchars($phone) . "</strong> already exists.<br>
+                                       🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
+                }
+            }
+            
+            // 4. EXTRA CHECK: Full Name + Date of Birth (For children - mother registering same child)
+            // NOTE: This catches if someone tries to register same child twice
+            if (empty($duplicate_error) && !empty($full_name) && !empty($date_of_birth)) {
+                $stmt = $db->prepare("SELECT id, full_name, patient_id, date_of_birth FROM patients WHERE full_name = ? AND date_of_birth = ? AND branch_id = ?");
+                $stmt->execute([$full_name, $date_of_birth, $branch_id]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($existing) {
+                    $duplicate_error = "❌ A patient with name <strong>" . htmlspecialchars($full_name) . "</strong> and date of birth <strong>" . date('d/m/Y', strtotime($date_of_birth)) . "</strong> already exists.<br>
+                                       🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
+                }
+            }
+        }
+        
+        // If duplicate found, show error and stop
+        if (!empty($duplicate_error)) {
+            $message = $duplicate_error;
+            $message_type = 'error';
+        } elseif (empty($errors)) {
             // ================================================================
             // 1. INSERT PATIENT
             // ================================================================
@@ -1138,11 +1201,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- FEE INFO BAR - REMOVED - Bill is BACKGROUND ONLY -->
-    <!-- ================================================================ -->
-    <!-- FEE INFO BAR IMETOLEWA KABISA - HAIONEKANI KWA RECEPTION -->
-
-    <!-- ================================================================ -->
     <!-- REGISTRATION FORM -->
     <!-- ================================================================ -->
     <div class="form-card animate-fade-in-up">
@@ -1287,6 +1345,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <!-- Hidden Fields -->
             <!-- ============================================================ -->
             <input type="hidden" name="branch_id" value="<?= $selected_branch_id ?>">
+            <input type="hidden" name="register_patient" value="1">
             
             <!-- ============================================================ -->
             <!-- FORM ACTIONS -->
@@ -1295,7 +1354,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <button type="submit" class="btn btn-primary" id="registerBtn">
                     <i class="fas fa-save"></i> Register Patient
                 </button>
-                <button type="reset" class="btn btn-outline">
+                <button type="reset" class="btn btn-outline" id="resetFormBtn">
                     <i class="fas fa-undo"></i> Reset Form
                 </button>
                 <a href="patients.php" class="btn btn-outline">
@@ -1477,6 +1536,24 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     var allergyChips = document.querySelectorAll('.allergy-chip');
     var allergiesTextarea = document.getElementById('allergiesTextarea');
     
+    function syncAllergyChips() {
+        var currentValue = allergiesTextarea.value;
+        var allergyList = currentValue.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
+        
+        allergyChips.forEach(function(chip) {
+            var allergyName = chip.dataset.allergy;
+            var checkbox = chip.querySelector('.allergy-checkbox');
+            
+            if (allergyList.includes(allergyName)) {
+                chip.classList.add('active');
+                checkbox.checked = true;
+            } else {
+                chip.classList.remove('active');
+                checkbox.checked = false;
+            }
+        });
+    }
+    
     allergyChips.forEach(function(chip) {
         chip.addEventListener('click', function(e) {
             var checkbox = this.querySelector('.allergy-checkbox');
@@ -1501,30 +1578,49 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             allergiesTextarea.value = allergyList.join(', ');
         });
     });
-
-    function syncAllergyChips() {
-        var currentValue = allergiesTextarea.value;
-        var allergyList = currentValue.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
-        
-        allergyChips.forEach(function(chip) {
-            var allergyName = chip.dataset.allergy;
-            var checkbox = chip.querySelector('.allergy-checkbox');
-            
-            if (allergyList.includes(allergyName)) {
-                chip.classList.add('active');
-                checkbox.checked = true;
-            } else {
-                chip.classList.remove('active');
-                checkbox.checked = false;
-            }
-        });
-    }
     
     allergiesTextarea.addEventListener('input', function() {
         syncAllergyChips();
     });
     
+    // Initial sync
     syncAllergyChips();
+
+    // ================================================================
+    // RESET FORM BUTTON - WORKS PROPERLY
+    // ================================================================
+    document.getElementById('resetFormBtn').addEventListener('click', function(e) {
+        e.preventDefault();
+        
+        // Reset all form fields
+        var form = document.getElementById('registrationForm');
+        form.reset();
+        
+        // Reset allergies textarea
+        allergiesTextarea.value = '';
+        
+        // Reset allergy chips
+        allergyChips.forEach(function(chip) {
+            chip.classList.remove('active');
+            var checkbox = chip.querySelector('.allergy-checkbox');
+            if (checkbox) checkbox.checked = false;
+        });
+        
+        // Reset select boxes to default
+        var selects = form.querySelectorAll('select');
+        selects.forEach(function(select) {
+            select.selectedIndex = 0;
+        });
+        
+        // Reset date input
+        var dateInput = form.querySelector('input[type="date"]');
+        if (dateInput) dateInput.value = '';
+        
+        // Show toast notification
+        showToast('🔄 Reset', 'Form has been reset successfully', 'info');
+        
+        console.log('%c🔄 Form reset successfully', 'font-size:12px; color:#F59E0B;');
+    });
 
     // ================================================================
     // FORM VALIDATION
@@ -1556,14 +1652,15 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Registering...';
     });
 
-    console.log('%c👤 Braick - New Patient Registration (Bill is BACKGROUND)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick - New Patient Registration (No Duplicates)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Next Patient ID: <?= $patient_id_number ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Registration Fee: TSh <?= number_format($registration_fee, 0) ?> (BACKGROUND)', 'font-size:13px; color:#94A3B8;');
-    console.log('%c🏥 Consultation Fee: TSh <?= number_format($consultation_fee, 0) ?> (BACKGROUND)', 'font-size:13px; color:#94A3B8;');
-    console.log('%c💳 Total Bill: TSh <?= number_format($consultation_fee, 0) ?> (BACKGROUND - Not shown to Reception)', 'font-size:13px; color:#94A3B8;');
-    console.log('%c✅ Bill sent to Cashier as Pending (Background)', 'font-size:13px; color:#34D399;');
-    console.log('%c👁️ Reception sees NO fee information - Bill is completely BACKGROUND', 'font-size:13px; color:#F59E0B;');
+    console.log('%c✅ Duplicate check: Phone, Email, Name+Phone, Name+DOB', 'font-size:13px; color:#34D399;');
+    console.log('%c⚠️ Full Name ALONE is NOT checked (allows different patients with same name)', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💰 Fees are BACKGROUND ONLY - Not shown to Reception', 'font-size:13px; color:#94A3B8;');
+    console.log('%c💳 Bill sent to Cashier as Pending (Background)', 'font-size:13px; color:#34D399;');
+    console.log('%c🚫 System prevents duplicate registration via Phone, Email, Name+Phone, Name+DOB', 'font-size:13px; color:#F59E0B;');
+    console.log('%c🔄 Reset Form button works properly', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
