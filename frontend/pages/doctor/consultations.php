@@ -1,10 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultations.php
-// DOCTOR - CONSULTATIONS LIST (Prescribed, Pending, Completed, Cancelled)
-// WITH AUTO-COMPLETE - Prescribed → Completed after all bills paid
-// WITH BILL, LAB & PRESCRIPTION INDICATORS
-// FIXED: Uses 'prescribed' instead of 'waiting'
+// DOCTOR - CONSULTATIONS LIST WITH AUTO-UPDATE
+// - Pending: Active consultations (with_doctor, assigned, pending)
+// - Lab Test: Waiting for lab results
+// - Prescribed: Doctor saved, waiting for payment
+// - Completed: All paid and completed
+// - Auto-update every 3 seconds without refresh
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -34,13 +36,13 @@ $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 // ================================================================
 // GET FILTER PARAMETER
 // ================================================================
-$filter = isset($_GET['filter']) ? $_GET['filter'] : 'prescribed';
+$filter = isset($_GET['filter']) ? $_GET['filter'] : 'pending';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-// Allowed filters - FIXED: 'waiting' changed to 'prescribed'
-$allowed_filters = ['prescribed', 'pending', 'completed', 'cancelled'];
+// Allowed filters
+$allowed_filters = ['pending', 'lab_test', 'prescribed', 'completed', 'cancelled'];
 if (!in_array($filter, $allowed_filters)) {
-    $filter = 'prescribed';
+    $filter = 'pending';
 }
 
 // ================================================================
@@ -50,7 +52,7 @@ require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// AUTO-COMPLETE LOGIC - FIXED (Check all prescribed visits)
+// AUTO-COMPLETE LOGIC - Check all prescribed visits
 // ================================================================
 try {
     // Get all prescribed visits for this doctor (waiting for payment)
@@ -87,6 +89,8 @@ try {
         
         // If there are bills AND no pending bills AND at least one paid bill
         if ($total_bills > 0 && $pending_count == 0 && $paid_count > 0) {
+            $db->beginTransaction();
+            
             $stmt = $db->prepare("
                 UPDATE visits 
                 SET status = 'completed', 
@@ -97,17 +101,27 @@ try {
             ");
             $stmt->execute([$visit['id']]);
             
+            // Update bills to paid
+            $stmt = $db->prepare("
+                UPDATE patient_bills 
+                SET status = 'paid', updated_at = NOW()
+                WHERE visit_id = ? AND status IN ('pending', 'partial')
+            ");
+            $stmt->execute([$visit['id']]);
+            
             // Log activity
             try {
                 $stmt = $db->prepare("
                     INSERT INTO activity_logs (user_id, action, details, created_at) 
-                    VALUES (?, 'visit_auto_completed', ?, NOW())
+                    VALUES (?, 'consultation_auto_completed', ?, NOW())
                 ");
                 $stmt->execute([
                     $doctor_id,
-                    "Visit #" . $visit['visit_number'] . " auto-completed - Bills: $total_bills (TSh " . number_format($total_amount) . " all paid)"
+                    "Consultation #" . $visit['visit_number'] . " auto-completed - Bills: $total_bills (TSh " . number_format($total_amount) . " all paid)"
                 ]);
             } catch (Exception $e) {}
+            
+            $db->commit();
         }
     }
 } catch (Exception $e) {
@@ -130,13 +144,19 @@ if (!empty($search)) {
     $params[] = "%$search%";
 }
 
-// Build status condition based on filter - FIXED: 'waiting' → 'prescribed'
+// Build status condition based on filter
 switch ($filter) {
-    case 'prescribed':
-        $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
-        break;
     case 'pending':
-        $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test') AND v.is_completed = 0";
+        // Active consultations (with_doctor, assigned, pending)
+        $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
+        break;
+    case 'lab_test':
+        // Waiting for lab results
+        $status_condition = "AND v.status = 'lab_test' AND v.is_completed = 0";
+        break;
+    case 'prescribed':
+        // Doctor saved, waiting for payment
+        $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
         break;
     case 'completed':
         $status_condition = "AND v.status = 'completed' AND v.is_completed = 1";
@@ -145,7 +165,7 @@ switch ($filter) {
         $status_condition = "AND v.status = 'cancelled'";
         break;
     default:
-        $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
+        $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
         break;
 }
 
@@ -191,12 +211,35 @@ $total_consultations = count($consultations);
 // ================================================================
 // GET COUNTS FOR BADGES
 // ================================================================
-$prescribed_count = 0;
 $pending_count = 0;
+$lab_test_count = 0;
+$prescribed_count = 0;
 $completed_count = 0;
 $cancelled_count = 0;
 
-// Prescribed (doctor saved but not completed - waiting for payment)
+// Pending (active consultations)
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM visits 
+    WHERE doctor_id = ? 
+    AND status IN ('pending', 'assigned', 'with_doctor') 
+    AND is_completed = 0
+");
+$stmt->execute([$doctor_id]);
+$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// Lab Test (waiting for lab results)
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM visits 
+    WHERE doctor_id = ? 
+    AND status = 'lab_test' 
+    AND is_completed = 0
+");
+$stmt->execute([$doctor_id]);
+$lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// Prescribed (waiting for payment)
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM visits 
@@ -206,17 +249,6 @@ $stmt = $db->prepare("
 ");
 $stmt->execute([$doctor_id]);
 $prescribed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Pending (active consultations)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test') 
-    AND is_completed = 0
-");
-$stmt->execute([$doctor_id]);
-$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // Completed
 $stmt = $db->prepare("
@@ -292,6 +324,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             --prescribed-bg: #EDE9FE;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
+            --lab-test: #8B5CF6;
+            --lab-test-bg: #EDE9FE;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -691,6 +725,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             color: white;
         }
         
+        .filter-tab .tab-badge.lab-badge {
+            background: #8B5CF6;
+            color: white;
+        }
+        
         /* ================================================================
            CONSULTATION CARD
            ================================================================ */
@@ -795,8 +834,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
         
         .status-badge.lab_test {
-            background: var(--purple-bg);
-            color: var(--purple);
+            background: var(--lab-test-bg);
+            color: var(--lab-test);
         }
         
         .status-badge.completed {
@@ -1100,10 +1139,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             opacity: 0;
         }
         
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(52, 211, 153, 0.2);
+            color: #34D399;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            border: 1px solid rgba(52, 211, 153, 0.3);
         }
+        .live-badge i { font-size: 0.4rem; }
     </style>
 </head>
 <body>
@@ -1174,8 +1222,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <?= $total_consultations ?> Total
                 </span>
                 
-                <span class="header-badge" id="liveBadge">
-                    <i class="fas fa-circle" style="color:#34D399;font-size:0.5rem;"></i>
+                <span class="live-badge" id="liveBadge">
+                    <i class="fas fa-circle" style="color:#34D399;"></i>
                     Live
                     <span id="liveTime" style="font-weight:400;font-size:0.55rem;"><?= date('H:i:s') ?></span>
                 </span>
@@ -1185,7 +1233,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
-            <button onclick="window.location.reload()" class="btn-outline-light">
+            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
@@ -1195,16 +1243,22 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <!-- FILTER TABS -->
     <!-- ================================================================ -->
     <div class="filter-tabs">
-        <a href="consultations.php?filter=prescribed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
-           class="filter-tab <?= $filter === 'prescribed' ? 'active' : '' ?>">
-            <i class="fas fa-hourglass-half"></i> Prescribed
-            <span class="tab-badge prescribed-badge"><?= $prescribed_count ?></span>
-        </a>
-        
         <a href="consultations.php?filter=pending<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
            class="filter-tab <?= $filter === 'pending' ? 'active' : '' ?>">
             <i class="fas fa-clock"></i> Pending
             <span class="tab-badge danger"><?= $pending_count ?></span>
+        </a>
+        
+        <a href="consultations.php?filter=lab_test<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+           class="filter-tab <?= $filter === 'lab_test' ? 'active' : '' ?>">
+            <i class="fas fa-flask"></i> Lab Test
+            <span class="tab-badge lab-badge"><?= $lab_test_count ?></span>
+        </a>
+        
+        <a href="consultations.php?filter=prescribed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+           class="filter-tab <?= $filter === 'prescribed' ? 'active' : '' ?>">
+            <i class="fas fa-hourglass-half"></i> Waiting
+            <span class="tab-badge prescribed-badge"><?= $prescribed_count ?></span>
         </a>
         
         <a href="consultations.php?filter=completed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
@@ -1223,147 +1277,151 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <!-- ================================================================ -->
     <!-- CONSULTATIONS LIST -->
     <!-- ================================================================ -->
-    <?php if (count($consultations) > 0): ?>
-        <?php foreach ($consultations as $consultation): ?>
-            <div class="consultation-card animate-fade-in-up">
-                <div class="card-header">
-                    <div class="patient-info">
-                        <?php 
-                            $initial = strtoupper(substr($consultation['patient_name'] ?? 'U', 0, 1));
-                            $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
-                            $color = $colors[abs(crc32($consultation['patient_name'] ?? 'U')) % count($colors)];
-                        ?>
-                        <div class="patient-avatar" style="background:<?= $color ?>;">
-                            <?= $initial ?>
-                        </div>
-                        <div>
-                            <div class="patient-name"><?= htmlspecialchars($consultation['patient_name'] ?? 'N/A') ?></div>
-                            <div class="patient-id">ID: <?= htmlspecialchars($consultation['patient_code'] ?? 'N/A') ?></div>
-                            <div class="patient-details">
-                                <?= htmlspecialchars($consultation['gender'] ?? 'N/A') ?> • 
-                                <?= htmlspecialchars($consultation['phone'] ?? 'N/A') ?>
-                                <?php if (!empty($consultation['blood_group'])): ?>
-                                    • Blood: <?= htmlspecialchars($consultation['blood_group']) ?>
-                                <?php endif; ?>
+    <div id="consultationsContainer">
+        <?php if (count($consultations) > 0): ?>
+            <?php foreach ($consultations as $consultation): ?>
+                <div class="consultation-card animate-fade-in-up" data-visit-id="<?= $consultation['id'] ?>" data-status="<?= $consultation['status'] ?>">
+                    <div class="card-header">
+                        <div class="patient-info">
+                            <?php 
+                                $initial = strtoupper(substr($consultation['patient_name'] ?? 'U', 0, 1));
+                                $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
+                                $color = $colors[abs(crc32($consultation['patient_name'] ?? 'U')) % count($colors)];
+                            ?>
+                            <div class="patient-avatar" style="background:<?= $color ?>;">
+                                <?= $initial ?>
+                            </div>
+                            <div>
+                                <div class="patient-name"><?= htmlspecialchars($consultation['patient_name'] ?? 'N/A') ?></div>
+                                <div class="patient-id">ID: <?= htmlspecialchars($consultation['patient_code'] ?? 'N/A') ?></div>
+                                <div class="patient-details">
+                                    <?= htmlspecialchars($consultation['gender'] ?? 'N/A') ?> • 
+                                    <?= htmlspecialchars($consultation['phone'] ?? 'N/A') ?>
+                                    <?php if (!empty($consultation['blood_group'])): ?>
+                                        • Blood: <?= htmlspecialchars($consultation['blood_group']) ?>
+                                    <?php endif; ?>
+                                </div>
                             </div>
                         </div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span class="visit-number"><?= htmlspecialchars($consultation['visit_number'] ?? 'N/A') ?></span>
+                            <span class="status-badge <?= $consultation['status'] ?? 'pending' ?>">
+                                <?= ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending')) ?>
+                            </span>
+                        </div>
                     </div>
-                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span class="visit-number"><?= htmlspecialchars($consultation['visit_number'] ?? 'N/A') ?></span>
-                        <span class="status-badge <?= $consultation['status'] ?? 'pending' ?>">
-                            <?= ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending')) ?>
-                        </span>
-                    </div>
-                </div>
-                
-                <!-- Lab, Prescription & Bill Indicators -->
-                <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
-                    <?php if (($consultation['pending_lab_count'] ?? 0) > 0): ?>
-                        <span class="lab-indicator">
-                            <i class="fas fa-flask pending"></i>
-                            <?= $consultation['pending_lab_count'] ?> lab(s) pending
-                        </span>
-                    <?php endif; ?>
-                    <?php if (($consultation['completed_lab_count'] ?? 0) > 0): ?>
-                        <span class="lab-indicator">
-                            <i class="fas fa-check-circle completed"></i>
-                            <?= $consultation['completed_lab_count'] ?> lab(s) completed
-                        </span>
-                    <?php endif; ?>
-                    <?php if (($consultation['pending_prescriptions'] ?? 0) > 0): ?>
-                        <span class="lab-indicator">
-                            <i class="fas fa-prescription pending"></i>
-                            <?= $consultation['pending_prescriptions'] ?> prescription(s) pending
-                        </span>
-                    <?php endif; ?>
-                    <?php if (($consultation['dispensed_prescriptions'] ?? 0) > 0): ?>
-                        <span class="lab-indicator">
-                            <i class="fas fa-check-circle completed"></i>
-                            <?= $consultation['dispensed_prescriptions'] ?> prescription(s) dispensed
-                        </span>
-                    <?php endif; ?>
                     
-                    <!-- Bill Indicators -->
-                    <?php if (($consultation['pending_bills_count'] ?? 0) > 0): ?>
-                        <span class="bill-indicator">
-                            <i class="fas fa-receipt pending"></i>
-                            <?= $consultation['pending_bills_count'] ?> bill(s) pending
-                            <span class="bill-amount">
-                                (TSh <?= number_format($consultation['total_bill_amount'] ?? 0) ?>)
-                            </span>
-                        </span>
-                    <?php endif; ?>
-                    <?php if (($consultation['paid_bills_count'] ?? 0) > 0): ?>
-                        <span class="bill-indicator">
-                            <i class="fas fa-check-circle paid"></i>
-                            <?= $consultation['paid_bills_count'] ?> bill(s) paid
-                            <span class="bill-amount">
-                                (TSh <?= number_format($consultation['total_paid_amount'] ?? 0) ?>)
-                            </span>
-                        </span>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Footer -->
-                <div class="card-footer">
-                    <div class="meta">
-                        <i class="far fa-calendar-alt"></i> <?= date('M d, Y', strtotime($consultation['created_at'])) ?>
-                        <span class="mx-1">•</span>
-                        <i class="far fa-clock"></i> <?= date('h:i A', strtotime($consultation['created_at'])) ?>
-                        <?php if (!empty($consultation['doctor_name'])): ?>
-                            <span class="mx-1">•</span>
-                            <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($consultation['doctor_name']) ?>
-                        <?php endif; ?>
-                        <?php if (($consultation['total_bills_count'] ?? 0) > 0): ?>
-                            <span class="mx-1">•</span>
-                            <i class="fas fa-receipt"></i> Bills: <?= $consultation['paid_bills_count'] ?? 0 ?>/<?= $consultation['total_bills_count'] ?? 0 ?>
-                        <?php endif; ?>
-                    </div>
-                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                        <?php if ($filter === 'prescribed' || $filter === 'pending'): ?>
-                            <a href="consultation.php?visit_id=<?= $consultation['id'] ?>" class="btn btn-primary btn-sm">
-                                <i class="fas fa-stethoscope"></i> Continue
-                            </a>
-                        <?php endif; ?>
-                        <?php if ($filter === 'completed' || $filter === 'cancelled'): ?>
-                            <a href="consultation.php?visit_id=<?= $consultation['id'] ?>&view=1" class="btn btn-outline btn-sm">
-                                <i class="fas fa-eye"></i> View
-                            </a>
-                        <?php endif; ?>
-                        <?php if ($filter === 'prescribed' && ($consultation['pending_bills_count'] ?? 0) > 0): ?>
-                            <span class="text-xs text-gray-400 self-center">
-                                <i class="fas fa-clock"></i> Waiting for payment...
+                    <!-- Lab, Prescription & Bill Indicators -->
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+                        <?php if (($consultation['pending_lab_count'] ?? 0) > 0): ?>
+                            <span class="lab-indicator">
+                                <i class="fas fa-flask pending"></i>
+                                <?= $consultation['pending_lab_count'] ?> lab(s) pending
                             </span>
                         <?php endif; ?>
-                        <?php if ($filter === 'prescribed' && ($consultation['pending_bills_count'] ?? 0) == 0 && ($consultation['total_bills_count'] ?? 0) > 0): ?>
-                            <span class="text-xs text-green-600 self-center animate-fade-in-up">
-                                <i class="fas fa-check-circle"></i> All bills paid - Auto completing...
+                        <?php if (($consultation['completed_lab_count'] ?? 0) > 0): ?>
+                            <span class="lab-indicator">
+                                <i class="fas fa-check-circle completed"></i>
+                                <?= $consultation['completed_lab_count'] ?> lab(s) completed
+                            </span>
+                        <?php endif; ?>
+                        <?php if (($consultation['pending_prescriptions'] ?? 0) > 0): ?>
+                            <span class="lab-indicator">
+                                <i class="fas fa-prescription pending"></i>
+                                <?= $consultation['pending_prescriptions'] ?> prescription(s) pending
+                            </span>
+                        <?php endif; ?>
+                        <?php if (($consultation['dispensed_prescriptions'] ?? 0) > 0): ?>
+                            <span class="lab-indicator">
+                                <i class="fas fa-check-circle completed"></i>
+                                <?= $consultation['dispensed_prescriptions'] ?> prescription(s) dispensed
+                            </span>
+                        <?php endif; ?>
+                        
+                        <!-- Bill Indicators -->
+                        <?php if (($consultation['pending_bills_count'] ?? 0) > 0): ?>
+                            <span class="bill-indicator">
+                                <i class="fas fa-receipt pending"></i>
+                                <?= $consultation['pending_bills_count'] ?> bill(s) pending
+                                <span class="bill-amount">
+                                    (TSh <?= number_format($consultation['total_bill_amount'] ?? 0) ?>)
+                                </span>
+                            </span>
+                        <?php endif; ?>
+                        <?php if (($consultation['paid_bills_count'] ?? 0) > 0): ?>
+                            <span class="bill-indicator">
+                                <i class="fas fa-check-circle paid"></i>
+                                <?= $consultation['paid_bills_count'] ?> bill(s) paid
+                                <span class="bill-amount">
+                                    (TSh <?= number_format($consultation['total_paid_amount'] ?? 0) ?>)
+                                </span>
                             </span>
                         <?php endif; ?>
                     </div>
+                    
+                    <!-- Footer -->
+                    <div class="card-footer">
+                        <div class="meta">
+                            <i class="far fa-calendar-alt"></i> <?= date('M d, Y', strtotime($consultation['created_at'])) ?>
+                            <span class="mx-1">•</span>
+                            <i class="far fa-clock"></i> <?= date('h:i A', strtotime($consultation['created_at'])) ?>
+                            <?php if (!empty($consultation['doctor_name'])): ?>
+                                <span class="mx-1">•</span>
+                                <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($consultation['doctor_name']) ?>
+                            <?php endif; ?>
+                            <?php if (($consultation['total_bills_count'] ?? 0) > 0): ?>
+                                <span class="mx-1">•</span>
+                                <i class="fas fa-receipt"></i> Bills: <?= $consultation['paid_bills_count'] ?? 0 ?>/<?= $consultation['total_bills_count'] ?? 0 ?>
+                            <?php endif; ?>
+                        </div>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                            <?php if ($filter === 'pending' || $filter === 'lab_test' || $filter === 'prescribed'): ?>
+                                <a href="consultation.php?visit_id=<?= $consultation['id'] ?>" class="btn btn-primary btn-sm">
+                                    <i class="fas fa-stethoscope"></i> Continue
+                                </a>
+                            <?php endif; ?>
+                            <?php if ($filter === 'completed' || $filter === 'cancelled'): ?>
+                                <a href="consultation.php?visit_id=<?= $consultation['id'] ?>&view=1" class="btn btn-outline btn-sm">
+                                    <i class="fas fa-eye"></i> View
+                                </a>
+                            <?php endif; ?>
+                            <?php if ($filter === 'prescribed' && ($consultation['pending_bills_count'] ?? 0) > 0): ?>
+                                <span class="text-xs text-gray-400 self-center">
+                                    <i class="fas fa-clock"></i> Waiting for payment...
+                                </span>
+                            <?php endif; ?>
+                            <?php if ($filter === 'prescribed' && ($consultation['pending_bills_count'] ?? 0) == 0 && ($consultation['total_bills_count'] ?? 0) > 0): ?>
+                                <span class="text-xs text-green-600 self-center animate-fade-in-up">
+                                    <i class="fas fa-check-circle"></i> Auto-completing...
+                                </span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        <?php else: ?>
+            <div class="empty-state" style="max-width:1200px;margin:0 auto;">
+                <i class="fas fa-<?= $filter === 'pending' ? 'clock' : ($filter === 'lab_test' ? 'flask' : ($filter === 'prescribed' ? 'hourglass-half' : ($filter === 'completed' ? 'check-circle' : 'times-circle'))) ?>"></i>
+                <div class="empty-title">No <?= $filter ?> consultations</div>
+                <div class="empty-sub">
+                    <?php if ($filter === 'pending'): ?>
+                        All consultations have been processed or no pending consultations
+                    <?php elseif ($filter === 'lab_test'): ?>
+                        No consultations waiting for lab results
+                    <?php elseif ($filter === 'prescribed'): ?>
+                        All consultations have been completed or no prescribed consultations waiting for payment
+                    <?php elseif ($filter === 'completed'): ?>
+                        No completed consultations yet
+                    <?php else: ?>
+                        No cancelled consultations
+                    <?php endif; ?>
+                    <?php if (!empty($search)): ?>
+                        <br>Try adjusting your search criteria
+                    <?php endif; ?>
                 </div>
             </div>
-        <?php endforeach; ?>
-    <?php else: ?>
-        <div class="empty-state" style="max-width:1200px;margin:0 auto;">
-            <i class="fas fa-<?= $filter === 'prescribed' ? 'hourglass-half' : ($filter === 'pending' ? 'clock' : ($filter === 'completed' ? 'check-circle' : 'times-circle')) ?>"></i>
-            <div class="empty-title">No <?= $filter ?> consultations</div>
-            <div class="empty-sub">
-                <?php if ($filter === 'prescribed'): ?>
-                    All consultations have been completed or no prescribed consultations waiting for payment
-                <?php elseif ($filter === 'pending'): ?>
-                    All consultations have been processed or no pending consultations
-                <?php elseif ($filter === 'completed'): ?>
-                    No completed consultations yet
-                <?php else: ?>
-                    No cancelled consultations
-                <?php endif; ?>
-                <?php if (!empty($search)): ?>
-                    <br>Try adjusting your search criteria
-                <?php endif; ?>
-            </div>
-        </div>
-    <?php endif; ?>
+        <?php endif; ?>
+    </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -1394,7 +1452,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1508,6 +1566,116 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     // ================================================================
+    // AUTO-UPDATE - EVERY 3 SECONDS
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    var lastHash = null;
+    var updateCount = 0;
+
+    function fetchAndUpdateConsultations() {
+        if (isUpdating) return;
+        isUpdating = true;
+        updateCount++;
+        
+        var filter = '<?= $filter ?>';
+        var search = '<?= addslashes($search) ?>';
+        
+        fetch('get_consultations.php?filter=' + filter + '&search=' + encodeURIComponent(search) + '&t=' + Date.now())
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    // Check if data has changed
+                    if (lastHash !== data.hash) {
+                        lastHash = data.hash;
+                        updateConsultations(data.data);
+                        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + data.timestamp;
+                        
+                        // Show notification on change
+                        if (updateCount > 1) {
+                            showToast('🔄 Updated', 'Consultations auto-updated at ' + data.timestamp, 'info');
+                        }
+                    }
+                }
+                isUpdating = false;
+            })
+            .catch(function(error) {
+                console.error('Update error:', error);
+                isUpdating = false;
+            });
+    }
+
+    function updateConsultations(data) {
+        var container = document.getElementById('consultationsContainer');
+        if (!container) return;
+        
+        // Update counts in filter tabs
+        document.querySelector('.filter-tab[href*="filter=pending"] .tab-badge').textContent = data.counts.pending;
+        document.querySelector('.filter-tab[href*="filter=lab_test"] .tab-badge').textContent = data.counts.lab_test;
+        document.querySelector('.filter-tab[href*="filter=prescribed"] .tab-badge').textContent = data.counts.prescribed;
+        document.querySelector('.filter-tab[href*="filter=completed"] .tab-badge').textContent = data.counts.completed;
+        document.querySelector('.filter-tab[href*="filter=cancelled"] .tab-badge').textContent = data.counts.cancelled;
+        
+        // Update page header total
+        var totalBadge = document.querySelector('.header-badge');
+        if (totalBadge) {
+            totalBadge.innerHTML = '<i class="fas fa-file-invoice"></i> ' + data.total + ' Total';
+        }
+        
+        // Update consultations list
+        if (data.html) {
+            container.innerHTML = data.html;
+        }
+        
+        // Update live time
+        var liveTime = document.getElementById('liveTime');
+        if (liveTime) liveTime.textContent = data.timestamp.split(' ')[1];
+    }
+
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        fetchAndUpdateConsultations();
+        updateInterval = setInterval(fetchAndUpdateConsultations, 3000);
+        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
+    }
+    
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
+        }
+    }
+
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        btn.disabled = true;
+        
+        lastHash = null;
+        fetchAndUpdateConsultations();
+        
+        setTimeout(function() {
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+            btn.disabled = false;
+            showToast('✅ Refreshed', 'Consultations updated manually', 'success');
+        }, 1500);
+    }
+
+    // ================================================================
+    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
+
+    // ================================================================
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
@@ -1516,13 +1684,26 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             searchInput?.focus();
             searchInput?.select();
         }
+        if (e.key === 'F5') {
+            e.preventDefault();
+            manualRefresh();
+        }
     });
 
-    console.log('%c👨‍⚕️ Braick - Full Consultations (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Prescribed: <?= $prescribed_count ?> | Pending: <?= $pending_count ?> | Completed: <?= $completed_count ?> | Cancelled: <?= $cancelled_count ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Auto-complete: Prescribed → Completed after all bills paid', 'font-size:13px; color:#059669;');
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 2000);
+    });
+
+    console.log('%c👨‍⚕️ Braick - Full Consultations (Auto-Update)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Pending: <?= $pending_count ?> | Lab Test: <?= $lab_test_count ?> | Prescribed: <?= $prescribed_count ?> | Completed: <?= $completed_count ?> | Cancelled: <?= $cancelled_count ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🔄 Auto-update every 3 seconds without refresh', 'font-size:13px; color:#059669;');
     console.log('%c📋 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Status values: prescribed, pending, assigned, with_doctor, lab_test, completed, cancelled', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Status: pending, assigned, with_doctor, lab_test, prescribed, completed, cancelled', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
