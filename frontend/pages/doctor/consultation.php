@@ -4,7 +4,8 @@
 // DOCTOR CONSULTATION - COMPLETE VERSION WITH ALL FIXES
 // ALL BILLS GO TO CASHIER: Consultation, Lab Tests, Medications, Procedures, Tools
 // FIXED: Tools with quantity support
-// FIXED: Lab total calculation, Tools total calculation
+// FIXED: Combined total for Procedures + Tools in one card
+// FIXED: Procedure Tools grouped by procedure_name
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -228,13 +229,26 @@ try {
     $procedures_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $procedures_list = []; }
 
-// Procedure Tools
+// Procedure Tools - GROUPED BY procedure_name
 $procedure_tools = [];
+$procedure_tools_grouped = [];
 try {
     $stmt = $db->prepare("SELECT id, procedure_name, tool_name, price FROM procedure_tools WHERE is_active = 1 ORDER BY procedure_name, tool_name");
     $stmt->execute();
     $procedure_tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { $procedure_tools = []; }
+    
+    // Group tools by procedure_name
+    foreach ($procedure_tools as $tool) {
+        $proc_name = $tool['procedure_name'];
+        if (!isset($procedure_tools_grouped[$proc_name])) {
+            $procedure_tools_grouped[$proc_name] = [];
+        }
+        $procedure_tools_grouped[$proc_name][] = $tool;
+    }
+} catch (Exception $e) { 
+    $procedure_tools = []; 
+    $procedure_tools_grouped = [];
+}
 
 // Medications
 $medications_list = [];
@@ -286,6 +300,7 @@ $tool_total = 0;
 $consultation_total = 0;
 $registration_total = 0;
 $total_bill_amount = 0;
+$procedure_tool_combined = 0;
 
 try {
     $stmt = $db->prepare("
@@ -309,7 +324,11 @@ try {
             case 'registration': $registration_total += $item['total_price']; break;
         }
     }
-} catch (Exception $e) { $bill_items = []; }
+    $procedure_tool_combined = $procedure_total + $tool_total;
+} catch (Exception $e) { 
+    $bill_items = [];
+    $procedure_tool_combined = 0;
+}
 
 // ================================================================
 // GET LAB STATUS - FROM lab_tests TABLE
@@ -2676,21 +2695,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
 
-            <!-- SECTION 7: PROCEDURES & TOOLS - FIXED: With quantity support -->
+            <!-- ================================================================ -->
+            <!-- SECTION 7: PROCEDURES & TOOLS - GROUPED BY PROCEDURE NAME -->
+            <!-- ================================================================ -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
                     <i class="fas fa-syringe title-blue"></i> Procedures & Tools
                     <?php if ($sections_frozen): ?>
                         <span class="frozen-badge" id="procedureFrozenBadge">🔒 Frozen - Lab Pending</span>
                     <?php endif; ?>
-                    <!-- Procedure & Tool Totals -->
-                    <span class="section-total purple" id="procSectionTotal">
-                        <span class="label">💉 Procedures:</span>
-                        <span class="amount">TSh <span id="procTotalDisplay"><?= number_format($procedure_total, 0) ?></span></span>
-                    </span>
-                    <span class="section-total orange" id="toolSectionTotal">
-                        <span class="label">🔧 Tools:</span>
-                        <span class="amount">TSh <span id="toolTotalDisplay"><?= number_format($tool_total, 0) ?></span></span>
+                    <!-- Combined Total for Procedures + Tools -->
+                    <span class="section-total purple" id="procToolSectionTotal">
+                        <span class="label">🛠️ Total (Procedures + Tools):</span>
+                        <span class="amount">TSh <span id="procToolTotalDisplay"><?= number_format($procedure_tool_combined, 0) ?></span></span>
                     </span>
                 </h3>
                 
@@ -2720,32 +2737,38 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- Tools Dropdown - WITH QUANTITY INPUT -->
+                <!-- Tools Dropdown - GROUPED BY PROCEDURE NAME -->
                 <div style="border:1px solid var(--gray-200);border-radius:var(--radius-lg);margin-bottom:12px;overflow:hidden;">
                     <div onclick="toggleDropdown('toolsToggle')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;background:var(--gray-50);cursor:pointer;user-select:none;">
                         <span style="font-weight:600;font-size:0.85rem;color:var(--gray-700);display:flex;align-items:center;gap:10px;">
-                            <i class="fas fa-tools title-orange"></i> Tools
+                            <i class="fas fa-tools title-orange"></i> Tools by Procedure
                             <span class="text-xs text-gray-400">(Click to expand - Select & enter quantity)</span>
                         </span>
                         <span style="transition:var(--transition);color:var(--gray-400);font-size:0.8rem;"><i class="fas fa-chevron-down"></i></span>
                     </div>
                     <div id="toolsToggle" style="padding:0 18px 18px 18px;display:none;">
-                        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:8px;padding:12px;background:var(--gray-100);border-radius:var(--radius);max-height:200px;overflow-y:auto;">
-                            <?php foreach ($procedure_tools as $tool): ?>
-                                <div class="tool-item-select" 
-                                     data-tool-id="<?= $tool['id'] ?>"
-                                     data-tool-name="<?= htmlspecialchars($tool['tool_name']) ?>"
-                                     data-procedure-name="<?= htmlspecialchars($tool['procedure_name']) ?>"
-                                     data-price="<?= $tool['price'] ?>"
-                                     onclick="toggleTool(this)">
-                                    <span class="item-check"><i class="fas fa-check"></i></span>
-                                    <span><?= htmlspecialchars($tool['tool_name']) ?></span>
-                                    <small class="text-xs text-gray-400">(<?= htmlspecialchars($tool['procedure_name']) ?>) TSh <?= number_format($tool['price'], 0) ?></small>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
+                        <?php foreach ($procedure_tools_grouped as $procedure_name => $tools): ?>
+                            <div style="margin-top:12px;padding:8px 12px;background:var(--primary-bg);border-radius:6px;font-weight:600;font-size:0.8rem;color:var(--primary);">
+                                <i class="fas fa-folder-open"></i> <?= htmlspecialchars($procedure_name) ?>
+                            </div>
+                            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:4px;padding:8px 12px;background:var(--gray-100);border-radius:var(--radius);">
+                                <?php foreach ($tools as $tool): ?>
+                                    <div class="tool-item-select" 
+                                         data-tool-id="<?= $tool['id'] ?>"
+                                         data-tool-name="<?= htmlspecialchars($tool['tool_name']) ?>"
+                                         data-procedure-name="<?= htmlspecialchars($tool['procedure_name']) ?>"
+                                         data-price="<?= $tool['price'] ?>"
+                                         onclick="toggleTool(this)">
+                                        <span class="item-check"><i class="fas fa-check"></i></span>
+                                        <span><?= htmlspecialchars($tool['tool_name']) ?></span>
+                                        <small class="text-xs text-gray-400">TSh <?= number_format($tool['price'], 0) ?></small>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endforeach; ?>
+                        
                         <!-- Quantity input for tools -->
-                        <div style="padding:12px;border-top:1px solid var(--gray-200);background:var(--gray-50);">
+                        <div style="padding:12px;border-top:1px solid var(--gray-200);background:var(--gray-50);margin-top:12px;">
                             <label class="form-label" style="font-size:0.7rem;">Quantity for selected tool</label>
                             <div style="display:flex;gap:10px;align-items:center;">
                                 <input type="number" id="toolQuantity" class="form-control" value="1" min="1" max="999" style="width:100px;">
@@ -2764,12 +2787,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </button>
                 </div>
                 
+                <!-- Selected Items List with Combined Total -->
                 <div class="selected-items-list mt-3">
                     <div class="flex items-center justify-between mb-2">
                         <h4 class="text-sm font-semibold text-gray-600">
                             <i class="fas fa-list"></i> Selected Items
                             <span class="text-xs text-gray-400" id="selectedCount">(0 items)</span>
                         </h4>
+                        <span class="text-sm font-bold text-purple-600" id="selectedItemsTotal">
+                            Total: TSh <span id="selectedItemsTotalAmount">0</span>
+                        </span>
                     </div>
                     <div id="selectedItemsList">
                         <div class="empty-state" id="emptySelected">
@@ -3165,7 +3192,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
-    // ADD ITEM TO LIST - FIXED: Calculates price properly
+    // ADD ITEM TO LIST - FIXED: Updates combined total
     // ================================================================
     function addItemToList(item, type) {
         var list = document.getElementById('selectedItemsList');
@@ -3191,6 +3218,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         list.appendChild(itemEl);
         updateSelectedCount();
         updateProcToolTotals();
+        updateGrandTotal();
     }
 
     // ================================================================
@@ -3228,11 +3256,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
-    // UPDATE PROCEDURE & TOOL TOTALS - FIXED
+    // UPDATE PROCEDURE & TOOL COMBINED TOTAL
     // ================================================================
     function updateProcToolTotals() {
         var procTotal = 0;
         var toolTotal = 0;
+        var combinedTotal = 0;
         
         document.querySelectorAll('#selectedItemsList .selected-item').forEach(function(item) {
             var text = item.querySelector('.med-details')?.textContent?.toLowerCase() || '';
@@ -3247,10 +3276,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             } else if (text.includes('tool')) {
                 toolTotal += totalPrice;
             }
+            combinedTotal += totalPrice;
         });
         
-        document.getElementById('procTotalDisplay').textContent = procTotal.toLocaleString();
-        document.getElementById('toolTotalDisplay').textContent = toolTotal.toLocaleString();
+        // Update combined total (Procedures + Tools)
+        document.getElementById('procToolTotalDisplay').textContent = combinedTotal.toLocaleString();
+        document.getElementById('selectedItemsTotalAmount').textContent = combinedTotal.toLocaleString();
+        
         updateGrandTotal();
     }
 
@@ -3260,9 +3292,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     function updateGrandTotal() {
         var labTotal = parseFloat(document.getElementById('labTotalDisplay').textContent.replace(/,/g, '')) || 0;
         var medTotal = parseFloat(document.getElementById('medTotalDisplay').textContent.replace(/,/g, '')) || 0;
-        var procTotal = parseFloat(document.getElementById('procTotalDisplay').textContent.replace(/,/g, '')) || 0;
-        var toolTotal = parseFloat(document.getElementById('toolTotalDisplay').textContent.replace(/,/g, '')) || 0;
-        var grandTotal = labTotal + medTotal + procTotal + toolTotal;
+        var procToolTotal = parseFloat(document.getElementById('procToolTotalDisplay').textContent.replace(/,/g, '')) || 0;
+        var grandTotal = labTotal + medTotal + procToolTotal;
         document.getElementById('grandTotalAmount').textContent = grandTotal.toLocaleString();
     }
 
@@ -3408,8 +3439,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             if (data.success) {
                 document.getElementById('labTotalDisplay').textContent = data.lab_total.toLocaleString();
                 document.getElementById('medTotalDisplay').textContent = data.medication_total.toLocaleString();
-                document.getElementById('procTotalDisplay').textContent = data.procedure_total.toLocaleString();
-                document.getElementById('toolTotalDisplay').textContent = data.tool_total.toLocaleString();
+                
+                // FIXED: Combine procedure + tool totals
+                var procedureToolTotal = data.procedure_total + data.tool_total;
+                document.getElementById('procToolTotalDisplay').textContent = procedureToolTotal.toLocaleString();
+                document.getElementById('selectedItemsTotalAmount').textContent = procedureToolTotal.toLocaleString();
+                
                 document.getElementById('grandTotalAmount').textContent = data.grand_total.toLocaleString();
                 document.getElementById('medListTotal').textContent = data.medication_total.toLocaleString();
                 
@@ -3723,15 +3758,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 500);
     <?php endif; ?>
 
-    console.log('%c👨‍⚕️ Consultation - FULLY FIXED - Tools with Quantity', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Consultation - FULLY FIXED - Tools Grouped by Procedure', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
     console.log('%c💰 Lab Total: <?= number_format($lab_total, 0) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c💊 Medication Total: <?= number_format($medications_total, 0) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c💉 Procedure Total: <?= number_format($procedure_total, 0) ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c🔧 Tool Total: <?= number_format($tool_total, 0) ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c🛠️ Procedures + Tools Total: <?= number_format($procedure_tool_combined, 0) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c🏷️ Grand Total: <?= number_format($total_bill_amount, 0) ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c✅ ALL bills sent to Cashier: Consultation, Lab Tests, Medications, Procedures, Tools', 'font-size:12px; color:#059669;');
-    console.log('%c🔧 FIXED: Tools with quantity support - enter quantity before adding', 'font-size:12px; color:#DC2626;');
+    console.log('%c📂 Tools grouped by procedure_name', 'font-size:12px; color:#7C3AED;');
     console.log('%c🔄 Auto-update every 3 seconds', 'font-size:12px; color:#34D399;');
 </script>
 
