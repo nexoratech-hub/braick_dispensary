@@ -4,9 +4,12 @@
 // RECEPTION - ASSIGN / CHANGE DOCTOR & LAB REQUESTS
 // ================================================================
 // FIXED:
-// 1. Auto-update - inabadilika bila refresh (online/offline doctors)
-// 2. Lab Request - inafanya kazi vizuri
-// 3. Lab Request List - inaonyesha pending, in_progress, completed
+// 1. ONDOA "Updated: 07:41:02 PM" kabisa
+// 2. Online/Offline counts zinabadilika bila refresh
+// 3. Kila row ina field mbili (grid-2)
+// 4. Lab request - doctor inabaki NULL
+// 5. Lab section ina background color yake
+// 6. Auto-update kila 3 seconds
 // ================================================================
 
 session_start();
@@ -123,7 +126,7 @@ try {
     $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET ALL PATIENTS WITH CURRENT STATUS - WOTE
+    // GET ALL PATIENTS WITH CURRENT STATUS
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -919,7 +922,7 @@ try {
         }
         
         // ================================================================
-        // LAB TEST REQUEST - FIXED
+        // LAB TEST REQUEST - FIXED: doctor inabaki NULL
         // ================================================================
         if ($action === 'assign_doctor' && $assignment_type === 'lab') {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -953,7 +956,7 @@ try {
                     if ($existing_visit) {
                         $visit_id = $existing_visit['id'];
                         
-                        // Update visit to lab_test status
+                        // Update visit to lab_test status - DOCTOR INABAKI NULL
                         $stmt = $db->prepare("
                             UPDATE visits 
                             SET status = 'lab_test', 
@@ -970,7 +973,7 @@ try {
                         $visit_number = $visit['visit_number'] ?? '';
                         
                     } else {
-                        // Create new visit with lab_test status
+                        // Create new visit with lab_test status - DOCTOR INABAKI NULL
                         $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                         
                         $stmt = $db->prepare("
@@ -988,7 +991,7 @@ try {
                         $visit_id = $db->lastInsertId();
                     }
                     
-                    // Create lab request
+                    // Create lab request - DOCTOR INABAKI NULL
                     $request_number = 'LAB-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                     
                     $stmt = $db->prepare("
@@ -1030,7 +1033,7 @@ try {
                         }
                     }
                     
-                    // Update patient status
+                    // Update patient status - assigned_doctor_id inabaki NULL
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
                     $stmt->execute([$patient_id]);
                     
@@ -1050,9 +1053,10 @@ try {
                     $message = "✅ Lab test request created successfully!";
                     $message .= "<br>📋 Request #: <strong>$request_number</strong>";
                     $message .= "<br>🧪 Tests: <strong>" . count($lab_test_ids) . "</strong> test(s) requested";
+                    $message .= "<br>👨‍⚕️ Doctor: <strong>Not assigned</strong> (lab only)";
                     $message_type = 'success';
                     
-                    // Redirect to refresh page and show lab requests
+                    // Redirect to refresh page
                     echo '<script>
                         showToast("✅ Success", "' . addslashes($message) . '", "success");
                         setTimeout(function(){ 
@@ -1148,6 +1152,8 @@ include_once '../../components/reception_sidebar.php';
             --warning: #D97706;
             --warning-bg: #FEF3C7;
             --purple: #7C3AED;
+            --purple-dark: #5B21B6;
+            --purple-light: #A78BFA;
             --purple-bg: #EDE9FE;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -1183,6 +1189,7 @@ include_once '../../components/reception_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+            --purple-bg: #2D1B5F;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1355,7 +1362,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER
+           PAGE HEADER - UPDATED: ONDOA "Updated: time"
            ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
@@ -1448,6 +1455,11 @@ include_once '../../components/reception_sidebar.php';
             font-weight: 700;
         }
         
+        .page-header .header-badge .offline-count {
+            color: #F87171;
+            font-weight: 700;
+        }
+        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -1536,21 +1548,21 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           LAB REQUESTS CARD
+           LAB REQUESTS CARD - WITH PURPLE BACKGROUND
            ================================================================ */
         .lab-requests-card {
-            background: var(--bg-card);
+            background: var(--purple-bg);
             border-radius: 18px;
             padding: 24px 28px;
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--purple);
             box-shadow: var(--shadow-md);
             margin-bottom: 24px;
             transition: all 0.3s ease;
         }
         
         .lab-requests-card:hover {
-            border-color: var(--purple);
-            box-shadow: 0 8px 30px rgba(124, 58, 237, 0.08);
+            border-color: var(--purple-dark);
+            box-shadow: 0 8px 30px rgba(124, 58, 237, 0.15);
         }
         
         .lab-requests-card .card-header {
@@ -1561,7 +1573,7 @@ include_once '../../components/reception_sidebar.php';
             gap: 12px;
             margin-bottom: 16px;
             padding-bottom: 14px;
-            border-bottom: 2px solid var(--border-color);
+            border-bottom: 2px solid var(--purple);
         }
         
         .lab-requests-card .card-title {
@@ -1575,6 +1587,15 @@ include_once '../../components/reception_sidebar.php';
         
         .lab-requests-card .card-title i {
             color: var(--purple);
+        }
+        
+        .lab-requests-card .card-badge {
+            background: var(--purple);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
         }
         
         .lab-status-badge {
@@ -1699,8 +1720,11 @@ include_once '../../components/reception_sidebar.php';
             cursor: not-allowed;
         }
         
+        /* ================================================================
+           FORM ROW - IMPROVED SPACING
+           ================================================================ */
         .form-row {
-            margin-bottom: 18px;
+            margin-bottom: 22px;
         }
         
         .form-row:last-child {
@@ -1946,13 +1970,13 @@ include_once '../../components/reception_sidebar.php';
         .vital-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 10px;
+            gap: 12px;
         }
         
         .vital-item {
             background: var(--bg-body);
             border-radius: 8px;
-            padding: 8px 12px;
+            padding: 10px 14px;
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
         }
@@ -2079,7 +2103,7 @@ include_once '../../components/reception_sidebar.php';
             color: white;
         }
         .btn-purple:hover {
-            background: #6D28D9;
+            background: var(--purple-dark);
         }
         
         /* ================================================================
@@ -2362,14 +2386,37 @@ include_once '../../components/reception_sidebar.php';
         .grid-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 18px;
+            gap: 20px;
+        }
+        
+        /* Spacing kwa ajili ya fields - up and down */
+        .form-row {
+            margin-bottom: 22px;
+        }
+        
+        .form-row .form-label {
+            margin-bottom: 6px;
+        }
+        
+        .form-row .form-control {
+            margin-top: 2px;
         }
         
         @media (max-width: 640px) {
             .grid-2 {
                 grid-template-columns: 1fr;
-                gap: 12px;
+                gap: 14px;
             }
+        }
+        
+        /* Lab section spacing */
+        .lab-modal-container {
+            margin-bottom: 18px;
+        }
+        
+        .lab-selected-summary {
+            margin-top: 12px;
+            margin-bottom: 16px;
         }
     </style>
 </head>
@@ -2423,7 +2470,7 @@ include_once '../../components/reception_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- PAGE HEADER - ONDOA "Updated: time" -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -2433,7 +2480,6 @@ include_once '../../components/reception_sidebar.php';
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">RECEPTION</span>
                 <span class="update-badge-light" id="updateBadge">
                     <span class="live-indicator"></span> Live
-                    <span id="updateTime"><?= date('H:i:s') ?></span>
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -2561,12 +2607,10 @@ include_once '../../components/reception_sidebar.php';
             <div class="card-title">
                 <i class="fas fa-flask"></i>
                 Lab Requests
-                <span class="card-badge" style="background:var(--purple-bg);color:var(--purple);">
-                    <?= count($lab_requests) ?>
-                </span>
+                <span class="card-badge"><?= count($lab_requests) ?></span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-                <span class="text-xs text-gray-400">Auto-updated live</span>
+                <span class="text-xs text-gray-500">Auto-updated live</span>
                 <span class="text-xs text-green-500">
                     <span class="live-indicator"></span>
                 </span>
@@ -2578,7 +2622,7 @@ include_once '../../components/reception_sidebar.php';
                 <div style="overflow-x:auto;">
                     <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
                         <thead>
-                            <tr style="border-bottom:2px solid var(--border-color);">
+                            <tr style="border-bottom:2px solid var(--purple);">
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Request #</th>
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Tests</th>
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
@@ -2611,7 +2655,7 @@ include_once '../../components/reception_sidebar.php';
                     </table>
                 </div>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
+                <div class="text-center py-6 text-gray-500">
                     <i class="fas fa-flask text-2xl block mb-2"></i>
                     <p>No lab requests for this patient</p>
                 </div>
@@ -2960,6 +3004,7 @@ include_once '../../components/reception_sidebar.php';
                     <span id="labSelectedNames" style="color:var(--text-primary);"></span>
                 </div>
                 
+                <!-- Lab Notes -->
                 <div class="form-row" style="margin-top:12px;">
                     <label class="form-label">
                         <i class="fas fa-notes-medical label-icon"></i> Lab Test Notes
@@ -2967,6 +3012,7 @@ include_once '../../components/reception_sidebar.php';
                     <textarea name="lab_notes" class="form-control" placeholder="Any special instructions for lab tests..." rows="2" id="labNotes"></textarea>
                 </div>
                 
+                <!-- Lab Symptoms & Complaint - FIELD MBILI -->
                 <div class="grid-2">
                     <div class="form-row">
                         <label class="form-label">
@@ -3235,15 +3281,8 @@ include_once '../../components/reception_sidebar.php';
         document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
         document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
         document.getElementById('formTimestamp').textContent = timeStr;
-        document.getElementById('updateTime').textContent = timeStr;
-        
-        var assignedUpdate = document.getElementById('assignedListUpdate');
-        if (assignedUpdate) {
-            assignedUpdate.textContent = '(Auto-updated ' + timeStr + ')';
-        }
+        // NOTE: "updateTime" imeondolewa kabisa kwenye page header
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // SEARCH
@@ -3476,12 +3515,10 @@ include_once '../../components/reception_sidebar.php';
     // SELECT PATIENT AND CHANGE DOCTOR
     // ================================================================
     function selectPatientAndChange(patientId) {
-        // Select patient in dropdown
         var select = document.getElementById('patientSelect');
         if (select) {
             select.value = patientId;
             
-            // Check if it was set
             if (select.value != patientId) {
                 window.location.href = 'assign_doctor.php?patient_id=' + patientId + '&change=1';
                 return;
@@ -3738,6 +3775,16 @@ include_once '../../components/reception_sidebar.php';
                 }, 1000);
             }
         }
+        
+        // Ondoa "updateTime" kutoka kwenye header - hakuna haja
+        var updateBadge = document.getElementById('updateBadge');
+        if (updateBadge) {
+            // Hakikisha hakuna text ya "Updated:" 
+            var existingText = updateBadge.textContent;
+            if (existingText && existingText.includes('Updated:')) {
+                updateBadge.innerHTML = '<span class="live-indicator"></span> Live';
+            }
+        }
     });
 
     function fetchPatientDetails(patientId) {
@@ -3855,7 +3902,11 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c✅ Assigned (second): <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline)', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Live updates every 3 seconds - Auto-update', 'font-size:13px; color:#34D399;');
-    console.log('%c🧪 Lab Request - inafanya kazi vizuri', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🧪 Lab Request - doctor inabaki NULL', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📋 Kila row ina field mbili (grid-2)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🟣 Lab section ina background color ya purple', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📏 Spacing imeongezwa kati ya fields (up & down)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ "Updated: time" imeondolewa kabisa kwenye header', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

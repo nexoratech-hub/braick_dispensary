@@ -1,7 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/process_payment.php
-// CASHIER - PROCESS PAYMENT WITH PARTIAL PAYMENT SUPPORT
+// CASHIER - PROCESS PAYMENT WITH PATIENT CARD DESIGN
+// FIXED: Items expand button works properly
+// FIXED: Partial payment uses exact amount entered
+// DISCOUNT: Amount in TSh (not percentage)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -41,13 +44,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     
     $action = $_POST['action'];
     $bill_ids = isset($_POST['bill_ids']) ? $_POST['bill_ids'] : [];
-    $item_ids = isset($_POST['item_ids']) ? $_POST['item_ids'] : [];
     $payment_method = isset($_POST['payment_method']) ? $_POST['payment_method'] : 'cash';
-    $payment_type = isset($_POST['payment_type']) ? $_POST['payment_type'] : 'full';
+    $discount_amount = isset($_POST['discount_amount']) ? floatval($_POST['discount_amount']) : 0;
     $partial_amount = isset($_POST['partial_amount']) ? floatval($_POST['partial_amount']) : 0;
+    $payment_type = isset($_POST['payment_type']) ? $_POST['payment_type'] : 'full';
     
     // ================================================================
-    // FULL PAYMENT - Pay entire bills
+    // FULL PAYMENT - Pay entire bills with discount
     // ================================================================
     if ($action === 'complete_payment') {
         if (empty($bill_ids) || !is_array($bill_ids)) {
@@ -60,12 +63,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $failed_bills = [];
             $receipt_numbers = [];
             $total_amount_paid = 0;
+            $total_discount_applied = 0;
+            $total_original_balance = 0;
+            
+            // First, calculate total balance of all selected bills
+            foreach ($bill_ids as $bill_id) {
+                $stmt = $db->prepare("SELECT balance FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
+                $stmt->execute([$bill_id, $user_branch_id]);
+                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($bill) {
+                    $total_original_balance += (float)$bill['balance'];
+                }
+            }
             
             foreach ($bill_ids as $bill_id) {
                 $bill_id = (int)$bill_id;
                 
                 // Get bill details
-                $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ? AND status != 'paid'");
+                $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
                 $stmt->execute([$bill_id, $user_branch_id]);
                 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 
@@ -82,19 +97,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     continue;
                 }
                 
+                // Calculate discount per bill proportionally
+                $bill_discount = 0;
+                if ($discount_amount > 0 && $total_original_balance > 0) {
+                    $bill_discount = ($remaining / $total_original_balance) * $discount_amount;
+                    $bill_discount = round($bill_discount, 2);
+                    $total_discount_applied += $bill_discount;
+                }
+                
+                $amount_to_pay = $remaining - $bill_discount;
+                if ($amount_to_pay < 0) $amount_to_pay = 0;
+                
                 // Generate receipt number
                 $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
                 
-                // Update bill to paid
+                // Update bill with discount
                 $stmt = $db->prepare("
                     UPDATE patient_bills 
-                    SET paid_amount = total_amount, 
-                        balance = 0, 
+                    SET paid_amount = paid_amount + ?,
+                        balance = ?,
+                        discount_amount = discount_amount + ?,
                         status = 'paid',
                         updated_at = NOW()
                     WHERE id = ?
                 ");
-                $stmt->execute([$bill_id]);
+                $stmt->execute([$amount_to_pay, 0, $bill_discount, $bill_id]);
                 
                 // Mark all items as paid
                 $stmt = $db->prepare("
@@ -102,31 +129,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     SET is_paid = 1, 
                         payment_status = 'paid', 
                         paid_at = NOW()
-                    WHERE bill_id = ?
+                    WHERE bill_id = ? AND (is_paid = 0 OR is_paid IS NULL)
                 ");
                 $stmt->execute([$bill_id]);
                 
                 // Insert payment record
                 $stmt = $db->prepare("
-                    INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                    INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
                 ");
                 $stmt->execute([
                     $receipt_number,
                     $bill_id,
                     $bill['patient_id'],
-                    $remaining,
+                    $amount_to_pay,
                     $payment_method,
                     $user_id,
-                    $user_branch_id
+                    $user_branch_id,
+                    $bill_discount > 0 ? 'Discount: TSh ' . number_format($bill_discount, 2) : ''
                 ]);
                 
-                $total_amount_paid += $remaining;
+                $total_amount_paid += $amount_to_pay;
                 $receipt_numbers[] = $receipt_number;
                 $success_count++;
             }
             
-            $message = $success_count . " bill(s) paid successfully! Total: TSh " . number_format($total_amount_paid);
+            $message = $success_count . " bill(s) paid successfully!";
+            if ($total_discount_applied > 0) {
+                $message .= " Total Discount: TSh " . number_format($total_discount_applied, 2);
+            }
+            $message .= " Total Paid: TSh " . number_format($total_amount_paid, 2);
+            
             if (!empty($failed_bills)) {
                 $message .= " Failed bills: " . implode(', ', $failed_bills);
             }
@@ -136,6 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'message' => $message,
                 'receipt_numbers' => $receipt_numbers,
                 'total_paid' => $total_amount_paid,
+                'total_discount' => $total_discount_applied,
                 'count' => $success_count,
                 'payment_type' => 'full'
             ]);
@@ -147,111 +181,209 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     
     // ================================================================
-    // PARTIAL PAYMENT - Pay specific items only
+    // PARTIAL PAYMENT - Pay exact amount entered by user
     // ================================================================
     if ($action === 'partial_payment') {
-        if (empty($item_ids) || !is_array($item_ids)) {
-            echo json_encode(['success' => false, 'message' => 'No items selected for payment']);
+        if (empty($bill_ids) || !is_array($bill_ids)) {
+            echo json_encode(['success' => false, 'message' => 'No bills selected for payment']);
+            exit;
+        }
+        
+        if ($partial_amount <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Please enter a valid partial amount']);
             exit;
         }
         
         try {
-            $total_selected = 0;
-            $paid_items = [];
-            $bill_id = 0;
+            $success_count = 0;
+            $failed_bills = [];
+            $receipt_numbers = [];
+            $total_amount_paid = 0;
+            $total_discount_applied = 0;
+            $total_original_balance = 0;
             
-            // Get items details - ONLY PENDING ITEMS (is_paid = 0)
-            $placeholders = implode(',', array_fill(0, count($item_ids), '?'));
-            $stmt = $db->prepare("
-                SELECT bi.*, pb.patient_id, pb.bill_number, pb.branch_id
-                FROM bill_items bi
-                JOIN patient_bills pb ON bi.bill_id = pb.id
-                WHERE bi.id IN ($placeholders) AND (bi.is_paid = 0 OR bi.is_paid IS NULL)
-            ");
-            $stmt->execute($item_ids);
-            $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            // Calculate total balance for selected bills
+            foreach ($bill_ids as $bill_id) {
+                $stmt = $db->prepare("SELECT balance FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
+                $stmt->execute([$bill_id, $user_branch_id]);
+                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($bill) {
+                    $total_original_balance += (float)$bill['balance'];
+                }
+            }
             
-            if (empty($items)) {
-                echo json_encode(['success' => false, 'message' => 'No unpaid items selected']);
+            if ($total_original_balance <= 0) {
+                echo json_encode(['success' => false, 'message' => 'Selected bills are already fully paid']);
                 exit;
             }
             
-            $bill_id = $items[0]['bill_id'];
-            $patient_id = $items[0]['patient_id'];
-            $bill_number = $items[0]['bill_number'];
+            // Use the exact partial amount entered
+            $amount_to_pay = min($partial_amount, $total_original_balance);
             
-            // Calculate total for selected items
-            foreach ($items as $item) {
-                $item_price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
-                $total_selected += $item_price;
-                $paid_items[] = $item['id'];
+            // Calculate total discount proportionally
+            $total_discount = 0;
+            if ($discount_amount > 0) {
+                $total_discount = min($discount_amount, $total_original_balance);
             }
             
-            // Use calculated total
-            $payment_amount = $total_selected;
+            // If partial amount + discount exceeds total balance, adjust
+            if ($amount_to_pay + $total_discount > $total_original_balance) {
+                $total_discount = $total_original_balance - $amount_to_pay;
+                if ($total_discount < 0) $total_discount = 0;
+            }
             
-            // Mark selected items as paid
-            $item_placeholders = implode(',', array_fill(0, count($paid_items), '?'));
-            $stmt = $db->prepare("
-                UPDATE bill_items 
-                SET is_paid = 1, 
-                    payment_status = 'paid', 
-                    paid_at = NOW()
-                WHERE id IN ($item_placeholders)
-            ");
-            $stmt->execute($paid_items);
+            foreach ($bill_ids as $bill_id) {
+                $bill_id = (int)$bill_id;
+                $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
+                $stmt->execute([$bill_id, $user_branch_id]);
+                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if (!$bill) {
+                    $failed_bills[] = $bill_id;
+                    continue;
+                }
+                
+                $remaining = (float)$bill['balance'];
+                if ($remaining <= 0) continue;
+                
+                // Calculate proportional payment and discount
+                $bill_portion = $remaining / $total_original_balance;
+                $bill_payment = $amount_to_pay * $bill_portion;
+                $bill_discount = $total_discount * $bill_portion;
+                
+                $bill_payment = round($bill_payment, 2);
+                $bill_discount = round($bill_discount, 2);
+                
+                // Check if this bill can be fully paid
+                if ($bill_payment + $bill_discount >= $remaining) {
+                    // Full payment for this bill
+                    $bill_payment = $remaining - $bill_discount;
+                    if ($bill_payment < 0) {
+                        $bill_payment = 0;
+                        $bill_discount = $remaining;
+                    }
+                    $new_balance = 0;
+                    $new_status = 'paid';
+                } else {
+                    $new_balance = $remaining - $bill_payment - $bill_discount;
+                    if ($new_balance < 0) $new_balance = 0;
+                    $new_status = 'partial';
+                }
+                
+                // Generate receipt number
+                $receipt_number = 'RCP-PARTIAL-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
+                
+                // Update bill
+                $stmt = $db->prepare("
+                    UPDATE patient_bills 
+                    SET paid_amount = paid_amount + ?,
+                        balance = ?,
+                        discount_amount = discount_amount + ?,
+                        status = ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$bill_payment, $new_balance, $bill_discount, $new_status, $bill_id]);
+                
+                // Insert payment record
+                $stmt = $db->prepare("
+                    INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+                ");
+                $stmt->execute([
+                    $receipt_number,
+                    $bill_id,
+                    $bill['patient_id'],
+                    $bill_payment,
+                    $payment_method,
+                    $user_id,
+                    $user_branch_id,
+                    'Partial payment - Discount: TSh ' . number_format($bill_discount, 2)
+                ]);
+                
+                $total_amount_paid += $bill_payment;
+                $total_discount_applied += $bill_discount;
+                $receipt_numbers[] = $receipt_number;
+                $success_count++;
+            }
             
-            // Generate receipt
-            $receipt_number = 'RCP-PARTIAL-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
-            
-            // Insert payment
-            $stmt = $db->prepare("
-                INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
-            ");
-            $stmt->execute([
-                $receipt_number,
-                $bill_id,
-                $patient_id,
-                $payment_amount,
-                $payment_method,
-                $user_id,
-                $user_branch_id,
-                'Partial payment for ' . count($paid_items) . ' items'
-            ]);
-            
-            // Update bill totals
-            $stmt = $db->prepare("
-                SELECT COALESCE(SUM(total_price), 0) as total 
-                FROM bill_items 
-                WHERE bill_id = ? AND (is_paid = 0 OR is_paid IS NULL)
-            ");
-            $stmt->execute([$bill_id]);
-            $remaining = $stmt->fetch(PDO::FETCH_ASSOC);
-            $new_balance = (float)$remaining['total'];
-            
-            $stmt = $db->prepare("
-                UPDATE patient_bills 
-                SET paid_amount = paid_amount + ?,
-                    balance = ?,
-                    status = CASE 
-                        WHEN ? <= 0 THEN 'paid'
-                        ELSE 'partial'
-                    END,
-                    updated_at = NOW()
-                WHERE id = ?
-            ");
-            $stmt->execute([$payment_amount, $new_balance, $new_balance, $bill_id]);
+            $message = "✅ Partial payment of TSh " . number_format($total_amount_paid, 2) . " completed!";
+            if ($total_discount_applied > 0) {
+                $message .= " Discount: TSh " . number_format($total_discount_applied, 2);
+            }
             
             echo json_encode([
                 'success' => true,
-                'message' => '✅ Payment of TSh ' . number_format($payment_amount) . ' for ' . count($paid_items) . ' items completed!',
-                'receipt_number' => $receipt_number,
-                'total_paid' => $payment_amount,
-                'items_paid' => count($paid_items),
-                'remaining_balance' => $new_balance,
-                'bill_id' => $bill_id,
+                'message' => $message,
+                'receipt_numbers' => $receipt_numbers,
+                'total_paid' => $total_amount_paid,
+                'total_discount' => $total_discount_applied,
+                'count' => $success_count,
                 'payment_type' => 'partial'
+            ]);
+            
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+    
+    // ================================================================
+    // CANCEL BILLS
+    // ================================================================
+    if ($action === 'cancel_bills') {
+        if (empty($bill_ids) || !is_array($bill_ids)) {
+            echo json_encode(['success' => false, 'message' => 'No bills selected for cancellation']);
+            exit;
+        }
+        
+        try {
+            $success_count = 0;
+            $failed_bills = [];
+            
+            foreach ($bill_ids as $bill_id) {
+                $bill_id = (int)$bill_id;
+                
+                // Check if bill exists and is not already paid or cancelled
+                $stmt = $db->prepare("SELECT id, status FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
+                $stmt->execute([$bill_id, $user_branch_id]);
+                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if (!$bill) {
+                    $failed_bills[] = $bill_id;
+                    continue;
+                }
+                
+                // Update bill status to cancelled
+                $stmt = $db->prepare("
+                    UPDATE patient_bills 
+                    SET status = 'cancelled', 
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$bill_id]);
+                
+                // Update bill items
+                $stmt = $db->prepare("
+                    UPDATE bill_items 
+                    SET payment_status = 'cancelled', 
+                        status = 'cancelled'
+                    WHERE bill_id = ? AND (is_paid = 0 OR is_paid IS NULL)
+                ");
+                $stmt->execute([$bill_id]);
+                
+                $success_count++;
+            }
+            
+            $message = $success_count . " bill(s) cancelled successfully!";
+            if (!empty($failed_bills)) {
+                $message .= " Failed bills: " . implode(', ', $failed_bills);
+            }
+            
+            echo json_encode([
+                'success' => true,
+                'message' => $message,
+                'count' => $success_count
             ]);
             
         } catch (Exception $e) {
@@ -265,115 +397,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // ================================================================
-// GET ALL BILLS FOR THIS BRANCH (Only Pending/Partial)
+// GET ALL PENDING PATIENTS WITH BILLS
 // ================================================================
 $stmt = $db->prepare("
-    SELECT 
-        pb.*,
-        p.full_name as patient_name,
+    SELECT DISTINCT 
+        p.id as patient_id,
+        p.full_name,
         p.patient_id as patient_number,
-        p.phone as patient_phone,
-        v.visit_number,
-        v.visit_type,
-        v.visit_date,
+        p.phone,
+        p.gender,
+        p.date_of_birth,
+        p.address,
+        p.blood_group,
+        p.email,
+        pb.branch_id,
         u.full_name as doctor_name,
-        u2.full_name as created_by_name,
-        (
-            SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id
-        ) as item_count,
-        (
-            SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id AND is_paid = 1
-        ) as paid_item_count
+        v.doctor_id
     FROM patient_bills pb
     JOIN patients p ON pb.patient_id = p.id
     LEFT JOIN visits v ON pb.visit_id = v.id
     LEFT JOIN users u ON v.doctor_id = u.id
-    LEFT JOIN users u2 ON pb.created_by = u2.id
-    WHERE pb.branch_id = ? AND pb.status != 'paid'
-    ORDER BY pb.created_at ASC
+    WHERE pb.branch_id = ? AND pb.status NOT IN ('paid', 'cancelled')
+    ORDER BY p.full_name
 ");
 $stmt->execute([$user_branch_id]);
-$bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET BILL ITEMS WITH PRICES AND CORRECT STATUS
+// GET BILLS FOR EACH PATIENT
 // ================================================================
-$bill_items = [];
-foreach ($bills as $bill) {
+$patient_bills_data = [];
+foreach ($patients as $patient) {
     $stmt = $db->prepare("
-        SELECT bi.*, 
-               CASE 
-                   WHEN bi.is_paid = 1 OR bi.payment_status = 'paid' THEN 'paid'
-                   ELSE 'pending'
-               END as item_status,
-               bi.total_price as price,
-               bi.paid_at
-        FROM bill_items bi
-        WHERE bi.bill_id = ?
-        ORDER BY bi.is_paid ASC, bi.created_at ASC
+        SELECT 
+            pb.*,
+            v.visit_number,
+            v.visit_type,
+            v.visit_date,
+            u.full_name as doctor_name,
+            (
+                SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id AND (is_paid = 0 OR is_paid IS NULL)
+            ) as pending_items,
+            (
+                SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id AND is_paid = 1
+            ) as paid_items
+        FROM patient_bills pb
+        LEFT JOIN visits v ON pb.visit_id = v.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE pb.patient_id = ? AND pb.branch_id = ? AND pb.status NOT IN ('paid', 'cancelled')
+        ORDER BY pb.created_at ASC
     ");
-    $stmt->execute([$bill['id']]);
-    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt->execute([$patient['patient_id'], $user_branch_id]);
+    $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    foreach ($items as &$item) {
-        if (!isset($item['item_status'])) {
-            $item['item_status'] = ($item['is_paid'] ?? 0) ? 'paid' : 'pending';
-        }
-        if (!isset($item['price']) || $item['price'] <= 0) {
-            $item['price'] = $item['total_price'] ?? $item['unit_price'] ?? 0;
-        }
+    // Get items for each bill
+    foreach ($bills as &$bill) {
+        $stmt = $db->prepare("
+            SELECT * FROM bill_items 
+            WHERE bill_id = ? 
+            ORDER BY is_paid ASC, created_at ASC
+        ");
+        $stmt->execute([$bill['id']]);
+        $bill['items'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
-    $bill_items[$bill['id']] = $items;
-}
-
-// ================================================================
-// GET PAID BILLS HISTORY
-// ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        pb.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_number,
-        v.visit_number,
-        p.phone as patient_phone,
-        (
-            SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id
-        ) as item_count
-    FROM patient_bills pb
-    JOIN patients p ON pb.patient_id = p.id
-    LEFT JOIN visits v ON pb.visit_id = v.id
-    WHERE pb.branch_id = ? AND pb.status = 'paid'
-    ORDER BY pb.updated_at DESC
-    LIMIT 30
-");
-$stmt->execute([$user_branch_id]);
-$paid_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// GET PAYMENT HISTORY FOR PAID BILLS
-// ================================================================
-$payment_history = [];
-foreach ($paid_bills as $paid) {
-    $stmt = $db->prepare("
-        SELECT * FROM payments 
-        WHERE bill_id = ? 
-        ORDER BY received_at DESC
-    ");
-    $stmt->execute([$paid['id']]);
-    $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    $payment_history[$paid['id']] = $payments;
+    
+    $patient['bills'] = $bills;
+    $patient_bills_data[] = $patient;
 }
 
 // ================================================================
 // CALCULATE TOTALS
 // ================================================================
-$total_bills = count($bills);
+$total_patients = count($patients);
+$total_bills = 0;
+$total_balance = 0;
 $total_amount = 0;
-$total_pending_balance = 0;
 
-foreach ($bills as $bill) {
-    $total_amount += (float)$bill['total_amount'];
-    $total_pending_balance += (float)$bill['balance'];
+foreach ($patient_bills_data as $patient) {
+    if (isset($patient['bills']) && is_array($patient['bills'])) {
+        foreach ($patient['bills'] as $bill) {
+            $total_bills++;
+            $total_balance += (float)$bill['balance'];
+            $total_amount += (float)$bill['total_amount'];
+        }
+    }
 }
 
 // ================================================================
@@ -385,7 +492,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 
 <style>
     /* ================================================================
-       PROCESS PAYMENT STYLES - GREEN THEME
+       PROCESS PAYMENT STYLES - PATIENT CARD DESIGN
        ================================================================ */
     :root {
         --primary: #059669;
@@ -399,6 +506,8 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         --warning-bg: #fef3c7;
         --danger: #dc2626;
         --danger-bg: #fee2e2;
+        --purple: #7c3aed;
+        --purple-bg: #ede9fe;
     }
     
     .stats-grid {
@@ -433,16 +542,146 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     .stat-box .number.orange { color: #d97706; }
     .stat-box .number.red { color: #dc2626; }
     .stat-box .number.purple { color: #7c3aed; }
+    .stat-box .label { font-size: 0.7rem; color: var(--text-secondary); font-weight: 500; margin-top: 2px; }
     
-    .stat-box .label {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        margin-top: 2px;
+    /* Patient Card */
+    .patient-card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        border: 2px solid var(--border-color);
+        margin-bottom: 20px;
+        overflow: hidden;
+        transition: all 0.3s ease;
     }
     
-    .page-title i { color: var(--primary) !important; }
+    .patient-card:hover {
+        border-color: var(--primary);
+        box-shadow: 0 4px 16px rgba(5, 150, 105, 0.08);
+    }
     
+    .patient-card .card-header {
+        background: var(--primary);
+        color: white;
+        padding: 12px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        cursor: pointer;
+    }
+    
+    .patient-card .card-header .patient-info {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+    }
+    
+    .patient-card .card-header .patient-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 1.1rem;
+        color: white;
+        flex-shrink: 0;
+    }
+    
+    .patient-card .card-header .patient-name { font-weight: 600; font-size: 1rem; }
+    .patient-card .card-header .patient-id { font-size: 0.75rem; opacity: 0.8; font-family: monospace; }
+    
+    .patient-card .card-header .patient-details {
+        display: flex;
+        gap: 14px;
+        font-size: 0.75rem;
+        opacity: 0.85;
+        flex-wrap: wrap;
+    }
+    
+    .patient-card .card-header .patient-details span { display: flex; align-items: center; gap: 4px; }
+    
+    .patient-card .card-header .bill-summary {
+        display: flex;
+        gap: 16px;
+        font-size: 0.75rem;
+        background: rgba(255,255,255,0.1);
+        padding: 4px 14px;
+        border-radius: 20px;
+        align-items: center;
+    }
+    
+    .patient-card .card-header .bill-summary .amount { font-weight: 700; font-size: 0.9rem; }
+    
+    .patient-card .card-body { padding: 0; }
+    .patient-card .card-body.collapsed { display: none; }
+    
+    /* Bills Table inside Card */
+    .bills-table-wrap { overflow-x: auto; }
+    
+    .bills-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+        min-width: 700px;
+    }
+    
+    .bills-table thead th {
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: 600;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-secondary);
+        background: var(--bg-body);
+        border-bottom: 2px solid var(--border-color);
+        white-space: nowrap;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+    
+    .bills-table thead th:first-child { text-align: center; width: 40px; }
+    .bills-table tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; }
+    .bills-table tbody tr:hover td { background: var(--table-hover); }
+    .bills-table tbody tr.selected td { background: var(--primary-bg); }
+    .bills-table tbody tr.bill-paid td { opacity: 0.6; background: var(--success-bg); }
+    
+    .bills-table .bill-checkbox {
+        width: 18px;
+        height: 18px;
+        cursor: pointer;
+        accent-color: #059669;
+        border-radius: 4px;
+    }
+    .bills-table .bill-checkbox:disabled { opacity: 0.3; cursor: not-allowed; }
+    
+    .bill-status {
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 20px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .bill-status.pending { background: var(--warning-bg); color: var(--warning); }
+    .bill-status.partial { background: var(--warning-bg); color: var(--warning); }
+    .bill-status.paid { background: var(--success-bg); color: var(--success); }
+    .bill-status.cancelled { background: var(--danger-bg); color: var(--danger); }
+    
+    .amount-total { font-weight: 700; color: #059669; font-family: monospace; }
+    .amount-balance { font-weight: 600; font-family: monospace; }
+    .amount-balance.positive { color: #dc2626; }
+    .amount-balance.zero { color: #059669; }
+    
+    /* Payment Controls */
     .payment-controls {
         background: var(--bg-card);
         border-radius: 12px;
@@ -453,22 +692,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         align-items: center;
         gap: 12px;
         margin-bottom: 20px;
+        position: sticky;
+        bottom: 0;
+        z-index: 20;
+        box-shadow: 0 -4px 20px rgba(0,0,0,0.05);
     }
     
-    .payment-controls .control-group {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-    }
+    .payment-controls .control-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .payment-controls .control-group label { font-size: 0.8rem; font-weight: 600; color: var(--text-primary); }
     
-    .payment-controls .control-group label {
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-    
-    .payment-controls select {
+    .payment-controls select,
+    .payment-controls input[type="number"] {
         padding: 6px 12px;
         border: 2px solid var(--border-color);
         border-radius: 8px;
@@ -476,10 +710,11 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         background: var(--bg-card);
         color: var(--text-primary);
         outline: none;
-        cursor: pointer;
+        width: 140px;
     }
     
-    .payment-controls select:focus {
+    .payment-controls select:focus,
+    .payment-controls input[type="number"]:focus {
         border-color: #059669;
         box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
     }
@@ -487,141 +722,36 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     .payment-controls .selected-count {
         font-size: 0.8rem;
         color: var(--text-secondary);
-        padding: 4px 12px;
+        padding: 4px 14px;
         background: var(--bg-body);
         border-radius: 20px;
         border: 1px solid var(--border-color);
     }
     
-    .payment-controls .selected-count strong {
-        color: var(--primary);
-    }
+    .payment-controls .selected-count strong { color: var(--primary); }
+    .payment-controls .divider { width: 1px; height: 30px; background: var(--border-color); }
     
-    .bills-table-wrap {
-        overflow-x: auto;
-        border-radius: 12px;
-        border: 2px solid var(--border-color);
-        background: var(--bg-card);
-        margin-bottom: 20px;
-    }
-    
-    .bills-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.82rem;
-        min-width: 900px;
-    }
-    
-    .bills-table thead th {
-        text-align: left;
-        padding: 10px 14px;
-        font-weight: 700;
-        font-size: 0.65rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: white;
-        background: #059669;
-        border-bottom: 3px solid #047857;
-        white-space: nowrap;
-        position: sticky;
-        top: 0;
-        z-index: 10;
-    }
-    
-    .bills-table thead th:first-child {
-        border-radius: 8px 0 0 0;
-        text-align: center;
-    }
-    
-    .bills-table thead th:last-child {
-        border-radius: 0 8px 0 0;
-    }
-    
-    .bills-table tbody td {
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-        vertical-align: middle;
-    }
-    
-    .bills-table tbody tr:hover td {
-        background: var(--table-hover);
-    }
-    
-    .bills-table tbody tr.selected td {
-        background: #ecfdf5;
-    }
-    
-    .bills-table tbody tr.bill-paid td {
-        opacity: 0.7;
-        background: #ecfdf5;
-    }
-    
-    .bill-checkbox {
-        width: 18px;
-        height: 18px;
-        cursor: pointer;
-        accent-color: #059669;
-        border-radius: 4px;
-    }
-    
-    .bill-checkbox:checked {
-        background-color: #059669;
-    }
-    
-    .bill-checkbox:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-    }
-    
-    .bill-status {
-        font-size: 0.65rem;
-        font-weight: 600;
-        padding: 3px 12px;
-        border-radius: 20px;
-        display: inline-flex;
+    /* Total Display */
+    .total-display {
+        display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 16px;
+        background: var(--primary-bg);
+        padding: 4px 16px;
+        border-radius: 10px;
+        border: 2px solid var(--primary);
     }
     
-    .bill-status.pending {
-        background: #fef3c7;
-        color: #d97706;
+    .total-display .total-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 4px 8px;
     }
     
-    .bill-status.partial {
-        background: #fef3c7;
-        color: #d97706;
-    }
-    
-    .bill-status.paid {
-        background: #d1fae5;
-        color: #059669;
-    }
-    
-    .bill-status.cancelled {
-        background: #fee2e2;
-        color: #dc2626;
-    }
-    
-    .amount-total {
-        font-weight: 700;
-        color: #059669;
-        font-family: monospace;
-    }
-    
-    .amount-balance {
-        font-weight: 600;
-        font-family: monospace;
-    }
-    
-    .amount-balance.positive {
-        color: #dc2626;
-    }
-    
-    .amount-balance.zero {
-        color: #059669;
-    }
+    .total-display .total-item .label { font-size: 0.6rem; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; }
+    .total-display .total-item .value { font-size: 1rem; font-weight: 700; color: var(--primary); font-family: monospace; }
+    .total-display .total-item .value.grand { color: #dc2626; font-size: 1.2rem; }
     
     .btn {
         display: inline-flex;
@@ -638,272 +768,106 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         white-space: nowrap;
     }
     
-    .btn-success {
-        background: #059669;
-        color: white;
-    }
+    .btn-success { background: #059669; color: white; }
+    .btn-success:hover { background: #047857; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3); }
     
-    .btn-success:hover {
-        background: #047857;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
+    .btn-warning { background: #d97706; color: white; }
+    .btn-warning:hover { background: #b45309; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3); }
     
-    .btn-warning {
-        background: #d97706;
-        color: white;
-    }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover { background: #b91c1c; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3); }
     
-    .btn-warning:hover {
-        background: #b45309;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-    }
+    .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
+    .btn-outline:hover { background: var(--bg-body); border-color: #059669; color: #059669; }
     
-    .btn-danger {
-        background: #dc2626;
-        color: white;
-    }
+    .btn-sm { padding: 4px 12px; font-size: 0.75rem; }
+    .btn-lg { padding: 10px 28px; font-size: 0.95rem; }
+    .btn-block { width: 100%; justify-content: center; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none !important; }
     
-    .btn-danger:hover {
-        background: #b91c1c;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #059669;
-        color: #059669;
-    }
-    
-    .btn-sm {
-        padding: 4px 12px;
-        font-size: 0.75rem;
-    }
-    
-    .btn-lg {
-        padding: 10px 28px;
-        font-size: 0.95rem;
-    }
-    
-    .btn-block {
-        width: 100%;
-        justify-content: center;
-    }
-    
-    .btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-        transform: none !important;
-    }
-    
-    .bill-items {
-        position: relative;
-    }
-    
-    .items-toggle {
+    /* Expand items - FIXED */
+    .expand-btn {
+        background: none;
+        border: none;
         cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        color: #059669;
-        font-weight: 500;
-        font-size: 0.75rem;
-        padding: 2px 0;
-        transition: color 0.2s;
-    }
-    
-    .items-toggle:hover {
-        color: #047857;
-    }
-    
-    .items-toggle i {
-        transition: transform 0.3s ease;
+        color: var(--primary);
         font-size: 0.7rem;
-    }
-    
-    .items-list {
-        display: none;
-        padding: 6px 0 6px 16px;
-        border-left: 3px solid #059669;
-        margin-top: 4px;
-        background: var(--bg-body);
-        border-radius: 0 4px 4px 0;
-    }
-    
-    .items-list.open {
-        display: block;
-    }
-    
-    .item-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 4px 0;
-        font-size: 0.75rem;
-        border-bottom: 1px dashed var(--border-color);
-    }
-    
-    .item-row:last-child {
-        border-bottom: none;
-    }
-    
-    .item-row.paid-item {
-        background: #ecfdf5;
-        border-bottom-color: #d1fae5;
-    }
-    
-    .item-row.paid-item .item-name {
-        text-decoration: line-through;
-        color: #6b7280;
-    }
-    
-    .item-row .item-name {
-        font-weight: 500;
-        color: var(--text-primary);
-    }
-    
-    .item-row .item-qty {
-        color: var(--text-secondary);
-        font-size: 0.65rem;
-    }
-    
-    .item-row .item-price {
-        font-weight: 600;
-        font-family: monospace;
-    }
-    
-    .item-row .item-price.paid {
-        color: #059669;
-    }
-    
-    .item-row .item-price.pending {
-        color: #dc2626;
-    }
-    
-    .item-badge {
-        padding: 1px 8px;
-        border-radius: 10px;
-        font-size: 0.6rem;
-        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 6px;
+        transition: all 0.2s;
         display: inline-flex;
         align-items: center;
-        gap: 3px;
+        gap: 4px;
+        background: var(--bg-body);
+        border: 1px solid var(--border-color);
+    }
+    .expand-btn:hover { 
+        background: var(--primary-bg);
+        border-color: var(--primary);
     }
     
-    .item-badge.paid {
-        background: #d1fae5;
-        color: #059669;
+    .items-container { 
+        display: none; 
+        padding: 8px 0 8px 20px; 
+        border-left: 3px solid var(--primary); 
+        margin-top: 6px; 
+        background: var(--bg-body); 
+        border-radius: 0 6px 6px 0;
+        transition: all 0.3s ease;
     }
+    .items-container.open { display: block; }
     
-    .item-badge.pending {
-        background: #fef3c7;
-        color: #d97706;
+    .item-row { 
+        display: flex; 
+        justify-content: space-between; 
+        align-items: center; 
+        padding: 4px 0; 
+        font-size: 0.7rem; 
+        border-bottom: 1px dashed var(--border-color);
     }
+    .item-row:last-child { border-bottom: none; }
+    .item-row.paid-item { opacity: 0.6; }
+    .item-row .item-name { font-weight: 500; color: var(--text-primary); }
+    .item-row .item-price { font-weight: 600; font-family: monospace; }
+    .item-row .item-price.paid { color: #059669; }
+    .item-row .item-price.pending { color: #dc2626; }
     
-    .item-checkbox {
-        width: 14px;
-        height: 14px;
+    .item-badge { 
+        padding: 1px 8px; 
+        border-radius: 10px; 
+        font-size: 0.55rem; 
+        font-weight: 600; 
+        display: inline-flex; 
+        align-items: center; 
+        gap: 3px; 
+    }
+    .item-badge.paid { background: var(--success-bg); color: var(--success); }
+    .item-badge.pending { background: var(--warning-bg); color: var(--warning); }
+    
+    .discount-input { max-width: 120px; }
+    .partial-input { max-width: 140px; }
+    
+    .total-row td { font-weight: 700; border-top: 2px solid var(--primary); background: var(--primary-bg); }
+    
+    .card-toggle {
+        background: none;
+        border: none;
+        color: rgba(255,255,255,0.7);
         cursor: pointer;
-        accent-color: #059669;
-        margin-right: 6px;
+        transition: transform 0.3s ease;
+        font-size: 0.9rem;
     }
-    
-    .item-checkbox:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-    }
-    
-    .partial-payment-section {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 16px 20px;
-        border: 2px solid #d97706;
-        margin-bottom: 20px;
-        display: none;
-    }
-    
-    .partial-payment-section.show {
-        display: block;
-    }
-    
-    .partial-payment-section .partial-total {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: #d97706;
-    }
-    
-    .paid-bills-section {
-        margin-top: 24px;
-    }
-    
-    .paid-bills-section .section-title {
-        font-size: 1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 12px;
-    }
-    
-    .paid-bills-section .section-title .badge {
-        background: #d1fae5;
-        color: #059669;
-        padding: 2px 12px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-    }
-    
-    .payment-history-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 4px 0;
-        font-size: 0.7rem;
-        border-bottom: 1px dashed #e5e7eb;
-        color: var(--text-secondary);
-    }
-    
-    .payment-history-item:last-child {
-        border-bottom: none;
-    }
-    
-    .payment-history-item .amount {
-        color: #059669;
-        font-weight: 600;
-        font-family: monospace;
-    }
-    
-    .payment-history-item .method {
-        font-size: 0.6rem;
-        background: #e5e7eb;
-        padding: 1px 8px;
-        border-radius: 10px;
-        color: #4b5563;
-    }
-    
-    .payment-history-item .date {
-        font-size: 0.6rem;
-        color: #6b7280;
-    }
+    .card-toggle:hover { color: white; }
+    .card-toggle.rotated { transform: rotate(180deg); }
     
     .toast-custom {
         position: fixed;
-        bottom: 24px;
+        bottom: 80px;
         right: 24px;
         padding: 12px 20px;
         border-radius: 12px;
         z-index: 999;
-        max-width: 400px;
+        max-width: 420px;
         transform: translateY(100px);
         opacity: 0;
         transition: all 0.4s ease;
@@ -913,12 +877,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         color: white;
         box-shadow: 0 8px 30px rgba(0,0,0,0.2);
     }
-    
-    .toast-custom.show {
-        transform: translateY(0);
-        opacity: 1;
-    }
-    
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
     .toast-custom.success { background: #059669; }
     .toast-custom.error { background: #dc2626; }
     .toast-custom.info { background: #0b5ed7; }
@@ -933,34 +892,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         border-radius: 50%;
         animation: spin 0.6s linear infinite;
     }
-    
-    @keyframes spin {
-        to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     
     @media (max-width: 768px) {
-        .bills-table {
-            font-size: 0.7rem;
-            min-width: 700px;
-        }
-        .bills-table th,
-        .bills-table td {
-            padding: 6px 8px;
-        }
-        .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
-        }
-        .payment-controls {
-            flex-direction: column;
-            align-items: stretch;
-        }
-        .payment-controls .control-group {
-            justify-content: center;
-        }
-        .payment-controls .btn {
-            width: 100%;
-            justify-content: center;
-        }
+        .bills-table { font-size: 0.7rem; min-width: 500px; }
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        .payment-controls { flex-direction: column; align-items: stretch; }
+        .payment-controls .control-group { justify-content: center; }
+        .payment-controls .btn { width: 100%; justify-content: center; }
+        .patient-card .card-header { flex-direction: column; align-items: stretch; }
+        .patient-card .card-header .patient-details { font-size: 0.65rem; }
+        .total-display { flex-wrap: wrap; justify-content: center; }
     }
 </style>
 
@@ -974,7 +916,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         </button>
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search bills by patient name or bill number...">
+            <input type="text" id="searchInput" placeholder="Search patients by name or ID...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -1009,12 +951,15 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                 <span class="role-badge-display ml-2">CASHIER</span>
             </h1>
             <p class="page-subtitle">
-                Select bills or individual items to pay
+                Select bills to pay, apply discount or partial payment
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-file-invoice mr-1"></i> <?= $total_bills ?> pending bill(s)
                 </span>
                 <span class="ml-2 inline-flex bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs border border-orange-200">
-                    <i class="fas fa-money-bill mr-1"></i> Balance: <?= number_format($total_pending_balance, 2) ?>
+                    <i class="fas fa-money-bill mr-1"></i> Balance: <?= number_format($total_balance, 2) ?>
+                </span>
+                <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
+                    <i class="fas fa-users mr-1"></i> <?= $total_patients ?> patient(s)
                 </span>
             </p>
         </div>
@@ -1028,29 +973,244 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <!-- Statistics -->
     <div class="stats-grid">
         <div class="stat-box">
+            <p class="number purple"><?= $total_patients ?></p>
+            <p class="label">Patients</p>
+        </div>
+        <div class="stat-box">
             <p class="number orange"><?= $total_bills ?></p>
             <p class="label">Pending Bills</p>
         </div>
         <div class="stat-box">
-            <p class="number red"><?= number_format($total_pending_balance, 2) ?></p>
+            <p class="number red" id="totalBalance"><?= number_format($total_balance, 2) ?></p>
             <p class="label">Total Balance</p>
         </div>
         <div class="stat-box">
-            <p class="number purple"><?= number_format($total_amount, 2) ?></p>
-            <p class="label">Total Amount</p>
-        </div>
-        <div class="stat-box">
             <p class="number green" id="selectedTotal">0.00</p>
-            <p class="label">Selected Total</p>
+            <p class="label">Selected Amount</p>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- PAYMENT CONTROLS -->
+    <!-- PATIENT CARDS WITH BILLS -->
+    <!-- ================================================================ -->
+    <?php if (count($patient_bills_data) > 0): ?>
+        <?php foreach ($patient_bills_data as $patient): 
+            // Check if bills exists and is array
+            $patient_bills = isset($patient['bills']) && is_array($patient['bills']) ? $patient['bills'] : [];
+            $patient_total_balance = 0;
+            $patient_total_amount = 0;
+            foreach ($patient_bills as $bill) {
+                $patient_total_balance += (float)$bill['balance'];
+                $patient_total_amount += (float)$bill['total_amount'];
+            }
+            $doctor_name = $patient['doctor_name'] ?? 'Not Assigned';
+        ?>
+        <div class="patient-card" data-patient-id="<?= $patient['patient_id'] ?>">
+            <div class="card-header" onclick="togglePatientCard(this)">
+                <div class="patient-info">
+                    <div class="patient-avatar" style="background: <?= '#' . substr(md5($patient['full_name']), 0, 6) ?>;">
+                        <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
+                    </div>
+                    <div>
+                        <div class="patient-name"><?= htmlspecialchars($patient['full_name']) ?></div>
+                        <div class="patient-id"><?= htmlspecialchars($patient['patient_number']) ?></div>
+                        <div style="font-size:0.65rem; opacity:0.8;">
+                            <i class="fas fa-user-md"></i> Doctor: <?= htmlspecialchars($doctor_name) ?>
+                        </div>
+                    </div>
+                    <div class="patient-details">
+                        <?php if (!empty($patient['phone'])): ?>
+                            <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone']) ?></span>
+                        <?php endif; ?>
+                        <?php if (!empty($patient['gender'])): ?>
+                            <span><i class="fas fa-<?= $patient['gender'] === 'Female' ? 'venus' : 'mars' ?>"></i> <?= htmlspecialchars($patient['gender']) ?></span>
+                        <?php endif; ?>
+                        <?php if (!empty($patient['blood_group'])): ?>
+                            <span><i class="fas fa-tint"></i> <?= htmlspecialchars($patient['blood_group']) ?></span>
+                        <?php endif; ?>
+                        <?php if (!empty($patient['date_of_birth'])): ?>
+                            <span><i class="fas fa-calendar"></i> <?= date('d/m/Y', strtotime($patient['date_of_birth'])) ?></span>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                    <div class="bill-summary">
+                        <span>Bills: <strong><?= count($patient_bills) ?></strong></span>
+                        <span>|</span>
+                        <span>Total: <strong class="amount">TSh <?= number_format($patient_total_amount, 2) ?></strong></span>
+                        <span>|</span>
+                        <span>Balance: <strong class="amount" style="color: <?= $patient_total_balance > 0 ? '#fcd34d' : '#34d399' ?>;">
+                            TSh <?= number_format($patient_total_balance, 2) ?>
+                        </strong></span>
+                    </div>
+                    <button class="card-toggle" onclick="event.stopPropagation(); togglePatientCard(this.closest('.card-header'))">
+                        <i class="fas fa-chevron-up"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="card-body">
+                <div class="bills-table-wrap">
+                    <table class="bills-table">
+                        <thead>
+                            <tr>
+                                <th style="width:40px; text-align:center;">
+                                    <input type="checkbox" class="bill-checkbox patient-select-all" 
+                                           data-patient-id="<?= $patient['patient_id'] ?>" 
+                                           onchange="selectPatientBills(this, <?= $patient['patient_id'] ?>)"
+                                           title="Select all bills for this patient">
+                                </th>
+                                <th>Bill #</th>
+                                <th>Visit</th>
+                                <th>Items</th>
+                                <th style="text-align:right;">Total</th>
+                                <th style="text-align:right;">Balance</th>
+                                <th style="text-align:center;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($patient_bills as $bill): 
+                                $balance = (float)$bill['balance'];
+                                $pending_items = (int)$bill['pending_items'];
+                                $paid_items = (int)$bill['paid_items'];
+                                $total_items = $pending_items + $paid_items;
+                                $is_fully_paid = $balance <= 0;
+                                $items = isset($bill['items']) && is_array($bill['items']) ? $bill['items'] : [];
+                                $bill_doctor = $bill['doctor_name'] ?? $doctor_name;
+                                $total_pending_price = 0;
+                                foreach ($items as $item) {
+                                    if (($item['is_paid'] ?? 0) == 0) {
+                                        $total_pending_price += (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
+                                    }
+                                }
+                            ?>
+                            <tr class="bill-row <?= $is_fully_paid ? 'bill-paid' : '' ?>" 
+                                data-bill-id="<?= $bill['id'] ?>" 
+                                data-balance="<?= $balance ?>" 
+                                data-total="<?= $bill['total_amount'] ?>">
+                                <td style="text-align:center;">
+                                    <?php if (!$is_fully_paid && $balance > 0): ?>
+                                        <input type="checkbox" class="bill-checkbox bill-select" 
+                                               data-id="<?= $bill['id'] ?>" 
+                                               data-patient-id="<?= $patient['patient_id'] ?>"
+                                               onchange="updateSelectedTotal()">
+                                    <?php else: ?>
+                                        <span style="color:#059669; font-size:0.8rem;" title="All paid">
+                                            <i class="fas fa-check-circle"></i>
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="font-mono text-xs font-semibold" style="color:#059669;">
+                                        <?= htmlspecialchars($bill['bill_number']) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="text-xs">
+                                        <?= htmlspecialchars($bill['visit_number'] ?? 'N/A') ?>
+                                    </span>
+                                    <span class="text-xs text-gray-400 block">
+                                        <?= date('d/m/Y', strtotime($bill['created_at'])) ?>
+                                    </span>
+                                    <?php if ($bill_doctor && $bill_doctor !== 'Not Assigned'): ?>
+                                        <span class="text-xs text-primary block">
+                                            <i class="fas fa-user-md"></i> <?= htmlspecialchars($bill_doctor) ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <!-- ITEMS EXPANDABLE - FIXED -->
+                                    <div class="bill-items">
+                                        <button class="expand-btn" onclick="toggleItems(this)" 
+                                                id="items-btn-<?= $bill['id'] ?>" 
+                                                data-count="<?= $total_items ?>">
+                                            <i class="fas fa-chevron-right" id="items-icon-<?= $bill['id'] ?>"></i>
+                                            <?= $total_items ?> items
+                                            <?php if ($paid_items > 0): ?>
+                                                <span style="color:#059669;">(<?= $paid_items ?> paid)</span>
+                                            <?php endif; ?>
+                                            <?php if ($pending_items > 0): ?>
+                                                <span style="color:#d97706;">(<?= $pending_items ?> pending)</span>
+                                            <?php endif; ?>
+                                        </button>
+                                        
+                                        <div class="items-container" id="items-container-<?= $bill['id'] ?>" style="display:none;">
+                                            <?php foreach ($items as $item): 
+                                                $is_paid = ($item['is_paid'] ?? 0) == 1;
+                                                $price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
+                                            ?>
+                                            <div class="item-row <?= $is_paid ? 'paid-item' : '' ?>">
+                                                <span class="item-name">
+                                                    <?= htmlspecialchars($item['item_name']) ?>
+                                                    <span class="item-badge <?= $is_paid ? 'paid' : 'pending' ?>">
+                                                        <?= $is_paid ? '✅ Paid' : '⏳ Pending' ?>
+                                                    </span>
+                                                </span>
+                                                <span class="item-price <?= $is_paid ? 'paid' : 'pending' ?>">
+                                                    TSh <?= number_format($price, 2) ?>
+                                                </span>
+                                            </div>
+                                            <?php endforeach; ?>
+                                            
+                                            <!-- Summary row -->
+                                            <div style="padding:6px 0; border-top:2px solid #d97706; margin-top:4px; display:flex; justify-content:space-between; font-weight:700; font-size:0.75rem;">
+                                                <span style="color:#d97706;">Pending Total:</span>
+                                                <span style="color:#d97706; font-family:monospace;"><?= number_format($total_pending_price, 2) ?></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td style="text-align:right; font-weight:700; color:#059669; font-family:monospace;">
+                                    <?= number_format($bill['total_amount'] ?? 0, 2) ?>
+                                </td>
+                                <td style="text-align:right; font-weight:600; color:<?= $balance > 0 ? '#dc2626' : '#059669' ?>; font-family:monospace;">
+                                    <?= number_format($balance, 2) ?>
+                                </td>
+                                <td style="text-align:center;">
+                                    <?php if ($balance <= 0): ?>
+                                        <span class="bill-status paid">✅ Paid</span>
+                                    <?php elseif ($pending_items > 0 && $paid_items > 0): ?>
+                                        <span class="bill-status partial">🔄 Partial</span>
+                                    <?php else: ?>
+                                        <span class="bill-status pending">⏳ Pending</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                            
+                            <!-- Total row for this patient -->
+                            <tr class="total-row">
+                                <td colspan="3" style="text-align:right; font-weight:700; color:var(--text-primary);">
+                                    Patient Total:
+                                </td>
+                                <td style="font-weight:600; color:#059669; font-family:monospace;">
+                                    TSh <?= number_format($patient_total_amount, 2) ?>
+                                </td>
+                                <td style="font-weight:600; color:<?= $patient_total_balance > 0 ? '#dc2626' : '#059669' ?>; font-family:monospace;">
+                                    TSh <?= number_format($patient_total_balance, 2) ?>
+                                </td>
+                                <td></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <?php endforeach; ?>
+    <?php else: ?>
+        <div class="text-center py-12">
+            <i class="fas fa-check-circle text-5xl text-green-500 mb-4 block"></i>
+            <h3 class="text-xl font-semibold text-gray-600">No Pending Bills</h3>
+            <p class="text-gray-400 mt-2">All bills have been paid. Great job! 🎉</p>
+        </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- PAYMENT CONTROLS - STICKY BOTTOM -->
     <!-- ================================================================ -->
     <div class="payment-controls" id="paymentControls">
         <div class="control-group">
-            <label><i class="fas fa-hand-holding-usd"></i> Payment Method:</label>
+            <label><i class="fas fa-hand-holding-usd"></i> Method:</label>
             <select id="paymentMethod">
                 <option value="cash">💰 Cash</option>
                 <option value="m-pesa">📱 M-Pesa</option>
@@ -1064,272 +1224,66 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             </select>
         </div>
         
+        <div class="divider"></div>
+        
         <div class="control-group">
-            <span class="selected-count" id="selectedCount">Selected: <strong>0</strong> items</span>
+            <label><i class="fas fa-percent"></i> Discount (TSh):</label>
+            <input type="number" id="discountAmount" class="discount-input" placeholder="0.00" 
+                   min="0" step="0.01" value="0" oninput="updateSelectedTotal()">
         </div>
         
-        <div class="control-group" style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap;">
-            <button onclick="togglePartialMode()" class="btn btn-warning btn-sm" id="partialModeBtn">
-                <i class="fas fa-hand-holding-heart"></i> Partial Payment
-            </button>
-            <button onclick="selectAllItems()" class="btn btn-outline btn-sm">
+        <div class="divider"></div>
+        
+        <div class="control-group">
+            <label><i class="fas fa-hand-holding-heart"></i> Partial:</label>
+            <input type="number" id="partialAmount" class="partial-input" placeholder="0.00" 
+                   min="0" step="0.01" value="0" oninput="updateSelectedTotal()">
+        </div>
+        
+        <div class="divider"></div>
+        
+        <!-- TOTAL DISPLAY -->
+        <div class="total-display" id="totalDisplay">
+            <div class="total-item">
+                <span class="label">Total</span>
+                <span class="value" id="displayTotal">TSh 0.00</span>
+            </div>
+            <div style="color:var(--border-color);">|</div>
+            <div class="total-item">
+                <span class="label">Discount</span>
+                <span class="value" style="color:#d97706;" id="displayDiscount">TSh 0.00</span>
+            </div>
+            <div style="color:var(--border-color);">|</div>
+            <div class="total-item">
+                <span class="label">Grand Total</span>
+                <span class="value grand" id="displayGrandTotal">TSh 0.00</span>
+            </div>
+        </div>
+        
+        <div style="flex:1; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;">
+            <span class="selected-count" id="selectedCount">
+                Selected: <strong id="selectedCountNum">0</strong> bills
+            </span>
+            <button onclick="selectAllBills()" class="btn btn-outline btn-sm">
                 <i class="fas fa-check-double"></i> Select All
             </button>
-            <button onclick="deselectAll()" class="btn btn-outline btn-sm">
+            <button onclick="deselectAllBills()" class="btn btn-outline btn-sm">
                 <i class="fas fa-times"></i> Deselect All
             </button>
-            <button onclick="processPayment()" class="btn btn-success" id="completeBtn">
-                <i class="fas fa-check-circle"></i> Complete Payment
+            <button onclick="processPayment('cancel')" class="btn btn-danger" id="cancelBtn">
+                <i class="fas fa-times-circle"></i> CANCEL
+            </button>
+            <button onclick="processPayment('partial')" class="btn btn-warning" id="partialPayBtn">
+                <i class="fas fa-hand-holding-heart"></i> PAY PARTIAL
+            </button>
+            <button onclick="processPayment('full')" class="btn btn-success" id="fullPayBtn">
+                <i class="fas fa-check-circle"></i> PAY FULL
             </button>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- PARTIAL PAYMENT SECTION -->
-    <!-- ================================================================ -->
-    <div class="partial-payment-section" id="partialSection">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-            <div>
-                <h4 style="margin:0; color:#d97706;">
-                    <i class="fas fa-hand-holding-heart"></i> Partial Payment Mode
-                </h4>
-                <p style="margin:4px 0 0; font-size:0.8rem; color:var(--text-secondary);">
-                    Select individual unpaid items to pay. Paid items are disabled.
-                </p>
-            </div>
-            <div style="display:flex; align-items:center; gap:12px;">
-                <span style="font-size:0.8rem; color:var(--text-secondary);">Total Selected:</span>
-                <span class="partial-total" id="partialTotal">TSh 0.00</span>
-                <button onclick="processPartialPayment()" class="btn btn-warning" id="partialPayBtn" disabled>
-                    <i class="fas fa-hand-holding-usd"></i> Select Items First
-                </button>
-                <button onclick="togglePartialMode()" class="btn btn-outline btn-sm">
-                    <i class="fas fa-times"></i> Close
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- BILLS TABLE WITH ITEMS -->
-    <!-- ================================================================ -->
-    <div class="bills-table-wrap">
-        <table class="bills-table" id="billsTable">
-            <thead>
-                <tr>
-                    <th style="text-align:center; width:40px;">
-                        <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)" title="Select All Bills">
-                    </th>
-                    <th style="width:45px;">#</th>
-                    <th>Bill Number</th>
-                    <th>Patient</th>
-                    <th style="min-width:250px;">Items / Services</th>
-                    <th style="text-align:right;">Total (TSh)</th>
-                    <th style="text-align:right;">Balance (TSh)</th>
-                    <th style="text-align:center;">Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php if (count($bills) > 0): ?>
-                    <?php $counter = 1; foreach ($bills as $bill): 
-                        $balance = (float)$bill['balance'];
-                        $items = $bill_items[$bill['id']] ?? [];
-                        $paid_count = 0;
-                        $pending_count = 0;
-                        $has_pending = false;
-                        $all_paid = true;
-                        $total_pending_price = 0;
-                        
-                        foreach ($items as $item) {
-                            if ($item['item_status'] === 'paid') {
-                                $paid_count++;
-                            } else {
-                                $pending_count++;
-                                $has_pending = true;
-                                $all_paid = false;
-                                $total_pending_price += (float)($item['price'] ?? $item['total_price'] ?? 0);
-                            }
-                        }
-                        
-                        $row_class = '';
-                        if ($balance <= 0) {
-                            $row_class = 'bill-paid';
-                        }
-                    ?>
-                        <tr class="bill-row <?= $row_class ?>" data-bill-id="<?= $bill['id'] ?>" data-balance="<?= $balance ?>" data-total="<?= $bill['total_amount'] ?>">
-                            <td style="text-align:center;">
-                                <?php if ($has_pending && $balance > 0): ?>
-                                    <input type="checkbox" class="bill-checkbox bill-select" data-id="<?= $bill['id'] ?>" onchange="updateSelectedTotal()">
-                                <?php else: ?>
-                                    <span style="color:#059669; font-size:0.8rem;" title="All items paid">
-                                        <i class="fas fa-check-circle"></i>
-                                    </span>
-                                <?php endif; ?>
-                            </td>
-                            <td><?= $counter++ ?></td>
-                            <td>
-                                <span class="font-mono text-xs font-semibold" style="color:#059669;"><?= htmlspecialchars($bill['bill_number']) ?></span>
-                            </td>
-                            <td>
-                                <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name']) ?></div>
-                                <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['patient_number'] ?? 'N/A') ?></div>
-                            </td>
-                            <td>
-                                <!-- Items Expandable -->
-                                <div class="bill-items">
-                                    <div class="items-toggle" onclick="toggleItems(this)">
-                                        <i class="fas fa-chevron-right" style="transition:transform 0.3s;"></i>
-                                        <span>
-                                            <?= count($items) ?> item(s)
-                                            <?php if ($paid_count > 0): ?>
-                                                <span style="color:#059669; font-weight:600;">(<?= $paid_count ?> paid)</span>
-                                            <?php endif; ?>
-                                            <?php if ($pending_count > 0): ?>
-                                                <span style="color:#d97706; font-weight:600;">(<?= $pending_count ?> pending)</span>
-                                            <?php endif; ?>
-                                        </span>
-                                    </div>
-                                    <div class="items-list" style="display:none; padding:6px 0 6px 16px; border-left:3px solid #059669; margin-top:4px;">
-                                        <?php foreach ($items as $item): 
-                                            $is_paid = $item['item_status'] === 'paid';
-                                            $price = (float)($item['price'] ?? $item['total_price'] ?? 0);
-                                            $quantity = (int)($item['quantity'] ?? 1);
-                                            $row_class = $is_paid ? 'paid-item' : '';
-                                        ?>
-                                            <div class="item-row <?= $row_class ?>" style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; font-size:0.75rem; border-bottom:1px dashed <?= $is_paid ? '#d1fae5' : '#e5e7eb' ?>;">
-                                                <div style="display:flex; align-items:center; gap:8px; flex:1;">
-                                                    <?php if (!$is_paid): ?>
-                                                        <input type="checkbox" class="item-checkbox item-select" data-item-id="<?= $item['id'] ?>" data-price="<?= $price ?>" onchange="updatePartialTotal()">
-                                                    <?php else: ?>
-                                                        <span style="width:14px; display:inline-block;"></span>
-                                                    <?php endif; ?>
-                                                    <span class="item-name" style="font-weight:500; <?= $is_paid ? 'text-decoration:line-through; color:#6b7280;' : '' ?>">
-                                                        <?= htmlspecialchars($item['item_name']) ?>
-                                                    </span>
-                                                    <span class="item-qty" style="color:#6b7280; font-size:0.65rem;">x<?= $quantity ?></span>
-                                                    <?php if ($is_paid): ?>
-                                                        <span class="item-badge paid">
-                                                            <i class="fas fa-check-circle"></i> Paid
-                                                        </span>
-                                                        <span style="font-size:0.55rem; color:#6b7280;">
-                                                            <?= date('d/m/Y H:i', strtotime($item['paid_at'] ?? 'now')) ?>
-                                                        </span>
-                                                    <?php else: ?>
-                                                        <span class="item-badge pending">
-                                                            <i class="fas fa-clock"></i> Pending
-                                                        </span>
-                                                    <?php endif; ?>
-                                                </div>
-                                                <div class="item-price <?= $is_paid ? 'paid' : 'pending' ?>" style="font-weight:600; font-family:monospace; <?= $is_paid ? 'color:#059669;' : 'color:#dc2626;' ?>">
-                                                    <?= number_format($price, 2) ?>
-                                                </div>
-                                            </div>
-                                        <?php endforeach; ?>
-                                        <?php if ($pending_count > 0): ?>
-                                            <div style="padding:6px 0; border-top:2px solid #d97706; margin-top:4px; display:flex; justify-content:space-between; font-weight:700; font-size:0.75rem;">
-                                                <span style="color:#d97706;">Pending Total:</span>
-                                                <span style="color:#d97706; font-family:monospace;"><?= number_format($total_pending_price, 2) ?></span>
-                                            </div>
-                                        <?php endif; ?>
-                                    </div>
-                                </div>
-                            </td>
-                            <td style="text-align:right; font-weight:700; color:#059669; font-family:monospace;">
-                                <?= number_format($bill['total_amount'] ?? 0, 2) ?>
-                            </td>
-                            <td style="text-align:right; font-weight:600; color:<?= $balance > 0 ? '#dc2626' : '#059669' ?>; font-family:monospace;">
-                                <?= number_format($balance, 2) ?>
-                            </td>
-                            <td style="text-align:center;">
-                                <?php if ($balance <= 0): ?>
-                                    <span class="bill-status paid">✅ Paid</span>
-                                <?php elseif ($has_pending): ?>
-                                    <span class="bill-status partial">🔄 Partial</span>
-                                <?php else: ?>
-                                    <span class="bill-status pending">⏳ Pending</span>
-                                <?php endif; ?>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <tr>
-                        <td colspan="8" class="text-center py-8 text-gray-400">
-                            <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
-                            <p>No pending bills found!</p>
-                            <p class="text-sm mt-1">All bills have been paid</p>
-                        </td>
-                    </tr>
-                <?php endif; ?>
-            </tbody>
-        </table>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PAID BILLS HISTORY -->
-    <!-- ================================================================ -->
-    <?php if (count($paid_bills) > 0): ?>
-    <div class="paid-bills-section">
-        <div class="section-title">
-            <i class="fas fa-history text-green-600"></i>
-            Payment History
-            <span class="badge"><?= count($paid_bills) ?></span>
-        </div>
-        
-        <?php foreach ($paid_bills as $paid):
-            $payments = $payment_history[$paid['id']] ?? [];
-            $paid_items_count = $paid['item_count'] ?? 0;
-        ?>
-        <div class="bills-table-wrap" style="border-color: #d1fae5; margin-bottom:12px;">
-            <table class="bills-table" style="min-width: 600px;">
-                <thead>
-                    <tr style="background: #059669;">
-                        <th>Bill Number</th>
-                        <th>Patient</th>
-                        <th style="text-align:right;">Total (TSh)</th>
-                        <th style="text-align:center;">Status</th>
-                        <th style="text-align:center;">Paid At</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><span class="font-mono text-xs text-green-600"><?= htmlspecialchars($paid['bill_number']) ?></span></td>
-                        <td><?= htmlspecialchars($paid['patient_name']) ?></td>
-                        <td style="text-align:right; color:#059669; font-weight:600; font-family:monospace;"><?= number_format($paid['total_amount'] ?? 0, 2) ?></td>
-                        <td style="text-align:center;">
-                            <span class="bill-status paid">✅ Paid</span>
-                        </td>
-                        <td style="text-align:center; font-size:0.7rem; color:#6b7280;">
-                            <?= date('d/m/Y H:i', strtotime($paid['updated_at'])) ?>
-                        </td>
-                    </tr>
-                    <?php if (!empty($payments)): ?>
-                    <tr>
-                        <td colspan="5" style="padding:0;">
-                            <div style="padding:8px 14px; background:#f8fafc;">
-                                <div style="font-size:0.65rem; font-weight:600; color:#6b7280; margin-bottom:4px;">
-                                    <i class="fas fa-receipt mr-1"></i> Payment Receipts
-                                </div>
-                                <?php foreach ($payments as $payment): ?>
-                                <div class="payment-history-item">
-                                    <span><?= htmlspecialchars($payment['receipt_number']) ?></span>
-                                    <span class="method"><?= $payment['payment_method'] ?></span>
-                                    <span class="amount"><?= number_format($payment['amount'], 2) ?></span>
-                                    <span class="date"><?= date('d/m/Y H:i', strtotime($payment['received_at'])) ?></span>
-                                </div>
-                                <?php endforeach; ?>
-                            </div>
-                        </td>
-                    </tr>
-                    <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
-        <?php endforeach; ?>
-    </div>
-    <?php endif; ?>
-
     <!-- Footer -->
-    <footer class="footer">
+    <footer class="footer" style="margin-top: 100px;">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
@@ -1351,236 +1305,244 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - FIXED: Items toggle works properly -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // PARTIAL PAYMENT MODE
+    // TOGGLE PATIENT CARD
     // ================================================================
-    var partialMode = false;
-    
-    function togglePartialMode() {
-        partialMode = !partialMode;
-        var section = document.getElementById('partialSection');
-        var btn = document.getElementById('partialModeBtn');
-        var itemCheckboxes = document.querySelectorAll('.item-select');
+    function togglePatientCard(header) {
+        var card = header.closest('.patient-card');
+        var body = card.querySelector('.card-body');
+        var icon = header.querySelector('.card-toggle i');
         
-        if (partialMode) {
-            section.classList.add('show');
-            btn.innerHTML = '<i class="fas fa-times"></i> Cancel Partial';
-            btn.classList.remove('btn-warning');
-            btn.classList.add('btn-danger');
-            // Show item checkboxes (only for pending items)
-            itemCheckboxes.forEach(function(cb) {
-                cb.style.display = 'inline-block';
-            });
-            // Hide bill checkboxes
-            document.querySelectorAll('.bill-select').forEach(function(cb) {
-                cb.style.display = 'none';
-            });
-            document.getElementById('selectAllCheckbox').style.display = 'none';
-            updatePartialTotal();
+        if (body.classList.contains('collapsed')) {
+            body.classList.remove('collapsed');
+            if (icon) icon.className = 'fas fa-chevron-up';
         } else {
-            section.classList.remove('show');
-            btn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> Partial Payment';
-            btn.classList.remove('btn-danger');
-            btn.classList.add('btn-warning');
-            // Hide item checkboxes
-            itemCheckboxes.forEach(function(cb) {
-                cb.style.display = 'none';
-                cb.checked = false;
-            });
-            // Show bill checkboxes
-            document.querySelectorAll('.bill-select').forEach(function(cb) {
-                cb.style.display = 'inline-block';
-            });
-            document.getElementById('selectAllCheckbox').style.display = 'inline-block';
-            updateSelectedTotal();
+            body.classList.add('collapsed');
+            if (icon) icon.className = 'fas fa-chevron-down';
         }
     }
-    
-    function updatePartialTotal() {
-        var checkboxes = document.querySelectorAll('.item-select:checked');
-        var total = 0;
-        var count = checkboxes.length;
-        
-        checkboxes.forEach(function(cb) {
-            total += parseFloat(cb.dataset.price || 0);
-        });
-        
-        document.getElementById('partialTotal').textContent = 'TSh ' + total.toFixed(2);
-        document.getElementById('selectedCount').innerHTML = 'Selected: <strong>' + count + '</strong> items';
-        document.getElementById('selectedTotal').textContent = total.toFixed(2);
-        
-        var btn = document.getElementById('partialPayBtn');
-        if (count === 0) {
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-hand-holding-usd"></i> Select Items First';
-        } else {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-hand-holding-usd"></i> Pay Selected Items (TSh ' + total.toFixed(2) + ')';
-        }
-    }
-    
+
     // ================================================================
-    // SELECT ALL ITEMS (Partial Mode) - Only pending items
-    // ================================================================
-    function selectAllItems() {
-        if (partialMode) {
-            var checkboxes = document.querySelectorAll('.item-select:not(:checked)');
-            checkboxes.forEach(function(cb) {
-                cb.checked = true;
-            });
-            updatePartialTotal();
-        } else {
-            var checkboxes = document.querySelectorAll('.bill-select:not(:checked)');
-            checkboxes.forEach(function(cb) {
-                cb.checked = true;
-            });
-            updateSelectedTotal();
-        }
-    }
-    
-    // ================================================================
-    // DESELECT ALL
-    // ================================================================
-    function deselectAll() {
-        if (partialMode) {
-            document.querySelectorAll('.item-select').forEach(function(cb) {
-                cb.checked = false;
-            });
-            updatePartialTotal();
-        } else {
-            document.querySelectorAll('.bill-select').forEach(function(cb) {
-                cb.checked = false;
-            });
-            document.getElementById('selectAllCheckbox').checked = false;
-            updateSelectedTotal();
-        }
-    }
-    
-    // ================================================================
-    // PROCESS PARTIAL PAYMENT
-    // ================================================================
-    function processPartialPayment() {
-        var checkboxes = document.querySelectorAll('.item-select:checked');
-        var itemIds = [];
-        var totalAmount = 0;
-        
-        checkboxes.forEach(function(cb) {
-            itemIds.push(parseInt(cb.dataset.itemId));
-            totalAmount += parseFloat(cb.dataset.price || 0);
-        });
-        
-        if (itemIds.length === 0) {
-            showToast('⚠️ No Selection', 'Please select at least one unpaid item to pay', 'warning');
-            return;
-        }
-        
-        // Confirm payment
-        if (!confirm('Pay TSh ' + totalAmount.toFixed(2) + ' for ' + itemIds.length + ' item(s)?')) {
-            return;
-        }
-        
-        var paymentMethod = document.getElementById('paymentMethod').value;
-        var btn = document.getElementById('partialPayBtn');
-        var originalHtml = btn.innerHTML;
-        
-        btn.innerHTML = '<span class="spinner"></span> Processing...';
-        btn.disabled = true;
-        
-        var formData = new FormData();
-        formData.append('action', 'partial_payment');
-        formData.append('payment_method', paymentMethod);
-        formData.append('partial_amount', totalAmount);
-        itemIds.forEach(function(id) {
-            formData.append('item_ids[]', id);
-        });
-        
-        fetch(window.location.href, {
-            method: 'POST',
-            body: formData
-        })
-        .then(function(response) { return response.json(); })
-        .then(function(data) {
-            if (data.success) {
-                showToast('✅ Success', data.message, 'success');
-                setTimeout(function() { window.location.reload(); }, 2000);
-            } else {
-                showToast('❌ Error', data.message, 'error');
-            }
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-        })
-        .catch(function(error) {
-            showToast('❌ Error', 'Network error: ' + error.message, 'error');
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-        });
-    }
-    
-    // ================================================================
-    // TOGGLE ITEMS EXPAND
+    // TOGGLE ITEMS EXPAND - FIXED VERSION
     // ================================================================
     function toggleItems(element) {
-        var list = element.parentElement.querySelector('.items-list');
+        // Pata container ya items (sibling ya button)
+        var container = element.parentElement.querySelector('.items-container');
+        
+        // Pata icon ya chevron
         var icon = element.querySelector('.fa-chevron-right');
-        if (list) {
-            if (list.style.display === 'none' || list.style.display === '') {
-                list.style.display = 'block';
-                if (icon) icon.style.transform = 'rotate(90deg)';
+        if (!icon) {
+            icon = element.querySelector('.fa-chevron-down');
+        }
+        
+        if (container) {
+            // Toggle display
+            if (container.style.display === 'none' || container.style.display === '') {
+                // Open
+                container.style.display = 'block';
+                container.classList.add('open');
+                if (icon) {
+                    icon.className = 'fas fa-chevron-down';
+                    icon.style.transition = 'transform 0.3s ease';
+                }
+                // Badilisha text ya button
+                var btnText = element.innerHTML;
+                if (btnText.includes('items')) {
+                    element.innerHTML = element.innerHTML.replace('fa-chevron-right', 'fa-chevron-down');
+                }
             } else {
-                list.style.display = 'none';
-                if (icon) icon.style.transform = 'rotate(0deg)';
+                // Close
+                container.style.display = 'none';
+                container.classList.remove('open');
+                if (icon) {
+                    icon.className = 'fas fa-chevron-right';
+                    icon.style.transition = 'transform 0.3s ease';
+                }
+                // Rudisha text ya button
+                var btnText = element.innerHTML;
+                if (btnText.includes('items')) {
+                    element.innerHTML = element.innerHTML.replace('fa-chevron-down', 'fa-chevron-right');
+                }
+            }
+        } else {
+            // If container not found, try to find by ID
+            var billId = element.id ? element.id.replace('items-btn-', '') : '';
+            if (billId) {
+                toggleItemsByBillId(billId);
             }
         }
     }
-    
+
     // ================================================================
-    // SELECT / DESELECT ALL BILLS
+    // TOGGLE ITEMS BY BILL ID (for direct links)
     // ================================================================
-    function toggleSelectAll(checked) {
-        var checkboxes = document.querySelectorAll('.bill-select:not(:disabled)');
+    function toggleItemsByBillId(billId) {
+        var container = document.getElementById('items-container-' + billId);
+        var btn = document.getElementById('items-btn-' + billId);
+        var icon = document.getElementById('items-icon-' + billId);
+        
+        if (container) {
+            if (container.style.display === 'none' || container.style.display === '') {
+                container.style.display = 'block';
+                container.classList.add('open');
+                if (icon) {
+                    icon.className = 'fas fa-chevron-down';
+                }
+                if (btn) {
+                    btn.innerHTML = btn.innerHTML.replace('fa-chevron-right', 'fa-chevron-down');
+                }
+            } else {
+                container.style.display = 'none';
+                container.classList.remove('open');
+                if (icon) {
+                    icon.className = 'fas fa-chevron-right';
+                }
+                if (btn) {
+                    btn.innerHTML = btn.innerHTML.replace('fa-chevron-down', 'fa-chevron-right');
+                }
+            }
+        }
+    }
+
+    // ================================================================
+    // SELECT ALL BILLS FOR A PATIENT
+    // ================================================================
+    function selectPatientBills(checkbox, patientId) {
+        var checkboxes = document.querySelectorAll('.bill-select[data-patient-id="' + patientId + '"]');
         checkboxes.forEach(function(cb) {
-            cb.checked = checked;
+            cb.checked = checkbox.checked;
         });
         updateSelectedTotal();
     }
-    
+
+    // ================================================================
+    // SELECT / DESELECT ALL BILLS
+    // ================================================================
+    function selectAllBills() {
+        var checkboxes = document.querySelectorAll('.bill-select:not(:disabled)');
+        checkboxes.forEach(function(cb) {
+            cb.checked = true;
+        });
+        document.querySelectorAll('.patient-select-all').forEach(function(cb) {
+            var patientId = cb.dataset.patientId;
+            var patientCheckboxes = document.querySelectorAll('.bill-select[data-patient-id="' + patientId + '"]');
+            var allChecked = true;
+            patientCheckboxes.forEach(function(pcb) {
+                if (!pcb.checked) allChecked = false;
+            });
+            cb.checked = allChecked && patientCheckboxes.length > 0;
+        });
+        updateSelectedTotal();
+    }
+
+    function deselectAllBills() {
+        document.querySelectorAll('.bill-select').forEach(function(cb) {
+            cb.checked = false;
+        });
+        document.querySelectorAll('.patient-select-all').forEach(function(cb) {
+            cb.checked = false;
+        });
+        updateSelectedTotal();
+    }
+
+    // ================================================================
+    // UPDATE SELECTED TOTAL
+    // ================================================================
     function updateSelectedTotal() {
         var checkboxes = document.querySelectorAll('.bill-select:checked');
         var count = checkboxes.length;
-        var balance = 0;
-        var total = 0;
+        var total_balance = 0;
+        var total_amount = 0;
+        var discount = parseFloat(document.getElementById('discountAmount').value) || 0;
+        var partial = parseFloat(document.getElementById('partialAmount').value) || 0;
         
         checkboxes.forEach(function(cb) {
-            var row = cb.closest('tr');
+            var row = cb.closest('.bill-row');
             if (row) {
-                var bal = parseFloat(row.dataset.balance || 0);
-                balance += bal;
-                var tot = parseFloat(row.dataset.total || 0);
-                total += tot;
+                var balance = parseFloat(row.dataset.balance || 0);
+                total_balance += balance;
+                var amount = parseFloat(row.dataset.total || 0);
+                total_amount += amount;
             }
         });
         
-        document.getElementById('selectedCount').innerHTML = 'Selected: <strong>' + count + '</strong> bills';
-        document.getElementById('selectedTotal').textContent = balance.toFixed(2);
+        var grand_total = total_balance - discount;
+        if (grand_total < 0) grand_total = 0;
         
-        var selectAll = document.getElementById('selectAllCheckbox');
-        var allCheckboxes = document.querySelectorAll('.bill-select:not(:disabled)');
-        var allChecked = true;
-        allCheckboxes.forEach(function(cb) {
-            if (!cb.checked) allChecked = false;
+        // Update displays
+        document.getElementById('selectedCountNum').textContent = count;
+        document.getElementById('selectedTotal').textContent = total_balance.toFixed(2);
+        document.getElementById('displayTotal').textContent = 'TSh ' + total_balance.toFixed(2);
+        document.getElementById('displayDiscount').textContent = 'TSh ' + discount.toFixed(2);
+        document.getElementById('displayGrandTotal').textContent = 'TSh ' + grand_total.toFixed(2);
+        
+        // Update patient select all checkboxes
+        var patients = document.querySelectorAll('.patient-card');
+        patients.forEach(function(card) {
+            var patientId = card.dataset.patientId;
+            var selectAll = card.querySelector('.patient-select-all');
+            if (selectAll) {
+                var patientCheckboxes = card.querySelectorAll('.bill-select');
+                var allChecked = true;
+                patientCheckboxes.forEach(function(cb) {
+                    if (!cb.checked) allChecked = false;
+                });
+                selectAll.checked = allChecked && patientCheckboxes.length > 0;
+                if (patientCheckboxes.length === 0) {
+                    selectAll.checked = false;
+                }
+            }
         });
-        if (selectAll) {
-            selectAll.checked = allChecked && allCheckboxes.length > 0;
+        
+        // Enable/disable payment buttons
+        var fullBtn = document.getElementById('fullPayBtn');
+        var partialBtn = document.getElementById('partialPayBtn');
+        var cancelBtn = document.getElementById('cancelBtn');
+        
+        if (count === 0) {
+            fullBtn.disabled = true;
+            fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> Select Bills First';
+            partialBtn.disabled = true;
+            partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> Select Bills First';
+            cancelBtn.disabled = true;
+            cancelBtn.innerHTML = '<i class="fas fa-times-circle"></i> Select Bills First';
+        } else {
+            fullBtn.disabled = false;
+            fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> PAY FULL (TSh ' + grand_total.toFixed(2) + ')';
+            cancelBtn.disabled = false;
+            cancelBtn.innerHTML = '<i class="fas fa-times-circle"></i> CANCEL (' + count + ' bills)';
+            
+            // Partial uses exact amount entered
+            if (partial > 0 && partial <= total_balance) {
+                partialBtn.disabled = false;
+                var partialDisplay = partial;
+                if (discount > 0) {
+                    var discountRatio = partial / total_balance;
+                    var partialDiscount = discount * discountRatio;
+                    partialDisplay = partial - partialDiscount;
+                    if (partialDisplay < 0) partialDisplay = 0;
+                }
+                partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PAY PARTIAL (TSh ' + partialDisplay.toFixed(2) + ')';
+            } else if (partial > total_balance) {
+                partialBtn.disabled = true;
+                partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> Amount exceeds balance';
+            } else if (partial <= 0) {
+                partialBtn.disabled = true;
+                partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> Enter Partial Amount';
+            } else {
+                partialBtn.disabled = false;
+                partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PAY PARTIAL (TSh ' + partial.toFixed(2) + ')';
+            }
         }
     }
-    
+
     // ================================================================
-    // PROCESS FULL PAYMENT
+    // PROCESS PAYMENT
     // ================================================================
-    function processPayment() {
+    function processPayment(type) {
         var checkboxes = document.querySelectorAll('.bill-select:checked');
         var billIds = [];
         checkboxes.forEach(function(cb) {
@@ -1588,20 +1550,122 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         });
         
         if (billIds.length === 0) {
-            showToast('⚠️ No Selection', 'Please select at least one bill to pay', 'info');
+            showToast('⚠️ No Selection', 'Please select at least one bill', 'warning');
             return;
         }
         
         var paymentMethod = document.getElementById('paymentMethod').value;
-        var btn = document.getElementById('completeBtn');
+        var discount = parseFloat(document.getElementById('discountAmount').value) || 0;
+        var partialAmount = parseFloat(document.getElementById('partialAmount').value) || 0;
+        
+        // Calculate total balance
+        var totalBalance = 0;
+        checkboxes.forEach(function(cb) {
+            var row = cb.closest('.bill-row');
+            if (row) {
+                totalBalance += parseFloat(row.dataset.balance || 0);
+            }
+        });
+        
+        // CANCEL BILLS
+        if (type === 'cancel') {
+            if (!confirm('Cancel ' + billIds.length + ' selected bill(s)?\n\nThis action cannot be undone!')) {
+                return;
+            }
+            
+            var btn = document.getElementById('cancelBtn');
+            var originalHtml = btn.innerHTML;
+            btn.innerHTML = '<span class="spinner"></span> Cancelling...';
+            btn.disabled = true;
+            
+            var formData = new FormData();
+            formData.append('action', 'cancel_bills');
+            billIds.forEach(function(id) {
+                formData.append('bill_ids[]', id);
+            });
+            
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    showToast('✅ Success', data.message, 'success');
+                    setTimeout(function() { window.location.reload(); }, 2000);
+                } else {
+                    showToast('❌ Error', data.message, 'error');
+                }
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
+            })
+            .catch(function(error) {
+                showToast('❌ Error', 'Network error: ' + error.message, 'error');
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
+            });
+            return;
+        }
+        
+        // PARTIAL PAYMENT
+        if (type === 'partial') {
+            if (partialAmount <= 0) {
+                showToast('⚠️ Invalid Amount', 'Please enter a valid partial amount', 'warning');
+                return;
+            }
+            if (partialAmount > totalBalance) {
+                showToast('⚠️ Amount Exceeds', 'Partial amount exceeds total balance', 'warning');
+                return;
+            }
+            if (discount > 0 && discount >= totalBalance) {
+                showToast('⚠️ Discount', 'Discount cannot exceed or equal total balance', 'warning');
+                return;
+            }
+            
+            var finalAmount = partialAmount;
+            if (discount > 0) {
+                var discountRatio = partialAmount / totalBalance;
+                var discountApplied = discount * discountRatio;
+                finalAmount = partialAmount - discountApplied;
+                if (finalAmount < 0) finalAmount = 0;
+            }
+            
+            if (!confirm('Pay TSh ' + partialAmount.toFixed(2) + ' for ' + billIds.length + ' bill(s)' + 
+                        (discount > 0 ? ' (Discount: TSh ' + (partialAmount - finalAmount).toFixed(2) + ')' : '') + '?')) {
+                return;
+            }
+        }
+        
+        // FULL PAYMENT
+        if (type === 'full') {
+            var grandTotal = totalBalance - discount;
+            if (grandTotal < 0) grandTotal = 0;
+            if (discount > 0 && discount > totalBalance) {
+                showToast('⚠️ Discount', 'Discount cannot exceed total balance', 'warning');
+                return;
+            }
+            
+            if (!confirm('Pay TSh ' + grandTotal.toFixed(2) + ' for ' + billIds.length + ' bill(s)' + 
+                        (discount > 0 ? ' (Discount: TSh ' + discount.toFixed(2) + ')' : '') + '?')) {
+                return;
+            }
+        }
+        
+        var btn = type === 'partial' ? document.getElementById('partialPayBtn') : document.getElementById('fullPayBtn');
         var originalHtml = btn.innerHTML;
         
         btn.innerHTML = '<span class="spinner"></span> Processing...';
         btn.disabled = true;
         
         var formData = new FormData();
-        formData.append('action', 'complete_payment');
+        formData.append('action', type === 'partial' ? 'partial_payment' : 'complete_payment');
         formData.append('payment_method', paymentMethod);
+        if (discount > 0) {
+            formData.append('discount_amount', discount);
+        }
+        if (type === 'partial') {
+            formData.append('partial_amount', partialAmount);
+        }
         billIds.forEach(function(id) {
             formData.append('bill_ids[]', id);
         });
@@ -1614,12 +1678,13 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         .then(function(data) {
             if (data.success) {
                 showToast('✅ Success', data.message, 'success');
-                setTimeout(function() { window.location.reload(); }, 2000);
+                setTimeout(function() { window.location.reload(); }, 2500);
             } else {
                 showToast('❌ Error', data.message, 'error');
             }
             btn.innerHTML = originalHtml;
             btn.disabled = false;
+            updateSelectedTotal();
         })
         .catch(function(error) {
             showToast('❌ Error', 'Network error: ' + error.message, 'error');
@@ -1627,7 +1692,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             btn.disabled = false;
         });
     }
-    
+
     // ================================================================
     // TOAST
     // ================================================================
@@ -1647,7 +1712,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 4000);
     }
-    
+
     // ================================================================
     // DARK MODE
     // ================================================================
@@ -1752,14 +1817,33 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                 searchInput.select();
             }
         }
-        if (e.key === 'Enter' && e.ctrlKey) {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
-            if (partialMode) {
-                processPartialPayment();
+            var partialAmount = parseFloat(document.getElementById('partialAmount').value) || 0;
+            if (partialAmount > 0) {
+                processPayment('partial');
             } else {
-                processPayment();
+                processPayment('full');
             }
         }
+    });
+
+    // ================================================================
+    // AUTO-SELECT ALL WHEN DISCOUNT IS ADDED
+    // ================================================================
+    document.getElementById('discountAmount')?.addEventListener('input', function() {
+        var val = parseFloat(this.value) || 0;
+        if (val > 0) {
+            var selected = document.querySelectorAll('.bill-select:checked');
+            if (selected.length === 0) {
+                selectAllBills();
+            }
+        }
+        updateSelectedTotal();
+    });
+
+    document.getElementById('partialAmount')?.addEventListener('input', function() {
+        updateSelectedTotal();
     });
 
     // ================================================================
@@ -1767,17 +1851,27 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         updateSelectedTotal();
+        
+        // Open items if bill_id is in URL
+        var urlParams = new URLSearchParams(window.location.search);
+        var billId = urlParams.get('bill_id');
+        if (billId) {
+            setTimeout(function() {
+                toggleItemsByBillId(billId);
+            }, 500);
+        }
     });
 
     // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c💰 Braick - Process Payments (Full + Partial)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c📊 Total Bills: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Total Balance: <?= number_format($total_pending_balance, 2) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Select bills (full) or items (partial) to pay', 'font-size:12px; color:#34D399;');
-    console.log('%c🔄 Click "Partial Payment" to switch to item selection mode', 'font-size:12px; color:#34D399;');
-    console.log('%c⌨️ Ctrl+Enter to process payment', 'font-size:12px; color:#34D399;');
+    console.log('%c💰 Braick - Process Payments (FULLY FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c📊 Total Patients: <?= $total_patients ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Total Bills: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Total Balance: <?= number_format($total_balance, 2) ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ Items expand button works properly', 'font-size:12px; color:#34D399;');
+    console.log('%c💵 Partial uses EXACT amount entered', 'font-size:12px; color:#34D399;');
+    console.log('%c👨‍⚕️ Doctor name shown in patient details', 'font-size:12px; color:#059669;');
 </script>
 
 </body>
