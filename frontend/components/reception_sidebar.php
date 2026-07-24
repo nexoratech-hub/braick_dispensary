@@ -3,7 +3,7 @@
 // FILE: frontend/components/reception_sidebar.php
 // RECEPTION - SHARED SIDEBAR (BLUE BACKGROUND)
 // HAKUNA JINA LA RECEPTIONIST, HAKUNA BRANCH
-// WITH REAL DATA FOR BADGES + AJAX AUTO-UPDATE
+// WITH REAL DATA FOR BADGES + AJAX AUTO-UPDATE (SELF-CONTAINED)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -48,6 +48,7 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
         
     } catch (Exception $e) {
         // If error, keep counts as 0
+        error_log("Reception sidebar stats error: " . $e->getMessage());
     }
 }
 
@@ -69,6 +70,72 @@ function isActive($page) {
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// HANDLE AJAX REQUEST FOR SIDEBAR DATA (SELF-CONTAINED)
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_reception_sidebar_data') {
+    header('Content-Type: application/json');
+    
+    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    
+    $response = [
+        'success' => false,
+        'patients' => 0,
+        'appointments' => 0,
+        'pending_appointments' => 0,
+        'today_visits' => 0,
+        'pending_patients' => 0,
+        'hash' => ''
+    ];
+    
+    if (isset($db) && $db !== null) {
+        try {
+            // 1. Total Patients
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
+            $stmt->execute([$branch_id]);
+            $response['patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 2. Today's Appointments
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
+            $stmt->execute([$branch_id]);
+            $response['appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 3. Pending Appointments
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
+            $stmt->execute([$branch_id]);
+            $response['pending_appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 4. Today's Visits
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
+            $stmt->execute([$branch_id]);
+            $response['today_visits'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 5. Pending Patients
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
+            $stmt->execute([$branch_id]);
+            $response['pending_patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $response['success'] = true;
+            
+            // Create hash to detect changes
+            $response['hash'] = md5(
+                $response['patients'] . 
+                $response['appointments'] . 
+                $response['pending_appointments'] . 
+                $response['today_visits'] . 
+                $response['pending_patients']
+            );
+            
+        } catch (Exception $e) {
+            $response['success'] = false;
+            $response['error'] = $e->getMessage();
+        }
+    }
+    
+    echo json_encode($response);
+    exit;
+}
 ?>
 
 <style>
@@ -179,6 +246,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         font-weight: 600;
         color: white;
         transition: all 0.3s ease;
+        min-width: 18px;
+        text-align: center;
     }
     
     .sidebar-link:hover .badge {
@@ -197,6 +266,10 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     
     .sidebar-link .badge.green {
         background: #059669;
+    }
+    
+    .sidebar-link .badge.orange {
+        background: #D97706;
     }
     
     @keyframes pulse-badge {
@@ -250,12 +323,26 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         font-size: 0.6rem;
         color: #9EC5FE;
         margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .sidebar-status .status-time .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34D399;
+        display: inline-block;
+        animation: pulse-dot 1.5s infinite;
     }
     
     @keyframes pulse-dot {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.4; }
     }
+    
+    .mt-2 { margin-top: 8px; }
     
     @media (max-width: 1024px) {
         .sidebar { 
@@ -311,7 +398,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- 4. Appointments -->
         <a href="../reception/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
             <i class="fas fa-calendar-check"></i> Appointments
-            <span class="badge <?= $pending_appointments > 0 ? 'danger' : '' ?>" id="receptionAppointmentCount"><?= $appointment_count ?></span>
+            <?php if ($pending_appointments > 0): ?>
+                <span class="badge danger" id="receptionAppointmentCount"><?= $appointment_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="receptionAppointmentCount"><?= $appointment_count ?></span>
+            <?php endif; ?>
         </a>
         
         <!-- ===== VISITS ===== -->
@@ -326,7 +417,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- 6. Assign Doctor -->
         <a href="../reception/assign_doctor.php" class="sidebar-link <?= isActive('assign_doctor.php') ?>">
             <i class="fas fa-user-md"></i> Assign Doctor
-            <span class="badge <?= $pending_patients > 0 ? 'danger' : '' ?>" id="receptionPendingPatients"><?= $pending_patients ?></span>
+            <?php if ($pending_patients > 0): ?>
+                <span class="badge danger" id="receptionPendingPatients"><?= $pending_patients ?></span>
+            <?php else: ?>
+                <span class="badge" id="receptionPendingPatients">0</span>
+            <?php endif; ?>
         </a>
         
         <!-- ===== CASHIER ===== -->
@@ -352,16 +447,19 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
     </nav>
     
-    <!-- Online Status -->
+    <!-- Online Status with Live Update Indicator -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
-        <span class="status-time" id="sidebarStatusTime"><?= date('H:i:s') ?></span>
+        <span class="status-time" id="sidebarStatusTime">
+            <span class="live-dot"></span>
+            <span id="sidebarLiveTime"><?= date('H:i:s') ?></span>
+        </span>
     </div>
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH AJAX AUTO-UPDATE (EVERY 3 SECONDS) -->
+<!-- JAVASCRIPT - WITH AJAX AUTO-UPDATE (EVERY 3 SECONDS) - SELF-CONTAINED -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -391,23 +489,39 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     // ================================================================
     // UPDATE SIDEBAR BADGES
     // ================================================================
-    function updateSidebarBadges(patientCount, appointmentCount, todayVisits, pendingPatients) {
+    function updateSidebarBadges(patientCount, appointmentCount, pendingAppointments, todayVisits, pendingPatients) {
+        // Update Patients Badge
         if (patientCount !== undefined) {
             var el = document.getElementById('receptionPatientCount');
-            if (el) el.textContent = patientCount;
+            if (el) {
+                el.textContent = patientCount;
+                el.style.opacity = patientCount === 0 ? '0.6' : '1';
+            }
         }
+        
+        // Update Appointments Badge
         if (appointmentCount !== undefined) {
             var el = document.getElementById('receptionAppointmentCount');
             if (el) {
                 el.textContent = appointmentCount;
-                // If there are pending appointments, show danger badge
-                // This requires additional data from server
+                if (pendingAppointments > 0) {
+                    el.className = 'badge danger';
+                } else {
+                    el.className = 'badge';
+                }
             }
         }
+        
+        // Update Today Visits Badge
         if (todayVisits !== undefined) {
             var el = document.getElementById('receptionTodayVisits');
-            if (el) el.textContent = todayVisits;
+            if (el) {
+                el.textContent = todayVisits;
+                el.className = todayVisits > 0 ? 'badge green' : 'badge';
+            }
         }
+        
+        // Update Pending Patients Badge
         if (pendingPatients !== undefined) {
             var el = document.getElementById('receptionPendingPatients');
             if (el) {
@@ -421,52 +535,67 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
         
         // Update status time
-        var timeEl = document.getElementById('sidebarStatusTime');
+        var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
-            timeEl.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            var timeStr = now.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit',
+                hour12: true 
+            });
+            timeEl.textContent = timeStr;
         }
     }
 
     // ================================================================
-    // AJAX AUTO-UPDATE - FETCH SIDEBAR DATA EVERY 3 SECONDS
+    // AJAX AUTO-UPDATE (Self-contained - uses same file)
     // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
-    var sidebarLastHash = null;
+    var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
+    var lastDataHash = null;
 
     function fetchSidebarData() {
         if (sidebarIsUpdating) return;
         sidebarIsUpdating = true;
         
-        fetch('../reception/get_sidebar_stats.php')
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    // Check if data has changed
-                    if (sidebarLastHash !== data.hash) {
-                        sidebarLastHash = data.hash;
-                        updateSidebarBadges(
-                            data.patients,
-                            data.appointments,
-                            data.today_visits,
-                            data.pending_patients
-                        );
-                    }
-                    
-                    // Update status time
-                    var timeEl = document.getElementById('sidebarStatusTime');
-                    if (timeEl) {
-                        var now = new Date();
-                        timeEl.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    }
+        var formData = new FormData();
+        formData.append('action', 'get_reception_sidebar_data');
+        formData.append('branch_id', branchId);
+        
+        // Send request to the SAME FILE (self-contained)
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            if (data.success) {
+                // Only update if data has changed
+                if (lastDataHash !== data.hash) {
+                    lastDataHash = data.hash;
+                    updateSidebarBadges(
+                        data.patients || 0,
+                        data.appointments || 0,
+                        data.pending_appointments || 0,
+                        data.today_visits || 0,
+                        data.pending_patients || 0
+                    );
                 }
-                sidebarIsUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Sidebar update error:', error);
-                sidebarIsUpdating = false;
-            });
+            }
+            sidebarIsUpdating = false;
+        })
+        .catch(function(error) {
+            // Silent fail - don't spam console
+            // console.warn('Sidebar update error:', error.message);
+            sidebarIsUpdating = false;
+        });
     }
 
     // ================================================================
@@ -476,10 +605,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        // Update every 3 seconds
-        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
-        // Fetch immediately
+        // Initial update
         fetchSidebarData();
+        // Then every 3 seconds
+        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
+        console.log('%c🔄 Reception Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
 
     // ================================================================
@@ -489,6 +619,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
             sidebarUpdateInterval = null;
+            console.log('%c⏹️ Reception Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
@@ -513,10 +644,19 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }, 2000);
     });
 
-    console.log('%c🏥 Reception Sidebar - v2', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
+    // ================================================================
+    window.updateSidebarBadges = updateSidebarBadges;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
+
+    console.log('%c🏥 Reception Sidebar (SELF-CONTAINED - Auto-update every 3s)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Menu: Dashboard, Register Patient, Patients, Appointments, Visit, Assign Doctor, Cashier', 'font-size:12px; color:#9EC5FE;');
     console.log('%c👥 Patients: <?= $patient_count ?>', 'font-size:12px; color:#059669;');
     console.log('%c📅 Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#059669;');
     console.log('%c⏳ Pending Patients: <?= $pending_patients ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c🔄 Auto-update: Every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
 </script>

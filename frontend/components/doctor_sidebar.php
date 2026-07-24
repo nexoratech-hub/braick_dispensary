@@ -2,8 +2,8 @@
 // ================================================================
 // FILE: frontend/components/doctor_sidebar.php
 // DOCTOR - SHARED SIDEBAR (BLUE BACKGROUND)
-// WITH CONSULTATIONS AS SINGLE MENU ITEM
-// ORDER: Dashboard → My Patients → Prescribe → Prescriptions → Lab Results → Consultations → Referrals → Appointments → Documents
+// WITH AUTO-UPDATE EVERY 3 SECONDS - SELF-CONTAINED
+// CONSULTATIONS AS SINGLE MENU ITEM
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -108,6 +108,75 @@ function isActive($page) {
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// HANDLE AJAX REQUEST FOR SIDEBAR DATA (SELF-CONTAINED)
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_sidebar_data') {
+    header('Content-Type: application/json');
+    
+    $doctor_id = (int)($_POST['doctor_id'] ?? 0);
+    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    
+    $response = [
+        'success' => false,
+        'patientCount' => 0,
+        'labCount' => 0,
+        'referralCount' => 0,
+        'appointmentCount' => 0,
+        'pendingConsultations' => 0,
+        'pendingPrescriptions' => 0
+    ];
+    
+    if ($doctor_id > 0 && isset($db) && $db !== null) {
+        try {
+            // 1. Total Patients
+            $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?");
+            $stmt->execute([$doctor_id]);
+            $response['patientCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 2. Pending Lab Tests
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status IN ('pending', 'in_progress')");
+            $stmt->execute([$doctor_id]);
+            $response['labCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 3. Pending Referrals
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM referrals WHERE from_doctor_id = ? AND status = 'pending'");
+            $stmt->execute([$doctor_id]);
+            $response['referralCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 4. Today's Appointments
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE() AND status IN ('scheduled', 'confirmed')");
+            $stmt->execute([$doctor_id]);
+            $response['appointmentCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 5. Pending Consultations
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM visits 
+                WHERE doctor_id = ? 
+                AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test')
+                AND is_completed = 0
+            ");
+            $stmt->execute([$doctor_id]);
+            $response['pendingConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 6. Pending Prescriptions
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'");
+            $stmt->execute([$doctor_id]);
+            $response['pendingPrescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $response['success'] = true;
+            
+        } catch (Exception $e) {
+            $response['success'] = false;
+            $response['error'] = $e->getMessage();
+        }
+    }
+    
+    echo json_encode($response);
+    exit;
+}
 ?>
 
 <style>
@@ -299,9 +368,34 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         color: #D2E3FC;
     }
     
+    .sidebar-status .update-time {
+        font-size: 0.55rem;
+        color: #6EA8FE;
+        margin-left: auto;
+    }
+    
     @keyframes pulse-dot {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.4; }
+    }
+    
+    /* Live update indicator */
+    .sidebar-live-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.55rem;
+        color: #34D399;
+        margin-left: 8px;
+    }
+    
+    .sidebar-live-indicator .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34D399;
+        animation: pulse-dot 1.5s infinite;
+        display: inline-block;
     }
     
     @media (max-width: 1024px) {
@@ -450,15 +544,20 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
     </nav>
     
-    <!-- Online Status -->
+    <!-- Online Status with Live Update Indicator -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
+        <span class="update-time" id="sidebarUpdateTime">
+            <span class="sidebar-live-indicator">
+                <span class="dot"></span> Live
+            </span>
+        </span>
     </div>
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS (SELF-CONTAINED) -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -489,10 +588,16 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     // UPDATE SIDEBAR BADGES
     // ================================================================
     function updateSidebarBadges(data) {
+        // Patient Count
         if (data.patientCount !== undefined) {
             var el = document.getElementById('patientCount');
-            if (el) el.textContent = data.patientCount;
+            if (el) {
+                el.textContent = data.patientCount;
+                el.style.opacity = data.patientCount === 0 ? '0.6' : '1';
+            }
         }
+        
+        // Lab Count
         if (data.labCount !== undefined) {
             var el = document.getElementById('labCount');
             if (el) {
@@ -500,6 +605,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 el.className = data.labCount > 0 ? 'badge warning' : 'badge';
             }
         }
+        
+        // Referral Count
         if (data.referralCount !== undefined) {
             var el = document.getElementById('referralCount');
             if (el) {
@@ -507,6 +614,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 el.className = data.referralCount > 0 ? 'badge warning' : 'badge';
             }
         }
+        
+        // Appointment Count
         if (data.appointmentCount !== undefined) {
             var el = document.getElementById('appointmentCount');
             if (el) {
@@ -514,6 +623,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 el.className = data.appointmentCount > 0 ? 'badge blue' : 'badge';
             }
         }
+        
+        // Pending Consultations
         if (data.pendingConsultations !== undefined) {
             var el = document.getElementById('pendingConsultBadge');
             if (el) {
@@ -521,6 +632,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 el.className = data.pendingConsultations > 0 ? 'badge danger' : 'badge';
             }
         }
+        
+        // Pending Prescriptions
         if (data.pendingPrescriptions !== undefined) {
             var el = document.getElementById('prescriptionBadge');
             if (el) {
@@ -528,9 +641,126 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 el.className = data.pendingPrescriptions > 0 ? 'badge warning' : 'badge';
             }
         }
+        
+        // Update timestamp
+        var timeEl = document.getElementById('sidebarUpdateTime');
+        if (timeEl) {
+            var now = new Date();
+            var timeStr = now.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            });
+            timeEl.innerHTML = '<span class="sidebar-live-indicator"><span class="dot"></span> Live ' + timeStr;
+        }
     }
 
-    console.log('%c👨‍⚕️ Doctor Sidebar - Simplified', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // FETCH LIVE DATA FROM SAME FILE (SELF-CONTAINED)
+    // ================================================================
+    function fetchSidebarData() {
+        var doctorId = <?= json_encode($_SESSION['user_id'] ?? 0) ?>;
+        var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
+        
+        if (!doctorId) return;
+        
+        var formData = new FormData();
+        formData.append('action', 'get_sidebar_data');
+        formData.append('doctor_id', doctorId);
+        formData.append('branch_id', branchId);
+        
+        // Send request to the SAME FILE (self-contained)
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            if (data.success) {
+                updateSidebarBadges(data);
+            } else {
+                // Silent fail - keep existing data
+                // console.warn('Sidebar update returned error:', data.error);
+            }
+        })
+        .catch(function(error) {
+            // Silent fail - don't spam console with errors
+            // console.warn('Sidebar update failed:', error.message);
+        });
+    }
+
+    // ================================================================
+    // START AUTO-UPDATE (every 3 seconds)
+    // ================================================================
+    var sidebarUpdateInterval = null;
+    var isSidebarUpdating = false;
+
+    function startSidebarAutoUpdate() {
+        if (sidebarUpdateInterval) {
+            clearInterval(sidebarUpdateInterval);
+        }
+        // Initial update
+        fetchSidebarData();
+        // Then every 3 seconds
+        sidebarUpdateInterval = setInterval(function() {
+            if (!isSidebarUpdating) {
+                isSidebarUpdating = true;
+                fetchSidebarData();
+                setTimeout(function() {
+                    isSidebarUpdating = false;
+                }, 100);
+            }
+        }, 3000);
+        
+        console.log('%c🔄 Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
+    }
+
+    function stopSidebarAutoUpdate() {
+        if (sidebarUpdateInterval) {
+            clearInterval(sidebarUpdateInterval);
+            sidebarUpdateInterval = null;
+            console.log('%c⏹️ Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
+        }
+    }
+
+    // ================================================================
+    // HANDLE PAGE VISIBILITY - PAUSE WHEN HIDDEN
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopSidebarAutoUpdate();
+        } else {
+            startSidebarAutoUpdate();
+        }
+    });
+
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        // Start auto-update after a small delay
+        setTimeout(function() {
+            startSidebarAutoUpdate();
+        }, 1000);
+    });
+
+    // ================================================================
+    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
+    // ================================================================
+    window.updateSidebarBadges = updateSidebarBadges;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
+
+    console.log('%c👨‍⚕️ Doctor Sidebar - Auto-update enabled (SELF-CONTAINED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔄 Updates every 3 seconds - NO EXTERNAL API NEEDED', 'font-size:12px; color:#34D399;');
+    console.log('%c📊 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Menu Order:', 'font-size:12px; color:#9EC5FE;');
     console.log('%c   1. Dashboard', 'font-size:12px; color:#9EC5FE;');
     console.log('%c   2. My Patients (%s)', 'font-size:12px; color:#059669;', '<?= $patient_count ?>');

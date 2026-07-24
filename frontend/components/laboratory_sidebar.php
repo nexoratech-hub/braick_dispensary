@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/components/laboratory_sidebar.php
 // LABORATORY - SHARED SIDEBAR (FIXED - WITH REAL DATA FROM BOTH TABLES)
+// WITH AUTO-UPDATE EVERY 3 SECONDS (SELF-CONTAINED)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -109,6 +110,87 @@ function isActive($page) {
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// HANDLE AJAX REQUEST FOR SIDEBAR DATA (SELF-CONTAINED)
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_lab_sidebar_data') {
+    header('Content-Type: application/json');
+    
+    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    
+    $response = [
+        'success' => false,
+        'pending' => 0,
+        'in_progress' => 0,
+        'completed' => 0,
+        'today_tests' => 0
+    ];
+    
+    if (isset($db) && $db !== null) {
+        try {
+            // 1. Pending
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_tests 
+                WHERE branch_id = ? AND (status IS NULL OR status = 'pending' OR status = '')
+            ");
+            $stmt->execute([$branch_id]);
+            $pending_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+            
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_requests 
+                WHERE branch_id = ? AND status = 'pending'
+            ");
+            $stmt->execute([$branch_id]);
+            $pending_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+            
+            $response['pending'] = $pending_tests + $pending_requests;
+            
+            // 2. In Progress
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_requests 
+                WHERE branch_id = ? AND status IN ('accepted', 'in_progress')
+            ");
+            $stmt->execute([$branch_id]);
+            $response['in_progress'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 3. Completed Today
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_requests 
+                WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
+            ");
+            $stmt->execute([$branch_id]);
+            $response['completed'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 4. Today's Tests
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_tests 
+                WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
+            ");
+            $stmt->execute([$branch_id]);
+            $tests_completed_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM lab_request_items lri
+                JOIN lab_requests lr ON lri.request_id = lr.id
+                WHERE lr.branch_id = ? AND lri.status = 'completed' AND DATE(lri.completed_at) = CURDATE()
+            ");
+            $stmt->execute([$branch_id]);
+            $items_completed_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $response['today_tests'] = $tests_completed_today + $items_completed_today;
+            $response['success'] = true;
+            
+        } catch (Exception $e) {
+            $response['success'] = false;
+            $response['error'] = $e->getMessage();
+        }
+    }
+    
+    echo json_encode($response);
+    exit;
+}
 ?>
 <style>
     /* ================================================================
@@ -296,6 +378,18 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         font-size: 0.6rem;
         color: #9EC5FE;
         margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .sidebar-status .status-time .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34D399;
+        display: inline-block;
+        animation: pulse-dot 1.5s infinite;
     }
     
     @keyframes pulse-dot {
@@ -404,11 +498,14 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
     </nav>
     
-    <!-- Online Status -->
+    <!-- Online Status with Live Update Indicator -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
-        <span class="status-time" id="sidebarStatusTime"><?= date('H:i:s') ?></span>
+        <span class="status-time" id="sidebarStatusTime">
+            <span class="live-dot"></span>
+            <span id="sidebarLiveTime"><?= date('H:i:s') ?></span>
+        </span>
     </div>
 </aside>
 
@@ -445,98 +542,110 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge) {
             pendingBadge.textContent = pending;
-            if (pending > 0) {
-                pendingBadge.className = 'badge danger';
-            } else {
-                pendingBadge.className = 'badge';
-            }
+            pendingBadge.className = pending > 0 ? 'badge danger' : 'badge';
         }
         
         // Update In Progress Badge
         var inProgressBadge = document.getElementById('sidebarInProgressBadge');
         if (inProgressBadge) {
             inProgressBadge.textContent = inProgress;
-            if (inProgress > 0) {
-                inProgressBadge.className = 'badge orange';
-            } else {
-                inProgressBadge.className = 'badge';
-            }
+            inProgressBadge.className = inProgress > 0 ? 'badge orange' : 'badge';
         }
         
         // Update Completed Badge
         var completedBadge = document.getElementById('sidebarCompletedBadge');
         if (completedBadge) {
             completedBadge.textContent = completed;
-            if (completed > 0) {
-                completedBadge.className = 'badge green';
-            } else {
-                completedBadge.className = 'badge';
-            }
+            completedBadge.className = completed > 0 ? 'badge green' : 'badge';
         }
         
         // Update Today Tests Badge
         var todayTestsBadge = document.getElementById('sidebarTodayTests');
         if (todayTestsBadge) {
             todayTestsBadge.textContent = todayTests;
-            if (todayTests > 0) {
-                todayTestsBadge.className = 'badge green';
-            } else {
-                todayTestsBadge.className = 'badge';
-            }
+            todayTestsBadge.className = todayTests > 0 ? 'badge green' : 'badge';
         }
         
         // Update status time
-        var timeEl = document.getElementById('sidebarStatusTime');
+        var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
-            timeEl.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            var timeStr = now.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit',
+                hour12: true 
+            });
+            timeEl.textContent = timeStr;
         }
     }
 
     // ================================================================
-    // AJAX AUTO-UPDATE
+    // AJAX AUTO-UPDATE (Self-contained - uses same file)
     // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
+    var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
 
     function fetchSidebarData() {
         if (sidebarIsUpdating) return;
         sidebarIsUpdating = true;
         
-        fetch('../laboratory/get_sidebar_stats.php?t=' + new Date().getTime())
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    updateSidebarBadges(
-                        data.pending || 0,
-                        data.in_progress || 0,
-                        data.completed || 0,
-                        data.today_tests || 0
-                    );
-                }
-                sidebarIsUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Sidebar update error:', error);
-                sidebarIsUpdating = false;
-            });
+        var formData = new FormData();
+        formData.append('action', 'get_lab_sidebar_data');
+        formData.append('branch_id', branchId);
+        
+        // Send request to the SAME FILE (self-contained)
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            if (data.success) {
+                updateSidebarBadges(
+                    data.pending || 0,
+                    data.in_progress || 0,
+                    data.completed || 0,
+                    data.today_tests || 0
+                );
+            }
+            sidebarIsUpdating = false;
+        })
+        .catch(function(error) {
+            // Silent fail - don't spam console
+            // console.warn('Sidebar update error:', error.message);
+            sidebarIsUpdating = false;
+        });
     }
 
     function startSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
+        // Initial update
         fetchSidebarData();
+        // Then every 3 seconds
         sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
+        console.log('%c🔄 Laboratory Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
 
     function stopSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
             sidebarUpdateInterval = null;
+            console.log('%c⏹️ Laboratory Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
+    // ================================================================
+    // HANDLE PAGE VISIBILITY - PAUSE WHEN HIDDEN
+    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -545,13 +654,25 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     });
 
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 2000);
     });
 
-    console.log('%c🧪 Laboratory Sidebar (FIXED - Real Data from BOTH tables)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
+    // ================================================================
+    window.updateSidebarBadges = updateSidebarBadges;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
+
+    console.log('%c🧪 Laboratory Sidebar (SELF-CONTAINED - Auto-update every 3s)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?> | Today: <?= $today_tests ?>', 'font-size:12px; color:#9EC5FE;');
-    console.log('%c🔄 Auto-updates every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
 </script>

@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
-// PHARMACY - SHARED SIDEBAR
+// PHARMACY - SHARED SIDEBAR (FIXED - WITH AUTO-UPDATE)
+// AUTO-UPDATE EVERY 3 SECONDS - SELF-CONTAINED
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -31,7 +32,7 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $low_stock_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // Today's Sales
+        // Today's Prescription Sales
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM prescription_sales 
@@ -51,6 +52,7 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
         
     } catch (Exception $e) {
         // Keep counts as 0
+        error_log("Pharmacy sidebar stats error: " . $e->getMessage());
     }
 }
 
@@ -74,6 +76,68 @@ function isActive($page) {
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// HANDLE AJAX REQUEST FOR SIDEBAR DATA (SELF-CONTAINED)
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_pharmacy_sidebar_data') {
+    header('Content-Type: application/json');
+    
+    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    
+    $response = [
+        'success' => false,
+        'pending_prescriptions' => 0,
+        'low_stock' => 0,
+        'today_prescriptions' => 0,
+        'today_otc' => 0
+    ];
+    
+    if (isset($db) && $db !== null) {
+        try {
+            // Pending Prescriptions
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescription_sales WHERE branch_id = ? AND status = 'pending'");
+            $stmt->execute([$branch_id]);
+            $response['pending_prescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Low Stock Medicines
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM medications_inventory 
+                WHERE branch_id = ? AND quantity <= reorder_level AND status = 'active'
+            ");
+            $stmt->execute([$branch_id]);
+            $response['low_stock'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Today's Prescription Sales
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM prescription_sales 
+                WHERE branch_id = ? AND DATE(created_at) = CURDATE()
+            ");
+            $stmt->execute([$branch_id]);
+            $response['today_prescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Today's OTC Sales
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM otc_sales 
+                WHERE branch_id = ? AND DATE(created_at) = CURDATE()
+            ");
+            $stmt->execute([$branch_id]);
+            $response['today_otc'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $response['success'] = true;
+            
+        } catch (Exception $e) {
+            $response['success'] = false;
+            $response['error'] = $e->getMessage();
+        }
+    }
+    
+    echo json_encode($response);
+    exit;
+}
 ?>
 <style>
     /* ================================================================
@@ -183,6 +247,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         font-weight: 600;
         color: white;
         transition: all 0.3s ease;
+        min-width: 18px;
+        text-align: center;
     }
     
     .sidebar-link:hover .badge {
@@ -205,6 +271,10 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     
     .sidebar-link .badge.orange {
         background: #D97706;
+    }
+    
+    .sidebar-link .badge.blue {
+        background: #0B5ED7;
     }
     
     @keyframes pulse-badge {
@@ -258,12 +328,26 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         font-size: 0.6rem;
         color: #9EC5FE;
         margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .sidebar-status .status-time .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34D399;
+        display: inline-block;
+        animation: pulse-dot 1.5s infinite;
     }
     
     @keyframes pulse-dot {
         0%, 100% { opacity: 1; }
         50% { opacity: 0.4; }
     }
+    
+    .mt-2 { margin-top: 8px; }
     
     @media (max-width: 1024px) {
         .sidebar { 
@@ -302,16 +386,16 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <i class="fas fa-home"></i> Dashboard
         </a>
         
-        <!-- 2. Prescription Sales -->
+        <!-- ===== PRESCRIPTION SALES ===== -->
         <div class="nav-label mt-2">Prescription Sales</div>
         
         <!-- Pending Prescriptions -->
         <a href="../pharmacy/pending_prescriptions.php" class="sidebar-link <?= isActive('pending_prescriptions.php') ?>">
             <i class="fas fa-clock"></i> Pending Prescriptions
             <?php if ($pending_prescriptions > 0): ?>
-                <span class="badge danger"><?= $pending_prescriptions ?></span>
+                <span class="badge danger" id="sidebarPendingBadge"><?= $pending_prescriptions ?></span>
             <?php else: ?>
-                <span class="badge">0</span>
+                <span class="badge" id="sidebarPendingBadge">0</span>
             <?php endif; ?>
         </a>
         
@@ -323,10 +407,10 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- Prescription History -->
         <a href="../pharmacy/prescription_history.php" class="sidebar-link <?= isActive('prescription_history.php') ?>">
             <i class="fas fa-history"></i> Prescription History
-            <span class="badge"><?= $today_sales ?></span>
+            <span class="badge" id="sidebarTodayPrescriptions"><?= $today_sales ?></span>
         </a>
         
-        <!-- 3. OTC Sales -->
+        <!-- ===== OTC SALES ===== -->
         <div class="nav-label mt-2">OTC Sales</div>
         
         <!-- New OTC Sale -->
@@ -337,10 +421,10 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- OTC History -->
         <a href="../pharmacy/otc_history.php" class="sidebar-link <?= isActive('otc_history.php') ?>">
             <i class="fas fa-shopping-cart"></i> OTC History
-            <span class="badge"><?= $today_otc ?></span>
+            <span class="badge" id="sidebarTodayOtc"><?= $today_otc ?></span>
         </a>
         
-        <!-- 4. Medicines -->
+        <!-- ===== MEDICINES ===== -->
         <div class="nav-label mt-2">Medicines</div>
         
         <!-- Inventory -->
@@ -352,13 +436,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <a href="../pharmacy/low_stock.php" class="sidebar-link <?= isActive('low_stock.php') ?>">
             <i class="fas fa-exclamation-triangle"></i> Low Stock
             <?php if ($low_stock_count > 0): ?>
-                <span class="badge danger"><?= $low_stock_count ?></span>
+                <span class="badge danger" id="sidebarLowStockBadge"><?= $low_stock_count ?></span>
             <?php else: ?>
-                <span class="badge">0</span>
+                <span class="badge" id="sidebarLowStockBadge">0</span>
             <?php endif; ?>
         </a>
         
-        <!-- 5. Reports -->
+        <!-- ===== REPORTS ===== -->
         <a href="../pharmacy/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
             <i class="fas fa-chart-bar"></i> Reports
         </a>
@@ -378,11 +462,14 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
     </nav>
     
-    <!-- Online Status -->
+    <!-- Online Status with Live Update Indicator -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
-        <span class="status-time" id="sidebarStatusTime"><?= date('H:i:s') ?></span>
+        <span class="status-time" id="sidebarStatusTime">
+            <span class="live-dot"></span>
+            <span id="sidebarLiveTime"><?= date('H:i:s') ?></span>
+        </span>
     </div>
 </aside>
 
@@ -414,99 +501,115 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     // ================================================================
     // UPDATE SIDEBAR BADGES (AJAX every 3 seconds)
     // ================================================================
-    function updateSidebarBadges(pending, lowStock, todaySales, todayOtc) {
-        var links = document.querySelectorAll('.sidebar-link');
-        links.forEach(function(link) {
-            var text = link.textContent.trim();
-            if (text.includes('Pending Prescriptions')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    if (pending > 0) {
-                        badge.textContent = pending;
-                        badge.className = 'badge danger';
-                    } else {
-                        badge.textContent = '0';
-                        badge.className = 'badge';
-                    }
-                }
-            }
-            if (text.includes('Low Stock')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    if (lowStock > 0) {
-                        badge.textContent = lowStock;
-                        badge.className = 'badge danger';
-                    } else {
-                        badge.textContent = '0';
-                        badge.className = 'badge';
-                    }
-                }
-            }
-            if (text.includes('Prescription History')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    badge.textContent = todaySales;
-                }
-            }
-            if (text.includes('OTC History')) {
-                var badge = link.querySelector('.badge');
-                if (badge) {
-                    badge.textContent = todayOtc;
-                }
-            }
-        });
+    function updateSidebarBadges(pending, lowStock, todayPrescriptions, todayOtc) {
+        // Update Pending Prescriptions Badge
+        var pendingBadge = document.getElementById('sidebarPendingBadge');
+        if (pendingBadge) {
+            pendingBadge.textContent = pending;
+            pendingBadge.className = pending > 0 ? 'badge danger' : 'badge';
+        }
         
-        var timeEl = document.getElementById('sidebarStatusTime');
+        // Update Low Stock Badge
+        var lowStockBadge = document.getElementById('sidebarLowStockBadge');
+        if (lowStockBadge) {
+            lowStockBadge.textContent = lowStock;
+            lowStockBadge.className = lowStock > 0 ? 'badge danger' : 'badge';
+        }
+        
+        // Update Today Prescriptions Badge
+        var todayPrescriptionsBadge = document.getElementById('sidebarTodayPrescriptions');
+        if (todayPrescriptionsBadge) {
+            todayPrescriptionsBadge.textContent = todayPrescriptions;
+            todayPrescriptionsBadge.className = todayPrescriptions > 0 ? 'badge green' : 'badge';
+        }
+        
+        // Update Today OTC Badge
+        var todayOtcBadge = document.getElementById('sidebarTodayOtc');
+        if (todayOtcBadge) {
+            todayOtcBadge.textContent = todayOtc;
+            todayOtcBadge.className = todayOtc > 0 ? 'badge green' : 'badge';
+        }
+        
+        // Update status time
+        var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
-            timeEl.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            var timeStr = now.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit',
+                hour12: true 
+            });
+            timeEl.textContent = timeStr;
         }
     }
 
     // ================================================================
-    // AJAX AUTO-UPDATE
+    // AJAX AUTO-UPDATE (Self-contained - uses same file)
     // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
+    var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
 
     function fetchSidebarData() {
         if (sidebarIsUpdating) return;
         sidebarIsUpdating = true;
         
-        fetch('../pharmacy/get_sidebar_stats.php')
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    updateSidebarBadges(
-                        data.pending_prescriptions,
-                        data.low_stock,
-                        data.today_prescriptions,
-                        data.today_otc
-                    );
-                }
-                sidebarIsUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Sidebar update error:', error);
-                sidebarIsUpdating = false;
-            });
+        var formData = new FormData();
+        formData.append('action', 'get_pharmacy_sidebar_data');
+        formData.append('branch_id', branchId);
+        
+        // Send request to the SAME FILE (self-contained)
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            if (data.success) {
+                updateSidebarBadges(
+                    data.pending_prescriptions || 0,
+                    data.low_stock || 0,
+                    data.today_prescriptions || 0,
+                    data.today_otc || 0
+                );
+            }
+            sidebarIsUpdating = false;
+        })
+        .catch(function(error) {
+            // Silent fail - don't spam console
+            // console.warn('Sidebar update error:', error.message);
+            sidebarIsUpdating = false;
+        });
     }
 
     function startSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
+        // Initial update
         fetchSidebarData();
+        // Then every 3 seconds
+        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
+        console.log('%c🔄 Pharmacy Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
 
     function stopSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
             sidebarUpdateInterval = null;
+            console.log('%c⏹️ Pharmacy Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
+    // ================================================================
+    // HANDLE PAGE VISIBILITY - PAUSE WHEN HIDDEN
+    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -515,12 +618,25 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     });
 
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 2000);
     });
 
-    console.log('%c💊 Pharmacy Sidebar', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Pending: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?>', 'font-size:12px; color:#9EC5FE;');
+    // ================================================================
+    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
+    // ================================================================
+    window.updateSidebarBadges = updateSidebarBadges;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
+
+    console.log('%c💊 Pharmacy Sidebar (SELF-CONTAINED - Auto-update every 3s)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Pending: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Today Rx: <?= $today_sales ?> | Today OTC: <?= $today_otc ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
 </script>
