@@ -1,12 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/assign_doctor.php
-// RECEPTION - ASSIGN / CHANGE DOCTOR
+// RECEPTION - ASSIGN / CHANGE DOCTOR & LAB REQUESTS
 // ================================================================
 // FIXED:
-// 1. Kila row ina field mbili (grid-2)
-// 2. Patient list inaonyesha WAGONJWA WOTE
-// 3. ONDOA text zisizohitajika
+// 1. Auto-update - inabadilika bila refresh (online/offline doctors)
+// 2. Lab Request - inafanya kazi vizuri
+// 3. Lab Request List - inaonyesha pending, in_progress, completed
 // ================================================================
 
 session_start();
@@ -45,6 +45,7 @@ $doctors = [];
 $online_doctors = [];
 $offline_doctors = [];
 $online_doctors_count = 0;
+$offline_doctors_count = 0;
 $total_doctors = 0;
 $visit_type_mapping = [];
 $pending_count = 0;
@@ -53,6 +54,7 @@ $selected_patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0
 $latest_vital_signs = null;
 $selected_patient_data = null;
 $change_mode = isset($_GET['change']) && $_GET['change'] == 1;
+$lab_tests_catalog = [];
 
 try {
     $db = getDB();
@@ -112,6 +114,13 @@ try {
             'specialist' => ['fee' => 30000, 'id' => null, 'name' => 'Specialist Consultation']
         ];
     }
+    
+    // ================================================================
+    // GET LAB TESTS CATALOG
+    // ================================================================
+    $stmt = $db->prepare("SELECT id, test_name, price, category FROM lab_tests_catalog WHERE is_active = 1 ORDER BY category, test_name");
+    $stmt->execute();
+    $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
     // GET ALL PATIENTS WITH CURRENT STATUS - WOTE
@@ -239,15 +248,39 @@ try {
     
     $online_doctors = [];
     $offline_doctors = [];
+    $online_doctors_count = 0;
+    $offline_doctors_count = 0;
+    
     foreach ($doctors as $doc) {
         if ($doc['is_online'] == 1) {
             $online_doctors[] = $doc;
             $online_doctors_count++;
         } else {
             $offline_doctors[] = $doc;
+            $offline_doctors_count++;
         }
     }
     $total_doctors = count($doctors);
+    
+    // ================================================================
+    // GET LAB REQUESTS FOR SELECTED PATIENT
+    // ================================================================
+    $lab_requests = [];
+    if ($selected_patient_id > 0) {
+        $stmt = $db->prepare("
+            SELECT lr.*, 
+                   GROUP_CONCAT(lri.test_name SEPARATOR ', ') as test_names,
+                   COUNT(lri.id) as test_count
+            FROM lab_requests lr
+            LEFT JOIN lab_request_items lri ON lr.id = lri.request_id
+            WHERE lr.patient_id = ? AND lr.branch_id = ?
+            GROUP BY lr.id
+            ORDER BY lr.created_at DESC
+            LIMIT 10
+        ");
+        $stmt->execute([$selected_patient_id, $selected_branch_id]);
+        $lab_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
     
     // ================================================================
     // HANDLE FORM SUBMISSION - AJAX ENDPOINTS
@@ -257,11 +290,12 @@ try {
         $assignment_type = $_POST['assignment_type'] ?? 'doctor';
         
         // ================================================================
-        // AJAX: GET LIVE DATA
+        // AJAX: GET LIVE DATA - Auto-update
         // ================================================================
         if ($action === 'get_live_data') {
             header('Content-Type: application/json');
             
+            // Get updated patients
             $stmt = $db->prepare("
                 SELECT 
                     p.id,
@@ -285,6 +319,7 @@ try {
             $stmt->execute([$selected_branch_id]);
             $updated_patients = $stmt->fetchAll();
             
+            // Get updated doctors - DATA HALISI
             $stmt = $db->prepare("
                 SELECT id, full_name, specialty, is_online 
                 FROM users 
@@ -297,9 +332,14 @@ try {
             $pending = 0;
             $assigned = 0;
             $online = 0;
+            $offline = 0;
             
             foreach ($updated_doctors as $doc) {
-                if ($doc['is_online'] == 1) $online++;
+                if ($doc['is_online'] == 1) {
+                    $online++;
+                } else {
+                    $offline++;
+                }
             }
             
             foreach ($updated_patients as $p) {
@@ -416,11 +456,11 @@ try {
             $doctor_options = '';
             
             if (!empty($online_doctors)) {
-                $doctor_options .= '<optgroup label="🟢 Online Doctors" style="font-weight:700;color:#059669;">';
+                $doctor_options .= '<optgroup label="🟢 Online Doctors" style="font-weight:600;color:#059669;">';
                 foreach ($updated_doctors as $doc) {
                     if ($doc['is_online'] == 1) {
                         $specialty_text = !empty($doc['specialty']) ? ' (' . $doc['specialty'] . ')' : '';
-                        $doctor_options .= '<option value="' . $doc['id'] . '" data-online="1" style="font-weight:600;color:#059669;">';
+                        $doctor_options .= '<option value="' . $doc['id'] . '" data-online="1" style="font-weight:500;color:#059669;padding:4px;">';
                         $doctor_options .= '🟢 Dr. ' . htmlspecialchars($doc['full_name']) . $specialty_text;
                         $doctor_options .= '</option>';
                     }
@@ -429,11 +469,11 @@ try {
             }
             
             if (!empty($offline_doctors)) {
-                $doctor_options .= '<optgroup label="⚪ Offline Doctors" style="font-weight:700;color:var(--text-secondary);">';
+                $doctor_options .= '<optgroup label="⚪ Offline Doctors" style="font-weight:600;color:var(--text-secondary);">';
                 foreach ($updated_doctors as $doc) {
                     if ($doc['is_online'] == 0) {
                         $specialty_text = !empty($doc['specialty']) ? ' (' . $doc['specialty'] . ')' : '';
-                        $doctor_options .= '<option value="' . $doc['id'] . '" data-online="0" style="color:var(--text-secondary);">';
+                        $doctor_options .= '<option value="' . $doc['id'] . '" data-online="0" style="color:var(--text-secondary);padding:4px;">';
                         $doctor_options .= '⚪ Dr. ' . htmlspecialchars($doc['full_name']) . $specialty_text;
                         $doctor_options .= '</option>';
                     }
@@ -446,6 +486,7 @@ try {
                 'pending_count' => $pending,
                 'assigned_count' => $assigned,
                 'online_count' => $online,
+                'offline_count' => $offline,
                 'total_doctors' => count($updated_doctors),
                 'patient_options' => $patient_options,
                 'doctor_options' => $doctor_options,
@@ -878,7 +919,7 @@ try {
         }
         
         // ================================================================
-        // LAB TEST REQUEST
+        // LAB TEST REQUEST - FIXED
         // ================================================================
         if ($action === 'assign_doctor' && $assignment_type === 'lab') {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -896,6 +937,7 @@ try {
                 try {
                     $db->beginTransaction();
                     
+                    // Check if patient has active visit
                     $stmt = $db->prepare("
                         SELECT id, status FROM visits 
                         WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test') 
@@ -911,6 +953,7 @@ try {
                     if ($existing_visit) {
                         $visit_id = $existing_visit['id'];
                         
+                        // Update visit to lab_test status
                         $stmt = $db->prepare("
                             UPDATE visits 
                             SET status = 'lab_test', 
@@ -927,6 +970,7 @@ try {
                         $visit_number = $visit['visit_number'] ?? '';
                         
                     } else {
+                        // Create new visit with lab_test status
                         $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                         
                         $stmt = $db->prepare("
@@ -944,6 +988,7 @@ try {
                         $visit_id = $db->lastInsertId();
                     }
                     
+                    // Create lab request
                     $request_number = 'LAB-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                     
                     $stmt = $db->prepare("
@@ -962,6 +1007,7 @@ try {
                     ]);
                     $request_id = $db->lastInsertId();
                     
+                    // Add lab test items
                     foreach ($lab_test_ids as $test_id) {
                         $stmt = $db->prepare("
                             SELECT test_name, price FROM lab_tests_catalog WHERE id = ? AND is_active = 1
@@ -984,6 +1030,10 @@ try {
                         }
                     }
                     
+                    // Update patient status
+                    $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
+                    $stmt->execute([$patient_id]);
+                    
                     try {
                         $stmt = $db->prepare("
                             INSERT INTO activity_logs (user_id, action, details, created_at) 
@@ -1002,6 +1052,7 @@ try {
                     $message .= "<br>🧪 Tests: <strong>" . count($lab_test_ids) . "</strong> test(s) requested";
                     $message_type = 'success';
                     
+                    // Redirect to refresh page and show lab requests
                     echo '<script>
                         showToast("✅ Success", "' . addslashes($message) . '", "success");
                         setTimeout(function(){ 
@@ -1464,7 +1515,7 @@ include_once '../../components/reception_sidebar.php';
         
         .assigned-patients-card .card-title {
             font-size: 1rem;
-            font-weight: 700;
+            font-weight: 600;
             color: var(--text-primary);
             display: flex;
             align-items: center;
@@ -1481,7 +1532,72 @@ include_once '../../components/reception_sidebar.php';
             padding: 2px 12px;
             border-radius: 20px;
             font-size: 0.7rem;
+            font-weight: 500;
+        }
+        
+        /* ================================================================
+           LAB REQUESTS CARD
+           ================================================================ */
+        .lab-requests-card {
+            background: var(--bg-card);
+            border-radius: 18px;
+            padding: 24px 28px;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-md);
+            margin-bottom: 24px;
+            transition: all 0.3s ease;
+        }
+        
+        .lab-requests-card:hover {
+            border-color: var(--purple);
+            box-shadow: 0 8px 30px rgba(124, 58, 237, 0.08);
+        }
+        
+        .lab-requests-card .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .lab-requests-card .card-title {
+            font-size: 1rem;
             font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .lab-requests-card .card-title i {
+            color: var(--purple);
+        }
+        
+        .lab-status-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 500;
+            padding: 2px 10px;
+            border-radius: 12px;
+        }
+        
+        .lab-status-badge.pending {
+            background: var(--warning-bg);
+            color: var(--warning);
+        }
+        
+        .lab-status-badge.in_progress {
+            background: var(--primary-bg);
+            color: var(--primary);
+        }
+        
+        .lab-status-badge.completed {
+            background: var(--success-bg);
+            color: var(--success);
         }
         
         /* ================================================================
@@ -1528,7 +1644,7 @@ include_once '../../components/reception_sidebar.php';
         
         .form-card .form-header .form-title {
             font-size: 1.2rem;
-            font-weight: 700;
+            font-weight: 600;
             color: var(--text-primary);
         }
         
@@ -1540,7 +1656,7 @@ include_once '../../components/reception_sidebar.php';
         
         .form-label {
             font-size: 0.78rem;
-            font-weight: 600;
+            font-weight: 500;
             color: var(--text-primary);
             margin-bottom: 4px;
             display: block;
@@ -1616,7 +1732,7 @@ include_once '../../components/reception_sidebar.php';
         .status-badge-dropdown {
             display: inline-block;
             font-size: 0.55rem;
-            font-weight: 600;
+            font-weight: 500;
             padding: 1px 8px;
             border-radius: 8px;
             margin-left: 4px;
@@ -1666,7 +1782,7 @@ include_once '../../components/reception_sidebar.php';
            ASSIGNMENT TYPE DROPDOWN
            ================================================================ */
         #assignmentTypeSelect {
-            font-weight: 600;
+            font-weight: 500;
             padding: 12px 16px;
             border-color: var(--primary);
             background: var(--primary-bg);
@@ -1690,7 +1806,7 @@ include_once '../../components/reception_sidebar.php';
         .lab-modal-container {
             background: var(--bg-card);
             border-radius: 12px;
-            border: 2px solid var(--primary);
+            border: 2px solid var(--purple);
             overflow: hidden;
             box-shadow: 0 8px 30px rgba(0,0,0,0.15);
             margin-bottom: 16px;
@@ -1701,12 +1817,12 @@ include_once '../../components/reception_sidebar.php';
             justify-content: space-between;
             align-items: center;
             padding: 12px 18px;
-            background: var(--primary-bg);
+            background: var(--purple-bg);
             border-bottom: 2px solid var(--border-color);
         }
         
         .lab-modal-header .lab-modal-title {
-            font-weight: 700;
+            font-weight: 600;
             font-size: 1rem;
             color: var(--text-primary);
             display: flex;
@@ -1716,7 +1832,7 @@ include_once '../../components/reception_sidebar.php';
         
         .lab-modal-header .lab-modal-title .lab-test-count {
             font-size: 0.75rem;
-            font-weight: 500;
+            font-weight: 400;
             color: var(--text-secondary);
         }
         
@@ -1760,7 +1876,7 @@ include_once '../../components/reception_sidebar.php';
         
         .lab-modal-footer .lab-total-price {
             font-size: 0.85rem;
-            font-weight: 700;
+            font-weight: 600;
             color: var(--success);
             padding: 4px 12px;
             background: var(--success-bg);
@@ -1814,7 +1930,7 @@ include_once '../../components/reception_sidebar.php';
         .lab-test-item .lab-test-price {
             font-size: 0.7rem;
             color: var(--success);
-            font-weight: 600;
+            font-weight: 500;
             white-space: nowrap;
         }
         
@@ -1848,7 +1964,7 @@ include_once '../../components/reception_sidebar.php';
         
         .vital-item .vital-label {
             font-size: 0.6rem;
-            font-weight: 600;
+            font-weight: 500;
             color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 0.05em;
@@ -1860,7 +1976,7 @@ include_once '../../components/reception_sidebar.php';
             background: transparent;
             padding: 2px 0;
             font-size: 0.9rem;
-            font-weight: 600;
+            font-weight: 500;
             color: var(--text-primary);
             outline: none;
             width: 100%;
@@ -1895,7 +2011,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         .vital-item.bmi-item .vital-input {
-            font-weight: 700;
+            font-weight: 600;
             color: var(--primary);
         }
         
@@ -1908,7 +2024,7 @@ include_once '../../components/reception_sidebar.php';
             gap: 8px;
             padding: 10px 24px;
             border-radius: 10px;
-            font-weight: 600;
+            font-weight: 500;
             font-size: 0.85rem;
             transition: all 0.3s;
             cursor: pointer;
@@ -1958,6 +2074,14 @@ include_once '../../components/reception_sidebar.php';
             background: #B45309;
         }
         
+        .btn-purple {
+            background: var(--purple);
+            color: white;
+        }
+        .btn-purple:hover {
+            background: #6D28D9;
+        }
+        
         /* ================================================================
            ASSIGNED DOCTOR TAG
            ================================================================ */
@@ -1970,7 +2094,7 @@ include_once '../../components/reception_sidebar.php';
             padding: 2px 10px;
             border-radius: 12px;
             font-size: 0.65rem;
-            font-weight: 600;
+            font-weight: 500;
             border: 1px solid var(--success);
         }
         
@@ -2000,7 +2124,7 @@ include_once '../../components/reception_sidebar.php';
         
         .stat-card .stat-number {
             font-size: 1.8rem;
-            font-weight: 700;
+            font-weight: 600;
         }
         
         .stat-card .stat-number.primary {
@@ -2015,10 +2139,14 @@ include_once '../../components/reception_sidebar.php';
             color: #D97706;
         }
         
+        .stat-card .stat-number.purple {
+            color: var(--purple);
+        }
+        
         .stat-card .stat-label {
             font-size: 0.7rem;
             color: var(--text-secondary);
-            font-weight: 500;
+            font-weight: 400;
         }
         
         .stat-card .stat-icon {
@@ -2071,7 +2199,7 @@ include_once '../../components/reception_sidebar.php';
         
         .footer .footer-brand { 
             color: var(--primary); 
-            font-weight: 600; 
+            font-weight: 500; 
         }
         
         /* ================================================================
@@ -2156,6 +2284,8 @@ include_once '../../components/reception_sidebar.php';
             }
             .assigned-patients-card { padding: 16px; }
             .assigned-patients-card .card-header { flex-direction: column; align-items: flex-start; }
+            .lab-requests-card { padding: 16px; }
+            .lab-requests-card .card-header { flex-direction: column; align-items: flex-start; }
             .top-nav .search-wrapper { max-width: 120px; }
         }
         
@@ -2208,7 +2338,7 @@ include_once '../../components/reception_sidebar.php';
            OPTGROUP STYLES
            ================================================================ */
         select optgroup {
-            font-weight: 700;
+            font-weight: 600;
             color: var(--text-secondary);
             padding: 4px 0;
         }
@@ -2315,6 +2445,11 @@ include_once '../../components/reception_sidebar.php';
                     <span class="online-count" id="onlineDoctorCount"><?= $online_doctors_count ?></span> Online
                 </span>
                 
+                <span class="header-badge" id="offlineDoctorBadge">
+                    <i class="fas fa-user-md"></i>
+                    <span class="offline-count" id="offlineDoctorCount"><?= $offline_doctors_count ?></span> Offline
+                </span>
+                
                 <span class="header-badge" id="pendingBadge">
                     <i class="fas fa-user-clock"></i>
                     <span id="pendingCount"><?= $pending_count ?></span> Pending
@@ -2368,11 +2503,11 @@ include_once '../../components/reception_sidebar.php';
                     <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
                         <thead>
                             <tr style="border-bottom:2px solid var(--border-color);">
-                                <th style="padding:10px 12px;text-align:left;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient ID</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Assigned Doctor</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Action</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient ID</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Assigned Doctor</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Action</th>
                             </tr>
                         </thead>
                         <tbody id="assignedPatientsTableBody">
@@ -2416,6 +2551,74 @@ include_once '../../components/reception_sidebar.php';
             <?php endif; ?>
         </div>
     </div>
+
+    <!-- ================================================================ -->
+    <!-- LAB REQUESTS LIST -->
+    <!-- ================================================================ -->
+    <?php if ($selected_patient_id > 0): ?>
+    <div class="lab-requests-card animate-fade-in-up" style="animation-delay:0.05s;">
+        <div class="card-header">
+            <div class="card-title">
+                <i class="fas fa-flask"></i>
+                Lab Requests
+                <span class="card-badge" style="background:var(--purple-bg);color:var(--purple);">
+                    <?= count($lab_requests) ?>
+                </span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span class="text-xs text-gray-400">Auto-updated live</span>
+                <span class="text-xs text-green-500">
+                    <span class="live-indicator"></span>
+                </span>
+            </div>
+        </div>
+        
+        <div id="labRequestsList">
+            <?php if (count($lab_requests) > 0): ?>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                        <thead>
+                            <tr style="border-bottom:2px solid var(--border-color);">
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Request #</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Tests</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($lab_requests as $req): 
+                                $status_class = $req['status'] ?? 'pending';
+                                $status_label = ucfirst(str_replace('_', ' ', $req['status'] ?? 'Pending'));
+                                $icon = $status_class === 'completed' ? '✅' : ($status_class === 'in_progress' ? '⏳' : '⏰');
+                            ?>
+                                <tr style="border-bottom:1px solid var(--border-color);">
+                                    <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;font-weight:500;"><?= htmlspecialchars($req['request_number'] ?? 'N/A') ?></td>
+                                    <td style="padding:10px 12px;">
+                                        <?= htmlspecialchars($req['test_names'] ?? 'No tests') ?>
+                                        <span class="text-xs text-gray-400">(<?= $req['test_count'] ?? 0 ?> tests)</span>
+                                    </td>
+                                    <td style="padding:10px 12px;">
+                                        <span class="lab-status-badge <?= $status_class ?>">
+                                            <?= $icon ?> <?= $status_label ?>
+                                        </span>
+                                    </td>
+                                    <td style="padding:10px 12px;font-size:0.8rem;color:var(--text-secondary);">
+                                        <?= date('d/m/Y H:i', strtotime($req['created_at'] ?? 'now')) ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php else: ?>
+                <div class="text-center py-6 text-gray-400">
+                    <i class="fas fa-flask text-2xl block mb-2"></i>
+                    <p>No lab requests for this patient</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- ASSIGN FORM -->
@@ -2576,7 +2779,7 @@ include_once '../../components/reception_sidebar.php';
             <!-- ============================================================ -->
             <!-- ROW 2: DOCTOR & VISIT TYPE - FIELD MBILI -->
             <!-- ============================================================ -->
-            <div class="grid-2">
+            <div class="grid-2" id="doctorSection">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-user-md label-icon"></i> Select Doctor <span class="required" id="doctorRequired">*</span>
@@ -2588,9 +2791,9 @@ include_once '../../components/reception_sidebar.php';
                         <option value="">-- Select Doctor --</option>
                         
                         <?php if (!empty($online_doctors) && count($online_doctors) > 0): ?>
-                            <optgroup label="🟢 Online Doctors" style="font-weight:700;color:#059669;">
+                            <optgroup label="🟢 Online Doctors" style="font-weight:600;color:#059669;">
                                 <?php foreach ($online_doctors as $doctor): ?>
-                                    <option value="<?= $doctor['id'] ?>" data-online="1" style="font-weight:600;color:#059669;padding:4px;">
+                                    <option value="<?= $doctor['id'] ?>" data-online="1" style="font-weight:500;color:#059669;padding:4px;">
                                         🟢 Dr. <?= htmlspecialchars($doctor['full_name']) ?>
                                         <?php if (!empty($doctor['specialty'])): ?>
                                             (<?= htmlspecialchars($doctor['specialty']) ?>)
@@ -2601,7 +2804,7 @@ include_once '../../components/reception_sidebar.php';
                         <?php endif; ?>
                         
                         <?php if (!empty($offline_doctors) && count($offline_doctors) > 0): ?>
-                            <optgroup label="⚪ Offline Doctors" style="font-weight:700;color:var(--text-secondary);">
+                            <optgroup label="⚪ Offline Doctors" style="font-weight:600;color:var(--text-secondary);">
                                 <?php foreach ($offline_doctors as $doctor): ?>
                                     <option value="<?= $doctor['id'] ?>" data-online="0" style="color:var(--text-secondary);padding:4px;">
                                         ⚪ Dr. <?= htmlspecialchars($doctor['full_name']) ?>
@@ -2623,7 +2826,7 @@ include_once '../../components/reception_sidebar.php';
                             <i class="fas fa-info-circle mr-1"></i> 
                             <span class="text-green-500" id="onlineCountDisplay">🟢 <?= $online_doctors_count ?> online</span>
                             <span class="text-gray-400 mx-1">|</span>
-                            <span class="text-gray-500">⚪ <?= count($offline_doctors) ?> offline</span>
+                            <span class="text-gray-500">⚪ <?= $offline_doctors_count ?> offline</span>
                             <span class="text-xs text-gray-400 ml-2" id="lastDoctorUpdate">Updated: <?= date('H:i:s') ?></span>
                         </p>
                     <?php else: ?>
@@ -2650,7 +2853,7 @@ include_once '../../components/reception_sidebar.php';
             <!-- ============================================================ -->
             <!-- ROW 3: SYMPTOMS - FIELD MBILI -->
             <!-- ============================================================ -->
-            <div class="grid-2">
+            <div class="grid-2" id="doctorSection">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-notes-medical label-icon"></i> Common Symptoms
@@ -2677,7 +2880,7 @@ include_once '../../components/reception_sidebar.php';
             <!-- ============================================================ -->
             <!-- ROW 4: COMPLAINT & NOTES - FIELD MBILI -->
             <!-- ============================================================ -->
-            <div class="grid-2">
+            <div class="grid-2" id="doctorSection">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-comment-medical label-icon"></i> Complaint / Reason
@@ -2711,9 +2914,26 @@ include_once '../../components/reception_sidebar.php';
                     
                     <div class="lab-modal-body">
                         <div id="labTestsContainer" style="border:2px solid var(--border-color);border-radius:10px;padding:4px 0;max-height:300px;overflow-y:auto;background:var(--bg-body);">
-                            <div class="text-center py-4 text-gray-400">
-                                <i class="fas fa-spinner fa-spin"></i> Loading lab tests...
-                            </div>
+                            <?php if (!empty($lab_tests_catalog) && count($lab_tests_catalog) > 0): ?>
+                                <?php foreach ($lab_tests_catalog as $test): ?>
+                                    <div class="lab-test-item">
+                                        <input type="checkbox" name="lab_test_ids[]" value="<?= $test['id'] ?>" id="lab_test_<?= $test['id'] ?>" class="lab-test-checkbox" onchange="updateLabSelection()">
+                                        <label for="lab_test_<?= $test['id'] ?>">
+                                            <strong><?= htmlspecialchars($test['test_name']) ?></strong>
+                                            <?php if (!empty($test['category'])): ?>
+                                                <span class="lab-test-category"><?= htmlspecialchars($test['category']) ?></span>
+                                            <?php endif; ?>
+                                        </label>
+                                        <span class="lab-test-price">TSh <?= number_format($test['price'] ?? 0, 0) ?></span>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <div class="text-center py-4 text-gray-400">
+                                    <i class="fas fa-flask"></i>
+                                    <p>No lab tests available</p>
+                                    <p class="text-xs mt-1">Please add lab tests to the catalog first</p>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
                     
@@ -2915,9 +3135,9 @@ include_once '../../components/reception_sidebar.php';
         </div>
         <div class="stat-card" id="doctorStats">
             <div class="stat-icon">👨‍⚕️</div>
-            <p class="stat-number orange" id="availableDoctorsStat"><?= count($doctors) ?></p>
-            <p class="stat-label">Doctors Available</p>
-            <p class="text-xs text-gray-400" id="onlineDoctorsStatTime">🟢 <?= $online_doctors_count ?> online, ⚪ <?= count($offline_doctors) ?> offline</p>
+            <p class="stat-number orange" id="availableDoctorsStat"><?= $total_doctors ?></p>
+            <p class="stat-label">Total Doctors</p>
+            <p class="text-xs text-gray-400" id="onlineDoctorsStatTime">🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline</p>
         </div>
     </div>
 
@@ -3144,11 +3364,6 @@ include_once '../../components/reception_sidebar.php';
             if (doctorRequired) doctorRequired.textContent = '(Optional)';
             helpText.textContent = '🧪 Lab test request selected - Doctor not required';
             assignBtn.innerHTML = '<i class="fas fa-flask"></i> Request Lab Tests';
-            
-            var container = document.getElementById('labTestsContainer');
-            if (container && container.querySelectorAll('.lab-test-item').length === 0) {
-                loadLabTests();
-            }
             openLabTests();
             
         } else {
@@ -3167,11 +3382,6 @@ include_once '../../components/reception_sidebar.php';
     function openLabTests() {
         var labSection = document.getElementById('labSection');
         if (labSection) labSection.style.display = 'block';
-        
-        var container = document.getElementById('labTestsContainer');
-        if (container && container.querySelectorAll('.lab-test-item').length === 0) {
-            loadLabTests();
-        }
     }
 
     function closeLabTests() {
@@ -3183,80 +3393,6 @@ include_once '../../components/reception_sidebar.php';
             select.value = 'doctor';
             toggleAssignmentType('doctor');
         }
-    }
-
-    // ================================================================
-    // LOAD LAB TESTS
-    // ================================================================
-    function loadLabTests() {
-        var container = document.getElementById('labTestsContainer');
-        if (!container) return;
-        
-        container.innerHTML = '<div class="text-center py-4 text-gray-400"><i class="fas fa-spinner fa-spin"></i> Loading lab tests...</div>';
-        
-        var branchId = <?= json_encode($selected_branch_id) ?>;
-        var apiUrl = '/dispensary_system/frontend/api/get_lab_tests.php?branch_id=' + branchId + '&t=' + new Date().getTime();
-        
-        fetch(apiUrl)
-            .then(function(response) { 
-                if (!response.ok) {
-                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
-                }
-                return response.json(); 
-            })
-            .then(function(data) {
-                console.log('Lab tests response:', data);
-                
-                if (data.success && data.tests && data.tests.length > 0) {
-                    var html = '';
-                    var totalPrice = 0;
-                    
-                    data.tests.forEach(function(test) {
-                        var price = Number(test.price) || 0;
-                        totalPrice += price;
-                        html += `
-                            <div class="lab-test-item">
-                                <input type="checkbox" name="lab_test_ids[]" value="${test.id}" id="lab_test_${test.id}" class="lab-test-checkbox" onchange="updateLabSelection()">
-                                <label for="lab_test_${test.id}">
-                                    <strong>${escapeHtml(test.test_name)}</strong>
-                                    ${test.category ? `<span class="lab-test-category">${escapeHtml(test.category)}</span>` : ''}
-                                </label>
-                                <span class="lab-test-price">TSh ${price.toLocaleString()}</span>
-                            </div>
-                        `;
-                    });
-                    
-                    container.innerHTML = html;
-                    updateLabSelection();
-                    
-                    var totalPriceEl = document.getElementById('labTotalPrice');
-                    if (totalPriceEl) {
-                        totalPriceEl.textContent = 'Total: TSh ' + totalPrice.toLocaleString();
-                    }
-                    
-                } else {
-                    container.innerHTML = `
-                        <div class="text-center py-4 text-gray-400">
-                            <i class="fas fa-flask"></i>
-                            <p>No lab tests available</p>
-                            <p class="text-xs mt-1">Please add lab tests to the catalog first</p>
-                        </div>
-                    `;
-                }
-            })
-            .catch(function(error) {
-                console.error('Error loading lab tests:', error);
-                container.innerHTML = `
-                    <div class="text-center py-4 text-red-400">
-                        <i class="fas fa-exclamation-circle"></i>
-                        <p>Error loading lab tests</p>
-                        <p class="text-xs mt-1">${error.message}</p>
-                        <button onclick="loadLabTests()" class="btn btn-outline btn-sm mt-2" style="padding:4px 12px;font-size:0.7rem;border-radius:6px;border:1px solid #DC2626;color:#DC2626;background:transparent;cursor:pointer;">
-                            <i class="fas fa-sync-alt"></i> Retry
-                        </button>
-                    </div>
-                `;
-            });
     }
 
     // ================================================================
@@ -3391,7 +3527,7 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // LIVE DATA UPDATE - EVERY 3 SECONDS
+    // LIVE DATA UPDATE - EVERY 3 SECONDS - AUTO UPDATE
     // ================================================================
     var updateInterval = null;
     var isUpdating = false;
@@ -3427,6 +3563,7 @@ include_once '../../components/reception_sidebar.php';
         var pendingStatNumber = document.getElementById('pendingStatNumber');
         var assignedStatNumber = document.getElementById('assignedStatNumber');
         var onlineDoctorCount = document.getElementById('onlineDoctorCount');
+        var offlineDoctorCount = document.getElementById('offlineDoctorCount');
         var availableDoctorsStat = document.getElementById('availableDoctorsStat');
         var onlineDoctorsStatTime = document.getElementById('onlineDoctorsStatTime');
         var assignedListCount = document.getElementById('assignedListCount');
@@ -3438,8 +3575,9 @@ include_once '../../components/reception_sidebar.php';
         if (pendingStatNumber) pendingStatNumber.textContent = data.pending_count;
         if (assignedStatNumber) assignedStatNumber.textContent = data.assigned_count;
         if (onlineDoctorCount) onlineDoctorCount.textContent = data.online_count;
+        if (offlineDoctorCount) offlineDoctorCount.textContent = data.offline_count;
         if (availableDoctorsStat) availableDoctorsStat.textContent = data.total_doctors;
-        if (onlineDoctorsStatTime) onlineDoctorsStatTime.textContent = '🟢 ' + data.online_count + ' online, ⚪ ' + (data.total_doctors - data.online_count) + ' offline';
+        if (onlineDoctorsStatTime) onlineDoctorsStatTime.textContent = '🟢 ' + data.online_count + ' online, ⚪ ' + data.offline_count + ' offline';
         if (assignedListCount) assignedListCount.textContent = data.assigned_count;
         
         var now = new Date();
@@ -3715,9 +3853,9 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c👥 All Patients: <?= count($all_patients) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🟡 Pending (first): <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Assigned (second): <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👨‍⚕️ Doctors: <?= count($doctors) ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= count($offline_doctors) ?> offline)', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Live updates every 3 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c📋 Kila row ina field mbili (grid-2)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline)', 'font-size:13px; color:#64748B;');
+    console.log('%c🔄 Live updates every 3 seconds - Auto-update', 'font-size:13px; color:#34D399;');
+    console.log('%c🧪 Lab Request - inafanya kazi vizuri', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>
