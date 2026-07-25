@@ -2,13 +2,13 @@
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
 // DOCTOR CONSULTATION - COMPLETE VERSION WITH ALL FIXES
-// ALL BILLS GO TO CASHIER: Consultation, Lab Tests, Medications, Procedures, Tools
-// FIXED: Tools with quantity support
-// FIXED: Lab total calculation, Tools total calculation
-// FIXED: Combined total for Procedures + Tools in one card
-// FIXED: Frozen sections unfreeze when lab results are available
-// FIXED: Medication stock deducted only when Pharmacy dispenses
-// BRAICK DISPENSARY
+// ================================================================
+// BILL CREATION RULES:
+// 1. Consultation/Visit fee - Created by Doctor (when saving consultation)
+// 2. Lab Tests - NO bill here. Created by Lab when confirming results
+// 3. Medications - NO bill here. Created by Pharmacy when dispensing
+// 4. Procedures - Created by Doctor (when adding procedure)
+// 5. Tools - Created by Doctor (when adding tool)
 // ================================================================
 
 session_start();
@@ -161,7 +161,7 @@ if ($is_completed) {
 }
 
 // ================================================================
-// GET OR CREATE BILL
+// GET OR CREATE BILL - Only for consultation/procedures/tools
 // ================================================================
 $bill_id = null;
 $bill_status = 'pending';
@@ -280,7 +280,7 @@ try {
     $selected_medications = []; 
 }
 
-// Bill Items with totals by type
+// Bill Items with totals by type - ONLY includes what's already in bill_items
 $bill_items = [];
 $lab_total = 0;
 $medication_total = 0;
@@ -315,7 +315,7 @@ try {
 } catch (Exception $e) { $bill_items = []; }
 
 // ================================================================
-// GET LAB STATUS - FROM lab_tests TABLE - FIXED
+// GET LAB STATUS - FROM lab_tests TABLE
 // ================================================================
 $lab_requests = [];
 $lab_results = [];
@@ -361,8 +361,6 @@ function fetchLabData($db, $visit_id) {
         error_log("Lab fetch error: " . $e->getMessage());
     }
     
-    // FROZEN: TRUE only if there are pending lab requests (not completed)
-    // If all lab tests are completed, frozen = FALSE
     $frozen = $has_pending;
     
     return [
@@ -414,7 +412,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     if ($action === 'get_bill_totals') {
         header('Content-Type: application/json');
         
-        // Refresh totals
         $lab_total = 0;
         $medication_total = 0;
         $procedure_total = 0;
@@ -461,7 +458,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: GET LAB STATUS - FIXED
+    // AJAX: GET LAB STATUS
     // ================================================================
     if ($action === 'get_lab_status') {
         header('Content-Type: application/json');
@@ -471,7 +468,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $results_count = count($lab_data['results']);
         $in_progress_count = 0;
         
-        // Count in_progress
         foreach ($lab_data['requests'] as $req) {
             if ($req['status'] === 'in_progress') $in_progress_count++;
         }
@@ -506,59 +502,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: CONFIRM LAB RESULT - CREATE BILL ITEM (ONCE)
+    // AJAX: ADD PROCEDURE - Creates bill immediately
     // ================================================================
-    if ($action === 'confirm_lab_result') {
+    if ($action === 'add_procedure') {
         header('Content-Type: application/json');
-        $lab_test_id = (int)($_POST['lab_test_id'] ?? 0);
-        $results = trim($_POST['results'] ?? '');
-        $reference_range = trim($_POST['reference_range'] ?? '');
         
-        $response = ['success' => false, 'message' => ''];
+        if ($sections_frozen) {
+            echo json_encode(['success' => false, 'message' => '❌ Cannot add procedures. Lab tests pending!']);
+            exit;
+        }
         
-        if ($lab_test_id > 0) {
-            // Get lab test details
-            $stmt = $db->prepare("SELECT test_name, test_price, bill_created FROM lab_tests WHERE id = ? AND visit_id = ?");
-            $stmt->execute([$lab_test_id, $visit_id]);
-            $lab = $stmt->fetch(PDO::FETCH_ASSOC);
+        $procedure_id = (int)($_POST['procedure_id'] ?? 0);
+        $response = ['success' => false, 'message' => '', 'procedure' => null];
+        
+        if ($procedure_id > 0) {
+            $stmt = $db->prepare("SELECT id, procedure_name, price FROM procedures WHERE id = ? AND is_active = 1");
+            $stmt->execute([$procedure_id]);
+            $procedure = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            if ($lab) {
-                // Update lab test with results
-                $stmt = $db->prepare("
-                    UPDATE lab_tests 
-                    SET status = 'completed', 
-                        results = ?, 
-                        reference_range = ?,
-                        bill_created = 1,
-                        completed_at = NOW() 
-                    WHERE id = ?
-                ");
-                $stmt->execute([$results, $reference_range, $lab_test_id]);
+            if ($procedure) {
+                $item_name = $procedure['procedure_name'];
+                $item_price = $procedure['price'];
                 
-                // ✅ CREATE BILL ITEM - ONCE (HAPA TU)
-                if ($lab['test_price'] > 0 && $lab['bill_created'] == 0) {
-                    $stmt_bill = $db->prepare("
+                $stmt = $db->prepare("
+                    SELECT id, quantity FROM bill_items 
+                    WHERE bill_id = ? AND item_name = ? AND item_type = 'procedure' AND status != 'cancelled'
+                ");
+                $stmt->execute([$bill_id, $item_name]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($existing) {
+                    $new_qty = $existing['quantity'] + 1;
+                    $new_total = $item_price * $new_qty;
+                    $stmt = $db->prepare("
+                        UPDATE bill_items 
+                        SET quantity = ?, total_price = ? 
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$new_qty, $new_total, $existing['id']]);
+                    $proc_id = $existing['id'];
+                } else {
+                    $stmt = $db->prepare("
                         INSERT INTO bill_items (
                             bill_id, item_type, item_name, quantity, unit_price, total_price,
-                            payment_status, is_paid, status, reference_id, created_at
-                        ) VALUES (?, 'lab_test', ?, 1, ?, ?, 'pending', 0, 'pending', ?, NOW())
+                            payment_status, is_paid, status, created_at
+                        ) VALUES (?, 'procedure', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
                     ");
-                    $stmt_bill->execute([$bill_id, $lab['test_name'], $lab['test_price'], $lab['test_price'], $lab_test_id]);
-                    
-                    // Update patient_bills total
-                    updateBillTotal($db, $bill_id);
-                    
-                    $response['message'] = '✅ Lab test confirmed! Fee sent to Cashier.';
-                } else {
-                    $response['message'] = '✅ Lab test confirmed! (No fee or already billed)';
+                    $stmt->execute([$bill_id, $item_name, $item_price, $item_price]);
+                    $proc_id = $db->lastInsertId();
                 }
                 
+                updateBillTotal($db, $bill_id);
+                
                 $response['success'] = true;
+                $response['message'] = '✅ Procedure added successfully! Bill sent to Cashier.';
+                $response['procedure'] = ['id' => $proc_id, 'name' => $item_name, 'quantity' => $existing ? $existing['quantity'] + 1 : 1, 'price' => $item_price];
             } else {
-                $response['message'] = '❌ Lab test not found';
+                $response['message'] = '❌ Procedure not found';
             }
         } else {
-            $response['message'] = '❌ Invalid lab test ID';
+            $response['message'] = '❌ Please select a procedure';
         }
         
         echo json_encode($response);
@@ -566,7 +569,108 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD MEDICATION - NO STOCK DEDUCTION
+    // AJAX: ADD TOOL - Creates bill immediately
+    // ================================================================
+    if ($action === 'add_tool') {
+        header('Content-Type: application/json');
+        
+        if ($sections_frozen) {
+            echo json_encode(['success' => false, 'message' => '❌ Cannot add tools. Lab tests pending!']);
+            exit;
+        }
+        
+        $tool_id = (int)($_POST['tool_id'] ?? 0);
+        $quantity = (int)($_POST['tool_quantity'] ?? 1);
+        if ($quantity < 1) $quantity = 1;
+        
+        $response = ['success' => false, 'message' => '', 'tool' => null];
+        
+        if ($tool_id > 0) {
+            $stmt = $db->prepare("SELECT id, procedure_name, tool_name, price FROM procedure_tools WHERE id = ? AND is_active = 1");
+            $stmt->execute([$tool_id]);
+            $tool = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($tool) {
+                $item_name = $tool['procedure_name'] . ' - ' . $tool['tool_name'];
+                $item_price = $tool['price'];
+                $total_price = $item_price * $quantity;
+                
+                $stmt = $db->prepare("
+                    SELECT id, quantity FROM bill_items 
+                    WHERE bill_id = ? AND item_name = ? AND item_type = 'tool' AND status != 'cancelled'
+                ");
+                $stmt->execute([$bill_id, $item_name]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($existing) {
+                    $new_qty = $existing['quantity'] + $quantity;
+                    $new_total = $item_price * $new_qty;
+                    $stmt = $db->prepare("
+                        UPDATE bill_items 
+                        SET quantity = ?, total_price = ? 
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$new_qty, $new_total, $existing['id']]);
+                    $tool_db_id = $existing['id'];
+                } else {
+                    $stmt = $db->prepare("
+                        INSERT INTO bill_items (
+                            bill_id, item_type, item_name, quantity, unit_price, total_price,
+                            payment_status, is_paid, status, created_at
+                        ) VALUES (?, 'tool', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
+                    ");
+                    $stmt->execute([$bill_id, $item_name, $quantity, $item_price, $total_price]);
+                    $tool_db_id = $db->lastInsertId();
+                }
+                
+                updateBillTotal($db, $bill_id);
+                
+                $response['success'] = true;
+                $response['message'] = '✅ Tool added successfully! Bill sent to Cashier.';
+                $response['tool'] = [
+                    'id' => $tool_db_id, 
+                    'name' => $item_name, 
+                    'quantity' => $quantity, 
+                    'price' => $item_price,
+                    'total_price' => $total_price
+                ];
+            } else {
+                $response['message'] = '❌ Tool not found';
+            }
+        } else {
+            $response['message'] = '❌ Please select a tool';
+        }
+        
+        echo json_encode($response);
+        exit;
+    }
+    
+    // ================================================================
+    // AJAX: REMOVE ITEM
+    // ================================================================
+    if ($action === 'remove_item') {
+        header('Content-Type: application/json');
+        $item_id = (int)($_POST['item_id'] ?? 0);
+        $response = ['success' => false, 'message' => ''];
+        
+        if ($item_id > 0) {
+            $stmt = $db->prepare("DELETE FROM bill_items WHERE id = ? AND bill_id = ?");
+            $stmt->execute([$item_id, $bill_id]);
+            
+            updateBillTotal($db, $bill_id);
+            
+            $response['success'] = true;
+            $response['message'] = '✅ Item removed!';
+        } else {
+            $response['message'] = '❌ Invalid item';
+        }
+        
+        echo json_encode($response);
+        exit;
+    }
+    
+    // ================================================================
+    // AJAX: ADD MEDICATION - NO BILL, ONLY PRESCRIPTION
     // ================================================================
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
@@ -623,7 +727,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 
                 $prescription_id = $db->lastInsertId();
                 
-                // Insert into prescription_items - NO STOCK DEDUCTION YET
+                // Insert into prescription_items
                 $stmt = $db->prepare("
                     INSERT INTO prescription_items (
                         prescription_id, medication_name, dosage, frequency, quantity, 
@@ -645,23 +749,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     $total_price
                 ]);
                 
-                // ❌ DO NOT DEDUCT STOCK HERE - Pharmacy will deduct when dispensing
-                // Stock remains the same until pharmacy dispenses
-                
-                // Add to bill_items
-                $stmt = $db->prepare("
-                    INSERT INTO bill_items (
-                        bill_id, item_type, item_name, quantity, unit_price, total_price,
-                        payment_status, is_paid, status, created_at
-                    ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
-                ");
-                $stmt->execute([$bill_id, $med['medication_name'], $quantity, $unit_price, $total_price]);
-                
-                // Update patient_bills total
-                updateBillTotal($db, $bill_id);
+                // ❌ NO BILL CREATED - Pharmacy will create bill when dispensing
+                // ✅ Only prescription is saved
                 
                 $response['success'] = true;
-                $response['message'] = '✅ Medication added successfully! Bill sent to Cashier. Stock will be deducted when Pharmacy dispenses.';
+                $response['message'] = '✅ Medication added to prescription! Bill will be created when Pharmacy dispenses.';
                 $response['medication'] = [
                     'id' => $prescription_id,
                     'name' => $med['medication_name'],
@@ -685,7 +777,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: REMOVE MEDICATION - Restore stock if not dispensed
+    // AJAX: REMOVE MEDICATION - Only if not dispensed
     // ================================================================
     if ($action === 'remove_medication') {
         header('Content-Type: application/json');
@@ -715,7 +807,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $med = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($med) {
-                // Restore stock (just in case)
                 $stmt = $db->prepare("
                     UPDATE medications_inventory 
                     SET quantity = quantity + ? 
@@ -724,15 +815,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $stmt->execute([$med['quantity'], $med['medication_name'], $doctor_branch_id]);
             }
             
-            // Delete prescription_items
             $stmt = $db->prepare("DELETE FROM prescription_items WHERE prescription_id = ?");
             $stmt->execute([$prescription_id]);
             
-            // Delete prescription
             $stmt = $db->prepare("DELETE FROM prescriptions WHERE id = ? AND visit_id = ?");
             $stmt->execute([$prescription_id, $visit_id]);
             
-            // Remove from bill_items
+            // Remove from bill_items if exists (should not exist since no bill created)
             if ($med) {
                 $stmt = $db->prepare("
                     DELETE FROM bill_items 
@@ -743,7 +832,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $stmt->execute([$bill_id, $med['medication_name']]);
             }
             
-            // Update patient_bills total
             updateBillTotal($db, $bill_id);
             
             $response['success'] = true;
@@ -757,181 +845,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD PROCEDURE
-    // ================================================================
-    if ($action === 'add_procedure') {
-        header('Content-Type: application/json');
-        
-        if ($sections_frozen) {
-            echo json_encode(['success' => false, 'message' => '❌ Cannot add procedures. Lab tests pending!']);
-            exit;
-        }
-        
-        $procedure_id = (int)($_POST['procedure_id'] ?? 0);
-        $response = ['success' => false, 'message' => '', 'procedure' => null];
-        
-        if ($procedure_id > 0) {
-            $stmt = $db->prepare("SELECT id, procedure_name, price FROM procedures WHERE id = ? AND is_active = 1");
-            $stmt->execute([$procedure_id]);
-            $procedure = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($procedure) {
-                $item_name = $procedure['procedure_name'];
-                $item_price = $procedure['price'];
-                
-                $stmt = $db->prepare("
-                    SELECT id, quantity FROM bill_items 
-                    WHERE bill_id = ? AND item_name = ? AND item_type = 'procedure' AND status != 'cancelled'
-                ");
-                $stmt->execute([$bill_id, $item_name]);
-                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($existing) {
-                    $new_qty = $existing['quantity'] + 1;
-                    $new_total = $item_price * $new_qty;
-                    $stmt = $db->prepare("
-                        UPDATE bill_items 
-                        SET quantity = ?, total_price = ? 
-                        WHERE id = ?
-                    ");
-                    $stmt->execute([$new_qty, $new_total, $existing['id']]);
-                    $proc_id = $existing['id'];
-                } else {
-                    $stmt = $db->prepare("
-                        INSERT INTO bill_items (
-                            bill_id, item_type, item_name, quantity, unit_price, total_price,
-                            payment_status, is_paid, status, created_at
-                        ) VALUES (?, 'procedure', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
-                    ");
-                    $stmt->execute([$bill_id, $item_name, $item_price, $item_price]);
-                    $proc_id = $db->lastInsertId();
-                }
-                
-                // Update patient_bills total
-                updateBillTotal($db, $bill_id);
-                
-                $response['success'] = true;
-                $response['message'] = '✅ Procedure added successfully! Bill sent to Cashier.';
-                $response['procedure'] = ['id' => $proc_id, 'name' => $item_name, 'quantity' => $existing ? $existing['quantity'] + 1 : 1, 'price' => $item_price];
-            } else {
-                $response['message'] = '❌ Procedure not found';
-            }
-        } else {
-            $response['message'] = '❌ Please select a procedure';
-        }
-        
-        echo json_encode($response);
-        exit;
-    }
-    
-    // ================================================================
-    // AJAX: ADD TOOL
-    // ================================================================
-    if ($action === 'add_tool') {
-        header('Content-Type: application/json');
-        
-        if ($sections_frozen) {
-            echo json_encode(['success' => false, 'message' => '❌ Cannot add tools. Lab tests pending!']);
-            exit;
-        }
-        
-        $tool_id = (int)($_POST['tool_id'] ?? 0);
-        $quantity = (int)($_POST['tool_quantity'] ?? 1);
-        if ($quantity < 1) $quantity = 1;
-        
-        $response = ['success' => false, 'message' => '', 'tool' => null];
-        
-        if ($tool_id > 0) {
-            $stmt = $db->prepare("SELECT id, procedure_name, tool_name, price FROM procedure_tools WHERE id = ? AND is_active = 1");
-            $stmt->execute([$tool_id]);
-            $tool = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($tool) {
-                $item_name = $tool['procedure_name'] . ' - ' . $tool['tool_name'];
-                $item_price = $tool['price'];
-                $total_price = $item_price * $quantity;
-                
-                $stmt = $db->prepare("
-                    SELECT id, quantity FROM bill_items 
-                    WHERE bill_id = ? AND item_name = ? AND item_type = 'tool' AND status != 'cancelled'
-                ");
-                $stmt->execute([$bill_id, $item_name]);
-                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($existing) {
-                    $new_qty = $existing['quantity'] + $quantity;
-                    $new_total = $item_price * $new_qty;
-                    $stmt = $db->prepare("
-                        UPDATE bill_items 
-                        SET quantity = ?, total_price = ? 
-                        WHERE id = ?
-                    ");
-                    $stmt->execute([$new_qty, $new_total, $existing['id']]);
-                    $tool_db_id = $existing['id'];
-                } else {
-                    $stmt = $db->prepare("
-                        INSERT INTO bill_items (
-                            bill_id, item_type, item_name, quantity, unit_price, total_price,
-                            payment_status, is_paid, status, created_at
-                        ) VALUES (?, 'tool', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
-                    ");
-                    $stmt->execute([$bill_id, $item_name, $quantity, $item_price, $total_price]);
-                    $tool_db_id = $db->lastInsertId();
-                }
-                
-                // Update patient_bills total
-                updateBillTotal($db, $bill_id);
-                
-                $response['success'] = true;
-                $response['message'] = '✅ Tool added successfully! Bill sent to Cashier.';
-                $response['tool'] = [
-                    'id' => $tool_db_id, 
-                    'name' => $item_name, 
-                    'quantity' => $quantity, 
-                    'price' => $item_price,
-                    'total_price' => $total_price
-                ];
-            } else {
-                $response['message'] = '❌ Tool not found';
-            }
-        } else {
-            $response['message'] = '❌ Please select a tool';
-        }
-        
-        echo json_encode($response);
-        exit;
-    }
-    
-    // ================================================================
-    // AJAX: REMOVE ITEM
-    // ================================================================
-    if ($action === 'remove_item') {
-        header('Content-Type: application/json');
-        $item_id = (int)($_POST['item_id'] ?? 0);
-        $response = ['success' => false, 'message' => ''];
-        
-        if ($item_id > 0) {
-            $stmt = $db->prepare("DELETE FROM bill_items WHERE id = ? AND bill_id = ?");
-            $stmt->execute([$item_id, $bill_id]);
-            
-            // Update patient_bills total
-            updateBillTotal($db, $bill_id);
-            
-            $response['success'] = true;
-            $response['message'] = '✅ Item removed!';
-        } else {
-            $response['message'] = '❌ Invalid item';
-        }
-        
-        echo json_encode($response);
-        exit;
-    }
-    
-    // ================================================================
-    // 1. SEND LAB REQUESTS - NO BILL YET
+    // 1. SEND LAB REQUESTS - NO BILL
     // ================================================================
     if (isset($_POST['send_lab']) && isset($_POST['lab_tests']) && is_array($_POST['lab_tests'])) {
-        // Delete pending lab tests first
         $stmt = $db->prepare("DELETE FROM lab_tests WHERE visit_id = ? AND status IN ('pending', 'in_progress')");
         $stmt->execute([$visit_id]);
         
@@ -939,13 +855,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         foreach ($_POST['lab_tests'] as $test_name) {
             $test_name = trim($test_name);
             if (!empty($test_name)) {
-                // Get price from catalog
                 $stmt_price = $db->prepare("SELECT price FROM lab_tests_catalog WHERE test_name = ? LIMIT 1");
                 $stmt_price->execute([$test_name]);
                 $catalog = $stmt_price->fetch(PDO::FETCH_ASSOC);
                 $price = $catalog['price'] ?? 0;
                 
-                // Insert lab test - NO BILL YET
+                // ✅ NO BILL CREATED - Lab will create bill when confirming results
                 $stmt = $db->prepare("
                     INSERT INTO lab_tests (
                         visit_id, doctor_id, test_name, test_price, status, bill_created, branch_id, created_at
@@ -957,14 +872,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             }
         }
         
-        // Update visit status
         $stmt = $db->prepare("UPDATE visits SET status = 'lab_test', updated_at = NOW() WHERE id = ?");
         $stmt->execute([$visit_id]);
         
         $message = "✅ " . $lab_tests_sent . " lab request(s) sent to Laboratory!";
+        $message .= "<br>💳 <strong>NO bill created</strong> - Bill will be created by Lab when results are confirmed.";
         $message_type = 'success';
         
-        // Refresh lab data
         $lab_data = fetchLabData($db, $visit_id);
         $lab_requests = $lab_data['requests'];
         $lab_results = $lab_data['results'];
@@ -974,7 +888,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // 2. SAVE CONSULTATION - NO STOCK DEDUCTION
+    // 2. SAVE CONSULTATION - Creates consultation fee bill
     // ================================================================
     if (isset($_POST['save_consultation'])) {
         if ($sections_frozen) {
@@ -986,16 +900,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $treatment = trim($_POST['treatment'] ?? '');
             $notes = trim($_POST['notes'] ?? '');
             
+            // Get visit type and consultation fee
+            $visit_type = $visit['visit_type'] ?? 'new';
+            $consultation_fee = 0;
+            
+            // Get consultation fee from services table
+            $stmt = $db->prepare("
+                SELECT price FROM services 
+                WHERE category_id = 2 AND service_name LIKE ? AND is_active = 1 
+                LIMIT 1
+            ");
+            $type_labels = [
+                'new' => '%General%',
+                'follow-up' => '%Follow-up%',
+                'emergency' => '%Emergency%',
+                'specialist' => '%Specialist%'
+            ];
+            $search_term = $type_labels[$visit_type] ?? '%General%';
+            $stmt->execute([$search_term]);
+            $service = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($service) {
+                $consultation_fee = $service['price'];
+            } else {
+                // Fallback
+                $consultation_fee = 15000;
+            }
+            
+            // Check if patient has valid paid visit within 7 days
+            $stmt = $db->prepare("
+                SELECT pb.created_at as paid_date, pb.total_amount
+                FROM patient_bills pb
+                WHERE pb.patient_id = ? 
+                AND pb.branch_id = ? 
+                AND pb.status = 'paid'
+                AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                ORDER BY pb.created_at DESC
+                LIMIT 1
+            ");
+            $stmt->execute([$patient_id, $doctor_branch_id]);
+            $paid_visit = $stmt->fetch();
+            
+            if ($paid_visit) {
+                $consultation_fee = 0;
+            }
+            
             // Update diagnosis in visits table
             $stmt = $db->prepare("
                 UPDATE visits 
                 SET symptoms = ?, diagnosis = ?, treatment = ?, notes = ?,
+                    consultation_fee = ?,
                     status = 'prescribed', updated_at = NOW()
                 WHERE id = ? AND doctor_id = ?
             ");
-            $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $visit_id, $doctor_id]);
+            $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $consultation_fee, $visit_id, $doctor_id]);
             
-            // Also update diagnosis in prescriptions table if exists
+            // Update diagnosis in prescriptions
             $stmt = $db->prepare("
                 UPDATE prescriptions 
                 SET diagnosis = ? 
@@ -1003,24 +962,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             ");
             $stmt->execute([$diagnosis, $visit_id, $patient_id]);
             
-            // Update bill status if there are items
-            $stmt = $db->prepare("SELECT COUNT(*) as total FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
-            $stmt->execute([$bill_id]);
-            $item_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-            
-            if ($item_count > 0) {
+            // ✅ CREATE CONSULTATION BILL - ONLY IF FEE > 0
+            if ($consultation_fee > 0) {
+                // Check if consultation bill already exists
                 $stmt = $db->prepare("
-                    UPDATE patient_bills 
-                    SET status = 'pending', updated_at = NOW()
-                    WHERE id = ?
+                    SELECT id FROM bill_items 
+                    WHERE bill_id = ? AND item_type = 'consultation' AND status != 'cancelled'
                 ");
                 $stmt->execute([$bill_id]);
+                $existing_consult = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if (!$existing_consult) {
+                    $stmt = $db->prepare("
+                        INSERT INTO bill_items (
+                            bill_id, item_type, item_name, quantity, unit_price, total_price,
+                            payment_status, is_paid, status, created_at
+                        ) VALUES (?, 'consultation', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
+                    ");
+                    $item_name = ucfirst($visit_type) . ' Consultation';
+                    $stmt->execute([$bill_id, $item_name, $consultation_fee, $consultation_fee]);
+                }
             }
             
-            $message = "✅ Consultation saved successfully! All bills sent to Cashier.";
+            // Update patient_bills total
+            updateBillTotal($db, $bill_id);
+            
+            $message = "✅ Consultation saved successfully!";
+            if ($consultation_fee > 0) {
+                $message .= " 💰 Consultation fee (TSh " . number_format($consultation_fee) . ") sent to Cashier.";
+            } else {
+                $message .= " 💰 Consultation fee WAIVED (paid within 7 days).";
+            }
             $message_type = 'success';
             
-            // Redirect to view mode after save
             echo '<script>
                 setTimeout(function(){ 
                     window.location.href = "consultation.php?visit_id=' . $visit_id . '&view=view"; 
@@ -1037,13 +1011,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $bill_id = (int)($_POST['bill_id'] ?? 0);
         
         if ($bill_id > 0) {
-            // Check if all bills are paid
             $stmt = $db->prepare("SELECT balance, status FROM patient_bills WHERE id = ?");
             $stmt->execute([$bill_id]);
             $bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($bill_data && $bill_data['balance'] <= 0) {
-                // Mark bill as paid
                 $stmt = $db->prepare("
                     UPDATE patient_bills 
                     SET status = 'paid', updated_at = NOW() 
@@ -1051,7 +1023,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 ");
                 $stmt->execute([$bill_id]);
                 
-                // Update bill_items
                 $stmt = $db->prepare("
                     UPDATE bill_items 
                     SET payment_status = 'paid', is_paid = 1, status = 'paid', paid_at = NOW() 
@@ -1059,7 +1030,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 ");
                 $stmt->execute([$bill_id]);
                 
-                // Mark visit as completed
                 $stmt = $db->prepare("
                     UPDATE visits 
                     SET status = 'completed', is_completed = 1, completed_at = NOW(), updated_at = NOW() 
@@ -1067,7 +1037,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 ");
                 $stmt->execute([$visit_id]);
                 
-                // Update prescriptions status
                 $stmt = $db->prepare("
                     UPDATE prescriptions 
                     SET status = 'dispensed', dispensed_at = NOW() 
@@ -1078,7 +1047,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $message = "✅ Payment confirmed! Consultation completed successfully.";
                 $message_type = 'success';
                 
-                // Redirect to view mode
                 echo '<script>
                     setTimeout(function(){ 
                         window.location.href = "consultation.php?visit_id=' . $visit_id . '&view=view"; 
@@ -1666,6 +1634,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             margin-left: 6px;
             border: 1px solid var(--success);
         }
+        .med-status-pending {
+            font-size: 0.6rem;
+            background: var(--warning-bg);
+            color: var(--warning);
+            padding: 1px 10px;
+            border-radius: 12px;
+            margin-left: 6px;
+            border: 1px solid var(--warning);
+        }
         
         .btn-remove {
             width: 30px;
@@ -1907,7 +1884,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         
         /* ================================================================
-           FROZEN OVERLAY - FIXED
+           FROZEN OVERLAY
            ================================================================ */
         .frozen-overlay-active {
             position: relative;
@@ -2197,7 +2174,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <div class="grand-total-bar" id="grandTotalBar">
         <div>
             <span class="total-label"><i class="fas fa-receipt"></i> GRAND TOTAL</span>
-            <span class="text-xs" style="opacity:0.7;display:block;">All bills sent to Cashier</span>
+            <span class="text-xs" style="opacity:0.7;display:block;">Bills created by Doctor, Lab & Pharmacy</span>
         </div>
         <div>
             <span class="total-amount">
@@ -2442,7 +2419,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <button type="button" class="btn btn-outline btn-sm ml-2" onclick="addLabTest()">
                     <i class="fas fa-plus"></i> Add Test
                 </button>
-                <!-- Lab Total -->
+                <!-- Lab Total - DISPLAY ONLY, NO BILL -->
                 <span class="section-total" id="labSectionTotal">
                     <span class="label">🧪 Total:</span>
                     <span class="amount">TSh <span id="labTotalDisplay"><?= number_format($lab_total, 0) ?></span></span>
@@ -2509,7 +2486,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
 
-        <!-- SECTION 4: LAB RESULTS - FIXED -->
+        <!-- SECTION 4: LAB RESULTS -->
         <div class="consultation-card mb-6 <?= $lab_results_available ? 'border-green-500' : '' ?>" id="labResultsCard">
             <h3 class="card-title">
                 <i class="fas fa-file-medical-alt title-green"></i> Laboratory Results
@@ -2567,7 +2544,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
 
         <!-- ================================================================ -->
-        <!-- FROZEN SECTIONS - FIXED: Only frozen when lab tests are pending -->
+        <!-- FROZEN SECTIONS -->
         <!-- ================================================================ -->
         <div id="frozenSectionsContainer" class="<?= $sections_frozen ? 'frozen-overlay-active' : '' ?>">
 
@@ -2588,14 +2565,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
 
-            <!-- SECTION 6: MEDICATIONS -->
+            <!-- SECTION 6: MEDICATIONS - NO BILL, ONLY PRESCRIPTION -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
                     <i class="fas fa-prescription title-blue"></i> Medications
                     <?php if ($sections_frozen): ?>
                         <span class="frozen-badge" id="medicationFrozenBadge">🔒 Frozen - Lab Pending</span>
                     <?php endif; ?>
-                    <!-- Medication Total -->
+                    <!-- Medication Total - DISPLAY ONLY, NO BILL -->
                     <span class="section-total green" id="medSectionTotal">
                         <span class="label">💊 Total:</span>
                         <span class="amount">TSh <span id="medTotalDisplay"><?= number_format($medications_total, 0) ?></span></span>
@@ -2704,7 +2681,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <?php if ($sections_frozen): ?>
                             <span class="text-xs text-red-500 ml-2"><i class="fas fa-lock"></i> Frozen until lab results</span>
                         <?php endif; ?>
-                        <span class="text-xs text-gray-500 ml-2"><i class="fas fa-info-circle"></i> Stock deducted when Pharmacy dispenses</span>
+                        <span class="text-xs text-gray-500 ml-2"><i class="fas fa-info-circle"></i> Bill created when Pharmacy dispenses</span>
                     </div>
                 </div>
                 
@@ -2737,6 +2714,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <?php endif; ?>
                                         <?php if ($is_dispensed): ?>
                                             <span class="med-status-dispensed">✅ Dispensed</span>
+                                        <?php else: ?>
+                                            <span class="med-status-pending">⏳ Pending Dispense</span>
                                         <?php endif; ?>
                                     </div>
                                     <?php if (!$is_dispensed): ?>
@@ -2760,7 +2739,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
 
             <!-- ================================================================ -->
-            <!-- SECTION 7: PROCEDURES & TOOLS -->
+            <!-- SECTION 7: PROCEDURES & TOOLS - Creates bill immediately -->
             <!-- ================================================================ -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
@@ -2877,7 +2856,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="form-actions">
                 <button type="submit" name="save_consultation" class="btn btn-success" id="saveConsultationBtn" 
                         <?= $sections_frozen ? 'disabled' : '' ?>
-                        onclick="return confirm('Save consultation?\n\n- 💊 Medications: Sent to Pharmacy (Bill to Cashier)\n- 🧪 Lab Tests: Sent to Laboratory (Bill to Cashier)\n- 💉 Procedures & Tools: Sent to Cashier\n- 💰 All bills will be sent to Cashier for payment.')">
+                        onclick="return confirm('Save consultation?\n\n- 💊 Medications: Sent to Pharmacy (Bill when dispensed)\n- 🧪 Lab Tests: Sent to Laboratory (Bill when confirmed)\n- 💉 Procedures & Tools: Sent to Cashier now\n- 💰 Consultation fee: Sent to Cashier now')">
                     <i class="fas fa-save"></i> Save Consultation
                 </button>
                 <button type="submit" name="save_draft" class="btn btn-primary" id="saveDraftBtn" <?= $sections_frozen ? 'disabled' : '' ?>>
@@ -3354,7 +3333,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
-    // ADD MEDICATION AJAX - NO STOCK DEDUCTION
+    // ADD MEDICATION AJAX - NO BILL, ONLY PRESCRIPTION
     // ================================================================
     function addMedicationAjax() {
         var medSelect = document.getElementById('medicationSelect');
@@ -3426,6 +3405,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span class="med-qty">x${med.quantity}</span>
                 <span class="med-price">TSh ${totalPrice.toLocaleString()}</span>
                 ${med.instructions ? `<span class="med-instruction-tag">${escapeHtml(med.instructions)}</span>` : ''}
+                <span class="med-status-pending">⏳ Pending Dispense</span>
             </div>
             <button type="button" class="btn-remove" onclick="removeMedication(${med.id})"><i class="fas fa-times"></i></button>
         `;
@@ -3533,7 +3513,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
-    // AUTO-UPDATE - FIXED: Uses updated frozen logic
+    // AUTO-UPDATE
     // ================================================================
     function fetchLabStatus() {
         if (isUpdating || isCompleted) return;
@@ -3605,11 +3585,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             }
         }
         
-        // FIXED: Update frozen sections based on data.frozen
         var frozenSections = document.getElementById('frozenSectionsContainer');
         var isFrozen = data.frozen || false;
-        
-        // Update the global isFrozen variable
         isFrozen = isFrozen;
         
         if (frozenSections) {
@@ -3684,7 +3661,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             }
         });
         
-        // Update lab results container
         var labContainer = document.getElementById('labResultsContainer');
         if (labContainer) {
             if (data.available && data.results_html) {
@@ -3797,7 +3773,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         updateGrandTotal();
         initInstructions();
         
-        // Log current frozen state
         console.log('%c❄️ Frozen State: ' + isFrozen, 'font-size:12px; color:' + (isFrozen ? '#DC2626' : '#34D399') + ';');
         console.log('%c🧪 Lab Results Available: ' + <?= $lab_results_available ? 'true' : 'false' ?>, 'font-size:12px; color:#059669;');
         console.log('%c⏳ Pending Labs: ' + <?= count($lab_requests) ?>, 'font-size:12px; color:#D97706;');
@@ -3823,14 +3798,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
     console.log('%c👨‍⚕️ Consultation - FULLY FIXED', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
-    console.log('%c💰 Lab Total: <?= number_format($lab_total, 0) ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c💊 Medication Total: <?= number_format($medications_total, 0) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🛠️ Procedures + Tools Total: <?= number_format($procedure_total + $tool_total, 0) ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c🏷️ Grand Total: <?= number_format($total_bill_amount, 0) ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c✅ ALL bills sent to Cashier: Consultation, Lab Tests, Medications, Procedures, Tools', 'font-size:12px; color:#059669;');
+    console.log('%c💰 Bill Creation Rules:', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c  📝 Consultation/Visit - Doctor creates bill', 'font-size:11px; color:#0B5ED7;');
+    console.log('%c  🧪 Lab Tests - Lab creates bill (NOT Doctor)', 'font-size:11px; color:#7C3AED;');
+    console.log('%c  💊 Medications - Pharmacy creates bill (NOT Doctor)', 'font-size:11px; color:#D97706;');
+    console.log('%c  💉 Procedures - Doctor creates bill', 'font-size:11px; color:#0B5ED7;');
+    console.log('%c  🔧 Tools - Doctor creates bill', 'font-size:11px; color:#0B5ED7;');
     console.log('%c🔄 Auto-update every 3 seconds', 'font-size:12px; color:#34D399;');
-    console.log('%c❄️ Frozen: <?= $sections_frozen ? 'YES' : 'NO' ?>', 'font-size:12px; color:' + (<?= $sections_frozen ? 'true' : 'false' ?> ? '#DC2626' : '#34D399') + ';');
-    console.log('%c🧪 Lab Results Available: <?= $lab_results_available ? 'YES' : 'NO' ?>', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

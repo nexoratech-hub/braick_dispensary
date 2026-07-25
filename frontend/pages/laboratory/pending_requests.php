@@ -3,7 +3,9 @@
 // FILE: frontend/pages/laboratory/pending_requests.php
 // LABORATORY - PENDING TESTS (FROM lab_tests + lab_requests)
 // WITH CONFIRM & CANCEL BUTTONS
-// CONFIRM: Adds fees to cashier bill and moves to In Progress
+// FIXED: Duplicate bill_items prevention
+// FIXED: Status check before confirm
+// FIXED: Auto-update prevents duplicates
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -33,7 +35,7 @@ require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// HANDLE CONFIRM / CANCEL ACTIONS
+// HANDLE CONFIRM / CANCEL ACTIONS - WITH DUPLICATE CHECK
 // ================================================================
 $action_message = '';
 $action_message_type = '';
@@ -45,56 +47,60 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
     
     try {
         if ($action === 'confirm' || $action === 'confirm_test') {
-            $db->beginTransaction();
             
-            // Determine source and get details
-            if ($source === 'request' || $action === 'confirm') {
-                // From lab_requests
-                $stmt = $db->prepare("
-                    SELECT lr.*, lri.test_name, lri.price, lri.test_id,
-                           v.patient_id, v.branch_id
-                    FROM lab_requests lr
-                    LEFT JOIN lab_request_items lri ON lr.id = lri.request_id
-                    LEFT JOIN visits v ON lr.visit_id = v.id
-                    WHERE lr.id = ?
-                ");
+            // ================================================================
+            // CHECK 1: Verify test/request is still pending (prevent re-processing)
+            // ================================================================
+            if ($source === 'test' || $action === 'confirm_test') {
+                $stmt = $db->prepare("SELECT status FROM lab_tests WHERE id = ?");
                 $stmt->execute([$id]);
-                $request_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                $test_status = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                if ($request_data) {
-                    $first = $request_data[0];
+                if ($test_status && in_array($test_status['status'], ['completed', 'in_progress', 'processing'])) {
+                    $action_message = "⚠️ This test has already been processed!";
+                    $action_message_type = 'warning';
+                } else {
+                    // Process confirm
+                    $db->beginTransaction();
                     
-                    // Update lab_request status to 'accepted'
-                    $stmt = $db->prepare("UPDATE lab_requests SET status = 'accepted', accepted_at = NOW(), lab_technician_id = ?, updated_at = NOW() WHERE id = ?");
-                    $stmt->execute([$user_id, $id]);
+                    $stmt = $db->prepare("
+                        SELECT lt.*, v.patient_id, v.branch_id
+                        FROM lab_tests lt
+                        JOIN visits v ON lt.visit_id = v.id
+                        WHERE lt.id = ?
+                    ");
+                    $stmt->execute([$id]);
+                    $test = $stmt->fetch(PDO::FETCH_ASSOC);
                     
-                    // Also update lab_tests for each item
-                    foreach ($request_data as $item) {
+                    if ($test) {
+                        // Update test status to in_progress
                         $stmt = $db->prepare("
                             UPDATE lab_tests 
                             SET status = 'in_progress', lab_technician_id = ?, updated_at = NOW()
-                            WHERE test_name = ? AND visit_id = ? AND status IN ('pending', '')
+                            WHERE id = ?
                         ");
-                        $stmt->execute([$user_id, $item['test_name'], $first['visit_id']]);
-                    }
-                    
-                    // Add fees to bill_items for Cashier
-                    foreach ($request_data as $item) {
-                        if ($item['price'] > 0) {
-                            // Find the bill for this visit
+                        $stmt->execute([$user_id, $id]);
+                        
+                        // Get price from catalog
+                        $stmt = $db->prepare("SELECT price FROM lab_tests_catalog WHERE test_name = ? LIMIT 1");
+                        $stmt->execute([$test['test_name']]);
+                        $catalog = $stmt->fetch(PDO::FETCH_ASSOC);
+                        $price = $catalog['price'] ?? 0;
+                        
+                        if ($price > 0) {
+                            // Find bill
                             $stmt = $db->prepare("
                                 SELECT id FROM patient_bills 
                                 WHERE visit_id = ? AND branch_id = ?
                                 ORDER BY id DESC LIMIT 1
                             ");
-                            $stmt->execute([$first['visit_id'], $user_branch_id]);
+                            $stmt->execute([$test['visit_id'], $user_branch_id]);
                             $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                             
                             if ($bill) {
                                 $bill_id = $bill['id'];
                             } else {
-                                // Create bill if doesn't exist
-                                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($first['patient_id'], 6, '0', STR_PAD_LEFT);
+                                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($test['patient_id'], 6, '0', STR_PAD_LEFT);
                                 $stmt = $db->prepare("
                                     INSERT INTO patient_bills (
                                         bill_number, patient_id, visit_id, 
@@ -102,39 +108,31 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                                         status, created_by, branch_id, created_at
                                     ) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?, NOW())
                                 ");
-                                $stmt->execute([$bill_number, $first['patient_id'], $first['visit_id'], $user_id, $user_branch_id]);
+                                $stmt->execute([$bill_number, $test['patient_id'], $test['visit_id'], $user_id, $user_branch_id]);
                                 $bill_id = $db->lastInsertId();
                             }
                             
-                            // Check if lab fee already exists
+                            // ✅ CHECK 2: Prevent duplicate bill_items
                             $stmt = $db->prepare("
-                                SELECT id, quantity FROM bill_items 
-                                WHERE bill_id = ? AND item_name = ? AND item_type = 'lab_test'
+                                SELECT id FROM bill_items 
+                                WHERE bill_id = ? AND item_name = ? AND item_type = 'lab_test' AND status != 'cancelled'
                             ");
-                            $stmt->execute([$bill_id, $item['test_name']]);
+                            $stmt->execute([$bill_id, $test['test_name']]);
                             $existing = $stmt->fetch(PDO::FETCH_ASSOC);
                             
-                            if ($existing) {
-                                $new_qty = $existing['quantity'] + 1;
-                                $new_total = $item['price'] * $new_qty;
-                                $stmt = $db->prepare("
-                                    UPDATE bill_items 
-                                    SET quantity = ?, total_price = ? 
-                                    WHERE id = ?
-                                ");
-                                $stmt->execute([$new_qty, $new_total, $existing['id']]);
-                            } else {
+                            if (!$existing) {
+                                // Insert only if not exists
                                 $stmt = $db->prepare("
                                     INSERT INTO bill_items (
                                         bill_id, item_type, item_name, quantity, unit_price, total_price,
                                         payment_status, is_paid, status, created_at
                                     ) VALUES (?, 'lab_test', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
                                 ");
-                                $stmt->execute([$bill_id, $item['test_name'], $item['price'], $item['price']]);
+                                $stmt->execute([$bill_id, $test['test_name'], $price, $price]);
                             }
                             
                             // Update bill total
-                            $stmt = $db->prepare("SELECT COALESCE(SUM(total_price), 0) as total FROM bill_items WHERE bill_id = ?");
+                            $stmt = $db->prepare("SELECT COALESCE(SUM(total_price), 0) as total FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
                             $stmt->execute([$bill_id]);
                             $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
                             
@@ -145,89 +143,116 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                             ");
                             $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
                         }
+                        
+                        $db->commit();
+                        $action_message = "✅ Test confirmed! Fee sent to Cashier. Test moved to In Progress.";
+                        $action_message_type = 'success';
                     }
-                    
-                    $db->commit();
-                    $action_message = "✅ Lab request confirmed! Fees sent to Cashier. Tests moved to In Progress.";
-                    $action_message_type = 'success';
                 }
                 
-            } else {
-                // From lab_tests (single test)
-                $stmt = $db->prepare("
-                    SELECT lt.*, v.patient_id, v.branch_id
-                    FROM lab_tests lt
-                    JOIN visits v ON lt.visit_id = v.id
-                    WHERE lt.id = ?
-                ");
+            } elseif ($source === 'request' || $action === 'confirm') {
+                // From lab_requests
+                $stmt = $db->prepare("SELECT status FROM lab_requests WHERE id = ?");
                 $stmt->execute([$id]);
-                $test = $stmt->fetch(PDO::FETCH_ASSOC);
+                $req_status = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                if ($test) {
-                    // Update test status to in_progress
+                if ($req_status && in_array($req_status['status'], ['accepted', 'in_progress', 'completed'])) {
+                    $action_message = "⚠️ This request has already been processed!";
+                    $action_message_type = 'warning';
+                } else {
+                    $db->beginTransaction();
+                    
                     $stmt = $db->prepare("
-                        UPDATE lab_tests 
-                        SET status = 'in_progress', lab_technician_id = ?, updated_at = NOW()
-                        WHERE id = ?
+                        SELECT lr.*, lri.test_name, lri.price, lri.test_id,
+                               v.patient_id, v.branch_id
+                        FROM lab_requests lr
+                        LEFT JOIN lab_request_items lri ON lr.id = lri.request_id
+                        LEFT JOIN visits v ON lr.visit_id = v.id
+                        WHERE lr.id = ?
                     ");
-                    $stmt->execute([$user_id, $id]);
+                    $stmt->execute([$id]);
+                    $request_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     
-                    // Get price from catalog
-                    $stmt = $db->prepare("SELECT price FROM lab_tests_catalog WHERE test_name = ? LIMIT 1");
-                    $stmt->execute([$test['test_name']]);
-                    $catalog = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $price = $catalog['price'] ?? 0;
-                    
-                    if ($price > 0) {
-                        // Find bill
-                        $stmt = $db->prepare("
-                            SELECT id FROM patient_bills 
-                            WHERE visit_id = ? AND branch_id = ?
-                            ORDER BY id DESC LIMIT 1
-                        ");
-                        $stmt->execute([$test['visit_id'], $user_branch_id]);
-                        $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($request_data) {
+                        $first = $request_data[0];
                         
-                        if ($bill) {
-                            $bill_id = $bill['id'];
-                        } else {
-                            $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($test['patient_id'], 6, '0', STR_PAD_LEFT);
+                        // Update lab_request status to 'accepted'
+                        $stmt = $db->prepare("UPDATE lab_requests SET status = 'accepted', accepted_at = NOW(), lab_technician_id = ?, updated_at = NOW() WHERE id = ?");
+                        $stmt->execute([$user_id, $id]);
+                        
+                        // Also update lab_tests for each item
+                        foreach ($request_data as $item) {
                             $stmt = $db->prepare("
-                                INSERT INTO patient_bills (
-                                    bill_number, patient_id, visit_id, 
-                                    subtotal, total_amount, balance, 
-                                    status, created_by, branch_id, created_at
-                                ) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?, NOW())
+                                UPDATE lab_tests 
+                                SET status = 'in_progress', lab_technician_id = ?, updated_at = NOW()
+                                WHERE test_name = ? AND visit_id = ? AND status IN ('pending', '')
                             ");
-                            $stmt->execute([$bill_number, $test['patient_id'], $test['visit_id'], $user_id, $user_branch_id]);
-                            $bill_id = $db->lastInsertId();
+                            $stmt->execute([$user_id, $item['test_name'], $first['visit_id']]);
                         }
                         
-                        // Add lab fee
-                        $stmt = $db->prepare("
-                            INSERT INTO bill_items (
-                                bill_id, item_type, item_name, quantity, unit_price, total_price,
-                                payment_status, is_paid, status, created_at
-                            ) VALUES (?, 'lab_test', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
-                        ");
-                        $stmt->execute([$bill_id, $test['test_name'], $price, $price]);
+                        // Add fees to bill_items for Cashier - WITH DUPLICATE CHECK
+                        foreach ($request_data as $item) {
+                            if ($item['price'] > 0) {
+                                // Find the bill for this visit
+                                $stmt = $db->prepare("
+                                    SELECT id FROM patient_bills 
+                                    WHERE visit_id = ? AND branch_id = ?
+                                    ORDER BY id DESC LIMIT 1
+                                ");
+                                $stmt->execute([$first['visit_id'], $user_branch_id]);
+                                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                                
+                                if ($bill) {
+                                    $bill_id = $bill['id'];
+                                } else {
+                                    $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($first['patient_id'], 6, '0', STR_PAD_LEFT);
+                                    $stmt = $db->prepare("
+                                        INSERT INTO patient_bills (
+                                            bill_number, patient_id, visit_id, 
+                                            subtotal, total_amount, balance, 
+                                            status, created_by, branch_id, created_at
+                                        ) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?, NOW())
+                                    ");
+                                    $stmt->execute([$bill_number, $first['patient_id'], $first['visit_id'], $user_id, $user_branch_id]);
+                                    $bill_id = $db->lastInsertId();
+                                }
+                                
+                                // ✅ CHECK: Prevent duplicate bill_items
+                                $stmt = $db->prepare("
+                                    SELECT id FROM bill_items 
+                                    WHERE bill_id = ? AND item_name = ? AND item_type = 'lab_test' AND status != 'cancelled'
+                                ");
+                                $stmt->execute([$bill_id, $item['test_name']]);
+                                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+                                
+                                if (!$existing) {
+                                    $stmt = $db->prepare("
+                                        INSERT INTO bill_items (
+                                            bill_id, item_type, item_name, quantity, unit_price, total_price,
+                                            payment_status, is_paid, status, created_at
+                                        ) VALUES (?, 'lab_test', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
+                                    ");
+                                    $stmt->execute([$bill_id, $item['test_name'], $item['price'], $item['price']]);
+                                }
+                                
+                                // Update bill total
+                                $stmt = $db->prepare("SELECT COALESCE(SUM(total_price), 0) as total FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
+                                $stmt->execute([$bill_id]);
+                                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                                
+                                $stmt = $db->prepare("
+                                    UPDATE patient_bills 
+                                    SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
+                                    WHERE id = ?
+                                ");
+                                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                            }
+                        }
                         
-                        // Update bill total
-                        $stmt = $db->prepare("SELECT COALESCE(SUM(total_price), 0) as total FROM bill_items WHERE bill_id = ?");
-                        $stmt->execute([$bill_id]);
-                        $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-                        
-                        $stmt = $db->prepare("
-                            UPDATE patient_bills 
-                            SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
-                            WHERE id = ?
-                        ");
-                        $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                        $db->commit();
+                        $action_message = "✅ Lab request confirmed! Fees sent to Cashier. Tests moved to In Progress.";
+                        $action_message_type = 'success';
                     }
-                    
-                    $db->commit();
-                    $action_message = "✅ Test confirmed! Fee sent to Cashier. Test moved to In Progress.";
-                    $action_message_type = 'success';
                 }
             }
             
@@ -266,7 +291,9 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
         }
         
     } catch (Exception $e) {
-        $db->rollBack();
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
         $action_message = "❌ Error: " . $e->getMessage();
         $action_message_type = 'error';
     }
@@ -836,7 +863,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                                 $cancel_link = "pending_requests.php?action=cancel&id=" . $id . "&source=request";
                             }
                         ?>
-                            <tr class="item-row" data-id="<?= $id ?>">
+                            <tr class="item-row" data-id="<?= $id ?>" data-status="<?= $status ?>">
                                 <td><?= $i++ ?></td>
                                 <td>
                                     <div class="font-medium text-sm"><?= htmlspecialchars($test_name) ?></div>
@@ -1049,10 +1076,26 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c🧪 Braick - Pending Tests (With Confirm & Cancel)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    // ================================================================
+    // PREVENT DUPLICATE CONFIRM ON AUTO-UPDATE
+    // ================================================================
+    var processedIds = [];
+
+    function checkAndMarkProcessed(id, source) {
+        var key = source + '_' + id;
+        if (processedIds.includes(key)) {
+            return true; // Already processed
+        }
+        processedIds.push(key);
+        return false; // Not processed yet
+    }
+
+    console.log('%c🧪 Braick - Pending Tests (WITH DUPLICATE CHECK)', 'font-size:18px; font-weight:bold; color:#D97706;');
     console.log('%c📊 Pending: <?= $total_pending ?> | In Progress: <?= $in_progress_total ?> | Completed Today: <?= $completed_today_total ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Confirm: Sends fee to Cashier & moves to In Progress', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Confirm: Sends fee to Cashier ONCE & moves to In Progress', 'font-size:13px; color:#059669;');
     console.log('%c❌ Cancel: Cancels the test/request', 'font-size:13px; color:#DC2626;');
+    console.log('%c🛡️ Duplicate prevention: Status check + Bill item check', 'font-size:13px; color:#7C3AED;');
+    console.log('%c⚠️ Already processed tests/requests are ignored', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>
