@@ -1,13 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/new_patient.php
-// RECEPTION - REGISTER NEW PATIENT WITH AUTO BILL
-// - Registration Fee is BACKGROUND ONLY (not charged to patient)
-// - General Consultation Fee is BACKGROUND ONLY (not shown to reception)
-// - Bill sent to Cashier as Pending (Background)
-// - NO FEE DISPLAYED TO RECEPTION
+// RECEPTION - REGISTER NEW PATIENT - NO BILL CREATED
+// - Bills will be created AFTER doctor assigned or lab request
+// - Patient Type: New Patient, Follow-up, Emergency
+// - Marital Status added
+// - NO fees displayed to reception
 // - DUPLICATE CHECK: Phone, Email, Name+Phone, Name+DOB
-// - FULL NAME ALONE IS NOT CHECKED (to allow different patients with same name)
+// - FULL NAME ALONE is NOT checked
 // - RESET FORM BUTTON WORKS PROPERLY
 // BRAICK DISPENSARY
 // ================================================================
@@ -40,41 +40,6 @@ $message_type = '';
 try {
     $db = getDB();
     
-    // ================================================================
-    // GET FEES FROM SERVICES TABLE (BACKGROUND ONLY)
-    // ================================================================
-    
-    // 1. Registration Fee (category_id = 1) - BACKGROUND ONLY
-    $registration_fee = 0;
-    $registration_service_name = 'Registration Fee';
-    $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category_id = 1 AND is_active = 1 LIMIT 1");
-    $stmt->execute();
-    $reg_service = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($reg_service) {
-        $registration_fee = $reg_service['price'];
-        $registration_service_name = $reg_service['service_name'];
-    }
-    
-    // 2. General Consultation Fee (category_id = 2) - BACKGROUND ONLY
-    $consultation_fee = 0;
-    $consultation_service_name = 'General Consultation';
-    $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category_id = 2 AND service_name LIKE '%General%' AND is_active = 1 LIMIT 1");
-    $stmt->execute();
-    $cons_service = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($cons_service) {
-        $consultation_fee = $cons_service['price'];
-        $consultation_service_name = $cons_service['service_name'];
-    } else {
-        // Fallback: get any consultation service
-        $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category_id = 2 AND is_active = 1 LIMIT 1");
-        $stmt->execute();
-        $cons_service = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($cons_service) {
-            $consultation_fee = $cons_service['price'];
-            $consultation_service_name = $cons_service['service_name'];
-        }
-    }
-    
     // Generate patient ID
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE branch_id = ?");
     $stmt->execute([$selected_branch_id]);
@@ -87,12 +52,14 @@ try {
         $full_name = trim($_POST['full_name'] ?? '');
         $date_of_birth = $_POST['date_of_birth'] ?? null;
         $gender = $_POST['gender'] ?? null;
+        $marital_status = $_POST['marital_status'] ?? null;
         $phone = trim($_POST['phone'] ?? '');
         $email = trim($_POST['email'] ?? '');
         $address = trim($_POST['address'] ?? '');
         $emergency_contact = trim($_POST['emergency_contact'] ?? '');
         $blood_group = $_POST['blood_group'] ?? null;
         $allergies = trim($_POST['allergies'] ?? '');
+        $patient_type = $_POST['patient_type'] ?? 'new';
         $branch_id = $selected_branch_id;
         
         // Validation
@@ -133,7 +100,6 @@ try {
             }
             
             // 3. TERTIARY CHECK: Full Name + Phone (Same person trying to register again)
-            // NOTE: This catches if someone tries to register with same name and phone
             if (empty($duplicate_error) && !empty($full_name) && !empty($phone)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE full_name = ? AND phone = ? AND branch_id = ?");
                 $stmt->execute([$full_name, $phone, $branch_id]);
@@ -145,7 +111,6 @@ try {
             }
             
             // 4. EXTRA CHECK: Full Name + Date of Birth (For children - mother registering same child)
-            // NOTE: This catches if someone tries to register same child twice
             if (empty($duplicate_error) && !empty($full_name) && !empty($date_of_birth)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, date_of_birth FROM patients WHERE full_name = ? AND date_of_birth = ? AND branch_id = ?");
                 $stmt->execute([$full_name, $date_of_birth, $branch_id]);
@@ -169,19 +134,20 @@ try {
                 INSERT INTO patients (
                     patient_id, full_name, date_of_birth, gender, phone, email, 
                     address, emergency_contact, blood_group, allergies, branch_id, 
-                    created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_by, marital_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
             
             if ($stmt->execute([
                 $patient_id_number, $full_name, $date_of_birth, $gender, $phone, $email,
                 $address, $emergency_contact, $blood_group, $allergies, $branch_id,
-                $_SESSION['user_id']
+                $_SESSION['user_id'], $marital_status
             ])) {
                 $patient_db_id = $db->lastInsertId();
                 
                 // ================================================================
-                // 2. CREATE VISIT (PENDING - NO DOCTOR ASSIGNED)
+                // 2. CREATE VISIT - NO BILL CREATED
+                //    Bills will be created AFTER doctor assigned or lab request
                 // ================================================================
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT);
                 
@@ -190,76 +156,42 @@ try {
                         visit_number, patient_id, receptionist_id, 
                         branch_id, visit_type, status, created_at, updated_at,
                         registration_fee, consultation_fee
-                    ) VALUES (?, ?, ?, ?, 'new', 'pending', NOW(), NOW(), ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, 'pending', NOW(), NOW(), 0, 0)
                 ");
                 $stmt->execute([
                     $visit_number, 
                     $patient_db_id, 
                     $_SESSION['user_id'], 
                     $branch_id,
-                    $registration_fee,
-                    $consultation_fee
+                    $patient_type
                 ]);
                 $visit_id = $db->lastInsertId();
                 
                 // ================================================================
-                // 3. CREATE BILL (BACKGROUND - ONLY CONSULTATION FEE)
+                // 3. NO BILL CREATED - Bills will be created later
+                //    - When doctor is assigned -> consultation bill
+                //    - When lab request is made -> lab bill after confirmation
                 // ================================================================
-                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_db_id, 6, '0', STR_PAD_LEFT);
-                $total_amount = $consultation_fee;
-                
-                $stmt = $db->prepare("
-                    INSERT INTO patient_bills (
-                        bill_number, patient_id, visit_id, 
-                        registration_fee, consultation_fee,
-                        subtotal, total_amount, balance, 
-                        status, created_by, branch_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
-                ");
-                $stmt->execute([
-                    $bill_number,
-                    $patient_db_id,
-                    $visit_id,
-                    $registration_fee,
-                    $consultation_fee,
-                    $total_amount,
-                    $total_amount,
-                    $total_amount,
-                    $_SESSION['user_id'],
-                    $branch_id
-                ]);
-                $bill_id = $db->lastInsertId();
-                
-                // ================================================================
-                // 4. ADD BILL ITEMS (Only Consultation - NO Registration)
-                // ================================================================
-                if ($consultation_fee > 0) {
-                    $stmt = $db->prepare("
-                        INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
-                        VALUES (?, 'consultation', ?, 1, ?, ?)
-                    ");
-                    $stmt->execute([$bill_id, $consultation_service_name, $consultation_fee, $consultation_fee]);
-                }
                 
                 $_SESSION['current_patient_id'] = $patient_db_id;
                 $_SESSION['current_visit_id'] = $visit_id;
-                $_SESSION['current_bill_id'] = $bill_id;
                 
                 // Log activity
                 try {
                     $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'patient_registered', ?, NOW())");
-                    $stmt->execute([$_SESSION['user_id'], "New patient registered: $full_name (ID: $patient_id_number) in $branch_name - Bill #$bill_number"]);
+                    $stmt->execute([$_SESSION['user_id'], "New patient registered: $full_name (ID: $patient_id_number) in $branch_name - Visit: $visit_number (No bill created)"]);
                 } catch (Exception $e) {}
                 
                 $message = "✅ Patient registered successfully!";
                 $message .= "<br>📋 Patient ID: <strong>$patient_id_number</strong>";
-                $message .= "<br>⏳ Bill sent to Cashier - <strong>Pending</strong>";
+                $message .= "<br>📋 Visit #: <strong>$visit_number</strong>";
+                $message .= "<br>⏳ <strong>No bill created</strong> - Bill will be created after doctor assigned or lab request";
                 $message_type = 'success';
                 
                 echo '<script>
                     setTimeout(function(){ 
                         window.location.href = "patients.php?registered=1"; 
-                    }, 2000);
+                    }, 2500);
                 </script>';
                 
             } else {
@@ -296,6 +228,17 @@ $common_allergies = [
     'Dust' => 'Dust',
     'Pollen' => 'Pollen',
     'Animal Dander' => 'Animal Dander'
+];
+
+// ================================================================
+// MARITAL STATUS LIST
+// ================================================================
+$marital_statuses = [
+    'Single' => 'Single',
+    'Married' => 'Married',
+    'Divorced' => 'Divorced',
+    'Widowed' => 'Widowed',
+    'Separated' => 'Separated'
 ];
 
 // ================================================================
@@ -629,6 +572,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             align-items: center;
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .page-header .header-badge .no-bill {
+            color: #FCD34D;
+            font-weight: 700;
         }
         
         .page-header .btn-outline-light {
@@ -1105,6 +1053,15 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
+        
+        /* ================================================================
+           NO BILL BADGE
+           ================================================================ */
+        .no-bill-badge {
+            background: rgba(251, 191, 36, 0.2);
+            color: #FCD34D;
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
     </style>
 </head>
 <body>
@@ -1175,9 +1132,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     Next ID: <strong><?= $patient_id_number ?></strong>
                 </span>
                 
-                <span class="header-badge" style="background:rgba(255,215,0,0.15);border-color:rgba(255,215,0,0.2);">
+                <span class="header-badge no-bill-badge">
                     <i class="fas fa-receipt"></i>
-                    Bill: <strong>Pending Cashier</strong>
+                    <span class="no-bill">No Bill Created</span>
+                </span>
+                
+                <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.2);">
+                    <i class="fas fa-clock"></i>
+                    Bill after <strong>Doctor/Lab</strong>
                 </span>
                 
                 <span class="update-badge-light" id="updateBadge">
@@ -1232,9 +1194,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
-                        <i class="fas fa-tag label-icon"></i> Patient Type
+                        <i class="fas fa-tag label-icon"></i> Patient Type <span class="required">*</span>
                     </label>
-                    <select name="patient_type" class="form-control">
+                    <select name="patient_type" class="form-control" required>
                         <option value="new" <?= ($_POST['patient_type'] ?? 'new') === 'new' ? 'selected' : '' ?>>🆕 New Patient</option>
                         <option value="follow-up" <?= ($_POST['patient_type'] ?? '') === 'follow-up' ? 'selected' : '' ?>>🔄 Follow-up</option>
                         <option value="emergency" <?= ($_POST['patient_type'] ?? '') === 'emergency' ? 'selected' : '' ?>>🚨 Emergency</option>
@@ -1255,9 +1217,23 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 3: Date of Birth + Phone -->
+            <!-- ROW 3: Marital Status + Date of Birth -->
             <!-- ============================================================ -->
             <div class="grid-2">
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-ring label-icon"></i> Marital Status
+                    </label>
+                    <select name="marital_status" class="form-control">
+                        <option value="">Select Marital Status</option>
+                        <?php foreach ($marital_statuses as $key => $label): ?>
+                            <option value="<?= $key ?>" <?= ($_POST['marital_status'] ?? '') === $key ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($label) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-calendar label-icon"></i> Date of Birth
@@ -1265,7 +1241,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     <input type="date" name="date_of_birth" class="form-control" 
                            value="<?= htmlspecialchars($_POST['date_of_birth'] ?? '') ?>">
                 </div>
-                
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- ROW 4: Phone + Email -->
+            <!-- ============================================================ -->
+            <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-phone label-icon"></i> Phone Number <span class="required">*</span>
@@ -1273,12 +1254,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     <input type="tel" name="phone" class="form-control" placeholder="e.g. 0759 154 160" 
                            value="<?= htmlspecialchars($_POST['phone'] ?? '') ?>" required>
                 </div>
-            </div>
-            
-            <!-- ============================================================ -->
-            <!-- ROW 4: Email + Blood Group -->
-            <!-- ============================================================ -->
-            <div class="grid-2">
+                
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-envelope label-icon"></i> Email
@@ -1286,7 +1262,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     <input type="email" name="email" class="form-control" placeholder="e.g. john@example.com" 
                            value="<?= htmlspecialchars($_POST['email'] ?? '') ?>">
                 </div>
-                
+            </div>
+            
+            <!-- ============================================================ -->
+            <!-- ROW 5: Blood Group + Emergency Contact -->
+            <!-- ============================================================ -->
+            <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-tint label-icon"></i> Blood Group
@@ -1298,27 +1279,24 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
+                
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-phone-alt label-icon"></i> Emergency Contact
+                    </label>
+                    <input type="tel" name="emergency_contact" class="form-control" placeholder="e.g. 0755 123 456" 
+                           value="<?= htmlspecialchars($_POST['emergency_contact'] ?? '') ?>">
+                </div>
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 5: Address (Full Width) -->
+            <!-- ROW 6: Address (Full Width) -->
             <!-- ============================================================ -->
             <div class="form-row grid-full">
                 <label class="form-label">
                     <i class="fas fa-home label-icon"></i> Address
                 </label>
                 <textarea name="address" class="form-control" placeholder="Enter full address..." rows="2"><?= htmlspecialchars($_POST['address'] ?? '') ?></textarea>
-            </div>
-            
-            <!-- ============================================================ -->
-            <!-- ROW 6: Emergency Contact (Full Width) -->
-            <!-- ============================================================ -->
-            <div class="form-row grid-full">
-                <label class="form-label">
-                    <i class="fas fa-phone-alt label-icon"></i> Emergency Contact
-                </label>
-                <input type="tel" name="emergency_contact" class="form-control" placeholder="e.g. 0755 123 456" 
-                       value="<?= htmlspecialchars($_POST['emergency_contact'] ?? '') ?>">
             </div>
             
             <!-- ============================================================ -->
@@ -1369,6 +1347,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <i class="fas fa-info-circle mr-1"></i>
                 Patient ID: <strong><?= $patient_id_number ?></strong>
                 <span class="mx-2">|</span>
+                <i class="fas fa-receipt mr-1"></i>
+                <span class="text-yellow-500"><strong>No bill created</strong></span>
+                <span class="mx-2">|</span>
                 <i class="fas fa-clock mr-1"></i>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
             </div>
@@ -1378,7 +1359,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <!-- ================================================================ -->
     <!-- QUICK STATS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5" style="max-width:950px;margin:24px auto 0;">
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5" style="max-width:950px;margin:24px auto 0;">
         <div class="stat-card">
             <div class="stat-icon">📋</div>
             <p class="stat-number text-purple-600"><?= $patient_id_number ?></p>
@@ -1386,8 +1367,13 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         </div>
         <div class="stat-card">
             <div class="stat-icon">⏳</div>
-            <p class="stat-number text-orange-500">Pending</p>
+            <p class="stat-number text-orange-500">No Bill</p>
             <p class="stat-label">Bill Status</p>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">👨‍⚕️</div>
+            <p class="stat-number text-green-500">Pending</p>
+            <p class="stat-label">Doctor Assignment</p>
         </div>
     </div>
 
@@ -1652,14 +1638,15 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Registering...';
     });
 
-    console.log('%c👤 Braick - New Patient Registration (No Duplicates)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick - New Patient Registration (No Bill Created)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Next Patient ID: <?= $patient_id_number ?>', 'font-size:13px; color:#64748B;');
     console.log('%c✅ Duplicate check: Phone, Email, Name+Phone, Name+DOB', 'font-size:13px; color:#34D399;');
     console.log('%c⚠️ Full Name ALONE is NOT checked (allows different patients with same name)', 'font-size:13px; color:#F59E0B;');
-    console.log('%c💰 Fees are BACKGROUND ONLY - Not shown to Reception', 'font-size:13px; color:#94A3B8;');
-    console.log('%c💳 Bill sent to Cashier as Pending (Background)', 'font-size:13px; color:#34D399;');
-    console.log('%c🚫 System prevents duplicate registration via Phone, Email, Name+Phone, Name+DOB', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💰 NO bill created during registration', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💳 Bill will be created after doctor assigned OR lab request', 'font-size:13px; color:#34D399;');
+    console.log('%c📋 Patient Type: New Patient, Follow-up, Emergency', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💍 Marital Status added', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔄 Reset Form button works properly', 'font-size:13px; color:#0B5ED7;');
 </script>
 

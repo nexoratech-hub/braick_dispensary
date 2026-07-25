@@ -7,9 +7,10 @@
 // 1. ONDOA "Updated: 07:41:02 PM" kabisa
 // 2. Online/Offline counts zinabadilika bila refresh
 // 3. Kila row ina field mbili (grid-2)
-// 4. Lab request - doctor inabaki NULL
-// 5. Lab section ina background color yake
+// 4. Lab request - doctor inabaki NULL, NO consultation fee
+// 5. Lab section ina background color yake (purple)
 // 6. Auto-update kila 3 seconds
+// 7. Lab request HAINA bill - bill itaundwa baada ya lab kuthibitisha
 // ================================================================
 
 session_start();
@@ -208,7 +209,7 @@ try {
         $patient['has_active_visit'] = !empty($patient['visit_id']);
         
         if ($patient['has_active_visit']) {
-            // PENDING: new, pending, lab_test
+            // PENDING: new, pending, lab_test (including lab-only visits)
             if (in_array($patient['visit_status'], ['new', 'pending', 'lab_test'])) {
                 $pending_patients[] = $patient;
                 $pending_count++;
@@ -273,7 +274,8 @@ try {
         $stmt = $db->prepare("
             SELECT lr.*, 
                    GROUP_CONCAT(lri.test_name SEPARATOR ', ') as test_names,
-                   COUNT(lri.id) as test_count
+                   COUNT(lri.id) as test_count,
+                   lr.lab_total
             FROM lab_requests lr
             LEFT JOIN lab_request_items lri ON lr.id = lri.request_id
             WHERE lr.patient_id = ? AND lr.branch_id = ?
@@ -312,7 +314,9 @@ try {
                     v.id as visit_id,
                     v.status as visit_status,
                     v.visit_number,
-                    v.doctor_id as visit_doctor_id
+                    v.doctor_id as visit_doctor_id,
+                    v.consultation_fee,
+                    v.registration_fee
                 FROM patients p
                 LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
                 LEFT JOIN users u ON v.doctor_id = u.id
@@ -367,8 +371,14 @@ try {
                 $status_label = '⏳ Pending';
                 $status_class = 'pending';
                 if ($p['visit_status'] === 'lab_test') {
-                    $status_label = '🧪 Lab Test';
-                    $status_class = 'lab_test';
+                    // Check if lab-only (no doctor)
+                    if (empty($p['visit_doctor_id'])) {
+                        $status_label = '🧪 Lab Only';
+                        $status_class = 'lab_only';
+                    } else {
+                        $status_label = '🧪 Lab Test';
+                        $status_class = 'lab_test';
+                    }
                 }
                 
                 $pending_options .= '<option value="' . $p['id'] . '" data-status="' . $status_class . '" data-doctor="' . htmlspecialchars($p['assigned_doctor_name'] ?? '') . '">';
@@ -514,7 +524,9 @@ try {
                         p.date_of_birth, p.blood_group, p.allergies, p.address,
                         p.assigned_doctor_id,
                         u.full_name as assigned_doctor_name,
-                        v.id as visit_id, v.status as visit_status, v.visit_number
+                        v.id as visit_id, v.status as visit_status, v.visit_number,
+                        v.consultation_fee, v.registration_fee,
+                        v.doctor_id as visit_doctor_id
                     FROM patients p
                     LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
                     LEFT JOIN users u ON v.doctor_id = u.id
@@ -530,7 +542,10 @@ try {
                         'has_active_visit' => !empty($patient['visit_id']),
                         'visit_status' => $patient['visit_status'] ?? 'none',
                         'assigned_doctor' => $patient['assigned_doctor_name'] ?? 'None',
-                        'assigned_doctor_id' => $patient['assigned_doctor_id'] ?? null
+                        'assigned_doctor_id' => $patient['assigned_doctor_id'] ?? null,
+                        'is_lab_only' => ($patient['visit_status'] === 'lab_test' && empty($patient['visit_doctor_id'])),
+                        'consultation_fee' => $patient['consultation_fee'] ?? 0,
+                        'registration_fee' => $patient['registration_fee'] ?? 0
                     ]);
                 } else {
                     echo json_encode(['success' => false, 'message' => 'Patient not found']);
@@ -569,15 +584,16 @@ try {
             }
             
             try {
+                // Check if patient has lab-only visit
                 $stmt = $db->prepare("
-                    SELECT id, status, doctor_id, visit_number 
+                    SELECT id, status, doctor_id, visit_number, consultation_fee, registration_fee
                     FROM visits 
-                    WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
+                    WHERE patient_id = ? AND status = 'lab_test' AND doctor_id IS NULL
                     AND branch_id = ?
                     ORDER BY id DESC LIMIT 1
                 ");
                 $stmt->execute([$patient_id, $selected_branch_id]);
-                $visit = $stmt->fetch(PDO::FETCH_ASSOC);
+                $lab_only_visit = $stmt->fetch();
                 
                 $db->beginTransaction();
                 
@@ -586,29 +602,204 @@ try {
                 $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
                 $doctor_name = $doctor['full_name'] ?? 'Unknown';
                 
-                if ($visit) {
+                // Get consultation fee
+                $fee_key = $visit_type;
+                $consultation_fee = $visit_type_mapping[$fee_key]['fee'] ?? 0;
+                
+                // Check if patient has valid paid visit within 7 days
+                $stmt_check = $db->prepare("
+                    SELECT pb.created_at as paid_date, pb.total_amount
+                    FROM patient_bills pb
+                    WHERE pb.patient_id = ? 
+                    AND pb.branch_id = ? 
+                    AND pb.status = 'paid'
+                    AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                    ORDER BY pb.created_at DESC
+                    LIMIT 1
+                ");
+                $stmt_check->execute([$patient_id, $selected_branch_id]);
+                $paid_visit = $stmt_check->fetch();
+                
+                if ($paid_visit) {
+                    $consultation_fee = 0;
+                }
+                
+                if ($lab_only_visit) {
+                    // Update lab-only visit with doctor
                     $stmt = $db->prepare("
                         UPDATE visits 
-                        SET doctor_id = ?, status = 'assigned', 
-                            visit_type = ?, symptoms = ?, complaint = ?, notes = ?,
+                        SET doctor_id = ?, 
+                            status = 'assigned',
+                            visit_type = ?,
+                            symptoms = ?,
+                            complaint = ?,
+                            notes = ?,
+                            consultation_fee = ?,
                             updated_at = NOW()
                         WHERE id = ?
                     ");
-                    $stmt->execute([$doctor_id, $visit_type, $symptoms, $complaint, $notes, $visit['id']]);
-                    $visit_number = $visit['visit_number'];
-                } else {
-                    $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                    $stmt = $db->prepare("
-                        INSERT INTO visits (
-                            visit_number, patient_id, doctor_id, branch_id,
-                            visit_type, status, symptoms, complaint, notes,
-                            created_at, updated_at, receptionist_id
-                        ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, NOW(), NOW(), ?)
-                    ");
                     $stmt->execute([
-                        $visit_number, $patient_id, $doctor_id, $selected_branch_id,
-                        $visit_type, $symptoms, $complaint, $notes, $user_id
+                        $doctor_id,
+                        $visit_type,
+                        $symptoms,
+                        $complaint,
+                        $notes,
+                        $consultation_fee,
+                        $lab_only_visit['id']
                     ]);
+                    $visit_number = $lab_only_visit['visit_number'];
+                    
+                    // Create bill for consultation fee if applicable
+                    if ($consultation_fee > 0) {
+                        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
+                        
+                        $stmt = $db->prepare("
+                            INSERT INTO patient_bills (
+                                bill_number, patient_id, visit_id, 
+                                consultation_fee, subtotal, total_amount, balance, 
+                                status, created_by, branch_id, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+                        ");
+                        $subtotal = $consultation_fee;
+                        $stmt->execute([
+                            $bill_number,
+                            $patient_id,
+                            $lab_only_visit['id'],
+                            $consultation_fee,
+                            $subtotal,
+                            $subtotal,
+                            $subtotal,
+                            $user_id,
+                            $selected_branch_id
+                        ]);
+                        $bill_id = $db->lastInsertId();
+                        
+                        $stmt = $db->prepare("
+                            INSERT INTO bill_items (
+                                bill_id, item_type, item_name, 
+                                quantity, unit_price, total_price, created_at
+                            ) VALUES (?, 'consultation', ?, 1, ?, ?, NOW())
+                        ");
+                        $type_labels = [
+                            'new' => 'New Patient',
+                            'follow-up' => 'Follow-up',
+                            'emergency' => 'Emergency',
+                            'specialist' => 'Specialist'
+                        ];
+                        $type_label = $type_labels[$visit_type] ?? ucfirst($visit_type);
+                        $item_name = ($visit_type_mapping[$fee_key]['name'] ?? 'Consultation') . ' (' . $type_label . ')';
+                        
+                        $stmt->execute([
+                            $bill_id,
+                            $item_name,
+                            $consultation_fee,
+                            $consultation_fee
+                        ]);
+                    }
+                    
+                } else {
+                    // Check if patient has existing active visit (not lab-only)
+                    $stmt = $db->prepare("
+                        SELECT id, status, doctor_id, visit_number 
+                        FROM visits 
+                        WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor')
+                        AND branch_id = ?
+                        ORDER BY id DESC LIMIT 1
+                    ");
+                    $stmt->execute([$patient_id, $selected_branch_id]);
+                    $visit = $stmt->fetch();
+                    
+                    if ($visit) {
+                        $stmt = $db->prepare("
+                            UPDATE visits 
+                            SET doctor_id = ?, status = 'assigned', 
+                                visit_type = ?, symptoms = ?, complaint = ?, notes = ?,
+                                consultation_fee = ?,
+                                updated_at = NOW()
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([
+                            $doctor_id, 
+                            $visit_type, 
+                            $symptoms, 
+                            $complaint, 
+                            $notes,
+                            $consultation_fee,
+                            $visit['id']
+                        ]);
+                        $visit_number = $visit['visit_number'];
+                    } else {
+                        $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+                        $stmt = $db->prepare("
+                            INSERT INTO visits (
+                                visit_number, patient_id, doctor_id, branch_id,
+                                visit_type, status, symptoms, complaint, notes,
+                                consultation_fee,
+                                created_at, updated_at, receptionist_id
+                            ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, ?, NOW(), NOW(), ?)
+                        ");
+                        $stmt->execute([
+                            $visit_number, 
+                            $patient_id, 
+                            $doctor_id, 
+                            $selected_branch_id,
+                            $visit_type, 
+                            $symptoms, 
+                            $complaint, 
+                            $notes,
+                            $consultation_fee,
+                            $user_id
+                        ]);
+                        $visit_id = $db->lastInsertId();
+                        
+                        // Create bill for consultation fee if applicable
+                        if ($consultation_fee > 0) {
+                            $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
+                            
+                            $stmt = $db->prepare("
+                                INSERT INTO patient_bills (
+                                    bill_number, patient_id, visit_id, 
+                                    consultation_fee, subtotal, total_amount, balance, 
+                                    status, created_by, branch_id, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+                            ");
+                            $subtotal = $consultation_fee;
+                            $stmt->execute([
+                                $bill_number,
+                                $patient_id,
+                                $visit_id,
+                                $consultation_fee,
+                                $subtotal,
+                                $subtotal,
+                                $subtotal,
+                                $user_id,
+                                $selected_branch_id
+                            ]);
+                            $bill_id = $db->lastInsertId();
+                            
+                            $stmt = $db->prepare("
+                                INSERT INTO bill_items (
+                                    bill_id, item_type, item_name, 
+                                    quantity, unit_price, total_price, created_at
+                                ) VALUES (?, 'consultation', ?, 1, ?, ?, NOW())
+                            ");
+                            $type_labels = [
+                                'new' => 'New Patient',
+                                'follow-up' => 'Follow-up',
+                                'emergency' => 'Emergency',
+                                'specialist' => 'Specialist'
+                            ];
+                            $type_label = $type_labels[$visit_type] ?? ucfirst($visit_type);
+                            $item_name = ($visit_type_mapping[$fee_key]['name'] ?? 'Consultation') . ' (' . $type_label . ')';
+                            
+                            $stmt->execute([
+                                $bill_id,
+                                $item_name,
+                                $consultation_fee,
+                                $consultation_fee
+                            ]);
+                        }
+                    }
                 }
                 
                 $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
@@ -617,7 +808,8 @@ try {
                 $db->commit();
                 
                 $response['success'] = true;
-                $response['message'] = "✅ Doctor <strong>$doctor_name</strong> assigned successfully! Visit: $visit_number";
+                $fee_text = $consultation_fee > 0 ? ' - Fee: TSh ' . number_format($consultation_fee) : ' - Fee WAIVED (paid within 7 days)';
+                $response['message'] = "✅ Doctor <strong>$doctor_name</strong> assigned successfully! Visit: $visit_number" . $fee_text;
                 $response['visit_number'] = $visit_number;
                 $response['doctor_name'] = $doctor_name;
                 $response['patient_id'] = $patient_id;
@@ -688,19 +880,22 @@ try {
                     $consultation_fee = 0;
                 }
                 
+                // Check if patient has lab-only visit (no doctor assigned)
                 $stmt = $db->prepare("
-                    SELECT id, status, visit_type, doctor_id FROM visits 
-                    WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test') 
+                    SELECT id, status, doctor_id, visit_number 
+                    FROM visits 
+                    WHERE patient_id = ? AND status = 'lab_test' AND doctor_id IS NULL
                     AND branch_id = ?
                     ORDER BY id DESC LIMIT 1
                 ");
                 $stmt->execute([$patient_id, $selected_branch_id]);
-                $existing_visit = $stmt->fetch();
+                $lab_only_visit = $stmt->fetch();
                 
                 $visit_id = null;
                 $visit_number = '';
                 $status_msg = '';
                 $new_doctor_name = '';
+                $bill_created = false;
                 
                 try {
                     $db->beginTransaction();
@@ -710,10 +905,141 @@ try {
                     $doctor_data = $stmt->fetch();
                     $new_doctor_name = $doctor_data['full_name'] ?? '';
                     
-                    if ($existing_visit) {
-                        $visit_id = $existing_visit['id'];
+                    // If patient has lab-only visit, update it with doctor
+                    if ($lab_only_visit) {
+                        $visit_id = $lab_only_visit['id'];
+                        $visit_number = $lab_only_visit['visit_number'];
                         
-                        if ($existing_visit['status'] === 'with_doctor' || $existing_visit['status'] === 'completed') {
+                        $stmt = $db->prepare("
+                            UPDATE visits 
+                            SET doctor_id = ?, 
+                                status = 'assigned',
+                                visit_type = ?,
+                                symptoms = ?,
+                                complaint = ?,
+                                notes = ?,
+                                consultation_fee = ?,
+                                updated_at = NOW()
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([
+                            $doctor_id,
+                            $visit_type,
+                            $symptoms,
+                            $complaint,
+                            $notes,
+                            $consultation_fee,
+                            $visit_id
+                        ]);
+                        
+                        $status_msg = "updated from lab-only to assigned";
+                        
+                        // Create bill for consultation fee if applicable (and no existing bill)
+                        if ($consultation_fee > 0) {
+                            // Check if bill already exists
+                            $stmt_check = $db->prepare("SELECT id FROM patient_bills WHERE visit_id = ?");
+                            $stmt_check->execute([$visit_id]);
+                            $existing_bill = $stmt_check->fetch();
+                            
+                            if (!$existing_bill) {
+                                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
+                                
+                                $stmt = $db->prepare("
+                                    INSERT INTO patient_bills (
+                                        bill_number, patient_id, visit_id, 
+                                        consultation_fee, subtotal, total_amount, balance, 
+                                        status, created_by, branch_id, created_at
+                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+                                ");
+                                $subtotal = $consultation_fee;
+                                $stmt->execute([
+                                    $bill_number,
+                                    $patient_id,
+                                    $visit_id,
+                                    $consultation_fee,
+                                    $subtotal,
+                                    $subtotal,
+                                    $subtotal,
+                                    $user_id,
+                                    $selected_branch_id
+                                ]);
+                                $bill_id = $db->lastInsertId();
+                                
+                                $stmt = $db->prepare("
+                                    INSERT INTO bill_items (
+                                        bill_id, item_type, item_name, 
+                                        quantity, unit_price, total_price, created_at
+                                    ) VALUES (?, 'consultation', ?, 1, ?, ?, NOW())
+                                ");
+                                $type_labels = [
+                                    'new' => 'New Patient',
+                                    'follow-up' => 'Follow-up',
+                                    'emergency' => 'Emergency',
+                                    'specialist' => 'Specialist'
+                                ];
+                                $type_label = $type_labels[$visit_type] ?? ucfirst($visit_type);
+                                $item_name = $consultation_service_name . ' (' . $type_label . ')';
+                                
+                                $stmt->execute([
+                                    $bill_id,
+                                    $item_name,
+                                    $consultation_fee,
+                                    $consultation_fee
+                                ]);
+                                $bill_created = true;
+                            }
+                        }
+                        
+                    } else {
+                        // Check for existing active visit
+                        $stmt = $db->prepare("
+                            SELECT id, status, visit_type, doctor_id, visit_number 
+                            FROM visits 
+                            WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor') 
+                            AND branch_id = ?
+                            ORDER BY id DESC LIMIT 1
+                        ");
+                        $stmt->execute([$patient_id, $selected_branch_id]);
+                        $existing_visit = $stmt->fetch();
+                        
+                        if ($existing_visit) {
+                            $visit_id = $existing_visit['id'];
+                            $visit_number = $existing_visit['visit_number'];
+                            
+                            // If status is 'with_doctor' or 'completed', create new visit
+                            if ($existing_visit['status'] === 'with_doctor' || $existing_visit['status'] === 'completed') {
+                                $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+                                
+                                $stmt = $db->prepare("
+                                    INSERT INTO visits (
+                                        visit_number, patient_id, doctor_id, branch_id, 
+                                        visit_type, status, symptoms, complaint, notes, 
+                                        created_at, updated_at, consultation_fee, receptionist_id
+                                    ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, NOW(), NOW(), ?, ?)
+                                ");
+                                
+                                $stmt->execute([
+                                    $visit_number, $patient_id, $doctor_id, $selected_branch_id, 
+                                    $visit_type, $symptoms, $complaint, $notes, 
+                                    $consultation_fee, $user_id
+                                ]);
+                                $visit_id = $db->lastInsertId();
+                                $status_msg = "created (new visit)";
+                                
+                            } else {
+                                $stmt = $db->prepare("
+                                    UPDATE visits 
+                                    SET doctor_id = ?, status = 'assigned', 
+                                        visit_type = ?, symptoms = ?, complaint = ?, notes = ?, updated_at = NOW(),
+                                        consultation_fee = ?
+                                    WHERE id = ?
+                                ");
+                                $stmt->execute([$doctor_id, $visit_type, $symptoms, $complaint, $notes, $consultation_fee, $visit_id]);
+                                $status_msg = "updated";
+                            }
+                            
+                        } else {
+                            // Create new visit
                             $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                             
                             $stmt = $db->prepare("
@@ -730,45 +1056,66 @@ try {
                                 $consultation_fee, $user_id
                             ]);
                             $visit_id = $db->lastInsertId();
-                            $status_msg = "created (new visit)";
-                            
-                        } else {
-                            $stmt = $db->prepare("
-                                UPDATE visits 
-                                SET doctor_id = ?, status = 'assigned', 
-                                    visit_type = ?, symptoms = ?, complaint = ?, notes = ?, updated_at = NOW(),
-                                    consultation_fee = ?
-                                WHERE id = ?
-                            ");
-                            $stmt->execute([$doctor_id, $visit_type, $symptoms, $complaint, $notes, $consultation_fee, $visit_id]);
-                            
-                            $stmt = $db->prepare("SELECT visit_number FROM visits WHERE id = ?");
-                            $stmt->execute([$visit_id]);
-                            $visit = $stmt->fetch();
-                            $visit_number = $visit['visit_number'] ?? '';
-                            $status_msg = "updated";
+                            $status_msg = "created";
                         }
                         
-                    } else {
-                        $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                        
-                        $stmt = $db->prepare("
-                            INSERT INTO visits (
-                                visit_number, patient_id, doctor_id, branch_id, 
-                                visit_type, status, symptoms, complaint, notes, 
-                                created_at, updated_at, consultation_fee, receptionist_id
-                            ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, NOW(), NOW(), ?, ?)
-                        ");
-                        
-                        $stmt->execute([
-                            $visit_number, $patient_id, $doctor_id, $selected_branch_id, 
-                            $visit_type, $symptoms, $complaint, $notes, 
-                            $consultation_fee, $user_id
-                        ]);
-                        $visit_id = $db->lastInsertId();
-                        $status_msg = "created";
+                        // Create bill for consultation fee if applicable
+                        if ($consultation_fee > 0 && $visit_id) {
+                            $stmt_check = $db->prepare("SELECT id FROM patient_bills WHERE visit_id = ?");
+                            $stmt_check->execute([$visit_id]);
+                            $existing_bill = $stmt_check->fetch();
+                            
+                            if (!$existing_bill) {
+                                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
+                                
+                                $stmt = $db->prepare("
+                                    INSERT INTO patient_bills (
+                                        bill_number, patient_id, visit_id, 
+                                        consultation_fee, subtotal, total_amount, balance, 
+                                        status, created_by, branch_id, created_at
+                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+                                ");
+                                $subtotal = $consultation_fee;
+                                $stmt->execute([
+                                    $bill_number,
+                                    $patient_id,
+                                    $visit_id,
+                                    $consultation_fee,
+                                    $subtotal,
+                                    $subtotal,
+                                    $subtotal,
+                                    $user_id,
+                                    $selected_branch_id
+                                ]);
+                                $bill_id = $db->lastInsertId();
+                                
+                                $stmt = $db->prepare("
+                                    INSERT INTO bill_items (
+                                        bill_id, item_type, item_name, 
+                                        quantity, unit_price, total_price, created_at
+                                    ) VALUES (?, 'consultation', ?, 1, ?, ?, NOW())
+                                ");
+                                $type_labels = [
+                                    'new' => 'New Patient',
+                                    'follow-up' => 'Follow-up',
+                                    'emergency' => 'Emergency',
+                                    'specialist' => 'Specialist'
+                                ];
+                                $type_label = $type_labels[$visit_type] ?? ucfirst($visit_type);
+                                $item_name = $consultation_service_name . ' (' . $type_label . ')';
+                                
+                                $stmt->execute([
+                                    $bill_id,
+                                    $item_name,
+                                    $consultation_fee,
+                                    $consultation_fee
+                                ]);
+                                $bill_created = true;
+                            }
+                        }
                     }
                     
+                    // Save vital signs
                     $has_vital = $temperature || $bp_systolic || $bp_diastolic || 
                                  $pulse_rate || $weight || $height;
                     
@@ -802,75 +1149,6 @@ try {
                         ]);
                     }
                     
-                    if ($consultation_fee > 0 && $visit_id) {
-                        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
-                        
-                        $stmt = $db->prepare("SELECT id FROM patient_bills WHERE bill_number = ?");
-                        $stmt->execute([$bill_number]);
-                        $existing_bill_num = $stmt->fetch();
-                        
-                        $counter = 0;
-                        while ($existing_bill_num && $counter < 10) {
-                            $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
-                            $stmt = $db->prepare("SELECT id FROM patient_bills WHERE bill_number = ?");
-                            $stmt->execute([$bill_number]);
-                            $existing_bill_num = $stmt->fetch();
-                            $counter++;
-                        }
-                        
-                        $stmt = $db->prepare("SELECT id FROM patient_bills WHERE visit_id = ?");
-                        $stmt->execute([$visit_id]);
-                        $existing_bill = $stmt->fetch();
-                        
-                        if (!$existing_bill) {
-                            $stmt = $db->prepare("
-                                INSERT INTO patient_bills (
-                                    bill_number, patient_id, visit_id, 
-                                    consultation_fee, subtotal, total_amount, balance, 
-                                    status, created_by, branch_id, created_at
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
-                            ");
-                            $subtotal = $consultation_fee;
-                            $stmt->execute([
-                                $bill_number,
-                                $patient_id,
-                                $visit_id,
-                                $consultation_fee,
-                                $subtotal,
-                                $subtotal,
-                                $subtotal,
-                                $user_id,
-                                $selected_branch_id
-                            ]);
-                            $bill_id = $db->lastInsertId();
-                            
-                            $stmt = $db->prepare("
-                                INSERT INTO bill_items (
-                                    bill_id, item_type, item_id, item_name, 
-                                    quantity, unit_price, total_price, created_at
-                                ) VALUES (?, 'consultation', ?, ?, 1, ?, ?, NOW())
-                            ");
-                            $type_labels = [
-                                'new' => 'New Patient',
-                                'follow-up' => 'Follow-up',
-                                'emergency' => 'Emergency',
-                                'specialist' => 'Specialist'
-                            ];
-                            $type_label = $type_labels[$visit_type] ?? ucfirst($visit_type);
-                            $item_name = $consultation_service_name . ' (' . $type_label . ')';
-                            
-                            $stmt->execute([
-                                $bill_id,
-                                $consultation_service_id,
-                                $item_name,
-                                $consultation_fee,
-                                $consultation_fee
-                            ]);
-                            
-                            $_SESSION['current_bill_id'] = $bill_id;
-                        }
-                    }
-                    
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
                     $stmt->execute([$doctor_id, $patient_id]);
                     
@@ -894,11 +1172,14 @@ try {
                     if ($charge_fee && $consultation_fee > 0) {
                         $message = "✅ Doctor <strong>$new_doctor_name</strong> assigned successfully! Visit #$visit_number - Fee: TSh " . number_format($consultation_fee);
                     } else {
-                        $message = "✅ Doctor <strong>$new_doctor_name</strong> assigned successfully! Visit #$visit_number - Fee WAIVED";
+                        $message = "✅ Doctor <strong>$new_doctor_name</strong> assigned successfully! Visit #$visit_number - Fee WAIVED (paid within 7 days)";
                     }
                     
                     if ($has_vital) {
                         $message .= " ✅ Vital Signs recorded!";
+                    }
+                    if ($bill_created) {
+                        $message .= " ✅ Bill created for Cashier!";
                     }
                     $message_type = 'success';
                     
@@ -922,7 +1203,7 @@ try {
         }
         
         // ================================================================
-        // LAB TEST REQUEST - FIXED: doctor inabaki NULL
+        // LAB TEST REQUEST - FIXED: doctor inabaki NULL, NO CONSULTATION FEE, NO BILL
         // ================================================================
         if ($action === 'assign_doctor' && $assignment_type === 'lab') {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -942,7 +1223,7 @@ try {
                     
                     // Check if patient has active visit
                     $stmt = $db->prepare("
-                        SELECT id, status FROM visits 
+                        SELECT id, status, doctor_id FROM visits 
                         WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test') 
                         AND branch_id = ?
                         ORDER BY id DESC LIMIT 1
@@ -957,12 +1238,16 @@ try {
                         $visit_id = $existing_visit['id'];
                         
                         // Update visit to lab_test status - DOCTOR INABAKI NULL
+                        // NO consultation fee, NO registration fee, NO bill
                         $stmt = $db->prepare("
                             UPDATE visits 
                             SET status = 'lab_test', 
                                 symptoms = ?, complaint = ?, notes = ?, 
                                 updated_at = NOW(),
-                                doctor_id = NULL
+                                doctor_id = NULL,
+                                consultation_fee = 0,
+                                registration_fee = 0,
+                                visit_total = 0
                             WHERE id = ?
                         ");
                         $stmt->execute([$symptoms, $complaint, $notes, $visit_id]);
@@ -974,14 +1259,16 @@ try {
                         
                     } else {
                         // Create new visit with lab_test status - DOCTOR INABAKI NULL
+                        // NO fees at all for lab-only visit
                         $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                         
                         $stmt = $db->prepare("
                             INSERT INTO visits (
                                 visit_number, patient_id, doctor_id, branch_id, 
                                 visit_type, status, symptoms, complaint, notes, 
-                                created_at, updated_at, receptionist_id
-                            ) VALUES (?, ?, NULL, ?, 'new', 'lab_test', ?, ?, ?, NOW(), NOW(), ?)
+                                created_at, updated_at, receptionist_id,
+                                consultation_fee, registration_fee, visit_total
+                            ) VALUES (?, ?, NULL, ?, 'lab_only', 'lab_test', ?, ?, ?, NOW(), NOW(), ?, 0, 0, 0)
                         ");
                         
                         $stmt->execute([
@@ -997,8 +1284,8 @@ try {
                     $stmt = $db->prepare("
                         INSERT INTO lab_requests (
                             request_number, visit_id, patient_id, doctor_id,
-                            status, notes, requested_at, created_by, branch_id
-                        ) VALUES (?, ?, ?, NULL, 'pending', ?, NOW(), ?, ?)
+                            status, notes, requested_at, created_by, branch_id, lab_total
+                        ) VALUES (?, ?, ?, NULL, 'pending', ?, NOW(), ?, ?, 0)
                     ");
                     $stmt->execute([
                         $request_number,
@@ -1011,6 +1298,8 @@ try {
                     $request_id = $db->lastInsertId();
                     
                     // Add lab test items
+                    $lab_total = 0;
+                    $test_names = [];
                     foreach ($lab_test_ids as $test_id) {
                         $stmt = $db->prepare("
                             SELECT test_name, price FROM lab_tests_catalog WHERE id = ? AND is_active = 1
@@ -1019,6 +1308,8 @@ try {
                         $test = $stmt->fetch(PDO::FETCH_ASSOC);
                         
                         if ($test) {
+                            $lab_total += $test['price'];
+                            $test_names[] = $test['test_name'];
                             $stmt = $db->prepare("
                                 INSERT INTO lab_request_items (
                                     request_id, test_id, test_name, price, status, created_at
@@ -1033,6 +1324,15 @@ try {
                         }
                     }
                     
+                    // UPDATE lab_total in lab_requests
+                    if ($lab_total > 0) {
+                        $stmt = $db->prepare("UPDATE lab_requests SET lab_total = ? WHERE id = ?");
+                        $stmt->execute([$lab_total, $request_id]);
+                    }
+                    
+                    // DO NOT create patient_bill or bill_items for lab-only visits
+                    // Lab fees will be billed when results are confirmed by doctor (in consultation.php)
+                    
                     // Update patient status - assigned_doctor_id inabaki NULL
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
                     $stmt->execute([$patient_id]);
@@ -1044,7 +1344,7 @@ try {
                         ");
                         $stmt->execute([
                             $user_id, 
-                            "Lab request created for patient ID: $patient_id - Request: $request_number - Tests: " . count($lab_test_ids)
+                            "Lab request created for patient ID: $patient_id - Request: $request_number - Tests: " . count($lab_test_ids) . " - Total: TSh " . number_format($lab_total)
                         ]);
                     } catch (Exception $e) {}
                     
@@ -1053,7 +1353,9 @@ try {
                     $message = "✅ Lab test request created successfully!";
                     $message .= "<br>📋 Request #: <strong>$request_number</strong>";
                     $message .= "<br>🧪 Tests: <strong>" . count($lab_test_ids) . "</strong> test(s) requested";
+                    $message .= "<br>💰 Lab Total: <strong>TSh " . number_format($lab_total) . "</strong>";
                     $message .= "<br>👨‍⚕️ Doctor: <strong>Not assigned</strong> (lab only)";
+                    $message .= "<br>💳 <strong>No consultation fee</strong> - Bill will be created after lab confirms results";
                     $message_type = 'success';
                     
                     // Redirect to refresh page
@@ -1061,7 +1363,7 @@ try {
                         showToast("✅ Success", "' . addslashes($message) . '", "success");
                         setTimeout(function(){ 
                             window.location.href = "assign_doctor.php?patient_id=' . $patient_id . '&success=1"; 
-                        }, 2000);
+                        }, 3000);
                     </script>';
                     
                 } catch (Exception $e) {
@@ -1782,6 +2084,12 @@ include_once '../../components/reception_sidebar.php';
             color: #7C3AED;
         }
         
+        .status-badge-dropdown.lab_only {
+            background: #EDE9FE;
+            color: #7C3AED;
+            border: 1px dashed #7C3AED;
+        }
+        
         [data-theme="dark"] .status-badge-dropdown.pending {
             background: #3D2E0A;
             color: #FBBF24;
@@ -1798,6 +2106,11 @@ include_once '../../components/reception_sidebar.php';
         }
         
         [data-theme="dark"] .status-badge-dropdown.lab_test {
+            background: #2D1B5F;
+            color: #A78BFA;
+        }
+        
+        [data-theme="dark"] .status-badge-dropdown.lab_only {
             background: #2D1B5F;
             color: #A78BFA;
         }
@@ -2380,6 +2693,11 @@ include_once '../../components/reception_sidebar.php';
             border-left: 3px solid #059669;
         }
         
+        select optgroup option[data-status="lab_only"] {
+            border-left: 3px solid #7C3AED;
+            border-left-style: dashed;
+        }
+        
         /* ================================================================
            GRID 2 - KILA ROW INA FIELD MBILI
            ================================================================ */
@@ -2389,7 +2707,6 @@ include_once '../../components/reception_sidebar.php';
             gap: 20px;
         }
         
-        /* Spacing kwa ajili ya fields - up and down */
         .form-row {
             margin-bottom: 22px;
         }
@@ -2409,7 +2726,6 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        /* Lab section spacing */
         .lab-modal-container {
             margin-bottom: 18px;
         }
@@ -2626,6 +2942,7 @@ include_once '../../components/reception_sidebar.php';
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Request #</th>
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Tests</th>
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Total</th>
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Date</th>
                             </tr>
                         </thead>
@@ -2634,6 +2951,7 @@ include_once '../../components/reception_sidebar.php';
                                 $status_class = $req['status'] ?? 'pending';
                                 $status_label = ucfirst(str_replace('_', ' ', $req['status'] ?? 'Pending'));
                                 $icon = $status_class === 'completed' ? '✅' : ($status_class === 'in_progress' ? '⏳' : '⏰');
+                                $lab_total = $req['lab_total'] ?? 0;
                             ?>
                                 <tr style="border-bottom:1px solid var(--border-color);">
                                     <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;font-weight:500;"><?= htmlspecialchars($req['request_number'] ?? 'N/A') ?></td>
@@ -2645,6 +2963,9 @@ include_once '../../components/reception_sidebar.php';
                                         <span class="lab-status-badge <?= $status_class ?>">
                                             <?= $icon ?> <?= $status_label ?>
                                         </span>
+                                    </td>
+                                    <td style="padding:10px 12px;font-weight:500;color:var(--purple);">
+                                        <?= $lab_total > 0 ? 'TSh ' . number_format($lab_total, 0) : 'TSh 0' ?>
                                     </td>
                                     <td style="padding:10px 12px;font-size:0.8rem;color:var(--text-secondary);">
                                         <?= date('d/m/Y H:i', strtotime($req['created_at'] ?? 'now')) ?>
@@ -2719,8 +3040,13 @@ include_once '../../components/reception_sidebar.php';
                                     $status_label = '⏳ Pending';
                                     $status_class = 'pending';
                                     if ($patient['visit_status'] === 'lab_test') {
-                                        $status_label = '🧪 Lab Test';
-                                        $status_class = 'lab_test';
+                                        if (empty($patient['visit_doctor_id'])) {
+                                            $status_label = '🧪 Lab Only';
+                                            $status_class = 'lab_only';
+                                        } else {
+                                            $status_label = '🧪 Lab Test';
+                                            $status_class = 'lab_test';
+                                        }
                                     }
                                     $selected = ($selected_patient_id == $patient['id']) ? 'selected' : '';
                                 ?>
@@ -3281,7 +3607,6 @@ include_once '../../components/reception_sidebar.php';
         document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
         document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
         document.getElementById('formTimestamp').textContent = timeStr;
-        // NOTE: "updateTime" imeondolewa kabisa kwenye page header
     }
 
     // ================================================================
@@ -3623,8 +3948,6 @@ include_once '../../components/reception_sidebar.php';
         var pendingUpdate = document.getElementById('pendingUpdateTime');
         var assignedUpdate = document.getElementById('assignedUpdateTime');
         var lastDoctorUpdate = document.getElementById('lastDoctorUpdate');
-        var doctorUpdateStatus = document.getElementById('doctorUpdateStatus');
-        var patientUpdateStatus = document.getElementById('patientUpdateStatus');
         var liveUpdateStatus = document.getElementById('liveUpdateStatus');
         var assignedListUpdate = document.getElementById('assignedListUpdate');
         
@@ -3632,18 +3955,6 @@ include_once '../../components/reception_sidebar.php';
         if (assignedUpdate) assignedUpdate.textContent = 'Updated: ' + timeStr;
         if (assignedListUpdate) assignedListUpdate.textContent = '(Auto-updated ' + timeStr + ')';
         if (lastDoctorUpdate) lastDoctorUpdate.textContent = 'Updated: ' + timeStr;
-        if (doctorUpdateStatus) {
-            doctorUpdateStatus.textContent = '✅ Updated ' + timeStr + ' - Online doctors first';
-            setTimeout(function() {
-                doctorUpdateStatus.textContent = '(Online doctors shown first)';
-            }, 3000);
-        }
-        if (patientUpdateStatus) {
-            patientUpdateStatus.textContent = '✅ Updated ' + timeStr;
-            setTimeout(function() {
-                patientUpdateStatus.textContent = '(🟡 Pending first, ✅ Assigned second)';
-            }, 3000);
-        }
         if (liveUpdateStatus) {
             liveUpdateStatus.textContent = '🔄 Live ' + timeStr;
         }
@@ -3775,16 +4086,6 @@ include_once '../../components/reception_sidebar.php';
                 }, 1000);
             }
         }
-        
-        // Ondoa "updateTime" kutoka kwenye header - hakuna haja
-        var updateBadge = document.getElementById('updateBadge');
-        if (updateBadge) {
-            // Hakikisha hakuna text ya "Updated:" 
-            var existingText = updateBadge.textContent;
-            if (existingText && existingText.includes('Updated:')) {
-                updateBadge.innerHTML = '<span class="live-indicator"></span> Live';
-            }
-        }
     });
 
     function fetchPatientDetails(patientId) {
@@ -3803,19 +4104,39 @@ include_once '../../components/reception_sidebar.php';
                             ? '<span class="assigned-doctor-tag"><i class="fas fa-user-md"></i> Dr. ' + escapeHtml(doctorName) + '</span>'
                             : '<span class="text-gray-400 text-xs">No doctor assigned</span>';
                         
+                        var visitStatus = data.visit_status || 'none';
+                        var statusHtml = '';
+                        if (visitStatus !== 'none') {
+                            var statusClass = visitStatus;
+                            var statusLabel = visitStatus.charAt(0).toUpperCase() + visitStatus.slice(1);
+                            if (visitStatus === 'lab_test' && data.is_lab_only) {
+                                statusClass = 'lab_only';
+                                statusLabel = '🧪 Lab Only';
+                            }
+                            statusHtml = '<span class="status-badge-dropdown ' + statusClass + '">' + statusLabel + '</span>';
+                        }
+                        
                         var changeModeHtml = '';
                         if (<?= $change_mode ? 'true' : 'false' ?>) {
                             changeModeHtml = '<span class="text-xs text-yellow-500 font-bold" style="background:var(--warning-bg);padding:2px 8px;border-radius:12px;">🔄 Change Mode</span>';
                         }
                         
+                        var feeHtml = '';
+                        if (data.consultation_fee > 0) {
+                            feeHtml = '<span class="text-xs text-green-500">Fee: TSh ' + data.consultation_fee + '</span>';
+                        } else if (data.is_lab_only) {
+                            feeHtml = '<span class="text-xs text-purple-500">🧪 Lab Only (No consultation fee)</span>';
+                        }
+                        
                         infoDiv.innerHTML = `
-                            <div class="flex items-center gap-2 text-sm">
+                            <div class="flex items-center gap-2 text-sm flex-wrap">
                                 <i class="fas fa-user-circle text-primary"></i>
                                 <span class="font-semibold">${escapeHtml(data.patient.full_name || '')}</span>
                                 <span class="text-gray-400">|</span>
                                 <span>${escapeHtml(data.patient.patient_id || '')}</span>
                                 ${doctorHtml}
-                                ${data.visit_status && data.visit_status !== 'none' ? `<span class="status-badge-dropdown ${data.visit_status}">${data.visit_status.charAt(0).toUpperCase() + data.visit_status.slice(1)}</span>` : ''}
+                                ${statusHtml}
+                                ${feeHtml}
                                 ${changeModeHtml}
                             </div>
                         `;
@@ -3831,6 +4152,7 @@ include_once '../../components/reception_sidebar.php';
     document.getElementById('assignForm')?.addEventListener('submit', function(e) {
         var type = document.querySelector('select[name="assignment_type"]');
         if (type && type.value === 'lab') {
+            // Lab request submission - handled by normal form submit
             return true;
         }
         
@@ -3863,10 +4185,10 @@ include_once '../../components/reception_sidebar.php';
                         var assignedStatNumber = document.getElementById('assignedStatNumber');
                         var assignedListCount = document.getElementById('assignedListCount');
                         
-                        if (assignedCount) assignedCount.textContent = parseInt(assignedCount.textContent) - 1;
-                        if (assignedStat) assignedStat.textContent = parseInt(assignedStat.textContent) - 1;
-                        if (assignedStatNumber) assignedStatNumber.textContent = parseInt(assignedStatNumber.textContent) - 1;
-                        if (assignedListCount) assignedListCount.textContent = parseInt(assignedListCount.textContent) - 1;
+                        if (assignedCount) assignedCount.textContent = parseInt(assignedCount.textContent) + 1;
+                        if (assignedStat) assignedStat.textContent = parseInt(assignedStat.textContent) + 1;
+                        if (assignedStatNumber) assignedStatNumber.textContent = parseInt(assignedStatNumber.textContent) + 1;
+                        if (assignedListCount) assignedListCount.textContent = parseInt(assignedListCount.textContent) + 1;
                         
                         var infoDiv = document.getElementById('selectedPatientInfo');
                         if (infoDiv) {
@@ -3902,7 +4224,8 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c✅ Assigned (second): <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline)', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Live updates every 3 seconds - Auto-update', 'font-size:13px; color:#34D399;');
-    console.log('%c🧪 Lab Request - doctor inabaki NULL', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🧪 Lab Request - doctor inabaki NULL, NO consultation fee, NO bill', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💳 Lab bill itaundwa baada ya lab kuthibitisha (kwenye consultation.php)', 'font-size:13px; color:#7C3AED;');
     console.log('%c📋 Kila row ina field mbili (grid-2)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🟣 Lab section ina background color ya purple', 'font-size:13px; color:#7C3AED;');
     console.log('%c📏 Spacing imeongezwa kati ya fields (up & down)', 'font-size:13px; color:#059669;');

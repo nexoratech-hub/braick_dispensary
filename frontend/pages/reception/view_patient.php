@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/view_patient.php
-// RECEPTION - VIEW PATIENT DETAILS (DATABASE CONNECTED)
-// WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
+// VIEW PATIENT - COMPLETE PATIENT DETAILS
+// INCLUDES: Personal Info, Medical Info, Visit History, Bills, Procedures, Tools
+// FIXED: PDF opens in new window with Braick logo, Close & Download buttons
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -25,99 +26,242 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
 // PATH SAHIHI
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
 
-$selected_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$selected_branch_id = $user_branch_id;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$message = '';
+$message_type = '';
+
+// Get patient ID from URL
 $patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if ($patient_id <= 0) {
-    header('Location: patients.php');
+    header('Location: patients.php?error=invalid_patient');
     exit;
 }
 
 try {
     $db = getDB();
     
-    // Get patient details
+    // ================================================================
+    // GET PATIENT DETAILS - INCLUDING marital_status
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT p.*, b.name as branch_name 
+        SELECT 
+            p.*,
+            u.full_name as created_by_name,
+            b.name as branch_name,
+            doc.full_name as assigned_doctor_name,
+            doc.is_online as assigned_doctor_online
         FROM patients p
+        LEFT JOIN users u ON p.created_by = u.id
         LEFT JOIN branches b ON p.branch_id = b.id
+        LEFT JOIN users doc ON p.assigned_doctor_id = doc.id
         WHERE p.id = ? AND p.branch_id = ?
     ");
     $stmt->execute([$patient_id, $selected_branch_id]);
-    $patient = $stmt->fetch();
+    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$patient) {
-        header('Location: patients.php');
+        header('Location: patients.php?error=patient_not_found');
         exit;
     }
     
-    // Get patient visits
+    // ================================================================
+    // GET ACTIVE VISIT
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT v.*, u.full_name as doctor_name 
+        SELECT v.*, 
+               u.full_name as doctor_name,
+               u.is_online as doctor_online
         FROM visits v
         LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE v.patient_id = ?
+        WHERE v.patient_id = ? AND v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test')
+        ORDER BY v.created_at DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$patient_id]);
+    $active_visit = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // ================================================================
+    // GET VISIT HISTORY - LAST 10 VISITS
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT v.*, 
+               u.full_name as doctor_name,
+               pb.total_amount as bill_amount,
+               pb.status as bill_status,
+               pb.bill_number
+        FROM visits v
+        LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN patient_bills pb ON v.id = pb.visit_id
+        WHERE v.patient_id = ? 
         ORDER BY v.created_at DESC
         LIMIT 10
     ");
     $stmt->execute([$patient_id]);
-    $visits = $stmt->fetchAll();
+    $visit_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get patient appointments
+    // ================================================================
+    // GET BILLS
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT a.*, u.full_name as doctor_name 
-        FROM appointments a
-        LEFT JOIN users u ON a.doctor_id = u.id
-        WHERE a.patient_id = ?
-        ORDER BY a.appointment_date DESC
+        SELECT pb.*, 
+               v.visit_number,
+               u.full_name as created_by_name
+        FROM patient_bills pb
+        LEFT JOIN visits v ON pb.visit_id = v.id
+        LEFT JOIN users u ON pb.created_by = u.id
+        WHERE pb.patient_id = ?
+        ORDER BY pb.created_at DESC
         LIMIT 10
     ");
     $stmt->execute([$patient_id]);
-    $appointments = $stmt->fetchAll();
+    $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get total visits count
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?");
+    // ================================================================
+    // GET BILL ITEMS
+    // ================================================================
+    $bill_items = [];
+    foreach ($bills as $bill) {
+        if (!empty($bill['id'])) {
+            $stmt = $db->prepare("
+                SELECT * FROM bill_items 
+                WHERE bill_id = ?
+                ORDER BY created_at DESC
+            ");
+            $stmt->execute([$bill['id']]);
+            $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $bill_items[$bill['id']] = $items;
+        }
+    }
+    
+    // ================================================================
+    // GET PROCEDURES - Join with patient_bills
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT bi.*, 
+               pb.patient_id,
+               pb.bill_number,
+               pb.created_at as bill_date
+        FROM bill_items bi
+        JOIN patient_bills pb ON bi.bill_id = pb.id
+        WHERE pb.patient_id = ? AND bi.item_type = 'procedure'
+        ORDER BY bi.created_at DESC
+        LIMIT 10
+    ");
     $stmt->execute([$patient_id]);
-    $total_visits = $stmt->fetch()['total'] ?? 0;
+    $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get total prescriptions
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE patient_id = ?");
+    // ================================================================
+    // GET TOOLS - Join with patient_bills
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT bi.*, 
+               pb.patient_id,
+               pb.bill_number,
+               pb.created_at as bill_date
+        FROM bill_items bi
+        JOIN patient_bills pb ON bi.bill_id = pb.id
+        WHERE pb.patient_id = ? AND bi.item_type = 'tool'
+        ORDER BY bi.created_at DESC
+        LIMIT 10
+    ");
     $stmt->execute([$patient_id]);
-    $total_prescriptions = $stmt->fetch()['total'] ?? 0;
+    $tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get total appointments
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE patient_id = ?");
+    // ================================================================
+    // GET VITAL SIGNS - LATEST
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT vs.*, u.full_name as recorded_by_name
+        FROM vital_signs vs
+        LEFT JOIN users u ON vs.recorded_by = u.id
+        WHERE vs.patient_id = ?
+        ORDER BY vs.recorded_at DESC
+        LIMIT 1
+    ");
     $stmt->execute([$patient_id]);
-    $total_appointments = $stmt->fetch()['total'] ?? 0;
+    $latest_vitals = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    // Get online doctors count
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND is_online = 1 AND status = 'active' AND branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
-    $online_doctors = $stmt->fetch()['total'] ?? 0;
+    // ================================================================
+    // GET ALL VITAL SIGNS
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT vs.*, u.full_name as recorded_by_name
+        FROM vital_signs vs
+        LEFT JOIN users u ON vs.recorded_by = u.id
+        WHERE vs.patient_id = ?
+        ORDER BY vs.recorded_at DESC
+        LIMIT 20
+    ");
+    $stmt->execute([$patient_id]);
+    $vital_signs = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get total doctors
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
-    $total_doctors = $stmt->fetch()['total'] ?? 0;
+    // ================================================================
+    // GET PRESCRIPTIONS
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT p.*, 
+               u.full_name as doctor_name
+        FROM prescriptions p
+        LEFT JOIN users u ON p.doctor_id = u.id
+        WHERE p.patient_id = ?
+        ORDER BY p.created_at DESC
+        LIMIT 10
+    ");
+    $stmt->execute([$patient_id]);
+    $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // ================================================================
+    // GET LAB TESTS
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT lt.*, 
+               u.full_name as doctor_name
+        FROM lab_tests lt
+        LEFT JOIN users u ON lt.doctor_id = u.id
+        WHERE lt.visit_id IN (
+            SELECT id FROM visits WHERE patient_id = ?
+        )
+        ORDER BY lt.created_at DESC
+        LIMIT 10
+    ");
+    $stmt->execute([$patient_id]);
+    $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Calculate age
+    $age = 'N/A';
+    if (!empty($patient['date_of_birth'])) {
+        $birthDate = new DateTime($patient['date_of_birth']);
+        $today = new DateTime('today');
+        $age = $birthDate->diff($today)->y;
+    }
+    
+    // Get branch name
+    $branch_name = $patient['branch_name'] ?? $branch_name;
+    
+    // Get logo path
+    $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+    if (!file_exists($_SERVER['DOCUMENT_ROOT'] . $logo_path)) {
+        $logo_path = '/dispensary_system/frontend/assets/images/logo.png';
+    }
     
 } catch (Exception $e) {
+    $message = "Database error: " . $e->getMessage();
+    $message_type = 'error';
     $patient = null;
-    $visits = [];
-    $appointments = [];
-    $total_visits = 0;
-    $total_prescriptions = 0;
-    $total_appointments = 0;
-    $online_doctors = 0;
-    $total_doctors = 0;
 }
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/reception_header.php';
-include_once '../../components/reception_sidebar.php';
+include_once __DIR__ . '/../../components/reception_header.php';
+include_once __DIR__ . '/../../components/reception_sidebar.php';
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -150,6 +294,8 @@ include_once '../../components/reception_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -172,8 +318,6 @@ include_once '../../components/reception_sidebar.php';
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
         }
         
         [data-theme="dark"] {
@@ -186,8 +330,7 @@ include_once '../../components/reception_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
+            --purple-bg: #2D1B5F;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -360,7 +503,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER - IMPROVED
+           PAGE HEADER
            ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
@@ -448,11 +591,6 @@ include_once '../../components/reception_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        .page-header .header-badge .online-count {
-            color: #34D399;
-            font-weight: 700;
-        }
-        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -477,231 +615,218 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.8);
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(4px);
-        }
-        
         /* ================================================================
-           PATIENT PROFILE
+           PROFILE HEADER
            ================================================================ */
-        .profile-card {
+        .profile-header {
             background: var(--bg-card);
             border-radius: 18px;
+            padding: 28px 32px;
             border: 1px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s;
-        }
-        
-        .profile-card:hover {
-            border-color: var(--primary);
+            margin-bottom: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 24px;
+            align-items: center;
             box-shadow: var(--shadow-md);
         }
         
         .profile-avatar {
-            width: 90px;
-            height: 90px;
+            width: 100px;
+            height: 100px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 2.2rem;
+            font-size: 3rem;
             font-weight: 700;
-            color: white;
+            color: #ffffff;
             flex-shrink: 0;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.15);
         }
         
-        .profile-name {
-            font-size: 1.4rem;
-            font-weight: 700;
-            color: var(--text-primary);
+        .profile-avatar.avatar-male {
+            background: #0B5ED7;
         }
         
-        .profile-id {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
+        .profile-avatar.avatar-female {
+            background: #DC2626;
         }
         
-        .profile-badge {
-            display: inline-block;
-            font-size: 0.65rem;
-            font-weight: 600;
-            padding: 2px 12px;
-            border-radius: 20px;
+        .profile-avatar.avatar-other {
+            background: #7C3AED;
         }
         
-        .profile-badge.blue { background: var(--primary-bg); color: var(--primary); }
-        .profile-badge.green { background: var(--success-bg); color: var(--success); }
-        
-        [data-theme="dark"] .profile-badge.blue { background: #1E3A5F; color: #6EA8FE; }
-        [data-theme="dark"] .profile-badge.green { background: #1A3A2A; color: #34D399; }
-        
-        /* ================================================================
-           INFO ROWS
-           ================================================================ */
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid var(--border-color);
+        .profile-avatar.avatar-default {
+            background: #0B5ED7;
         }
         
-        .info-row:last-child {
-            border-bottom: none;
+        .profile-info {
+            flex: 1;
+            min-width: 200px;
         }
         
-        .info-label {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .info-value {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            text-align: right;
-        }
-        
-        .info-value .text-muted {
-            color: var(--text-secondary);
-            font-weight: 400;
-        }
-        
-        /* ================================================================
-           STATS BOXES
-           ================================================================ */
-        .stat-box {
-            text-align: center;
-            padding: 14px 16px;
-            border-radius: 12px;
-            border: 1px solid var(--border-color);
-            background: var(--bg-card);
-            transition: all 0.3s ease;
-        }
-        
-        .stat-box:hover {
-            border-color: var(--primary);
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .stat-box .stat-number {
+        .profile-info .patient-name {
             font-size: 1.6rem;
             font-weight: 700;
-        }
-        
-        .stat-box .stat-number.primary { color: var(--primary); }
-        .stat-box .stat-number.green { color: var(--success); }
-        .stat-box .stat-number.purple { color: #7C3AED; }
-        .stat-box .stat-number.orange { color: #D97706; }
-        
-        .stat-box .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        /* ================================================================
-           CARDS
-           ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: 14px;
-            padding: 18px 20px;
-            border: 1px solid var(--border-color);
-            transition: all 0.3s;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .card-title {
-            font-size: 0.9rem;
-            font-weight: 600;
             color: var(--text-primary);
         }
         
-        .card-title .title-blue { color: var(--primary); }
-        .card-title .title-green { color: var(--success); }
+        .profile-info .patient-id {
+            font-size: 0.85rem;
+            font-family: monospace;
+            color: var(--text-secondary);
+            background: var(--bg-body);
+            padding: 2px 12px;
+            border-radius: 12px;
+            display: inline-block;
+        }
+        
+        .profile-info .patient-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 8px;
+        }
+        
+        .profile-info .patient-meta .meta-item {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .profile-info .patient-meta .meta-item i {
+            color: var(--primary);
+            width: 16px;
+        }
+        
+        .profile-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
         
         /* ================================================================
-           VISIT & APPOINTMENT ITEMS
+           DETAIL CARDS
            ================================================================ */
-        .visit-item, .appointment-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color);
+        .detail-card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px 28px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 20px;
+            box-shadow: var(--shadow);
             transition: all 0.3s ease;
         }
         
-        .visit-item:hover, .appointment-item:hover {
-            background: var(--bg-body);
+        .detail-card:hover {
+            border-color: var(--primary-light);
+            box-shadow: var(--shadow-md);
         }
         
-        .visit-item:last-child, .appointment-item:last-child {
+        .detail-card .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .detail-card .card-title i {
+            color: var(--primary);
+        }
+        
+        .detail-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px 24px;
+        }
+        
+        .detail-grid .detail-item {
+            display: flex;
+            flex-direction: column;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .detail-grid .detail-item:last-child,
+        .detail-grid .detail-item:nth-last-child(2) {
             border-bottom: none;
         }
         
-        .visit-item .visit-date, .appointment-item .appt-date {
+        .detail-grid .detail-item .detail-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        
+        .detail-grid .detail-item .detail-value {
+            font-size: 0.9rem;
             font-weight: 500;
-            font-size: 0.8rem;
             color: var(--text-primary);
         }
         
-        .visit-item .visit-doctor, .appointment-item .appt-doctor {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
+        /* ================================================================
+           STATUS BADGES
+           ================================================================ */
         .badge {
-            padding: 2px 12px;
-            border-radius: 12px;
+            display: inline-block;
             font-size: 0.6rem;
             font-weight: 600;
+            padding: 2px 12px;
+            border-radius: 12px;
         }
         
-        .badge-green { background: #D1FAE5; color: #059669; }
-        .badge-yellow { background: #FEF3C7; color: #D97706; }
-        .badge-red { background: #FEE2E2; color: #DC2626; }
-        .badge-blue { background: #E8F0FE; color: #0B5ED7; }
+        .badge-success { background: var(--success-bg); color: var(--success); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); }
+        .badge-info { background: var(--primary-bg); color: var(--primary); }
+        .badge-purple { background: var(--purple-bg); color: var(--purple); }
         
-        [data-theme="dark"] .badge-green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .badge-yellow { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .badge-red { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .badge-blue { background: #1E3A5F; color: #6EA8FE; }
+        .badge-pending { background: var(--warning-bg); color: var(--warning); }
+        .badge-paid { background: var(--success-bg); color: var(--success); }
+        .badge-partial { background: var(--primary-bg); color: var(--primary); }
+        .badge-cancelled { background: var(--danger-bg); color: var(--danger); }
         
-        .scroll-container {
-            max-height: 220px;
-            overflow-y: auto;
+        /* ================================================================
+           TABLE STYLES
+           ================================================================ */
+        .table-wrapper {
+            overflow-x: auto;
         }
         
-        .scroll-container::-webkit-scrollbar { width: 4px; }
-        .scroll-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
-        .scroll-container::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
+        .table-wrapper table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        
+        .table-wrapper table thead th {
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .table-wrapper table tbody td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+        
+        .table-wrapper table tbody tr:hover {
+            background: var(--bg-body);
+        }
         
         /* ================================================================
            BUTTONS
@@ -709,35 +834,26 @@ include_once '../../components/reception_sidebar.php';
         .btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 7px 16px;
-            border-radius: 8px;
+            gap: 8px;
+            padding: 8px 20px;
+            border-radius: 10px;
             font-weight: 600;
-            font-size: 0.78rem;
+            font-size: 0.82rem;
             transition: all 0.3s;
             cursor: pointer;
             border: none;
             text-decoration: none;
         }
         
-        .btn-blue {
-            background: var(--primary);
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
-        }
-        .btn-blue:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
         }
         
-        .btn-green {
-            background: var(--success);
-            color: white;
-        }
-        .btn-green:hover {
-            background: var(--success-dark);
+        .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35);
         }
         
         .btn-outline {
@@ -745,113 +861,46 @@ include_once '../../components/reception_sidebar.php';
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
         }
+        
         .btn-outline:hover {
             background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
         }
         
-        .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
-        
-        /* ================================================================
-           BADGES DISPLAY
-           ================================================================ */
-        .role-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 380px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
+        .btn-sm {
+            padding: 4px 12px;
             font-size: 0.7rem;
-            color: var(--text-secondary);
+            border-radius: 8px;
         }
         
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+        .btn-success {
+            background: var(--success);
+            color: white;
         }
         
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
+        .btn-success:hover {
+            background: var(--success-dark);
         }
         
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
+        .btn-warning {
+            background: var(--warning);
+            color: white;
         }
         
-        @keyframes spin { to { transform: rotate(360deg); } }
+        .btn-warning:hover {
+            background: #B45309;
+        }
+        
+        .btn-pdf {
+            background: #DC2626;
+            color: white;
+        }
+        
+        .btn-pdf:hover {
+            background: #B91C1C;
+            transform: translateY(-2px);
+        }
         
         /* ================================================================
            RESPONSIVE
@@ -867,22 +916,96 @@ include_once '../../components/reception_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .profile-avatar { width: 70px; height: 70px; font-size: 1.8rem; }
-            .profile-name { font-size: 1.1rem; }
-            .info-row { flex-direction: column; gap: 2px; }
-            .info-value { text-align: left; }
-            .stat-box .stat-number { font-size: 1.3rem; }
+            .detail-grid { grid-template-columns: 1fr; }
+            .profile-header { flex-direction: column; text-align: center; }
+            .profile-info .patient-meta { justify-content: center; }
+            .profile-actions { justify-content: center; width: 100%; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .profile-avatar { width: 60px; height: 60px; font-size: 1.5rem; }
-            .card { padding: 12px 14px; }
-            .visit-item, .appointment-item { flex-direction: column; align-items: flex-start; gap: 4px; }
-            .btn { padding: 6px 12px; font-size: 0.7rem; }
+            .detail-card { padding: 16px; }
+            .profile-actions .btn { flex: 1; justify-content: center; }
         }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { 
+            color: var(--primary); 
+            font-weight: 600; 
+        }
+        
+        /* ================================================================
+           EMPTY STATE
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 30px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 2rem;
+            color: var(--gray-300);
+            display: block;
+            margin-bottom: 8px;
+        }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
     </style>
 </head>
 <body>
@@ -907,7 +1030,7 @@ include_once '../../components/reception_sidebar.php';
     
     <div class="flex items-center gap-3">
         <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($_SESSION['branch_name'] ?? 'Dodoma') ?>
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime"></span>
@@ -937,7 +1060,7 @@ include_once '../../components/reception_sidebar.php';
     <?php if ($patient): ?>
     
     <!-- ================================================================ -->
-    <!-- PAGE HEADER - IMPROVED -->
+    <!-- PAGE HEADER -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -945,289 +1068,645 @@ include_once '../../components/reception_sidebar.php';
                 <i class="fas fa-user-circle"></i>
                 Patient Details
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">RECEPTION</span>
-                <span class="update-badge-light" id="updateBadge">
-                    <i class="fas fa-sync-alt fa-spin"></i> Live
-                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-id-card"></i>
-                View complete patient information
-                
-                <span class="header-badge" id="onlineDoctorBadge">
-                    <i class="fas fa-user-md"></i>
-                    <span class="online-count" id="onlineDoctorCount"><?= $online_doctors ?></span> Online
-                </span>
+                View complete patient information for <strong><?= htmlspecialchars($patient['full_name']) ?></strong>
                 
                 <span class="header-badge">
-                    <i class="fas fa-hashtag"></i>
-                    <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
+                    <i class="fas fa-user"></i>
+                    ID: <strong><?= htmlspecialchars($patient['patient_id']) ?></strong>
                 </span>
             </p>
         </div>
-        <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="new_appointment.php?patient_id=<?= $patient_id ?>" class="btn-outline-light">
-                <i class="fas fa-calendar-plus"></i> New Appointment
-            </a>
+        <div class="header-right">
             <a href="patients.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back
+                <i class="fas fa-arrow-left"></i> Back to Patients
             </a>
+            <button onclick="generatePDF()" class="btn-outline-light" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);">
+                <i class="fas fa-file-pdf"></i> Export PDF
+            </button>
         </div>
     </div>
-
+    
     <!-- ================================================================ -->
-    <!-- PATIENT PROFILE -->
+    <!-- PROFILE HEADER -->
     <!-- ================================================================ -->
-    <div class="profile-card animate-fade-in-up mb-5">
-        <div class="p-5 flex flex-col md:flex-row items-center md:items-start gap-5">
-            <!-- Avatar -->
-            <div class="profile-avatar" style="background: <?= '#' . substr(md5($patient['full_name']), 0, 6) ?>;">
-                <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
-            </div>
-            
-            <!-- Patient Info -->
-            <div class="flex-1 text-center md:text-left">
-                <h2 class="profile-name"><?= htmlspecialchars($patient['full_name']) ?></h2>
-                <p class="profile-id">
-                    <i class="fas fa-id-card mr-1"></i>
-                    <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
-                </p>
-                <div class="flex flex-wrap gap-2 justify-center md:justify-start mt-2">
-                    <span class="profile-badge blue">
-                        <i class="fas fa-venus-mars mr-1"></i>
-                        <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?>
-                    </span>
-                    <span class="profile-badge green">
-                        <i class="fas fa-tint mr-1"></i>
-                        <?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?>
-                    </span>
-                    <span class="profile-badge blue">
-                        <i class="fas fa-store-alt mr-1"></i>
-                        <?= htmlspecialchars($patient['branch_name'] ?? 'Not Assigned') ?>
-                    </span>
-                </div>
-            </div>
-            
-            <!-- Quick Actions -->
-            <div class="flex flex-col gap-2 w-full md:w-auto">
-                <a href="new_appointment.php?patient_id=<?= $patient_id ?>" class="btn btn-blue btn-sm w-full justify-center">
-                    <i class="fas fa-calendar-plus"></i> New Appointment
-                </a>
-                <a href="assign_doctor.php?patient_id=<?= $patient_id ?>" class="btn btn-green btn-sm w-full justify-center">
-                    <i class="fas fa-user-md"></i> Assign Doctor
-                </a>
-            </div>
+    <div class="profile-header animate-fade-in-up">
+        <?php
+            $gender = $patient['gender'] ?? '';
+            if ($gender === 'Male') {
+                $avatar_class = 'avatar-male';
+            } elseif ($gender === 'Female') {
+                $avatar_class = 'avatar-female';
+            } elseif ($gender === 'Other') {
+                $avatar_class = 'avatar-other';
+            } else {
+                $avatar_class = 'avatar-default';
+            }
+        ?>
+        <div class="profile-avatar <?= $avatar_class ?>">
+            <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
         </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PATIENT INFORMATION -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
         
-        <!-- Personal Information -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-info-circle title-blue mr-2"></i> Personal Information
-                </h3>
+        <div class="profile-info">
+            <div>
+                <span class="patient-name"><?= htmlspecialchars($patient['full_name']) ?></span>
+                <span class="patient-id"><?= htmlspecialchars($patient['patient_id']) ?></span>
+                <?php if (!empty($patient['assigned_doctor_name'])): ?>
+                    <span class="badge badge-info">
+                        <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($patient['assigned_doctor_name']) ?>
+                        <?= $patient['assigned_doctor_online'] ? '🟢' : '⚪' ?>
+                    </span>
+                <?php endif; ?>
             </div>
-            <div class="space-y-1">
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-user mr-1"></i> Full Name</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['full_name']) ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-id-card mr-1"></i> Patient ID</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-calendar mr-1"></i> Date of Birth</span>
-                    <span class="info-value"><?= !empty($patient['date_of_birth']) ? date('F d, Y', strtotime($patient['date_of_birth'])) : 'N/A' ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-venus-mars mr-1"></i> Gender</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-phone mr-1"></i> Phone</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-envelope mr-1"></i> Email</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-home mr-1"></i> Address</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['address'] ?? 'N/A') ?></span>
-                </div>
+            
+            <div class="patient-meta">
+                <span class="meta-item"><i class="fas fa-venus-mars"></i> <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
+                <span class="meta-item"><i class="fas fa-ring"></i> <?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span>
+                <span class="meta-item"><i class="fas fa-calendar"></i> <?= !empty($patient['date_of_birth']) ? date('d M Y', strtotime($patient['date_of_birth'])) : 'N/A' ?></span>
+                <span class="meta-item"><i class="fas fa-clock"></i> <?= $age ?> years</span>
+                <span class="meta-item"><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
+                <span class="meta-item"><i class="fas fa-envelope"></i> <?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
+                <span class="meta-item"><i class="fas fa-tint"></i> <?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span>
+                <span class="meta-item">
+                    <i class="fas fa-circle" style="color:<?= ($patient['status'] ?? 'active') === 'active' ? '#059669' : '#DC2626' ?>;"></i>
+                    <?= ucfirst($patient['status'] ?? 'Active') ?>
+                </span>
             </div>
         </div>
         
-        <!-- Medical Information -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-notes-medical title-green mr-2"></i> Medical Information
-                </h3>
+        <div class="profile-actions">
+            <a href="assign_doctor.php?patient_id=<?= $patient['id'] ?>" class="btn btn-primary btn-sm">
+                <i class="fas fa-user-md"></i> Assign Doctor
+            </a>
+            <button onclick="window.print()" class="btn btn-outline btn-sm">
+                <i class="fas fa-print"></i> Print
+            </button>
+            <button onclick="generatePDF()" class="btn btn-pdf btn-sm">
+                <i class="fas fa-file-pdf"></i> PDF
+            </button>
+        </div>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- PERSONAL INFORMATION -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.05s;">
+        <div class="card-title">
+            <i class="fas fa-user"></i>
+            Personal Information
+        </div>
+        
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">Full Name</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['full_name']) ?></span>
             </div>
-            <div class="space-y-1">
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-phone-alt mr-1"></i> Emergency Contact</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-tint mr-1"></i> Blood Group</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-allergies mr-1"></i> Allergies</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['allergies'] ?? 'None') ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-calendar-alt mr-1"></i> Registered</span>
-                    <span class="info-value"><?= date('F d, Y h:i A', strtotime($patient['created_at'])) ?></span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-store-alt mr-1"></i> Branch</span>
-                    <span class="info-value"><?= htmlspecialchars($patient['branch_name'] ?? 'Not Assigned') ?></span>
-                </div>
-                <?php if (!empty($patient['assigned_doctor_id'])): ?>
-                <div class="info-row">
-                    <span class="info-label"><i class="fas fa-user-md mr-1"></i> Assigned Doctor</span>
-                    <span class="info-value">
-                        <?php
-                        $stmt = $db->prepare("SELECT full_name FROM users WHERE id = ?");
-                        $stmt->execute([$patient['assigned_doctor_id']]);
-                        $doc = $stmt->fetch();
-                        echo htmlspecialchars($doc['full_name'] ?? 'N/A');
+            <div class="detail-item">
+                <span class="detail-label">Patient ID</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['patient_id']) ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Gender</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Marital Status</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Date of Birth</span>
+                <span class="detail-value">
+                    <?= !empty($patient['date_of_birth']) ? date('d M Y', strtotime($patient['date_of_birth'])) : 'N/A' ?>
+                    <?php if ($age !== 'N/A'): ?>
+                        <span class="text-xs text-gray-400">(<?= $age ?> years)</span>
+                    <?php endif; ?>
+                </span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Age</span>
+                <span class="detail-value"><?= $age ?> years</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Phone</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Email</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Blood Group</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Branch</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Registered By</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['created_by_name'] ?? 'System') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Registered At</span>
+                <span class="detail-value"><?= date('d M Y h:i A', strtotime($patient['created_at'])) ?></span>
+            </div>
+            <div class="detail-item" style="grid-column: 1 / -1;">
+                <span class="detail-label">Address</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['address'] ?? 'N/A') ?></span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- MEDICAL INFORMATION -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="card-title">
+            <i class="fas fa-notes-medical"></i>
+            Medical Information
+        </div>
+        
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">Blood Group</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['blood_group'] ?? 'Not recorded') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Emergency Contact</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'Not recorded') ?></span>
+            </div>
+            <div class="detail-item" style="grid-column: 1 / -1;">
+                <span class="detail-label">Allergies</span>
+                <span class="detail-value">
+                    <?php if (!empty($patient['allergies'])): ?>
+                        <?php 
+                            $allergy_list = array_map('trim', explode(',', $patient['allergies']));
+                            foreach ($allergy_list as $allergy): 
                         ?>
-                    </span>
-                </div>
-                <?php endif; ?>
+                            <span class="badge badge-danger" style="margin:2px;">⚠️ <?= htmlspecialchars($allergy) ?></span>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <span class="text-gray-400">No known allergies</span>
+                    <?php endif; ?>
+                </span>
             </div>
-        </div>
-        
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- STATISTICS BOXES -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-        <div class="stat-box">
-            <p class="stat-number primary"><?= $total_visits ?></p>
-            <p class="stat-label">Total Visits</p>
-        </div>
-        <div class="stat-box">
-            <p class="stat-number green"><?= $total_prescriptions ?></p>
-            <p class="stat-label">Prescriptions</p>
-        </div>
-        <div class="stat-box">
-            <p class="stat-number purple"><?= $total_appointments ?></p>
-            <p class="stat-label">Appointments</p>
-        </div>
-        <div class="stat-box">
-            <p class="stat-number orange"><?= date('d/m/Y', strtotime($patient['created_at'])) ?></p>
-            <p class="stat-label">Registered Date</p>
         </div>
     </div>
-
+    
     <!-- ================================================================ -->
-    <!-- VISITS & APPOINTMENTS -->
+    <!-- ASSIGNED DOCTOR & ACTIVE VISIT -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-        
-        <!-- Recent Visits -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-clinic-medical title-blue mr-2"></i> Recent Visits
-                    <span class="text-sm font-normal text-gray-400">(<?= count($visits) ?>)</span>
-                </h3>
-                <a href="visits.php?patient_id=<?= $patient_id ?>" class="text-primary text-sm hover:underline">View All →</a>
-            </div>
-            <div class="scroll-container">
-                <?php if (count($visits) > 0): ?>
-                    <?php foreach ($visits as $visit): ?>
-                        <div class="visit-item">
-                            <div>
-                                <p class="visit-date"><?= date('M d, Y', strtotime($visit['created_at'])) ?></p>
-                                <p class="visit-doctor">
-                                    <i class="fas fa-user-md mr-1"></i>
-                                    Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'Not assigned') ?>
-                                </p>
-                            </div>
-                            <div class="text-right">
-                                <span class="badge <?= $visit['status'] === 'completed' ? 'badge-green' : 'badge-yellow' ?>">
-                                    <?= ucfirst($visit['status']) ?>
-                                </span>
-                                <div class="mt-1">
-                                    <a href="visit_details.php?id=<?= $visit['id'] ?>" class="text-primary text-xs hover:underline">
-                                        <i class="fas fa-eye mr-1"></i> View
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-clinic-medical text-2xl block mb-2"></i>
-                        <p class="text-sm">No visits recorded</p>
-                    </div>
-                <?php endif; ?>
-            </div>
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.15s;">
+        <div class="card-title">
+            <i class="fas fa-user-md"></i>
+            Assigned Doctor & Active Visit
         </div>
         
-        <!-- Appointments -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-calendar-check title-green mr-2"></i> Appointments
-                    <span class="text-sm font-normal text-gray-400">(<?= count($appointments) ?>)</span>
-                </h3>
-                <a href="appointments.php?patient_id=<?= $patient_id ?>" class="text-primary text-sm hover:underline">View All →</a>
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">Assigned Doctor</span>
+                <span class="detail-value">
+                    <?php if (!empty($patient['assigned_doctor_name'])): ?>
+                        <span class="badge badge-info">
+                            <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($patient['assigned_doctor_name']) ?>
+                            <?= $patient['assigned_doctor_online'] ? '🟢 Online' : '⚪ Offline' ?>
+                        </span>
+                    <?php else: ?>
+                        <span class="text-gray-400">No doctor assigned</span>
+                    <?php endif; ?>
+                </span>
             </div>
-            <div class="scroll-container">
-                <?php if (count($appointments) > 0): ?>
-                    <?php foreach ($appointments as $appt): ?>
-                        <div class="appointment-item">
-                            <div>
-                                <p class="appt-date"><?= date('M d, Y h:i A', strtotime($appt['appointment_date'])) ?></p>
-                                <p class="appt-doctor">
-                                    <i class="fas fa-user-md mr-1"></i>
-                                    Dr. <?= htmlspecialchars($appt['doctor_name'] ?? 'Not assigned') ?>
-                                </p>
-                            </div>
-                            <div class="text-right">
-                                <span class="badge <?= $appt['status'] === 'confirmed' || $appt['status'] === 'completed' ? 'badge-green' : 'badge-yellow' ?>">
-                                    <?= ucfirst($appt['status']) ?>
-                                </span>
-                                <div class="mt-1">
-                                    <a href="view_appointment.php?id=<?= $appt['id'] ?>" class="text-primary text-xs hover:underline">
-                                        <i class="fas fa-eye mr-1"></i> View
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-calendar-check text-2xl block mb-2"></i>
-                        <p class="text-sm">No appointments scheduled</p>
-                    </div>
-                <?php endif; ?>
+            <div class="detail-item">
+                <span class="detail-label">Active Visit</span>
+                <span class="detail-value">
+                    <?php if ($active_visit): ?>
+                        <span class="badge badge-<?= $active_visit['status'] ?? 'pending' ?>">
+                            <?= ucfirst(str_replace('_', ' ', $active_visit['status'] ?? 'Pending')) ?>
+                        </span>
+                        <span class="text-xs text-gray-400">
+                            #<?= htmlspecialchars($active_visit['visit_number'] ?? '') ?>
+                        </span>
+                        <?php if (!empty($active_visit['doctor_name'])): ?>
+                            <span class="text-xs">- Dr. <?= htmlspecialchars($active_visit['doctor_name']) ?></span>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <span class="text-gray-400">No active visit</span>
+                    <?php endif; ?>
+                </span>
             </div>
         </div>
-        
     </div>
-
-    <?php else: ?>
-        <div class="text-center py-12 text-gray-400">
-            <i class="fas fa-user-circle text-5xl block mb-3"></i>
-            <p class="text-lg">Patient not found</p>
-            <a href="patients.php" class="text-primary hover:underline">Back to patients</a>
+    
+    <!-- ================================================================ -->
+    <!-- LATEST VITAL SIGNS -->
+    <!-- ================================================================ -->
+    <?php if ($latest_vitals): ?>
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.2s;">
+        <div class="card-title">
+            <i class="fas fa-heartbeat" style="color:#DC2626;"></i>
+            Latest Vital Signs
+            <span class="text-xs text-gray-400">(<?= date('d M Y h:i A', strtotime($latest_vitals['recorded_at'])) ?>)</span>
         </div>
+        
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">Temperature</span>
+                <span class="detail-value"><?= $latest_vitals['temperature'] ?? 'N/A' ?> °C</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Blood Pressure</span>
+                <span class="detail-value">
+                    <?php if (!empty($latest_vitals['blood_pressure_systolic']) && !empty($latest_vitals['blood_pressure_diastolic'])): ?>
+                        <?= $latest_vitals['blood_pressure_systolic'] ?> / <?= $latest_vitals['blood_pressure_diastolic'] ?> mmHg
+                    <?php else: ?>
+                        N/A
+                    <?php endif; ?>
+                </span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Pulse Rate</span>
+                <span class="detail-value"><?= $latest_vitals['pulse_rate'] ?? 'N/A' ?> bpm</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Respiratory Rate</span>
+                <span class="detail-value"><?= $latest_vitals['respiratory_rate'] ?? 'N/A' ?> /min</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Weight</span>
+                <span class="detail-value"><?= $latest_vitals['weight'] ?? 'N/A' ?> kg</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Height</span>
+                <span class="detail-value"><?= $latest_vitals['height'] ?? 'N/A' ?> cm</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">BMI</span>
+                <span class="detail-value">
+                    <?= $latest_vitals['bmi'] ?? 'N/A' ?>
+                    <?php if (!empty($latest_vitals['bmi'])): ?>
+                        <?php 
+                            $bmi = $latest_vitals['bmi'];
+                            if ($bmi < 18.5) $bmi_class = 'badge-warning';
+                            elseif ($bmi < 25) $bmi_class = 'badge-success';
+                            elseif ($bmi < 30) $bmi_class = 'badge-warning';
+                            else $bmi_class = 'badge-danger';
+                        ?>
+                        <span class="badge <?= $bmi_class ?>">
+                            <?php 
+                                if ($bmi < 18.5) echo 'Underweight';
+                                elseif ($bmi < 25) echo 'Normal';
+                                elseif ($bmi < 30) echo 'Overweight';
+                                else echo 'Obese';
+                            ?>
+                        </span>
+                    <?php endif; ?>
+                </span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Recorded By</span>
+                <span class="detail-value"><?= htmlspecialchars($latest_vitals['recorded_by_name'] ?? 'N/A') ?></span>
+            </div>
+        </div>
+    </div>
     <?php endif; ?>
-
+    
+    <!-- ================================================================ -->
+    <!-- VISIT HISTORY -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.25s;">
+        <div class="card-title">
+            <i class="fas fa-clock"></i>
+            Visit History
+            <span class="text-xs text-gray-400">(Last 10 visits)</span>
+        </div>
+        
+        <?php if (count($visit_history) > 0): ?>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Visit #</th>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Doctor</th>
+                            <th>Status</th>
+                            <th>Bill</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($visit_history as $visit): ?>
+                            <tr>
+                                <td><span class="font-mono text-sm"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span></td>
+                                <td><?= date('d M Y', strtotime($visit['created_at'])) ?></td>
+                                <td><?= ucfirst($visit['visit_type'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="badge badge-<?= $visit['status'] ?? 'pending' ?>">
+                                        <?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'Pending')) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <?php if (!empty($visit['bill_amount'])): ?>
+                                        <span class="font-semibold">TSh <?= number_format($visit['bill_amount'], 0) ?></span>
+                                        <span class="badge badge-<?= $visit['bill_status'] ?? 'pending' ?>">
+                                            <?= ucfirst($visit['bill_status'] ?? 'Pending') ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="text-gray-400">No bill</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <a href="view_visit.php?id=<?= $visit['id'] ?>" class="btn btn-outline btn-sm">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-clock"></i>
+                <p>No visit history found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- PRESCRIPTIONS -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.3s;">
+        <div class="card-title">
+            <i class="fas fa-prescription"></i>
+            Prescriptions
+            <span class="text-xs text-gray-400">(Last 10)</span>
+        </div>
+        
+        <?php if (count($prescriptions) > 0): ?>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Prescription #</th>
+                            <th>Date</th>
+                            <th>Doctor</th>
+                            <th>Medication</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($prescriptions as $prescription): ?>
+                            <tr>
+                                <td><span class="font-mono text-sm"><?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?></span></td>
+                                <td><?= date('d M Y', strtotime($prescription['created_at'])) ?></td>
+                                <td><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($prescription['medication'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="badge badge-<?= $prescription['status'] ?? 'pending' ?>">
+                                        <?= ucfirst($prescription['status'] ?? 'Pending') ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <a href="view_prescription.php?id=<?= $prescription['id'] ?>" class="btn btn-outline btn-sm">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-prescription"></i>
+                <p>No prescriptions found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- LAB TESTS -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.35s;">
+        <div class="card-title">
+            <i class="fas fa-flask"></i>
+            Lab Tests
+            <span class="text-xs text-gray-400">(Last 10)</span>
+        </div>
+        
+        <?php if (count($lab_tests) > 0): ?>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Test Name</th>
+                            <th>Date</th>
+                            <th>Doctor</th>
+                            <th>Status</th>
+                            <th>Results</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($lab_tests as $test): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($test['created_at'])) ?></td>
+                                <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="badge badge-<?= $test['status'] ?? 'pending' ?>">
+                                        <?= ucfirst(str_replace('_', ' ', $test['status'] ?? 'Pending')) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <?php if (!empty($test['results'])): ?>
+                                        <span class="text-success">✅ Results available</span>
+                                    <?php else: ?>
+                                        <span class="text-gray-400">Pending</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <a href="view_lab.php?id=<?= $test['id'] ?>" class="btn btn-outline btn-sm">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-flask"></i>
+                <p>No lab tests found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- PROCEDURES -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.37s;">
+        <div class="card-title">
+            <i class="fas fa-syringe" style="color:#7C3AED;"></i>
+            Procedures
+            <span class="text-xs text-gray-400">(Last 10)</span>
+        </div>
+        
+        <?php if (count($procedures) > 0): ?>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Procedure Name</th>
+                            <th>Date</th>
+                            <th>Qty</th>
+                            <th>Unit Price</th>
+                            <th>Total</th>
+                            <th>Status</th>
+                            <th>Bill #</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($procedures as $procedure): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($procedure['item_name'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($procedure['created_at'])) ?></td>
+                                <td><?= $procedure['quantity'] ?? 1 ?></td>
+                                <td>TSh <?= number_format($procedure['unit_price'] ?? 0, 0) ?></td>
+                                <td><span class="font-semibold">TSh <?= number_format($procedure['total_price'] ?? 0, 0) ?></span></td>
+                                <td>
+                                    <span class="badge badge-<?= $procedure['payment_status'] ?? 'pending' ?>">
+                                        <?= ucfirst($procedure['payment_status'] ?? 'Pending') ?>
+                                    </span>
+                                </td>
+                                <td><span class="font-mono text-sm"><?= htmlspecialchars($procedure['bill_number'] ?? 'N/A') ?></span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-syringe"></i>
+                <p>No procedures found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- TOOLS -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.38s;">
+        <div class="card-title">
+            <i class="fas fa-tools" style="color:#D97706;"></i>
+            Tools
+            <span class="text-xs text-gray-400">(Last 10)</span>
+        </div>
+        
+        <?php if (count($tools) > 0): ?>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tool Name</th>
+                            <th>Date</th>
+                            <th>Qty</th>
+                            <th>Unit Price</th>
+                            <th>Total</th>
+                            <th>Status</th>
+                            <th>Bill #</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($tools as $tool): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($tool['item_name'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($tool['created_at'])) ?></td>
+                                <td><?= $tool['quantity'] ?? 1 ?></td>
+                                <td>TSh <?= number_format($tool['unit_price'] ?? 0, 0) ?></td>
+                                <td><span class="font-semibold">TSh <?= number_format($tool['total_price'] ?? 0, 0) ?></span></td>
+                                <td>
+                                    <span class="badge badge-<?= $tool['payment_status'] ?? 'pending' ?>">
+                                        <?= ucfirst($tool['payment_status'] ?? 'Pending') ?>
+                                    </span>
+                                </td>
+                                <td><span class="font-mono text-sm"><?= htmlspecialchars($tool['bill_number'] ?? 'N/A') ?></span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-tools"></i>
+                <p>No tools found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- BILLS - MOVED TO LAST -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.4s;">
+        <div class="card-title">
+            <i class="fas fa-receipt"></i>
+            Bills
+            <span class="text-xs text-gray-400">(Last 10 bills)</span>
+        </div>
+        
+        <?php if (count($bills) > 0): ?>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Bill #</th>
+                            <th>Date</th>
+                            <th>Visit</th>
+                            <th>Total</th>
+                            <th>Paid</th>
+                            <th>Balance</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($bills as $bill): ?>
+                            <tr>
+                                <td><span class="font-mono text-sm"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></span></td>
+                                <td><?= date('d M Y', strtotime($bill['created_at'])) ?></td>
+                                <td><?= htmlspecialchars($bill['visit_number'] ?? 'N/A') ?></td>
+                                <td><span class="font-semibold">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></span></td>
+                                <td>TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                                <td>TSh <?= number_format($bill['balance'] ?? 0, 0) ?></td>
+                                <td>
+                                    <span class="badge badge-<?= $bill['status'] ?? 'pending' ?>">
+                                        <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-outline btn-sm">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-receipt"></i>
+                <p>No bills found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
@@ -1235,13 +1714,31 @@ include_once '../../components/reception_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Patient Details
+            View Patient
+            <span class="text-gray-300 mx-2">|</span>
+            <?= htmlspecialchars($patient['full_name']) ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
+    
+    <?php else: ?>
+    
+    <!-- Patient not found -->
+    <div class="detail-card">
+        <div class="empty-state">
+            <i class="fas fa-user-slash" style="font-size:3rem;"></i>
+            <h3 style="margin-top:12px;">Patient Not Found</h3>
+            <p class="text-gray-400">The patient you are looking for does not exist or you don't have permission to view them.</p>
+            <a href="patients.php" class="btn btn-primary mt-3">
+                <i class="fas fa-arrow-left"></i> Back to Patients
+            </a>
+        </div>
+    </div>
+    
+    <?php endif; ?>
 
 </main>
 
@@ -1257,7 +1754,7 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS) -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1367,100 +1864,696 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // GLOBAL STATS AUTO-UPDATE (3 SECONDS)
+    // GENERATE PDF - Opens in new window with Braick logo, Close & Download buttons
     // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-
-    function fetchAndUpdateStats() {
-        if (isUpdating) return;
-        isUpdating = true;
+    function generatePDF() {
+        showToast('📄 PDF Export', 'Generating PDF... Please wait.', 'info');
         
-        fetch('/dispensary_system/frontend/api/get_global_stats.php?t=' + new Date().getTime())
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    var stats = data.stats || {};
-                    var onlineCount = stats.online_doctors || 0;
-                    
-                    // Update online doctors count
-                    document.getElementById('onlineDoctorCount').textContent = onlineCount;
-                    
-                    // Update update badge
-                    var now = new Date();
-                    document.getElementById('updateBadge').innerHTML = 
-                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
-                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    document.getElementById('footerTimestamp').textContent = 'Last updated: ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        // Get all patient data from PHP variables
+        var patientData = {
+            full_name: "<?= addslashes($patient['full_name'] ?? 'N/A') ?>",
+            patient_id: "<?= addslashes($patient['patient_id'] ?? 'N/A') ?>",
+            gender: "<?= addslashes($patient['gender'] ?? 'N/A') ?>",
+            marital_status: "<?= addslashes($patient['marital_status'] ?? 'N/A') ?>",
+            date_of_birth: "<?= !empty($patient['date_of_birth']) ? date('d M Y', strtotime($patient['date_of_birth'])) : 'N/A' ?>",
+            age: "<?= $age ?>",
+            phone: "<?= addslashes($patient['phone'] ?? 'N/A') ?>",
+            email: "<?= addslashes($patient['email'] ?? 'N/A') ?>",
+            blood_group: "<?= addslashes($patient['blood_group'] ?? 'N/A') ?>",
+            address: "<?= addslashes($patient['address'] ?? 'N/A') ?>",
+            allergies: "<?= addslashes($patient['allergies'] ?? 'None') ?>",
+            emergency_contact: "<?= addslashes($patient['emergency_contact'] ?? 'N/A') ?>",
+            branch_name: "<?= addslashes($patient['branch_name'] ?? 'N/A') ?>",
+            created_by: "<?= addslashes($patient['created_by_name'] ?? 'System') ?>",
+            created_at: "<?= date('d M Y h:i A', strtotime($patient['created_at'] ?? 'now')) ?>",
+            assigned_doctor: "<?= addslashes($patient['assigned_doctor_name'] ?? 'Not assigned') ?>",
+            active_visit: "<?= $active_visit ? $active_visit['visit_number'] . ' (' . $active_visit['status'] . ')' : 'No active visit' ?>",
+            visit_count: "<?= count($visit_history) ?>",
+            bill_count: "<?= count($bills) ?>",
+            procedure_count: "<?= count($procedures) ?>",
+            tool_count: "<?= count($tools) ?>",
+            prescription_count: "<?= count($prescriptions) ?>",
+            lab_count: "<?= count($lab_tests) ?>",
+            branch_name_display: "<?= addslashes($branch_name) ?>"
+        };
+        
+        // Logo path
+        var logoPath = "<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>";
+        
+        // Build HTML content for PDF with Logo, Close & Download buttons
+        var htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Patient Report - ${patientData.full_name}</title>
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                body {
+                    font-family: Arial, Helvetica, sans-serif;
+                    background: #ffffff;
+                    color: #1E293B;
+                    padding: 30px;
+                    font-size: 12px;
+                    line-height: 1.5;
                 }
-                isUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Update error:', error);
-                isUpdating = false;
-            });
-    }
+                .toolbar {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 12px 20px;
+                    background: #F8FAFC;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 8px;
+                    margin-bottom: 20px;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                }
+                .toolbar .toolbar-title {
+                    font-weight: 600;
+                    color: #0B5ED7;
+                }
+                .toolbar .toolbar-buttons {
+                    display: flex;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                }
+                .toolbar .toolbar-buttons button {
+                    padding: 8px 18px;
+                    border: none;
+                    border-radius: 6px;
+                    font-weight: 600;
+                    font-size: 13px;
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                .toolbar .toolbar-buttons .btn-print {
+                    background: #0B5ED7;
+                    color: white;
+                }
+                .toolbar .toolbar-buttons .btn-print:hover {
+                    background: #0A4CA8;
+                    transform: translateY(-1px);
+                }
+                .toolbar .toolbar-buttons .btn-download {
+                    background: #059669;
+                    color: white;
+                }
+                .toolbar .toolbar-buttons .btn-download:hover {
+                    background: #047857;
+                    transform: translateY(-1px);
+                }
+                .toolbar .toolbar-buttons .btn-close {
+                    background: #DC2626;
+                    color: white;
+                }
+                .toolbar .toolbar-buttons .btn-close:hover {
+                    background: #B91C1C;
+                    transform: translateY(-1px);
+                }
+                .header {
+                    text-align: center;
+                    border-bottom: 3px solid #0B5ED7;
+                    padding-bottom: 20px;
+                    margin-bottom: 25px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 20px;
+                    flex-wrap: wrap;
+                }
+                .header .logo {
+                    max-height: 60px;
+                    width: auto;
+                }
+                .header .header-text h1 {
+                    font-size: 24px;
+                    color: #0B5ED7;
+                    margin-bottom: 2px;
+                }
+                .header .header-text .sub {
+                    color: #64748B;
+                    font-size: 14px;
+                }
+                .header .header-text .date {
+                    color: #94A3B8;
+                    font-size: 11px;
+                    margin-top: 3px;
+                }
+                .section {
+                    margin-bottom: 18px;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 8px;
+                    overflow: hidden;
+                }
+                .section-title {
+                    background: #F1F5F9;
+                    padding: 8px 15px;
+                    font-weight: 700;
+                    font-size: 13px;
+                    color: #0B5ED7;
+                    border-bottom: 1px solid #E2E8F0;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                .section-title i {
+                    color: #0B5ED7;
+                }
+                .section-body {
+                    padding: 10px 15px;
+                }
+                .grid-2 {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 4px 20px;
+                }
+                .grid-3 {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr 1fr;
+                    gap: 4px 15px;
+                }
+                .item {
+                    padding: 3px 0;
+                    border-bottom: 1px solid #F1F5F9;
+                }
+                .item .label {
+                    font-size: 9px;
+                    font-weight: 600;
+                    color: #64748B;
+                    text-transform: uppercase;
+                    letter-spacing: 0.03em;
+                    display: block;
+                }
+                .item .value {
+                    font-size: 12px;
+                    font-weight: 500;
+                    color: #1E293B;
+                    display: block;
+                }
+                .badge {
+                    display: inline-block;
+                    font-size: 9px;
+                    font-weight: 600;
+                    padding: 2px 10px;
+                    border-radius: 10px;
+                }
+                .badge-success { background: #D1FAE5; color: #059669; }
+                .badge-danger { background: #FEE2E2; color: #DC2626; }
+                .badge-warning { background: #FEF3C7; color: #D97706; }
+                .badge-info { background: #DBEAFE; color: #0B5ED7; }
+                .badge-purple { background: #EDE9FE; color: #7C3AED; }
+                .badge-pending { background: #FEF3C7; color: #D97706; }
+                .badge-paid { background: #D1FAE5; color: #059669; }
+                .badge-partial { background: #DBEAFE; color: #0B5ED7; }
+                .badge-cancelled { background: #FEE2E2; color: #DC2626; }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 10px;
+                }
+                table thead th {
+                    text-align: left;
+                    padding: 6px 8px;
+                    font-weight: 600;
+                    font-size: 9px;
+                    text-transform: uppercase;
+                    color: #64748B;
+                    border-bottom: 2px solid #E2E8F0;
+                    background: #F8FAFC;
+                }
+                table tbody td {
+                    padding: 5px 8px;
+                    border-bottom: 1px solid #E2E8F0;
+                    color: #1E293B;
+                }
+                table tbody tr:hover {
+                    background: #F8FAFC;
+                }
+                .footer {
+                    text-align: center;
+                    padding-top: 15px;
+                    margin-top: 15px;
+                    border-top: 1px solid #E2E8F0;
+                    font-size: 9px;
+                    color: #94A3B8;
+                }
+                .footer .brand {
+                    color: #0B5ED7;
+                    font-weight: 600;
+                }
+                .no-data {
+                    text-align: center;
+                    padding: 12px;
+                    color: #94A3B8;
+                    font-size: 11px;
+                }
+                .stat-box {
+                    text-align: center;
+                    padding: 8px;
+                    background: #F8FAFC;
+                    border-radius: 6px;
+                    border: 1px solid #E2E8F0;
+                }
+                .stat-box .stat-number {
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: #0B5ED7;
+                    display: block;
+                }
+                .stat-box .stat-label {
+                    font-size: 9px;
+                    color: #64748B;
+                    text-transform: uppercase;
+                    letter-spacing: 0.03em;
+                }
+                @media print {
+                    .toolbar { display: none; }
+                    body { padding: 15px; }
+                    .section { page-break-inside: avoid; }
+                }
+                @media (max-width: 600px) {
+                    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+                    .header { flex-direction: column; text-align: center; }
+                    .toolbar { flex-direction: column; align-items: stretch; }
+                    .toolbar .toolbar-buttons { justify-content: center; }
+                }
+            </style>
+        </head>
+        <body>
+            <!-- TOOLBAR -->
+            <div class="toolbar">
+                <span class="toolbar-title">📄 Patient Report</span>
+                <div class="toolbar-buttons">
+                    <button class="btn-print" onclick="window.print()">
+                        <i class="fas fa-print"></i> Print
+                    </button>
+                    <button class="btn-download" onclick="downloadPDF()">
+                        <i class="fas fa-download"></i> Download
+                    </button>
+                    <button class="btn-close" onclick="window.close()">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            </div>
+            
+            <!-- HEADER WITH LOGO -->
+            <div class="header">
+                <img src="${logoPath}" alt="Braick Dispensary Logo" class="logo" onerror="this.style.display='none'">
+                <div class="header-text">
+                    <h1>🏥 ${patientData.branch_name_display}</h1>
+                    <div class="sub">Patient Medical Report</div>
+                    <div class="date">Generated: ${new Date().toLocaleString()}</div>
+                </div>
+            </div>
+            
+            <!-- PATIENT INFORMATION -->
+            <div class="section">
+                <div class="section-title">👤 Patient Information</div>
+                <div class="section-body">
+                    <div class="grid-2">
+                        <div class="item">
+                            <span class="label">Full Name</span>
+                            <span class="value">${patientData.full_name}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Patient ID</span>
+                            <span class="value">${patientData.patient_id}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Gender</span>
+                            <span class="value">${patientData.gender}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Marital Status</span>
+                            <span class="value">${patientData.marital_status}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Date of Birth</span>
+                            <span class="value">${patientData.date_of_birth} (${patientData.age} years)</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Blood Group</span>
+                            <span class="value">${patientData.blood_group}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Phone</span>
+                            <span class="value">${patientData.phone}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Email</span>
+                            <span class="value">${patientData.email}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Emergency Contact</span>
+                            <span class="value">${patientData.emergency_contact}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Branch</span>
+                            <span class="value">${patientData.branch_name}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Registered By</span>
+                            <span class="value">${patientData.created_by}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Registered At</span>
+                            <span class="value">${patientData.created_at}</span>
+                        </div>
+                        <div class="item" style="grid-column:1/-1;">
+                            <span class="label">Address</span>
+                            <span class="value">${patientData.address}</span>
+                        </div>
+                        <div class="item" style="grid-column:1/-1;">
+                            <span class="label">Allergies</span>
+                            <span class="value">${patientData.allergies}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- MEDICAL INFORMATION -->
+            <div class="section">
+                <div class="section-title">🩺 Medical Information</div>
+                <div class="section-body">
+                    <div class="grid-2">
+                        <div class="item">
+                            <span class="label">Assigned Doctor</span>
+                            <span class="value">${patientData.assigned_doctor}</span>
+                        </div>
+                        <div class="item">
+                            <span class="label">Active Visit</span>
+                            <span class="value">${patientData.active_visit}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- STATISTICS -->
+            <div class="section">
+                <div class="section-title">📊 Statistics</div>
+                <div class="section-body">
+                    <div class="grid-3">
+                        <div class="stat-box">
+                            <span class="stat-number" style="color:#0B5ED7;">${patientData.visit_count}</span>
+                            <span class="stat-label">Visits</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-number" style="color:#059669;">${patientData.bill_count}</span>
+                            <span class="stat-label">Bills</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-number" style="color:#7C3AED;">${patientData.prescription_count}</span>
+                            <span class="stat-label">Prescriptions</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-number" style="color:#7C3AED;">${patientData.lab_count}</span>
+                            <span class="stat-label">Lab Tests</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-number" style="color:#7C3AED;">${patientData.procedure_count}</span>
+                            <span class="stat-label">Procedures</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-number" style="color:#D97706;">${patientData.tool_count}</span>
+                            <span class="stat-label">Tools</span>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
 
-    // ================================================================
-    // START / STOP AUTO-UPDATE
-    // ================================================================
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        updateInterval = setInterval(fetchAndUpdateStats, 3000);
-        fetchAndUpdateStats();
-    }
+        // Add Visit History
+        htmlContent += `
+            <!-- VISIT HISTORY -->
+            <div class="section">
+                <div class="section-title">📋 Visit History (Last 10)</div>
+                <div class="section-body">
+                    <?php if (count($visit_history) > 0): ?>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Visit #</th>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Doctor</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($visit_history as $visit): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($visit['created_at'])) ?></td>
+                                <td><?= ucfirst($visit['visit_type'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></td>
+                                <td><span class="badge badge-<?= $visit['status'] ?? 'pending' ?>"><?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'Pending')) ?></span></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                    <div class="no-data">No visit history found</div>
+                    <?php endif; ?>
+                </div>
+            </div>`;
 
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-        }
-    }
+        // Add Prescriptions
+        htmlContent += `
+            <!-- PRESCRIPTIONS -->
+            <div class="section">
+                <div class="section-title">💊 Prescriptions (Last 10)</div>
+                <div class="section-body">
+                    <?php if (count($prescriptions) > 0): ?>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Prescription #</th>
+                                <th>Date</th>
+                                <th>Doctor</th>
+                                <th>Medication</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($prescriptions as $prescription): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($prescription['created_at'])) ?></td>
+                                <td><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($prescription['medication'] ?? 'N/A') ?></td>
+                                <td><span class="badge badge-<?= $prescription['status'] ?? 'pending' ?>"><?= ucfirst($prescription['status'] ?? 'Pending') ?></span></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                    <div class="no-data">No prescriptions found</div>
+                    <?php endif; ?>
+                </div>
+            </div>`;
 
-    // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
-    // ================================================================
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
+        // Add Lab Tests
+        htmlContent += `
+            <!-- LAB TESTS -->
+            <div class="section">
+                <div class="section-title">🧪 Lab Tests (Last 10)</div>
+                <div class="section-body">
+                    <?php if (count($lab_tests) > 0): ?>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Test Name</th>
+                                <th>Date</th>
+                                <th>Doctor</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($lab_tests as $test): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($test['created_at'])) ?></td>
+                                <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
+                                <td><span class="badge badge-<?= $test['status'] ?? 'pending' ?>"><?= ucfirst(str_replace('_', ' ', $test['status'] ?? 'Pending')) ?></span></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                    <div class="no-data">No lab tests found</div>
+                    <?php endif; ?>
+                </div>
+            </div>`;
+
+        // Add Procedures
+        htmlContent += `
+            <!-- PROCEDURES -->
+            <div class="section">
+                <div class="section-title">💉 Procedures (Last 10)</div>
+                <div class="section-body">
+                    <?php if (count($procedures) > 0): ?>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Procedure Name</th>
+                                <th>Date</th>
+                                <th>Qty</th>
+                                <th>Total</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($procedures as $procedure): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($procedure['item_name'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($procedure['created_at'])) ?></td>
+                                <td><?= $procedure['quantity'] ?? 1 ?></td>
+                                <td>TSh <?= number_format($procedure['total_price'] ?? 0, 0) ?></td>
+                                <td><span class="badge badge-<?= $procedure['payment_status'] ?? 'pending' ?>"><?= ucfirst($procedure['payment_status'] ?? 'Pending') ?></span></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                    <div class="no-data">No procedures found</div>
+                    <?php endif; ?>
+                </div>
+            </div>`;
+
+        // Add Tools
+        htmlContent += `
+            <!-- TOOLS -->
+            <div class="section">
+                <div class="section-title">🔧 Tools (Last 10)</div>
+                <div class="section-body">
+                    <?php if (count($tools) > 0): ?>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Tool Name</th>
+                                <th>Date</th>
+                                <th>Qty</th>
+                                <th>Total</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($tools as $tool): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($tool['item_name'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($tool['created_at'])) ?></td>
+                                <td><?= $tool['quantity'] ?? 1 ?></td>
+                                <td>TSh <?= number_format($tool['total_price'] ?? 0, 0) ?></td>
+                                <td><span class="badge badge-<?= $tool['payment_status'] ?? 'pending' ?>"><?= ucfirst($tool['payment_status'] ?? 'Pending') ?></span></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                    <div class="no-data">No tools found</div>
+                    <?php endif; ?>
+                </div>
+            </div>`;
+
+        // Add Bills
+        htmlContent += `
+            <!-- BILLS -->
+            <div class="section">
+                <div class="section-title">💰 Bills (Last 10)</div>
+                <div class="section-body">
+                    <?php if (count($bills) > 0): ?>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Bill #</th>
+                                <th>Date</th>
+                                <th>Total</th>
+                                <th>Paid</th>
+                                <th>Balance</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($bills as $bill): ?>
+                            <tr>
+                                <td><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
+                                <td><?= date('d M Y', strtotime($bill['created_at'])) ?></td>
+                                <td><strong>TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></strong></td>
+                                <td>TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                                <td>TSh <?= number_format($bill['balance'] ?? 0, 0) ?></td>
+                                <td><span class="badge badge-<?= $bill['status'] ?? 'pending' ?>"><?= ucfirst($bill['status'] ?? 'Pending') ?></span></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                    <div class="no-data">No bills found</div>
+                    <?php endif; ?>
+                </div>
+            </div>`;
+
+        // Footer
+        htmlContent += `
+            <!-- FOOTER -->
+            <div class="footer">
+                <p>
+                    <span class="brand">Braick Dispensary</span> Management System
+                    <span style="color:#CBD5E1;margin:0 8px;">|</span>
+                    Patient Report
+                    <span style="color:#CBD5E1;margin:0 8px;">|</span>
+                    ${patientData.full_name}
+                    <span style="color:#CBD5E1;margin:0 8px;">|</span>
+                    ${new Date().toLocaleString()}
+                </p>
+            </div>
+            
+            <script>
+                // Download PDF function - uses print to save as PDF
+                function downloadPDF() {
+                    window.print();
+                }
+                
+                // Keyboard shortcuts
+                document.addEventListener('keydown', function(e) {
+                    if (e.ctrlKey && e.key === 'p') {
+                        e.preventDefault();
+                        window.print();
+                    }
+                    if (e.key === 'Escape') {
+                        window.close();
+                    }
+                });
+            <\/script>
+        </body>
+        </html>
+        `;
+        
+        // Open PDF in new window
+        var pdfWindow = window.open('', '_blank', 'width=900,height=700,scrollbars=yes,resizable=yes');
+        if (pdfWindow) {
+            pdfWindow.document.write(htmlContent);
+            pdfWindow.document.close();
+            pdfWindow.focus();
+            
+            showToast('✅ PDF', 'PDF report opened in new window!', 'success');
         } else {
-            startAutoUpdate();
+            showToast('❌ Error', 'Please allow popups for this site to export PDF.', 'error');
         }
-    });
+    }
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
-        }
-        if (e.key === 'Escape' && document.activeElement === searchInput) {
-            searchInput.value = '';
-            searchInput.blur();
-        }
-    });
-
-    // ================================================================
-    // INITIALIZE
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 1500);
-    });
-
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c👤 Braick - View Patient', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick - View Patient Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Total Visits: <?= $total_visits ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');
+    console.log('%c🆔 ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💍 Marital Status: <?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🏥 Branch: <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Visit History: <?= count($visit_history) ?> records', 'font-size:13px; color:#34D399;');
+    console.log('%c💰 Bills: <?= count($bills) ?> records (moved to last)', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💉 Procedures: <?= count($procedures) ?> records', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔧 Tools: <?= count($tools) ?> records', 'font-size:13px; color:#D97706;');
+    console.log('%c📄 PDF opens in new window with Braick logo, Close & Download buttons', 'font-size:13px; color:#DC2626;');
+    console.log('%c❌ Edit button removed', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>
