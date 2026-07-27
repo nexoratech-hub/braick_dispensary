@@ -38,6 +38,7 @@ if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0 && !isset($_SESSION[
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../backend/config/config.php';
+require_once __DIR__ . '/../../backend/config/database.php';
 
 // ================================================================
 // GET DOCTOR DETAILS FROM SESSION OR DATABASE
@@ -49,10 +50,10 @@ $is_online = $_SESSION['is_online'] ?? 1;
 
 // Try to get latest doctor data from database
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
     $stmt = $db->prepare("SELECT id, full_name, is_online, profile_pic, branch_id, specialty FROM users WHERE id = ? AND role = 'doctor'");
     $stmt->execute([$doctor_id]);
-    $user_data = $stmt->fetch();
+    $user_data = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($user_data) {
         $doctor_id = (int)$user_data['id'];
@@ -402,7 +403,7 @@ $is_dark = $dark_mode === 'true';
            STATUS TOGGLE BUTTON
            ================================================================ */
         .status-toggle {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 8px;
             padding: 6px 14px;
@@ -419,6 +420,7 @@ $is_dark = $dark_mode === 'true';
         
         .status-toggle:hover {
             border-color: var(--primary);
+            background: var(--bg-card);
         }
         
         .status-toggle .status-dot {
@@ -472,7 +474,7 @@ $is_dark = $dark_mode === 'true';
             font-size: 0.82rem;
             color: var(--text-primary);
             transition: all 0.3s;
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 6px;
             white-space: nowrap;
@@ -545,6 +547,38 @@ $is_dark = $dark_mode === 'true';
         }
         
         /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 9999;
+            max-width: 360px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: #059669; }
+        .toast-custom.error { background: #DC2626; }
+        .toast-custom.info { background: #0B5ED7; }
+        .toast-custom.warning { background: #D97706; }
+        
+        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
@@ -574,7 +608,6 @@ $is_dark = $dark_mode === 'true';
             .top-nav .status-toggle { display: none; }
             .main-content { padding: 16px; }
             .search-wrapper { max-width: 180px; }
-            .stat-card .stat-number { font-size: 1.4rem; }
         }
         
         @media (max-width: 640px) {
@@ -615,7 +648,7 @@ $is_dark = $dark_mode === 'true';
             <i class="fas fa-bars"></i>
         </button>
         
-        <a href="dashboard.php" class="flex items-center gap-2 text-gray-700 hover:text-primary transition shrink-0">
+        <a href="dashboard.php" class="flex items-center gap-2 text-gray-700 hover:text-primary transition shrink-0" style="color:var(--text-primary);">
             <i class="fas fa-home text-primary"></i>
             <span class="font-semibold text-sm hidden sm:inline">Dashboard</span>
         </a>
@@ -951,34 +984,7 @@ function showToast(title, message, type) {
     }
     
     var toast = document.createElement('div');
-    toast.className = 'toast-custom';
-    toast.style.cssText = `
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        padding: 14px 20px;
-        border-radius: 12px;
-        z-index: 9999;
-        max-width: 360px;
-        transform: translateY(100px);
-        opacity: 0;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        color: white;
-        font-family: 'Inter', 'Segoe UI', sans-serif;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
-    `;
-    
-    if (type === 'success') {
-        toast.style.background = '#059669';
-    } else if (type === 'error') {
-        toast.style.background = '#DC2626';
-    } else {
-        toast.style.background = '#0B5ED7';
-    }
-    
+    toast.className = 'toast-custom ' + type;
     var icon = document.createElement('i');
     icon.className = 'fas ' + (type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle');
     icon.style.fontSize = '1.2rem';
@@ -995,14 +1001,12 @@ function showToast(title, message, type) {
     
     // Show with animation
     setTimeout(function() {
-        toast.style.transform = 'translateY(0)';
-        toast.style.opacity = '1';
+        toast.classList.add('show');
     }, 50);
     
     // Auto hide after 4 seconds
     setTimeout(function() {
-        toast.style.transform = 'translateY(100px)';
-        toast.style.opacity = '0';
+        toast.classList.remove('show');
         setTimeout(function() {
             if (toast.parentNode) {
                 toast.remove();

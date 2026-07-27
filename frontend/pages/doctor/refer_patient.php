@@ -4,6 +4,7 @@
 // DOCTOR - REFER PATIENT
 // Internal: Select doctor from dropdown (SAME BRANCH ONLY) with ONLINE/OFFLINE status
 // External: Form with Braick logo
+// USES SHARED HEADER - Dark mode, date/time, status toggle inherited
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -35,7 +36,7 @@ $user_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+$db = Database::getInstance()->getConnection();
 $message = '';
 $message_type = '';
 
@@ -77,6 +78,7 @@ try {
         exit;
     }
 } catch (Exception $e) {
+    error_log("Patient fetch error: " . $e->getMessage());
     header('Location: my_patients.php?error=database_error');
     exit;
 }
@@ -111,14 +113,6 @@ try {
 } catch (Exception $e) {
     $doctors = [];
 }
-
-// ================================================================
-// GET REFERRAL TYPES
-// ================================================================
-$referral_types = [
-    'internal' => 'Internal (Within Facility)',
-    'external' => 'External (Outside Facility)'
-];
 
 // ================================================================
 // GET SPECIALTIES
@@ -257,7 +251,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = "✅ Patient referred successfully! Referral #: " . $referral_number;
                 $message_type = 'success';
                 
-                // Redirect after success
                 echo '<script>
                     setTimeout(function(){
                         window.location.href = "my_patients.php?success=referral";
@@ -315,31 +308,8 @@ function calculateAge($dob) {
     return $birthDate->diff($today)->y;
 }
 
-function getStatusBadge($is_online) {
-    if ($is_online) {
-        return '<span class="status-badge online"><i class="fas fa-circle"></i> Online</span>';
-    }
-    return '<span class="status-badge offline"><i class="fas fa-circle"></i> Offline</span>';
-}
-
-function getLastOnline($last_online) {
-    if (empty($last_online)) return 'Never';
-    $timestamp = strtotime($last_online);
-    $diff = time() - $timestamp;
-    
-    if ($diff < 60) {
-        return 'Just now';
-    } elseif ($diff < 3600) {
-        return floor($diff / 60) . ' min ago';
-    } elseif ($diff < 86400) {
-        return floor($diff / 3600) . ' hours ago';
-    } else {
-        return date('d/m/Y H:i', $timestamp);
-    }
-}
-
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
@@ -352,75 +322,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Refer Patient - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
+    <!-- The header already includes Tailwind, FontAwesome, and styles -->
+    <!-- Add page-specific styles -->
     <style>
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --success: #059669;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            --radius: 10px;
-            --radius-lg: 14px;
-            --transition: all 0.3s ease;
-            --shadow: 0 1px 3px rgba(0,0,0,0.06);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-        }
-        
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        
-        body {
-            background: var(--bg-body);
-            color: var(--text-primary);
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            margin: 0;
-            padding: 0;
-            line-height: 1.6;
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
+        /* ================================================================
+           PAGE-SPECIFIC STYLES (Overrides/complements shared header)
+           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
         }
         
-        .page-header {
+        /* Page Header inside content */
+        .page-header-custom {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
             padding: 24px 32px;
@@ -435,7 +354,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             overflow: hidden;
         }
         
-        .page-header .page-title {
+        .page-header-custom::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .page-header-custom .page-title {
             color: white;
             font-size: 1.6rem;
             font-weight: 700;
@@ -447,12 +378,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i {
+        .page-header-custom .page-title i {
             font-size: 2rem;
             opacity: 0.9;
         }
         
-        .page-header .page-subtitle {
+        .page-header-custom .page-subtitle {
             color: rgba(255,255,255,0.85);
             font-size: 0.95rem;
             display: flex;
@@ -461,6 +392,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
+        }
+        
+        .page-header-custom .page-subtitle strong {
+            color: white;
+            font-weight: 600;
         }
         
         .role-badge-display {
@@ -487,6 +423,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             align-items: center;
             gap: 8px;
             backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
         }
         
         .btn-outline-light:hover {
@@ -494,23 +432,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transform: translateY(-2px);
         }
         
+        /* Cards */
         .card {
             background: var(--bg-card);
-            border-radius: var(--radius-lg);
+            border-radius: 14px;
             padding: 20px 24px;
             border: 1px solid var(--border-color);
-            transition: var(--transition);
-            box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         }
         
         .card:hover {
             border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        [data-theme="dark"] .card {
-            background: var(--gray-800);
-            border-color: var(--gray-700);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
         
         .card-title {
@@ -520,7 +454,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         .card-title .title-blue { color: var(--primary); }
-        .card-title .title-green { color: var(--success); }
+        .card-title .title-green { color: #059669; }
         .card-title .title-purple { color: #7C3AED; }
         
         .form-label {
@@ -535,12 +469,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             width: 100%;
             padding: 8px 12px;
             border: 2px solid var(--border-color);
-            border-radius: var(--radius);
+            border-radius: 10px;
             font-size: 0.85rem;
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
-            transition: var(--transition);
+            transition: all 0.3s ease;
             font-family: inherit;
         }
         
@@ -564,10 +498,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             align-items: center;
             gap: 6px;
             padding: 8px 20px;
-            border-radius: var(--radius);
+            border-radius: 10px;
             font-weight: 600;
             font-size: 0.8rem;
-            transition: var(--transition);
+            transition: all 0.3s ease;
             cursor: pointer;
             border: none;
             text-decoration: none;
@@ -575,7 +509,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         .btn-success {
-            background: var(--success);
+            background: #059669;
             color: white;
             box-shadow: 0 2px 8px rgba(5, 150, 105, 0.2);
         }
@@ -618,15 +552,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-weight: 600;
         }
         
-        .badge-success { background: var(--success-bg); color: var(--success); }
-        .badge-warning { background: var(--warning-bg); color: var(--warning); }
         .badge-info { background: var(--primary-bg); color: var(--primary); }
-        .badge-danger { background: var(--danger-bg); color: var(--danger); }
-        .badge-purple { background: #EDE9FE; color: #7C3AED; }
         
         .alert {
             padding: 14px 20px;
-            border-radius: var(--radius);
+            border-radius: 10px;
             margin-bottom: 24px;
             display: flex;
             align-items: center;
@@ -643,8 +573,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         
         .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
         .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
-        .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
-        .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
         
         .detail-row {
             display: flex;
@@ -668,150 +596,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.85rem;
         }
         
-        /* ================================================================
-           STATUS BADGE - ONLINE/OFFLINE
-           ================================================================ */
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 12px;
-            margin-left: 6px;
-        }
-        
-        .status-badge i {
-            font-size: 0.4rem;
-        }
-        
-        .status-badge.online {
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        .status-badge.offline {
-            background: var(--gray-200);
-            color: var(--gray-500);
-        }
-        
-        [data-theme="dark"] .status-badge.offline {
-            background: var(--gray-700);
-            color: var(--gray-400);
-        }
-        
-        /* ================================================================
-           DOCTOR SELECT - CUSTOM DROPDOWN WITH STATUS
-           ================================================================ */
-        .doctor-select-wrapper {
-            position: relative;
-        }
-        
-        .doctor-select-wrapper select {
-            appearance: none;
-            -webkit-appearance: none;
-            padding-right: 36px;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748B' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 12px center;
-            background-size: 12px;
-        }
-        
-        .doctor-select-wrapper select option {
-            padding: 8px 12px;
-        }
-        
-        .doctor-select-wrapper select option.doctor-online {
-            background-color: var(--success-bg);
-            color: var(--success);
-            font-weight: 600;
-        }
-        
-        .doctor-select-wrapper select option.doctor-offline {
-            background-color: var(--gray-100);
-            color: var(--gray-500);
-        }
-        
-        .doctor-select-wrapper select optgroup {
-            font-weight: 700;
-            color: var(--text-primary);
-            background: var(--bg-card);
-        }
-        
-        [data-theme="dark"] .doctor-select-wrapper select option.doctor-online {
-            background-color: #064E3B;
-            color: #34D399;
-        }
-        
-        [data-theme="dark"] .doctor-select-wrapper select option.doctor-offline {
-            background-color: var(--gray-700);
-            color: var(--gray-400);
-        }
-        
-        [data-theme="dark"] .doctor-select-wrapper select optgroup {
-            background: var(--gray-800);
-            color: var(--gray-200);
-        }
-        
-        .doctor-info-text {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            flex-wrap: wrap;
-            margin-top: 8px;
-            padding: 8px 12px;
-            background: var(--gray-50);
-            border-radius: var(--radius);
-            border: 1px solid var(--border-color);
-        }
-        
-        [data-theme="dark"] .doctor-info-text {
-            background: var(--gray-700);
-            border-color: var(--gray-600);
-        }
-        
-        .doctor-info-text .status-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-        }
-        
-        .doctor-info-text .status-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-        }
-        
-        .doctor-info-text .status-dot.online {
-            background: var(--success);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .doctor-info-text .status-dot.offline {
-            background: var(--gray-400);
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.5; transform: scale(0.8); }
-        }
-        
-        .doctor-info-text .total-doctors {
-            color: var(--text-secondary);
-            font-size: 0.75rem;
-        }
-        
-        .doctor-info-text .total-doctors strong {
-            color: var(--text-primary);
-        }
-        
-        /* ================================================================
-           REFERRAL TYPE SELECTOR
-           ================================================================ */
         .referral-type-selector {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -822,9 +606,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .referral-type-option {
             padding: 16px 20px;
             border: 2px solid var(--border-color);
-            border-radius: var(--radius);
+            border-radius: 10px;
             cursor: pointer;
-            transition: var(--transition);
+            transition: all 0.3s ease;
             text-align: center;
             background: var(--bg-card);
             color: var(--text-primary);
@@ -859,18 +643,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             margin-top: 2px;
         }
         
-        [data-theme="dark"] .referral-type-option:hover {
-            background: #1E3A5F;
-        }
-        
-        [data-theme="dark"] .referral-type-option.active {
-            background: var(--primary);
-            color: white;
-        }
-        
-        /* ================================================================
-           INTERNAL FORM
-           ================================================================ */
         .internal-form, .external-form {
             display: none;
             padding-top: 16px;
@@ -882,22 +654,82 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             display: block;
         }
         
-        /* ================================================================
-           EXTERNAL REFERRAL LETTER
-           ================================================================ */
+        .doctor-select-wrapper select {
+            appearance: none;
+            -webkit-appearance: none;
+            padding-right: 36px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748B' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 12px;
+        }
+        
+        .doctor-select-wrapper select option.doctor-online {
+            background-color: var(--success-bg);
+            color: var(--success);
+            font-weight: 600;
+        }
+        
+        .doctor-select-wrapper select option.doctor-offline {
+            background-color: var(--gray-100);
+            color: var(--gray-500);
+        }
+        
+        .doctor-info-text {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: var(--gray-50);
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .doctor-info-text .status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        
+        .doctor-info-text .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        
+        .doctor-info-text .status-dot.online {
+            background: #059669;
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .doctor-info-text .status-dot.offline {
+            background: #94A3B8;
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+        }
+        
         .referral-letter {
-            background: #fff;
-            border: 2px solid #0B5ED7;
-            border-radius: var(--radius-lg);
+            background: var(--bg-card);
+            border: 2px solid var(--primary);
+            border-radius: 14px;
             padding: 30px;
             max-width: 800px;
             margin: 0 auto;
             font-family: Arial, sans-serif;
+            color: var(--text-primary);
         }
         
         .referral-letter .letter-header {
             text-align: center;
-            border-bottom: 3px double #0B5ED7;
+            border-bottom: 3px double var(--primary);
             padding-bottom: 15px;
             margin-bottom: 20px;
         }
@@ -919,83 +751,43 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             object-fit: contain;
         }
         
-        .referral-letter .letter-header .logo-container .logo-text {
-            display: inline-block;
-            background: #0B5ED7;
-            color: white;
-            padding: 8px 20px;
-            border-radius: 8px;
-            font-size: 18px;
-            font-weight: bold;
-            font-family: Arial, sans-serif;
-        }
-        
         .referral-letter .letter-header h2 {
-            color: #0B5ED7;
+            color: var(--primary);
             font-size: 20px;
             margin: 0;
         }
         
         .referral-letter .letter-header .subtitle {
             font-size: 12px;
-            color: #666;
+            color: var(--text-secondary);
             margin: 2px 0 0 0;
-        }
-        
-        .referral-letter .letter-body {
-            padding: 10px 0;
         }
         
         .referral-letter .letter-body .field-row {
             display: flex;
             padding: 6px 0;
-            border-bottom: 1px solid #f0f0f0;
+            border-bottom: 1px solid var(--border-color);
         }
         
         .referral-letter .letter-body .field-row .field-label {
             font-weight: 600;
             width: 140px;
-            color: #555;
+            color: var(--text-secondary);
             flex-shrink: 0;
         }
         
         .referral-letter .letter-body .field-row .field-value {
             flex: 1;
-            color: #333;
+            color: var(--text-primary);
         }
         
         .referral-letter .letter-footer {
-            border-top: 2px solid #0B5ED7;
+            border-top: 2px solid var(--primary);
             padding-top: 15px;
             margin-top: 15px;
             text-align: center;
             font-size: 12px;
-            color: #888;
-        }
-        
-        [data-theme="dark"] .referral-letter {
-            background: #1E293B;
-            border-color: #3B82F6;
-        }
-        
-        [data-theme="dark"] .referral-letter .letter-header h2 {
-            color: #60A5FA;
-        }
-        
-        [data-theme="dark"] .referral-letter .letter-header .subtitle {
-            color: #94A3B8;
-        }
-        
-        [data-theme="dark"] .referral-letter .letter-body .field-row {
-            border-color: #334155;
-        }
-        
-        [data-theme="dark"] .referral-letter .letter-body .field-row .field-label {
-            color: #94A3B8;
-        }
-        
-        [data-theme="dark"] .referral-letter .letter-body .field-row .field-value {
-            color: #F1F5F9;
+            color: var(--text-secondary);
         }
         
         .footer {
@@ -1012,30 +804,37 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-weight: 600;
         }
         
-        /* Online indicator in dropdown */
-        .online-indicator {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 4px;
+        .toast-custom {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            padding: 14px 22px;
+            border-radius: 10px;
+            z-index: 9999;
+            max-width: 380px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s ease;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #ffffff;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
         }
         
-        .online-indicator.online {
-            background: #059669;
-        }
-        
-        .online-indicator.offline {
-            background: #94A3B8;
-        }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
+        .toast-custom.success { background: #059669; }
+        .toast-custom.error { background: #DC2626; }
+        .toast-custom.info { background: #0B5ED7; }
         
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
+            .sidebar-toggle-btn { display: block; }
         }
         
         @media (max-width: 768px) {
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
+            .page-header-custom { padding: 16px 18px; }
+            .page-header-custom .page-title { font-size: 1.3rem; }
             .card { padding: 14px 16px; }
             .detail-row { flex-direction: column; }
             .detail-label { width: 100%; }
@@ -1051,71 +850,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .card { padding: 10px 12px; }
             .referral-letter { padding: 12px; }
         }
-        
-        .toast-custom {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            padding: 14px 22px;
-            border-radius: var(--radius);
-            z-index: 9999;
-            max-width: 380px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s ease;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: #ffffff;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-        }
-        
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
     </style>
 </head>
 <body>
 
-<!-- TOP NAVIGATION -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        <span class="datetime" id="currentDateTime"></span>
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?? '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
 <!-- ================================================================ -->
-<!-- MAIN CONTENT -->
+<!-- MAIN CONTENT (Header and Sidebar are included from components) -->
 <!-- ================================================================ -->
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header">
+    <div class="page-header-custom">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-user-md"></i>
@@ -1145,7 +890,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- Message -->
     <?php if ($message): ?>
         <div class="alert alert-<?= $message_type ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'warning' ? 'fa-exclamation-triangle' : 'fa-exclamation-circle') ?>"></i>
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <?= $message ?>
         </div>
     <?php endif; ?>
@@ -1186,9 +931,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 Referral Details
             </h3>
             
-            <!-- ================================================================ -->
-            <!-- REFERRAL TYPE SELECTOR -->
-            <!-- ================================================================ -->
+            <!-- Referral Type Selector -->
             <div class="referral-type-selector">
                 <div class="referral-type-option active" onclick="selectReferralType('internal', this)" data-type="internal">
                     <span class="option-icon">🏥</span>
@@ -1204,9 +947,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             
             <input type="hidden" name="referral_type" id="referralType" value="internal">
             
-            <!-- ================================================================ -->
-            <!-- INTERNAL REFERRAL FORM -->
-            <!-- ================================================================ -->
+            <!-- Internal Referral -->
             <div class="internal-form active" id="internalForm">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div class="form-group">
@@ -1248,7 +989,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             </select>
                         </div>
                         
-                        <!-- Doctor Status Info -->
                         <div class="doctor-info-text" id="doctorInfoText">
                             <?php if (count($doctors) > 0): ?>
                                 <span class="status-item">
@@ -1289,9 +1029,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
-            <!-- ================================================================ -->
-            <!-- EXTERNAL REFERRAL FORM -->
-            <!-- ================================================================ -->
+            <!-- External Referral -->
             <div class="external-form" id="externalForm">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div class="form-group">
@@ -1327,9 +1065,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
-            <!-- ================================================================ -->
-            <!-- COMMON FIELDS -->
-            <!-- ================================================================ -->
+            <!-- Common Fields -->
             <div class="form-group mt-4">
                 <label class="form-label">Reason for Referral <span class="text-danger">*</span></label>
                 <textarea name="reason" class="form-control" rows="2" placeholder="Brief reason for referral..." required></textarea>
@@ -1340,11 +1076,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <textarea name="notes" class="form-control" rows="2" placeholder="Any additional notes..."></textarea>
             </div>
             
-            <!-- ================================================================ -->
-            <!-- EXTERNAL REFERRAL LETTER PREVIEW -->
-            <!-- ================================================================ -->
+            <!-- External Referral Letter Preview -->
             <div class="mt-4" id="externalLetterPreview" style="display:none;">
-                <h4 class="text-sm font-semibold text-gray-600 mb-3">
+                <h4 class="text-sm font-semibold text-gray-600 mb-3" style="color:var(--text-secondary);">
                     <i class="fas fa-file-pdf mr-2"></i> Referral Letter Preview
                 </h4>
                 <div class="referral-letter" id="referralLetter">
@@ -1419,14 +1153,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
-            <!-- ================================================================ -->
-            <!-- FORM ACTIONS -->
-            <!-- ================================================================ -->
+            <!-- Form Actions -->
             <div class="mt-4 flex flex-wrap gap-3" style="padding-top:16px;border-top:2px solid var(--border-color);">
                 <button type="submit" class="btn btn-success">
                     <i class="fas fa-paper-plane"></i> Submit Referral
                 </button>
-                <button type="reset" class="btn btn-outline">
+                <button type="reset" class="btn btn-outline" onclick="resetForm()">
                     <i class="fas fa-undo"></i> Clear
                 </button>
                 <a href="my_patients.php" class="btn btn-outline">
@@ -1462,64 +1194,30 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // Dark Mode
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
-    // Sidebar Toggle
+    // ================================================================
+    // SIDEBAR TOGGLE (for responsive)
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-
-    // Date & Time
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+    if (sidebarToggle && sidebar) {
+        sidebarToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
         });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                sidebar.classList.remove('open');
+            }
+        }
+    });
 
     // ================================================================
     // SELECT REFERRAL TYPE
     // ================================================================
     function selectReferralType(type, element) {
-        // Update button states
         document.querySelectorAll('.referral-type-option').forEach(function(btn) {
             btn.classList.remove('active');
         });
@@ -1527,10 +1225,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             element.classList.add('active');
         }
         
-        // Update hidden input
         document.getElementById('referralType').value = type;
         
-        // Show/hide forms
         var internalForm = document.getElementById('internalForm');
         var externalForm = document.getElementById('externalForm');
         var externalPreview = document.getElementById('externalLetterPreview');
@@ -1543,8 +1239,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             internalForm.classList.remove('active');
             externalForm.classList.add('active');
             externalPreview.style.display = 'block';
-            
-            // Update letter preview
             updateLetterPreview();
         }
     }
@@ -1558,17 +1252,23 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var reason = document.querySelector('textarea[name="referral_reason"]')?.value || '[Reason]';
         var summary = document.querySelector('textarea[name="clinical_summary"]')?.value || '[Clinical Summary]';
         
-        document.getElementById('letterFacility').textContent = facility;
-        document.getElementById('letterContact').textContent = contact;
-        document.getElementById('letterReason').textContent = reason;
-        document.getElementById('letterSummary').textContent = summary;
+        var letterFacility = document.getElementById('letterFacility');
+        var letterContact = document.getElementById('letterContact');
+        var letterReason = document.getElementById('letterReason');
+        var letterSummary = document.getElementById('letterSummary');
+        
+        if (letterFacility) letterFacility.textContent = facility;
+        if (letterContact) letterContact.textContent = contact;
+        if (letterReason) letterReason.textContent = reason;
+        if (letterSummary) letterSummary.textContent = summary;
     }
 
-    // Listen to form changes for letter preview
+    // Listen to form changes
     document.addEventListener('DOMContentLoaded', function() {
         var inputs = document.querySelectorAll('.external-form input, .external-form textarea');
         inputs.forEach(function(input) {
             input.addEventListener('input', updateLetterPreview);
+            input.addEventListener('change', updateLetterPreview);
         });
     });
 
@@ -1588,23 +1288,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             return;
         }
         
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         var content = letter.outerHTML;
         
         printWindow.document.write('<!DOCTYPE html><html><head><title>Referral Letter</title>');
         printWindow.document.write('<style>');
-        printWindow.document.write('body { font-family: Arial, sans-serif; padding: 40px; background: white; }');
-        printWindow.document.write('.referral-letter { max-width: 800px; margin: 0 auto; padding: 30px; border: 2px solid #0B5ED7; border-radius: 10px; }');
+        printWindow.document.write('body { font-family: Arial, sans-serif; padding: 40px; background: ' + (isDark ? '#1E293B' : 'white') + '; }');
+        printWindow.document.write('.referral-letter { max-width: 800px; margin: 0 auto; padding: 30px; border: 2px solid #0B5ED7; border-radius: 10px; background: ' + (isDark ? '#1E293B' : 'white') + '; color: ' + (isDark ? '#F1F5F9' : '#1E293B') + '; }');
         printWindow.document.write('.letter-header { text-align: center; border-bottom: 3px double #0B5ED7; padding-bottom: 15px; margin-bottom: 20px; }');
-        printWindow.document.write('.logo-container { display: flex; align-items: center; justify-content: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px; }');
-        printWindow.document.write('.logo-container img { height: 50px; width: auto; max-height: 50px; border-radius: 6px; }');
-        printWindow.document.write('.logo-container .logo-text { display: inline-block; background: #0B5ED7; color: white; padding: 8px 20px; border-radius: 8px; font-size: 18px; font-weight: bold; }');
+        printWindow.document.write('.letter-header .logo-container { display: flex; align-items: center; justify-content: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px; }');
+        printWindow.document.write('.letter-header .logo-container img { height: 50px; width: auto; max-height: 50px; border-radius: 6px; }');
         printWindow.document.write('.letter-header h2 { color: #0B5ED7; font-size: 20px; margin: 0; }');
-        printWindow.document.write('.letter-header .subtitle { font-size: 12px; color: #666; margin: 2px 0 0 0; }');
-        printWindow.document.write('.letter-body { padding: 10px 0; }');
-        printWindow.document.write('.field-row { display: flex; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }');
-        printWindow.document.write('.field-row .field-label { font-weight: 600; width: 140px; color: #555; flex-shrink: 0; }');
-        printWindow.document.write('.field-row .field-value { flex: 1; color: #333; }');
-        printWindow.document.write('.letter-footer { border-top: 2px solid #0B5ED7; padding-top: 15px; margin-top: 15px; text-align: center; font-size: 12px; color: #888; }');
+        printWindow.document.write('.letter-header .subtitle { font-size: 12px; color: ' + (isDark ? '#94A3B8' : '#666') + '; margin: 2px 0 0 0; }');
+        printWindow.document.write('.letter-body .field-row { display: flex; padding: 6px 0; border-bottom: 1px solid ' + (isDark ? '#334155' : '#f0f0f0') + '; }');
+        printWindow.document.write('.letter-body .field-row .field-label { font-weight: 600; width: 140px; color: ' + (isDark ? '#94A3B8' : '#555') + '; flex-shrink: 0; }');
+        printWindow.document.write('.letter-body .field-row .field-value { flex: 1; color: ' + (isDark ? '#F1F5F9' : '#333') + '; }');
+        printWindow.document.write('.letter-footer { border-top: 2px solid #0B5ED7; padding-top: 15px; margin-top: 15px; text-align: center; font-size: 12px; color: ' + (isDark ? '#94A3B8' : '#888') + '; }');
         printWindow.document.write('</style>');
         printWindow.document.write('</head><body>');
         printWindow.document.write(content);
@@ -1614,6 +1313,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         setTimeout(function() {
             printWindow.print();
         }, 500);
+    }
+
+    // ================================================================
+    // RESET FORM
+    // ================================================================
+    function resetForm() {
+        if (!confirm('Clear all form fields?')) return;
+        document.getElementById('doctorSelect').value = '';
+        document.querySelectorAll('.external-form input, .external-form textarea').forEach(function(el) {
+            el.value = '';
+        });
+        document.querySelectorAll('textarea[name="reason"], textarea[name="notes"]').forEach(function(el) {
+            el.value = '';
+        });
+        document.getElementById('externalLetterPreview').style.display = 'none';
+        showToast('Info', 'Form has been cleared', 'info');
     }
 
     // ================================================================
@@ -1643,19 +1358,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var select = document.getElementById('doctorSelect');
         if (!select) return;
         
-        // Get current selected value
         var selectedValue = select.value;
         
         fetch(window.location.href + '?ajax=1&action=get_doctor_status&branch_id=<?= $user_branch_id ?>')
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    // Clear current options except first
                     while (select.options.length > 1) {
                         select.remove(1);
                     }
                     
-                    // Rebuild options with updated status
                     var onlineDoctors = data.doctors.filter(d => d.is_online == 1);
                     var offlineDoctors = data.doctors.filter(d => d.is_online == 0);
                     
@@ -1691,7 +1403,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         select.appendChild(group);
                     }
                     
-                    // Update info text
                     var infoText = document.getElementById('doctorInfoText');
                     if (infoText) {
                         infoText.innerHTML = `
@@ -1716,10 +1427,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             });
     }
 
-    // Auto update doctor status every 30 seconds
     var statusInterval = setInterval(updateDoctorStatus, 30000);
 
-    // Stop interval when page is hidden
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             clearInterval(statusInterval);
@@ -1729,20 +1438,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
-    // Initial status update after page load
     setTimeout(updateDoctorStatus, 1000);
 
-    console.log('%c👨‍⚕️ Refer Patient - WITH ONLINE STATUS', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $user_branch_id ?>)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Refer Patient - Using Shared Header', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Internal Doctors: <?= count($doctors) ?> from SAME branch only', 'font-size:13px; color:#059669;');
+    console.log('%c🔄 Internal Doctors: <?= count($doctors) ?> (same branch only)', 'font-size:13px; color:#059669;');
     console.log('%c🟢 Online: <?= $online_count ?> | ⚪ Offline: <?= $offline_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c🌍 External: Form with Braick logo', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🔄 Auto-update doctor status every 30 seconds', 'font-size:12px; color:#64748B;');
-    
-    <?php if (count($doctors) === 0): ?>
-    console.log('%c⚠️ WARNING: No other doctors found in this branch!', 'font-size:13px; color:#DC2626;');
-    <?php endif; ?>
+    console.log('%c✅ Dark mode, date/time, status toggle from shared header', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
