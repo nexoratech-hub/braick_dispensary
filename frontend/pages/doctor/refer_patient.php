@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/refer_patient.php
 // DOCTOR - REFER PATIENT
-// Internal: Select doctor from dropdown
+// Internal: Select doctor from dropdown (SAME BRANCH ONLY)
 // External: Form with Braick logo
 // BRAICK DISPENSARY
 // ================================================================
@@ -20,6 +20,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
     $_SESSION['branch_name'] = 'Dodoma';
     $_SESSION['username'] = 'dr.john';
     $_SESSION['is_admin'] = false;
+    $_SESSION['specialty'] = 'General Medicine';
 }
 
 $user_id = $_SESSION['user_id'] ?? 5;
@@ -81,7 +82,7 @@ try {
 }
 
 // ================================================================
-// GET DOCTORS LIST (For Internal Referral)
+// GET DOCTORS LIST (For Internal Referral) - SAME BRANCH ONLY
 // ================================================================
 $doctors = [];
 try {
@@ -91,7 +92,7 @@ try {
         WHERE role = 'doctor' 
         AND id != ? 
         AND branch_id = ?
-        AND is_active = 1
+        AND status = 'active'
         ORDER BY full_name
     ");
     $stmt->execute([$user_id, $user_branch_id]);
@@ -935,6 +936,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <?= !empty($patient['date_of_birth']) ? calculateAge($patient['date_of_birth']) . ' yrs' : 'N/A' ?>
                 <span class="separator">|</span>
                 <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?>
+                <span class="separator">|</span>
+                <span class="badge badge-info">Branch: <?= htmlspecialchars($user_branch_name) ?></span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1015,16 +1018,28 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <label class="form-label">Referred To <span class="text-danger">*</span></label>
                         <select name="referred_to_doctor" class="form-control" required>
                             <option value="">-- Select Doctor --</option>
-                            <?php foreach ($doctors as $doctor): ?>
-                                <option value="<?= $doctor['id'] ?>">
-                                    <?= htmlspecialchars($doctor['full_name']) ?> 
-                                    <?= !empty($doctor['specialty']) ? '(' . htmlspecialchars($doctor['specialty']) . ')' : '' ?>
-                                </option>
-                            <?php endforeach; ?>
-                            <?php if (empty($doctors)): ?>
-                                <option value="" disabled>No other doctors available</option>
+                            <?php if (count($doctors) > 0): ?>
+                                <?php foreach ($doctors as $doctor): ?>
+                                    <option value="<?= $doctor['id'] ?>">
+                                        <?= htmlspecialchars($doctor['full_name']) ?> 
+                                        <?= !empty($doctor['specialty']) ? '(' . htmlspecialchars($doctor['specialty']) . ')' : '' ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <option value="" disabled>⚠️ No other doctors available in this branch</option>
                             <?php endif; ?>
                         </select>
+                        <?php if (count($doctors) > 0): ?>
+                            <small style="color:var(--text-secondary);font-size:0.7rem;display:block;margin-top:4px;">
+                                <i class="fas fa-info-circle"></i> 
+                                <?= count($doctors) ?> doctor(s) available in <strong><?= htmlspecialchars($user_branch_name) ?></strong> branch
+                            </small>
+                        <?php else: ?>
+                            <small style="color:var(--danger);font-size:0.7rem;display:block;margin-top:4px;">
+                                <i class="fas fa-exclamation-triangle"></i> 
+                                No other doctors found in <strong><?= htmlspecialchars($user_branch_name) ?></strong> branch
+                            </small>
+                        <?php endif; ?>
                     </div>
                     
                     <div class="form-group">
@@ -1391,10 +1406,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c👨‍⚕️ Refer Patient', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Refer Patient - FULL FIXED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $user_branch_id ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Internal: Select doctor from dropdown', 'font-size:13px; color:#059669;');
-    console.log('%c📋 External: Form with Braick logo', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔄 Internal Doctors: <?= count($doctors) ?> from SAME branch only', 'font-size:13px; color:#059669;');
+    console.log('%c🌍 External: Form with Braick logo', 'font-size:13px; color:#7C3AED;');
+    
+    <?php if (count($doctors) === 0): ?>
+    console.log('%c⚠️ WARNING: No other doctors found in this branch!', 'font-size:13px; color:#DC2626;');
+    <?php endif; ?>
 </script>
 
 </body>
