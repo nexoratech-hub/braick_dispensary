@@ -1,8 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/doctor/lab_results.php
-// DOCTOR - LAB RESULTS (WITH REAL-TIME AUTO-UPDATE)
-// BRAICK DISPENSARY
+// FILE: frontend/pages/doctor/my_patients.php
+// DOCTOR MY PATIENTS - FIXED: Lab button removed, View only for completed
 // ================================================================
 
 session_start();
@@ -14,715 +13,914 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
     $_SESSION['user_id'] = 5;
     $_SESSION['doctor_id'] = 5;
     $_SESSION['full_name'] = 'Dr. John Mushi';
+    $_SESSION['username'] = 'dr.john';
+    $_SESSION['email'] = 'john@braick.com';
+    $_SESSION['phone'] = '+255 700 000 011';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'dr.john';
     $_SESSION['specialty'] = 'General Medicine';
+    $_SESSION['profile_pic'] = '';
+    $_SESSION['is_online'] = 1;
 }
 
-$doctor_id = $_SESSION['user_id'] ?? $_SESSION['doctor_id'] ?? 5;
+$doctor_id = $_SESSION['user_id'] ?? 5;
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
-$doctor_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
 // GET FILTERS
 // ================================================================
-$status_filter = isset($_GET['status']) ? $_GET['status'] : '';
+$status_filter = isset($_GET['status']) ? $_GET['status'] : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$date_filter = isset($_GET['date']) ? $_GET['date'] : '';
-$patient_filter = isset($_GET['patient']) ? (int)$_GET['patient'] : 0;
 
 // ================================================================
-// BUILD QUERY - Get lab results for this doctor's patients
+// ✅ FIX: Check if there's an error parameter and handle it quietly
 // ================================================================
+$error = isset($_GET['error']) ? $_GET['error'] : '';
+// Don't show error message, just ignore it
+
+// ================================================================
+// GET PATIENTS - FIXED: EXCLUDE OTC PATIENTS WITHOUT DOCTOR
+// ================================================================
+
+// Base query: Get patients with visits assigned to this doctor
+// AND exclude OTC patients who don't have a doctor assigned
 $query = "
-    SELECT lt.*, 
-           p.full_name as patient_name, p.patient_id, p.phone,
-           u.full_name as doctor_name, u.specialty,
-           v.visit_number,
-           lab.full_name as lab_technician_name,
-           TIMESTAMPDIFF(MINUTE, lt.created_at, NOW()) as waiting_time
-    FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    JOIN patients p ON v.patient_id = p.id
-    LEFT JOIN users u ON lt.doctor_id = u.id
-    LEFT JOIN users lab ON lt.lab_technician_id = lab.id
-    WHERE lt.branch_id = ? AND lt.doctor_id = ?
+    SELECT 
+        p.id,
+        p.patient_id as patient_code,
+        p.full_name,
+        p.gender,
+        p.date_of_birth,
+        p.phone,
+        p.email,
+        p.blood_group,
+        p.address,
+        p.allergies,
+        p.created_at as registered_at,
+        v.status as current_visit_status,
+        COUNT(DISTINCT v.id) as total_visits,
+        MAX(v.created_at) as last_visit,
+        v.id as current_visit_id,
+        v.doctor_id as assigned_doctor_id,
+        u.full_name as assigned_doctor_name,
+        TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) as age,
+        CASE 
+            WHEN v.status = 'completed' THEN 'completed'
+            WHEN v.status IN ('pending', 'with_doctor', 'lab_test', 'prescribed', 'referred') THEN 'active'
+            WHEN v.status = 'cancelled' THEN 'inactive'
+            ELSE 'active'
+        END as patient_status
+    FROM patients p
+    LEFT JOIN visits v ON v.patient_id = p.id AND v.status NOT IN ('cancelled')
+    LEFT JOIN users u ON v.doctor_id = u.id
+    WHERE 1=1
+        AND v.doctor_id = ?
+        AND p.patient_id NOT LIKE 'PAT-OTC-%'
+        AND v.doctor_id IS NOT NULL
 ";
 
-$params = [$doctor_branch_id, $doctor_id];
+$params = [$doctor_id];
 
-// Status filter
-if (!empty($status_filter)) {
-    if ($status_filter === 'pending') {
-        $query .= " AND (lt.status IS NULL OR lt.status = 'pending')";
-    } else {
-        $query .= " AND lt.status = ?";
-        $params[] = $status_filter;
-    }
+// Status filter - using visit status
+if ($status_filter === 'active') {
+    $query .= " AND v.status NOT IN ('completed', 'cancelled')";
+} elseif ($status_filter === 'referred') {
+    $query .= " AND v.status = 'referred'";
+} elseif ($status_filter === 'inactive') {
+    $query .= " AND v.status = 'completed'";
 } else {
-    // Default: show all except cancelled
-    $query .= " AND (lt.status IS NULL OR lt.status != 'cancelled')";
+    // All: show all except cancelled
+    $query .= " AND v.status != 'cancelled'";
 }
 
-// Search
+// Search filter
 if (!empty($search)) {
-    $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lt.test_name LIKE ?)";
-    $search_term = "%$search%";
-    $params[] = $search_term;
-    $params[] = $search_term;
-    $params[] = $search_term;
+    $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
+    $search_param = '%' . $search . '%';
+    $params[] = $search_param;
+    $params[] = $search_param;
+    $params[] = $search_param;
 }
 
-// Date filter
-if (!empty($date_filter)) {
-    $query .= " AND DATE(lt.created_at) = ?";
-    $params[] = $date_filter;
-}
-
-// Patient filter
-if ($patient_filter > 0) {
-    $query .= " AND p.id = ?";
-    $params[] = $patient_filter;
-}
-
-$query .= " ORDER BY lt.status DESC, lt.created_at DESC";
+// Group by patient
+$query .= " GROUP BY p.id ORDER BY last_visit DESC, p.created_at DESC";
 
 $stmt = $db->prepare($query);
 $stmt->execute($params);
-$lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - FIXED: Only count assigned patients
 // ================================================================
 
-// Pending tests (status NULL or 'pending')
+// Total patients (assigned to this doctor, excluding OTC)
 $stmt = $db->prepare("
-    SELECT COUNT(*) as count FROM lab_tests 
-    WHERE branch_id = ? AND doctor_id = ? AND (status IS NULL OR status = 'pending')
+    SELECT COUNT(DISTINCT p.id) as total
+    FROM patients p
+    JOIN visits v ON v.patient_id = p.id
+    WHERE v.doctor_id = ? 
+        AND v.status NOT IN ('cancelled')
+        AND p.patient_id NOT LIKE 'PAT-OTC-%'
+        AND v.doctor_id IS NOT NULL
 ");
-$stmt->execute([$doctor_branch_id, $doctor_id]);
-$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$stmt->execute([$doctor_id]);
+$total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// In Progress tests
+// Active patients (with active visits, excluding OTC)
 $stmt = $db->prepare("
-    SELECT COUNT(*) as count FROM lab_tests 
-    WHERE branch_id = ? AND doctor_id = ? AND status = 'in_progress'
+    SELECT COUNT(DISTINCT p.id) as total
+    FROM patients p
+    JOIN visits v ON v.patient_id = p.id
+    WHERE v.doctor_id = ? 
+        AND v.status NOT IN ('completed', 'cancelled')
+        AND p.patient_id NOT LIKE 'PAT-OTC-%'
+        AND v.doctor_id IS NOT NULL
 ");
-$stmt->execute([$doctor_branch_id, $doctor_id]);
-$in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$stmt->execute([$doctor_id]);
+$active_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Completed tests
+// Referred patients
 $stmt = $db->prepare("
-    SELECT COUNT(*) as count FROM lab_tests 
-    WHERE branch_id = ? AND doctor_id = ? AND status = 'completed'
+    SELECT COUNT(DISTINCT p.id) as total
+    FROM patients p
+    JOIN visits v ON v.patient_id = p.id
+    WHERE v.doctor_id = ? 
+        AND v.status = 'referred'
+        AND p.patient_id NOT LIKE 'PAT-OTC-%'
+        AND v.doctor_id IS NOT NULL
 ");
-$stmt->execute([$doctor_branch_id, $doctor_id]);
-$completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$stmt->execute([$doctor_id]);
+$referred_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Completed today
-$today = date('Y-m-d');
+// Completed patients
 $stmt = $db->prepare("
-    SELECT COUNT(*) as count FROM lab_tests 
-    WHERE branch_id = ? AND doctor_id = ? AND status = 'completed' AND DATE(completed_at) = ?
+    SELECT COUNT(DISTINCT p.id) as total
+    FROM patients p
+    JOIN visits v ON v.patient_id = p.id
+    WHERE v.doctor_id = ? 
+        AND v.status = 'completed'
+        AND p.patient_id NOT LIKE 'PAT-OTC-%'
+        AND v.doctor_id IS NOT NULL
 ");
-$stmt->execute([$doctor_branch_id, $doctor_id, $today]);
-$completed_today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Total tests
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count FROM lab_tests 
-    WHERE branch_id = ? AND doctor_id = ?
-");
-$stmt->execute([$doctor_branch_id, $doctor_id]);
-$total_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// ================================================================
-// GET PATIENTS LIST FOR FILTER
-// ================================================================
-$stmt = $db->prepare("
-    SELECT DISTINCT p.id, p.full_name, p.patient_id
-    FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    JOIN patients p ON v.patient_id = p.id
-    WHERE lt.branch_id = ? AND lt.doctor_id = ?
-    ORDER BY p.full_name
-");
-$stmt->execute([$doctor_branch_id, $doctor_id]);
-$patients_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$stmt->execute([$doctor_id]);
+$completed_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
+
+// Helper functions
+function calculateAge($dob) {
+    if (empty($dob)) return 'N/A';
+    $birthDate = new DateTime($dob);
+    $today = new DateTime('today');
+    return $birthDate->diff($today)->y;
+}
+
+function getStatusBadge($status) {
+    $map = [
+        'active' => 'badge-success',
+        'inactive' => 'badge-danger',
+        'referred' => 'badge-warning',
+        'with_doctor' => 'badge-info',
+        'lab_test' => 'badge-warning',
+        'prescribed' => 'badge-purple',
+        'completed' => 'badge-success',
+        'pending' => 'badge-warning',
+        'cancelled' => 'badge-danger',
+    ];
+    return $map[$status] ?? 'badge-info';
+}
+
+function getStatusLabel($status) {
+    $map = [
+        'active' => '✅ Active',
+        'inactive' => '❌ Inactive',
+        'referred' => '↗️ Referred',
+        'with_doctor' => '🩺 With Doctor',
+        'lab_test' => '🧪 Lab Test',
+        'prescribed' => '💊 Prescribed',
+        'completed' => '✅ Completed',
+        'pending' => '⏳ Pending',
+        'cancelled' => '❌ Cancelled',
+    ];
+    return $map[$status] ?? ucfirst($status);
+}
+
+function getUserColor($name) {
+    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
+    $hash = 0;
+    for ($i = 0; $i < strlen($name); $i++) {
+        $hash = ord($name[$i]) + (($hash << 5) - $hash);
+    }
+    return $colors[abs($hash) % count($colors)];
+}
 ?>
 
-<style>
-    /* ================================================================
-       LAB RESULTS STYLES
-       ================================================================ */
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-        gap: 12px;
-        margin-bottom: 20px;
-    }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Patients - Braick Dispensary</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
-    .stat-card {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 12px 16px;
-        border: 2px solid var(--border-color);
-        text-align: center;
-        transition: all 0.3s ease;
-    }
-    .stat-card:hover {
-        border-color: var(--primary);
-        transform: translateY(-2px);
-    }
-    .stat-card .number {
-        font-size: 1.4rem;
-        font-weight: 700;
-        line-height: 1.2;
-    }
-    .stat-card .number.pending { color: #D97706; }
-    .stat-card .number.in-progress { color: #0B5ED7; }
-    .stat-card .number.completed { color: #059669; }
-    .stat-card .number.total { color: #7C3AED; }
-    .stat-card .label {
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    
-    .filter-btn {
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 500;
-        border: 2px solid var(--border-color);
-        background: transparent;
-        color: var(--text-secondary);
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-block;
-    }
-    .filter-btn:hover {
-        border-color: var(--primary);
-        color: var(--primary);
-    }
-    .filter-btn.active {
-        background: var(--primary);
-        color: white;
-        border-color: var(--primary);
-    }
-    
-    .test-row td {
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--border-color);
-        vertical-align: middle;
-    }
-    .test-row:hover td {
-        background: var(--table-hover);
-    }
-    .test-row.completed {
-        background: rgba(5, 150, 105, 0.03);
-    }
-    .test-row.in_progress {
-        background: rgba(11, 94, 215, 0.03);
-    }
-    .test-row.pending {
-        background: rgba(217, 119, 6, 0.03);
-    }
-    
-    .status-badge {
-        display: inline-block;
-        font-size: 0.6rem;
-        font-weight: 600;
-        padding: 2px 12px;
-        border-radius: 12px;
-    }
-    .status-badge.pending { background: #FEF3C7; color: #D97706; }
-    .status-badge.in_progress { background: #E8F0FE; color: #0B5ED7; }
-    .status-badge.completed { background: #D1FAE5; color: #059669; }
-    .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
-    
-    [data-theme="dark"] .status-badge.pending { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .status-badge.in_progress { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .status-badge.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .status-badge.cancelled { background: #3A1A1A; color: #F87171; }
-    
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 5px 12px;
-        border-radius: 6px;
-        font-weight: 600;
-        font-size: 0.7rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-    }
-    .btn-blue { background: #0B5ED7; color: white; }
-    .btn-blue:hover { background: #0A4CA8; transform: scale(1.05); }
-    .btn-green { background: #059669; color: white; }
-    .btn-green:hover { background: #047857; transform: scale(1.05); }
-    .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
-    .btn-outline:hover { background: var(--bg-body); border-color: #0B5ED7; color: #0B5ED7; }
-    .btn-sm { padding: 3px 8px; font-size: 0.65rem; border-radius: 4px; }
-    
-    .data-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.82rem;
-        min-width: 800px;
-    }
-    .data-table thead th {
-        text-align: left;
-        padding: 8px 12px;
-        font-weight: 700;
-        font-size: 0.65rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: white;
-        background: #0B5ED7;
-        border-bottom: 3px solid #0A4CA8;
-        white-space: nowrap;
-        position: sticky;
-        top: 0;
-        z-index: 10;
-    }
-    .data-table td {
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-        vertical-align: middle;
-    }
-    
-    .table-wrap {
-        overflow-x: auto;
-        max-height: 500px;
-        overflow-y: auto;
-    }
-    .table-wrap::-webkit-scrollbar {
-        width: 5px;
-        height: 5px;
-    }
-    .table-wrap::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
-    .table-wrap::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 4px; }
-    
-    .empty-state {
-        text-align: center;
-        padding: 40px 20px;
-        color: var(--text-secondary);
-    }
-    .empty-state i {
-        font-size: 3rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 10px;
-    }
-    
-    .update-badge {
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        background: var(--bg-body);
-        padding: 2px 12px;
-        border-radius: 20px;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .result-cell {
-        max-width: 200px;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        font-family: monospace;
-        font-size: 0.75rem;
-        background: var(--bg-body);
-        padding: 4px 8px;
-        border-radius: 4px;
-    }
-    .result-cell.empty {
-        color: var(--text-secondary);
-        font-style: italic;
-        font-family: inherit;
-    }
-    
-    .filter-group {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .form-control {
-        padding: 4px 10px;
-        border: 2px solid var(--border-color);
-        border-radius: 8px;
-        font-size: 0.8rem;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        outline: none;
-        transition: all 0.3s ease;
-    }
-    .form-control:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-    }
-    
-    .quick-stat {
-        font-size: 0.7rem;
-        padding: 2px 10px;
-        border-radius: 12px;
-        background: var(--bg-body);
-        color: var(--text-secondary);
-    }
-    .quick-stat .num { font-weight: 600; color: var(--primary); }
-    
-    @media (max-width: 768px) {
-        .stats-grid { grid-template-columns: repeat(2, 1fr); }
-        .data-table { font-size: 0.7rem; min-width: 650px; }
-        .filter-group { flex-direction: column; align-items: stretch; }
-    }
-</style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
+    <style>
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --radius: 10px;
+            --radius-lg: 14px;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+        }
         
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search lab results..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($doctor_branch_name) ?>
-        </span>
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+        }
         
-        <span class="datetime" id="currentDateTime"></span>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
+        body {
+            background: var(--bg-body);
+            color: var(--text-primary);
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+            transition: background 0.3s ease, color 0.3s ease;
+        }
         
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
         
-        <a href="profile.php">
-            <img src="/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($doctor_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+        /* Page Header */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+        .page-title {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .page-title i { color: var(--primary); }
+        .page-subtitle {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        .page-subtitle .text-success { color: var(--success); }
+        
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+        .stat-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 20px 24px;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .stat-number {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .stat-icon {
+            font-size: 1.2rem;
+        }
+        .stat-card.primary .stat-number { color: var(--primary); }
+        .stat-card.success .stat-number { color: var(--success); }
+        .stat-card.warning .stat-number { color: var(--warning); }
+        .stat-card.danger .stat-number { color: var(--danger); }
+        
+        /* Filters */
+        .filters-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 24px;
+            padding: 16px 20px;
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            align-items: center;
+        }
+        .filter-group {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border: 2px solid var(--border-color);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+        .filter-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: var(--primary-bg);
+        }
+        .filter-btn.active {
+            border-color: var(--primary);
+            background: var(--primary);
+            color: #ffffff;
+        }
+        
+        .search-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+        .search-box input {
+            padding: 8px 16px;
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            font-size: 0.85rem;
+            width: 250px;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        .search-box input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11,94,215,0.1);
+        }
+        .search-box button {
+            padding: 8px 18px;
+            border: none;
+            border-radius: var(--radius);
+            background: var(--primary);
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .search-box button:hover {
+            background: var(--primary-dark);
+        }
+        
+        /* Table */
+        .table-container {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+        
+        .table-container table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        
+        /* ✅ BLUE HEADER BACKGROUND */
+        .table-container th {
+            text-align: left;
+            padding: 14px 18px;
+            font-weight: 700;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: #0B5ED7 !important;
+            color: #ffffff !important;
+            border-bottom: 3px solid #0A4CA8;
+        }
+        .table-container th i {
+            color: #ffffff !important;
+            margin-right: 6px;
+        }
+        
+        [data-theme="dark"] .table-container th {
+            background: #0B5ED7 !important;
+            color: #ffffff !important;
+            border-bottom: 3px solid #0A4CA8;
+        }
+        
+        .table-container td {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        .table-container tr:hover td {
+            background: var(--gray-50);
+        }
+        [data-theme="dark"] .table-container tr:hover td {
+            background: var(--gray-700);
+        }
+        .table-container tbody tr:nth-child(even) td {
+            background: var(--gray-50);
+        }
+        [data-theme="dark"] .table-container tbody tr:nth-child(even) td {
+            background: var(--gray-800);
+        }
+        
+        .patient-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1rem;
+            color: #ffffff;
+            flex-shrink: 0;
+        }
+        .patient-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .patient-name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .patient-id {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-family: monospace;
+            display: block;
+        }
+        .patient-details {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        .patient-details i { margin-right: 2px; }
+        
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: capitalize;
+        }
+        .badge-success { background: var(--success-bg); color: var(--success); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); }
+        .badge-info { background: var(--primary-bg); color: var(--primary); }
+        .badge-purple { background: var(--purple-bg); color: var(--purple); }
+        
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.7rem;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-family: inherit;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: #ffffff;
+        }
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+        .btn-success {
+            background: var(--success);
+            color: #ffffff;
+        }
+        .btn-success:hover {
+            background: #047857;
+            transform: translateY(-1px);
+        }
+        .btn-warning {
+            background: var(--warning);
+            color: #ffffff;
+        }
+        .btn-warning:hover {
+            background: #B45309;
+            transform: translateY(-1px);
+        }
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: var(--primary-bg);
+        }
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 0.65rem;
+        }
+        
+        .action-btns {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+        .empty-state i {
+            font-size: 3rem;
+            color: var(--gray-300);
+            display: block;
+            margin-bottom: 16px;
+        }
+        .empty-state h3 {
+            font-size: 1.2rem;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+        
+        .table-footer {
+            padding: 12px 18px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        .footer .brand {
+            color: var(--primary);
+            font-weight: 600;
+        }
+        
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 768px) {
+            .main-content { margin-left: 0; padding: 16px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+            .filters-bar { flex-direction: column; align-items: stretch; }
+            .search-box { margin-left: 0; width: 100%; }
+            .search-box input { width: 100%; }
+            .table-container { overflow-x: auto; }
+            .action-btns { flex-direction: column; gap: 4px; }
+            .action-btns .btn { width: 100%; justify-content: center; }
+        }
+        @media (max-width: 480px) {
+            .stats-grid { grid-template-columns: 1fr; }
+            .page-title { font-size: 1.2rem; }
+        }
+        
+        /* Print */
+        @media print {
+            .stats-grid { display: none; }
+            .filters-bar { display: none; }
+            .action-btns .btn { display: none; }
+            .main-content { margin: 0; padding: 20px; }
+            .table-container { border: 1px solid #ddd; }
+            .patient-avatar { background: #0B5ED7 !important; color: white !important; }
+            .badge { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            .btn { display: none !important; }
+            .footer { position: fixed; bottom: 0; width: 100%; }
+            .table-container th { background: #0B5ED7 !important; color: white !important; }
+        }
+    </style>
+</head>
+<body>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
-
+    
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-flask mr-2" style="color: var(--primary);"></i> Lab Results
-                <span class="role-badge ml-2">DOCTOR</span>
-                <span class="update-badge ml-2" id="updateBadge">
-                    <i class="fas fa-sync-alt fa-spin"></i> Live
-                </span>
+                <i class="fas fa-users"></i> My Patients
+                <span style="font-size:0.8rem;font-weight:400;color:var(--text-secondary);">(<?= $total_patients ?> assigned)</span>
             </h1>
             <p class="page-subtitle">
-                View all laboratory test results for your patients
-                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
-                    <i class="fas fa-clock mr-1"></i> <?= $pending_count ?> Pending
-                </span>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-spinner mr-1"></i> <?= $in_progress_count ?> In Progress
-                </span>
-                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
-                    <i class="fas fa-check-circle mr-1"></i> <?= $completed_count ?> Completed
-                </span>
+                <i class="fas fa-stethoscope"></i> <?= htmlspecialchars($doctor_name) ?> • 
+                <?= htmlspecialchars($doctor_specialty) ?> • 
+                <span class="text-success">🟢 Online</span>
             </p>
         </div>
         <div>
-            <a href="dashboard.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Dashboard
+            <button onclick="window.print()" class="btn btn-outline btn-sm">
+                <i class="fas fa-print"></i> Print
+            </button>
+        </div>
+    </div>
+    
+    <!-- Stats -->
+    <div class="stats-grid">
+        <div class="stat-card primary">
+            <div class="stat-number"><?= $total_patients ?></div>
+            <div class="stat-label"><i class="fas fa-users stat-icon"></i> Total Patients</div>
+        </div>
+        <div class="stat-card success">
+            <div class="stat-number"><?= $active_patients ?></div>
+            <div class="stat-label"><i class="fas fa-check-circle stat-icon" style="color:var(--success);"></i> Active</div>
+        </div>
+        <div class="stat-card warning">
+            <div class="stat-number"><?= $referred_patients ?></div>
+            <div class="stat-label"><i class="fas fa-share stat-icon" style="color:var(--warning);"></i> Referred</div>
+        </div>
+        <div class="stat-card danger">
+            <div class="stat-number"><?= $completed_patients ?></div>
+            <div class="stat-label"><i class="fas fa-check-double stat-icon" style="color:var(--gray-400);"></i> Completed</div>
+        </div>
+    </div>
+    
+    <!-- Filters -->
+    <div class="filters-bar">
+        <div class="filter-group">
+            <a href="?status=all<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+               class="filter-btn <?= $status_filter === 'all' ? 'active' : '' ?>">All</a>
+            <a href="?status=active<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+               class="filter-btn <?= $status_filter === 'active' ? 'active' : '' ?>">
+                <i class="fas fa-check-circle" style="color:var(--success);"></i> Active
+            </a>
+            <a href="?status=referred<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+               class="filter-btn <?= $status_filter === 'referred' ? 'active' : '' ?>">
+                <i class="fas fa-share" style="color:var(--warning);"></i> Referred
+            </a>
+            <a href="?status=inactive<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+               class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">
+                <i class="fas fa-clock" style="color:var(--gray-400);"></i> Completed
             </a>
         </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- STATS CARDS -->
-    <!-- ================================================================ -->
-    <div class="stats-grid">
-        <div class="stat-card">
-            <p class="number pending" id="statPending"><?= $pending_count ?></p>
-            <p class="label">⏳ Pending</p>
-        </div>
-        <div class="stat-card">
-            <p class="number in-progress" id="statInProgress"><?= $in_progress_count ?></p>
-            <p class="label">🔬 In Progress</p>
-        </div>
-        <div class="stat-card">
-            <p class="number completed" id="statCompleted"><?= $completed_count ?></p>
-            <p class="label">✅ Completed</p>
-        </div>
-        <div class="stat-card">
-            <p class="number completed" id="statCompletedToday" style="color: #34D399;"><?= $completed_today_count ?></p>
-            <p class="label">📅 Completed Today</p>
-        </div>
-        <div class="stat-card">
-            <p class="number total" id="statTotal"><?= $total_count ?></p>
-            <p class="label">📊 Total Tests</p>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- FILTERS -->
-    <!-- ================================================================ -->
-    <div class="card mb-5">
-        <div class="filter-group">
-            <span class="text-sm font-medium text-gray-600 mr-2">Status:</span>
-            <a href="lab_results.php" class="filter-btn <?= empty($status_filter) ? 'active' : '' ?>">All</a>
-            <a href="lab_results.php?status=pending" class="filter-btn <?= $status_filter === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
-            <a href="lab_results.php?status=in_progress" class="filter-btn <?= $status_filter === 'in_progress' ? 'active' : '' ?>">🔬 In Progress</a>
-            <a href="lab_results.php?status=completed" class="filter-btn <?= $status_filter === 'completed' ? 'active' : '' ?>">✅ Completed</a>
-            
-            <span class="text-sm font-medium text-gray-600 ml-4 mr-2">Date:</span>
-            <input type="date" id="dateFilter" value="<?= $date_filter ?>"
-                   onchange="window.location.href='lab_results.php?date='+this.value+'&status=<?= $status_filter ?>&search=<?= urlencode($search) ?>&patient=<?= $patient_filter ?>'"
-                   class="form-control" style="width:auto;">
-            
-            <?php if (!empty($patients_list)): ?>
-                <span class="text-sm font-medium text-gray-600 ml-4 mr-2">Patient:</span>
-                <select id="patientFilter" class="form-control" style="width:auto;min-width:120px;"
-                        onchange="window.location.href='lab_results.php?patient='+this.value+'&status=<?= $status_filter ?>&date=<?= $date_filter ?>&search=<?= urlencode($search) ?>'">
-                    <option value="0">All Patients</option>
-                    <?php foreach ($patients_list as $p): ?>
-                        <option value="<?= $p['id'] ?>" <?= $patient_filter == $p['id'] ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($p['full_name']) ?> (<?= htmlspecialchars($p['patient_id']) ?>)
-                        </option>
-                    <?php endforeach; ?>
-                </select>
+        
+        <form method="GET" class="search-box">
+            <?php if ($status_filter !== 'all'): ?>
+                <input type="hidden" name="status" value="<?= htmlspecialchars($status_filter) ?>">
             <?php endif; ?>
-            
-            <?php if (!empty($search) || !empty($status_filter) || !empty($date_filter) || $patient_filter > 0): ?>
-                <a href="lab_results.php" class="btn btn-outline btn-sm">
-                    <i class="fas fa-times"></i> Clear Filters
+            <input type="text" name="search" placeholder="Search by name, ID, phone..." 
+                   value="<?= htmlspecialchars($search) ?>">
+            <button type="submit"><i class="fas fa-search"></i> Search</button>
+            <?php if (!empty($search)): ?>
+                <a href="?status=<?= $status_filter ?>" class="btn btn-outline btn-sm">
+                    <i class="fas fa-times"></i>
                 </a>
             <?php endif; ?>
-        </div>
+        </form>
     </div>
-
-    <!-- ================================================================ -->
-    <!-- RESULTS TABLE -->
-    <!-- ================================================================ -->
-    <div class="card">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i> Lab Results
-                <span class="text-sm font-normal text-gray-400" id="resultCount">(<?= count($lab_tests) ?>)</span>
-            </h3>
-            <div class="quick-stats">
-                <span class="quick-stat">With Results: <span class="num" id="withResultsCount">0</span></span>
-                <span class="text-sm text-gray-400">Scroll to view all</span>
-            </div>
-        </div>
-        
-        <div class="table-wrap">
-            <table class="data-table" id="resultTable">
+    
+    <!-- Patient Table -->
+    <div class="table-container">
+        <?php if (count($patients) > 0): ?>
+            <table>
                 <thead>
                     <tr>
-                        <th style="border-radius: 8px 0 0 0;">#</th>
-                        <th>Test Name</th>
-                        <th>Patient</th>
-                        <th>Visit #</th>
-                        <th>Status</th>
-                        <th>Result</th>
-                        <th>Lab Tech</th>
-                        <th>Date</th>
-                        <th style="border-radius: 0 8px 0 0;">Actions</th>
+                        <th><i class="fas fa-hashtag"></i> #</th>
+                        <th><i class="fas fa-user"></i> Patient</th>
+                        <th><i class="fas fa-phone"></i> Contact</th>
+                        <th><i class="fas fa-circle"></i> Status</th>
+                        <th><i class="fas fa-calendar"></i> Registered</th>
+                        <th><i class="fas fa-cog"></i> Actions</th>
                     </tr>
                 </thead>
-                <tbody id="resultTableBody">
-                    <?php if (count($lab_tests) > 0): ?>
-                        <?php $i = 1; 
-                        $with_results = 0;
-                        foreach ($lab_tests as $test): 
-                            $status = $test['status'] ?? 'pending';
-                            $has_result = !empty($test['results']);
-                            if ($has_result) $with_results++;
-                            $row_class = $status;
-                        ?>
-                            <tr class="test-row <?= $row_class ?>" data-id="<?= $test['id'] ?>">
-                                <td><?= $i++ ?></td>
-                                <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($test['test_name']) ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['test_type'] ?? 'N/A') ?></div>
-                                </td>
-                                <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($test['patient_name']) ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['patient_id'] ?? 'N/A') ?></div>
-                                </td>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></td>
-                                <td>
-                                    <span class="status-badge <?= $status ?>">
-                                        <?php if ($status === 'pending'): ?>
-                                            ⏳ Pending
-                                        <?php elseif ($status === 'in_progress'): ?>
-                                            🔬 In Progress
-                                        <?php elseif ($status === 'completed'): ?>
-                                            ✅ Completed
-                                        <?php else: ?>
-                                            <?= ucfirst($status) ?>
+                <tbody>
+                    <?php foreach ($patients as $index => $patient):
+                        $age = calculateAge($patient['date_of_birth'] ?? '');
+                        $visit_status = $patient['current_visit_status'] ?? 'pending';
+                        $visit_id = $patient['current_visit_id'] ?? 0;
+                        $is_completed = ($visit_status === 'completed');
+                        $color = getUserColor($patient['full_name'] ?? 'Unknown');
+                    ?>
+                        <tr>
+                            <td><?= $index + 1 ?></td>
+                            <td>
+                                <div class="patient-info">
+                                    <div class="patient-avatar" style="background:<?= $color ?>;">
+                                        <?= strtoupper(substr($patient['full_name'] ?? 'U', 0, 1)) ?>
+                                    </div>
+                                    <div>
+                                        <div class="patient-name">
+                                            <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>
+                                        </div>
+                                        <span class="patient-id"><?= htmlspecialchars($patient['patient_code'] ?? 'N/A') ?></span>
+                                        <?php if ($age !== 'N/A'): ?>
+                                            <span class="patient-details">• <?= $age ?> yrs</span>
                                         <?php endif; ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <?php if ($has_result): ?>
-                                        <div class="result-cell"><?= nl2br(htmlspecialchars($test['results'])) ?></div>
-                                    <?php else: ?>
-                                        <div class="result-cell empty">No result yet</div>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if ($test['lab_technician_name']): ?>
-                                        <span class="text-xs"><?= htmlspecialchars($test['lab_technician_name']) ?></span>
-                                    <?php else: ?>
-                                        <span class="text-xs text-gray-400">Not assigned</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td class="text-xs">
-                                    <?= date('M d, Y', strtotime($test['created_at'])) ?>
-                                    <?php if ($test['completed_at']): ?>
-                                        <br><span class="text-green-600">✓ <?= date('h:i A', strtotime($test['completed_at'])) ?></span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <div class="flex gap-1">
-                                        <a href="view_lab_result.php?id=<?= $test['id'] ?>" class="btn btn-blue btn-sm" title="View Details">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <?php if ($has_result): ?>
-                                            <a href="view_lab_result.php?id=<?= $test['id'] ?>&print=1" class="btn btn-outline btn-sm" title="Print" style="border-color:#059669;color:#059669;">
-                                                <i class="fas fa-print"></i>
-                                            </a>
+                                        <?php if (!empty($patient['gender'])): ?>
+                                            <span class="patient-details">• <?= $patient['gender'] === 'Male' ? '♂' : '♀' ?></span>
+                                        <?php endif; ?>
+                                        <?php if (!empty($patient['blood_group'])): ?>
+                                            <span class="patient-details">• Blood: <?= htmlspecialchars($patient['blood_group']) ?></span>
                                         <?php endif; ?>
                                     </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <tr>
-                            <td colspan="9">
-                                <div class="empty-state">
-                                    <i class="fas fa-flask" style="font-size: 3rem;"></i>
-                                    <p>No lab results found</p>
-                                    <p class="text-sm mt-1">Tests you have requested will appear here once processed</p>
+                                </div>
+                            </td>
+                            <td>
+                                <?php if (!empty($patient['phone'])): ?>
+                                    <div><i class="fas fa-phone" style="color:var(--text-secondary);font-size:0.7rem;"></i> <?= htmlspecialchars($patient['phone']) ?></div>
+                                <?php endif; ?>
+                                <?php if (!empty($patient['email'])): ?>
+                                    <div style="font-size:0.7rem;color:var(--text-secondary);"><?= htmlspecialchars($patient['email']) ?></div>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <span class="badge <?= getStatusBadge($visit_status) ?>">
+                                    <?= getStatusLabel($visit_status) ?>
+                                </span>
+                                <?php if ($patient['assigned_doctor_name']): ?>
+                                    <div style="font-size:0.6rem;color:var(--text-secondary);margin-top:2px;">
+                                        <i class="fas fa-user-md"></i> <?= htmlspecialchars($patient['assigned_doctor_name']) ?>
+                                    </div>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <div style="font-size:0.8rem;">
+                                    <?php 
+                                        $reg_date = $patient['registered_at'] ?? ($patient['last_visit'] ?? 'now');
+                                        echo date('d/m/Y h:i A', strtotime($reg_date));
+                                    ?>
+                                </div>
+                                <div style="font-size:0.65rem;color:var(--text-secondary);">
+                                    <?= $patient['total_visits'] ?? 0 ?> visits
+                                    <?php if (!empty($patient['last_visit'])): ?>
+                                        • Last: <?= date('d/m/Y h:i A', strtotime($patient['last_visit'])) ?>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="action-btns">
+                                    <?php if ($is_completed): ?>
+                                        <!-- ✅ COMPLETED: Only View button -->
+                                        <a href="consultation.php?visit_id=<?= $visit_id ?>&view=view" 
+                                           class="btn btn-outline btn-sm">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                    <?php elseif ($visit_id > 0): ?>
+                                        <!-- ✅ ACTIVE: Continue + View buttons -->
+                                        <a href="consultation.php?visit_id=<?= $visit_id ?>" 
+                                           class="btn btn-success btn-sm">
+                                            <i class="fas fa-stethoscope"></i> Continue
+                                        </a>
+                                        <a href="consultation.php?visit_id=<?= $visit_id ?>&view=view" 
+                                           class="btn btn-outline btn-sm">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                    <?php else: ?>
+                                        <!-- ✅ NO VISIT: Consult only -->
+                                        <a href="consultation.php?patient_id=<?= $patient['id'] ?>" 
+                                           class="btn btn-primary btn-sm">
+                                            <i class="fas fa-user-md"></i> Consult
+                                        </a>
+                                    <?php endif; ?>
+                                    
+                                    <!-- ✅ Refer button - available for all -->
+                                    <a href="refer_patient.php?patient_id=<?= $patient['id'] ?>" 
+                                       class="btn btn-warning btn-sm">
+                                        <i class="fas fa-share"></i> Refer
+                                    </a>
+                                    
+                                    <!-- ❌ LAB BUTTON REMOVED - NOT SHOWING -->
                                 </div>
                             </td>
                         </tr>
-                    <?php endif; ?>
+                    <?php endforeach; ?>
                 </tbody>
             </table>
-        </div>
-        
-        <!-- Card Footer -->
-        <div class="card-footer">
-            <span class="text-sm text-gray-500">
-                <i class="fas fa-flask mr-1"></i> 
-                Showing <strong id="recordCount"><?= count($lab_tests) ?></strong> result(s)
-            </span>
-            <span class="text-sm text-gray-500">
-                <i class="fas fa-check-circle mr-1"></i> 
-                With Results: <strong id="withResultsCountFooter"><?= $with_results ?? 0 ?></strong>
-            </span>
-            <span class="text-sm text-gray-500">
-                <i class="fas fa-clock mr-1"></i> 
-                <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
-            </span>
-        </div>
+            
+            <div class="table-footer">
+                <span>Showing <?= count($patients) ?> patients</span>
+                <span><?= $total_patients ?> Total patients</span>
+            </div>
+            
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-users-slash"></i>
+                <h3>No Patients Found</h3>
+                <p>
+                    <?php if (!empty($search)): ?>
+                        No patients match "<strong><?= htmlspecialchars($search) ?></strong>"
+                    <?php elseif ($status_filter !== 'all'): ?>
+                        No <?= $status_filter ?> patients found
+                    <?php else: ?>
+                        You don't have any assigned patients yet.
+                        <br>OTC patients are not shown here until assigned to a doctor.
+                    <?php endif; ?>
+                </p>
+                <?php if (!empty($search) || $status_filter !== 'all'): ?>
+                    <a href="?status=all" class="btn btn-primary" style="margin-top:12px;">
+                        <i class="fas fa-undo"></i> Clear Filters
+                    </a>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
     </div>
-
-    <!-- ================================================================ -->
-    <!-- QUICK ACTIONS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
-        <a href="request_lab_test.php" class="card text-center hover:border-blue-500 transition">
-            <i class="fas fa-plus-circle text-blue-600 text-2xl block mb-2"></i>
-            <span class="text-sm font-medium">Request New Lab Test</span>
-            <p class="text-xs text-gray-400">Order tests for patients</p>
-        </a>
-        <a href="my_patients.php" class="card text-center hover:border-green-500 transition">
-            <i class="fas fa-users text-green-600 text-2xl block mb-2"></i>
-            <span class="text-sm font-medium">My Patients</span>
-            <p class="text-xs text-gray-400">View all your patients</p>
-        </a>
-        <a href="dashboard.php" class="card text-center hover:border-purple-500 transition">
-            <i class="fas fa-chart-bar text-purple-600 text-2xl block mb-2"></i>
-            <span class="text-sm font-medium">Dashboard</span>
-            <p class="text-xs text-gray-400">Return to dashboard</p>
-        </a>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    
+    <!-- Footer -->
     <footer class="footer">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
+            <span class="brand">Braick Dispensary</span> Management System 
             <span class="text-gray-300 mx-2">|</span>
-            Lab Results
+            My Patients 
+            <span class="text-gray-300 mx-2">|</span>
+            Doctor: <?= htmlspecialchars($doctor_name) ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
-
+    
 </main>
-
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle"></i>
-    <div>
-        <p id="toastTitle">Notification</p>
-        <p id="toastMessage"></p>
-    </div>
-</div>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE TOGGLE
     // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
@@ -732,8 +930,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     var savedDarkMode = localStorage.getItem('darkMode');
     if (savedDarkMode === 'true') {
         htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
+        if (darkIcon) darkIcon.className = 'fas fa-sun';
+        if (darkText) darkText.textContent = 'Light';
     }
     
     darkModeToggle?.addEventListener('click', function() {
@@ -752,24 +950,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     });
 
     // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
     // DATE & TIME
     // ================================================================
     function updateDateTime() {
@@ -780,258 +960,42 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
+        var el = document.getElementById('currentDateTime');
+        if (el) {
+            el.textContent = dateStr + ' • ' + timeStr;
+        }
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // SEARCH
+    // SIDEBAR TOGGLE
     // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
+    var sidebar = document.getElementById('sidebar');
+    var sidebarToggle = document.getElementById('sidebarToggle');
     
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var status = '<?= $status_filter ?>';
-        var date = '<?= $date_filter ?>';
-        var patient = '<?= $patient_filter ?>';
-        window.location.href = 'lab_results.php?search=' + encodeURIComponent(query) + '&status=' + status + '&date=' + date + '&patient=' + patient;
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
+    sidebarToggle?.addEventListener('click', function() {
+        sidebar.classList.toggle('open');
     });
 
     // ================================================================
-    // TOAST
+    // REFER PATIENT
     // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
+    function referPatient(patientId) {
+        if (!confirm('Refer this patient to another doctor?')) return;
+        window.location.href = 'refer_patient.php?patient_id=' + patientId;
     }
 
-    // ================================================================
-    // AUTO-UPDATE (3 SECONDS)
-    // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-    var lastHash = null;
-    
-    function fetchAndUpdate() {
-        if (isUpdating) return;
-        isUpdating = true;
-        
-        var status = '<?= $status_filter ?>';
-        var date = '<?= $date_filter ?>';
-        var search = '<?= urlencode($search) ?>';
-        var patient = '<?= $patient_filter ?>';
-        var url = 'get_lab_results.php?status=' + status + '&date=' + date + '&search=' + search + '&patient=' + patient + '&t=' + new Date().getTime();
-        
-        fetch(url)
-            .then(function(response) {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                return response.json();
-            })
-            .then(function(data) {
-                if (data.success) {
-                    // Check if data has changed
-                    if (lastHash !== data.hash) {
-                        lastHash = data.hash;
-                        updateTable(data);
-                        
-                        // Update stats
-                        document.getElementById('statPending').textContent = data.pending_count || 0;
-                        document.getElementById('statInProgress').textContent = data.in_progress_count || 0;
-                        document.getElementById('statCompleted').textContent = data.completed_count || 0;
-                        document.getElementById('statCompletedToday').textContent = data.completed_today_count || 0;
-                        document.getElementById('statTotal').textContent = data.total_count || 0;
-                        
-                        // Update counts
-                        document.getElementById('resultCount').textContent = '(' + (data.total || 0) + ')';
-                        document.getElementById('recordCount').textContent = data.total || 0;
-                        document.getElementById('withResultsCount').textContent = data.with_results || 0;
-                        document.getElementById('withResultsCountFooter').textContent = data.with_results || 0;
-                        
-                        // Update timestamp
-                        var now = new Date();
-                        var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
-                        document.getElementById('updateBadge').innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
-                    }
-                }
-                isUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Error fetching lab results:', error);
-                document.getElementById('updateBadge').innerHTML = '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Error';
-                isUpdating = false;
-            });
-    }
-    
-    function updateTable(data) {
-        var tbody = document.getElementById('resultTableBody');
-        var tests = data.tests || [];
-        
-        if (tests.length > 0) {
-            var html = '';
-            var i = 1;
-            tests.forEach(function(test) {
-                var status = test.status || 'pending';
-                var hasResult = test.results && test.results.trim() !== '';
-                var rowClass = status;
-                var statusLabel = status === 'pending' ? '⏳ Pending' : 
-                                 status === 'in_progress' ? '🔬 In Progress' : 
-                                 status === 'completed' ? '✅ Completed' : 
-                                 status || 'Pending';
-                var resultDisplay = hasResult ? 
-                    `<div class="result-cell">${escapeHtml(test.results).replace(/\n/g, '<br>')}</div>` : 
-                    `<div class="result-cell empty">No result yet</div>`;
-                var labTech = test.lab_technician_name || '<span class="text-xs text-gray-400">Not assigned</span>';
-                var dateDisplay = test.created_at ? formatDate(test.created_at) : 'N/A';
-                if (test.completed_at) {
-                    dateDisplay += `<br><span class="text-green-600">✓ ${formatTime(test.completed_at)}</span>`;
-                }
-                
-                html += `
-                    <tr class="test-row ${rowClass}" data-id="${test.id}">
-                        <td>${i++}</td>
-                        <td>
-                            <div class="font-medium text-sm">${escapeHtml(test.test_name)}</div>
-                            <div class="text-xs text-gray-400">${escapeHtml(test.test_type || 'N/A')}</div>
-                        </td>
-                        <td>
-                            <div class="font-medium text-sm">${escapeHtml(test.patient_name)}</div>
-                            <div class="text-xs text-gray-400">${escapeHtml(test.patient_id || 'N/A')}</div>
-                        </td>
-                        <td class="font-mono text-xs">${escapeHtml(test.visit_number || 'N/A')}</td>
-                        <td>
-                            <span class="status-badge ${status}">
-                                ${statusLabel}
-                            </span>
-                        </td>
-                        <td>${resultDisplay}</td>
-                        <td>${labTech}</td>
-                        <td class="text-xs">${dateDisplay}</td>
-                        <td>
-                            <div class="flex gap-1">
-                                <a href="view_lab_result.php?id=${test.id}" class="btn btn-blue btn-sm" title="View Details">
-                                    <i class="fas fa-eye"></i>
-                                </a>
-                                ${hasResult ? `
-                                    <a href="view_lab_result.php?id=${test.id}&print=1" class="btn btn-outline btn-sm" title="Print" style="border-color:#059669;color:#059669;">
-                                        <i class="fas fa-print"></i>
-                                    </a>
-                                ` : ''}
-                            </div>
-                        </td>
-                    </tr>
-                `;
-            });
-            tbody.innerHTML = html;
-        } else {
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan="9">
-                        <div class="empty-state">
-                            <i class="fas fa-flask" style="font-size: 3rem;"></i>
-                            <p>No lab results found</p>
-                            <p class="text-sm mt-1">Tests you have requested will appear here once processed</p>
-                        </div>
-                    </td>
-                </tr>
-            `;
-        }
-    }
-    
-    function escapeHtml(text) {
-        if (!text) return '';
-        var div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-    
-    function formatDate(datetime) {
-        if (!datetime) return 'N/A';
-        var d = new Date(datetime);
-        if (isNaN(d.getTime())) return 'N/A';
-        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    }
-    
-    function formatTime(datetime) {
-        if (!datetime) return 'N/A';
-        var d = new Date(datetime);
-        if (isNaN(d.getTime())) return 'N/A';
-        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    }
-    
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        fetchAndUpdate();
-        updateInterval = setInterval(fetchAndUpdate, 3000);
-    }
-    
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-        }
-    }
-    
-    // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
-    // ================================================================
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
-    });
-    
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
-        }
-    });
-
-    // ================================================================
-    // START AUTO-UPDATE
-    // ================================================================
-    startAutoUpdate();
-
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c🧪 Braick - Lab Results (Auto-Update)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($doctor_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
+    console.log('%c👨‍⚕️ My Patients - FIXED', 'font-size:14px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ OTC patients hidden (not assigned to doctor)', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Error message "patient_not_found" removed', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Blue header background added', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c✅ Lab button removed', 'font-size:12px; color:#DC2626;');
+    console.log('%c✅ Completed: Only View button', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Active: Continue + View buttons', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📊 Total assigned patients: <?= $total_patients ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c🟢 Active: <?= $active_patients ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🟡 Referred: <?= $referred_patients ?>', 'font-size:12px; color:#D97706;');
 </script>
 
 </body>
