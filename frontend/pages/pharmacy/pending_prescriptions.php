@@ -3,6 +3,7 @@
 // FILE: frontend/pages/pharmacy/pending_prescriptions.php
 // PHARMACY - PENDING PRESCRIPTIONS WITH DISPENSE BUTTON
 // DISPENSE BUTTON → Redirects to dispense.php
+// CONFIRM BUTTON → Creates bill and sends to Cashier
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -167,25 +168,48 @@ try {
                             ]);
                             
                             $db->commit();
-                            $message = "✅ Prescription confirmed! Bill sent to Cashier.";
-                            $message_type = 'success';
+                            $_SESSION['flash_message'] = "✅ Prescription confirmed! Bill sent to Cashier.";
+                            $_SESSION['flash_type'] = 'success';
                         } else {
                             $db->rollBack();
-                            $message = "⚠️ Bill already exists for this visit.";
-                            $message_type = 'warning';
+                            $_SESSION['flash_message'] = "⚠️ Bill already exists for this visit.";
+                            $_SESSION['flash_type'] = 'warning';
                         }
                     } else {
                         $db->rollBack();
-                        $message = "❌ Prescription not found or already processed.";
-                        $message_type = 'error';
+                        $_SESSION['flash_message'] = "❌ Prescription not found or already processed.";
+                        $_SESSION['flash_type'] = 'error';
                     }
                 } catch (Exception $e) {
                     $db->rollBack();
-                    $message = "❌ Error: " . $e->getMessage();
-                    $message_type = 'error';
+                    $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
+                    $_SESSION['flash_type'] = 'error';
                 }
             }
+            
+            // ✅ FIX: Redirect after POST to prevent resubmission
+            $redirect_url = 'pending_prescriptions.php';
+            if (!empty($_GET)) {
+                $params = [];
+                if (!empty($_GET['status'])) $params['status'] = $_GET['status'];
+                if (!empty($_GET['search'])) $params['search'] = $_GET['search'];
+                if (!empty($params)) {
+                    $redirect_url .= '?' . http_build_query($params);
+                }
+            }
+            header('Location: ' . $redirect_url);
+            exit;
         }
+    }
+    
+    // ================================================================
+    // GET FLASH MESSAGES
+    // ================================================================
+    if (isset($_SESSION['flash_message'])) {
+        $message = $_SESSION['flash_message'];
+        $message_type = $_SESSION['flash_type'] ?? 'info';
+        unset($_SESSION['flash_message']);
+        unset($_SESSION['flash_type']);
     }
     
     // ================================================================
@@ -241,7 +265,8 @@ try {
             v.visit_number,
             (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = p.id) as item_count,
             (SELECT id FROM patient_bills WHERE visit_id = p.visit_id ORDER BY id DESC LIMIT 1) as bill_id,
-            (SELECT status FROM patient_bills WHERE visit_id = p.visit_id ORDER BY id DESC LIMIT 1) as bill_status
+            (SELECT status FROM patient_bills WHERE visit_id = p.visit_id ORDER BY id DESC LIMIT 1) as bill_status,
+            (SELECT total_amount FROM patient_bills WHERE visit_id = p.visit_id ORDER BY id DESC LIMIT 1) as bill_total
         FROM prescriptions p
         LEFT JOIN patients pat ON p.patient_id = pat.id
         LEFT JOIN users u ON p.doctor_id = u.id
@@ -915,7 +940,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .btn-danger:hover {
-            background: var(--danger-dark);
+            background: #B91C1C;
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
         }
@@ -948,7 +973,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .btn-dispense {
             background: var(--success);
             color: white;
-            padding: 5px 14px;
+            padding: 6px 16px;
             border-radius: 6px;
             font-weight: 600;
             font-size: 0.7rem;
@@ -958,7 +983,7 @@ include_once '../../components/pharmacy_sidebar.php';
             text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
         }
         
         .btn-dispense:hover {
@@ -976,7 +1001,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .btn-confirm {
             background: var(--primary);
             color: white;
-            padding: 5px 14px;
+            padding: 6px 16px;
             border-radius: 6px;
             font-weight: 600;
             font-size: 0.7rem;
@@ -986,13 +1011,19 @@ include_once '../../components/pharmacy_sidebar.php';
             text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
         }
         
         .btn-confirm:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-confirm:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
         }
         
         .role-badge-display {
@@ -1092,6 +1123,14 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
+        /* ✅ FIX: Action buttons container */
+        .action-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            align-items: center;
+        }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1109,6 +1148,8 @@ include_once '../../components/pharmacy_sidebar.php';
             .stats-row { grid-template-columns: 1fr 1fr; }
             .data-table { font-size: 0.7rem; }
             .data-table thead th, .data-table tbody td { padding: 5px 8px; }
+            .action-buttons { flex-direction: column; gap: 3px; }
+            .btn-dispense, .btn-confirm { padding: 3px 10px; font-size: 0.6rem; }
         }
         
         @media (max-width: 480px) {
@@ -1117,7 +1158,6 @@ include_once '../../components/pharmacy_sidebar.php';
             .stats-row { grid-template-columns: 1fr; }
             .page-title { font-size: 1.1rem; }
             .btn { padding: 3px 8px; font-size: 0.55rem; }
-            .btn-dispense, .btn-confirm { padding: 3px 10px; font-size: 0.6rem; }
         }
     </style>
 </head>
@@ -1193,7 +1233,8 @@ include_once '../../components/pharmacy_sidebar.php';
                 Manage prescriptions in <strong><?= htmlspecialchars($branch_name) ?></strong>
                 <span class="text-xs text-gray-400 ml-2">
                     <i class="fas fa-info-circle"></i> 
-                    <strong>Dispense</strong> = Go to dispense page
+                    <strong>Dispense</strong> = Go to dispense page | 
+                    <strong>Confirm</strong> = Send bill to Cashier
                 </span>
             </p>
         </div>
@@ -1248,11 +1289,11 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <div class="filter-section">
         <div class="filter-row">
-            <a href="?status=all" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
-            <a href="?status=pending" class="filter-btn <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
-            <a href="?status=confirmed" class="filter-btn <?= $filter_status === 'confirmed' ? 'active' : '' ?>">✅ Confirmed</a>
-            <a href="?status=dispensed" class="filter-btn <?= $filter_status === 'dispensed' ? 'active' : '' ?>">💊 Dispensed</a>
-            <a href="?status=cancelled" class="filter-btn <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
+            <a href="?status=all<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
+            <a href="?status=pending<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
+            <a href="?status=confirmed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'confirmed' ? 'active' : '' ?>">✅ Confirmed</a>
+            <a href="?status=dispensed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'dispensed' ? 'active' : '' ?>">💊 Dispensed</a>
+            <a href="?status=cancelled<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
             
             <div style="flex:1;"></div>
             
@@ -1335,8 +1376,10 @@ include_once '../../components/pharmacy_sidebar.php';
                                         <span class="badge-status <?= getBillStatusBadgeClass($pres['bill_status'] ?? 'pending') ?>">
                                             <?= getBillStatusLabel($pres['bill_status'] ?? 'pending') ?>
                                         </span>
-                                        <?php if ($pres['bill_status'] === 'paid'): ?>
+                                        <?php if (($pres['bill_status'] ?? '') === 'paid'): ?>
                                             <span class="text-xs text-green-600 block">✅ Paid</span>
+                                        <?php else: ?>
+                                            <span class="text-xs text-yellow-600 block">⏳ TSh <?= number_format($pres['bill_total'] ?? 0, 2) ?></span>
                                         <?php endif; ?>
                                     <?php else: ?>
                                         <span class="text-xs text-gray-400">No bill yet</span>
@@ -1349,7 +1392,7 @@ include_once '../../components/pharmacy_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="flex flex-wrap gap-1">
+                                    <div class="action-buttons">
                                         <!-- View Button -->
                                         <a href="view_prescription.php?id=<?= $pres['id'] ?>" class="btn btn-primary btn-sm" title="View Details">
                                             <i class="fas fa-eye"></i>
@@ -1362,9 +1405,9 @@ include_once '../../components/pharmacy_sidebar.php';
                                             </a>
                                         <?php endif; ?>
                                         
-                                        <!-- Confirm Button - Only for pending (if needed) -->
+                                        <!-- Confirm Button - Only for pending with no bill -->
                                         <?php if (($pres['status'] ?? '') === 'pending' && empty($pres['bill_id'])): ?>
-                                            <form method="POST" action="" style="display:inline;" onsubmit="return confirm('Confirm this prescription?\n\n✅ Bill will be created and sent to Cashier.');">
+                                            <form method="POST" action="" style="display:inline;" onsubmit="return confirm('Confirm this prescription?\n\n✅ Bill will be created and sent to Cashier.\n\nMedication: <?= addslashes($pres['medication'] ?? 'N/A') ?>\nQuantity: <?= $pres['quantity'] ?? 0 ?>\nPatient: <?= addslashes($pres['patient_name'] ?? 'Unknown') ?>');">
                                                 <input type="hidden" name="action" value="confirm_prescription">
                                                 <input type="hidden" name="prescription_id" value="<?= $pres['id'] ?>">
                                                 <button type="submit" class="btn-confirm" title="Confirm - Send Bill to Cashier">
@@ -1374,7 +1417,11 @@ include_once '../../components/pharmacy_sidebar.php';
                                         <?php endif; ?>
                                         
                                         <?php if (($pres['status'] ?? '') === 'dispensed'): ?>
-                                            <span class="text-xs text-green-600">✅ Done</span>
+                                            <span class="text-xs text-green-600 font-semibold">✅ Done</span>
+                                        <?php endif; ?>
+                                        
+                                        <?php if (($pres['status'] ?? '') === 'cancelled'): ?>
+                                            <span class="text-xs text-red-600 font-semibold">❌ Cancelled</span>
                                         <?php endif; ?>
                                     </div>
                                 </td>
@@ -1513,6 +1560,8 @@ include_once '../../components/pharmacy_sidebar.php';
         var status = '<?= $filter_status ?>';
         if (query.length > 0) {
             window.location.href = 'pending_prescriptions.php?search=' + encodeURIComponent(query) + '&status=' + status;
+        } else {
+            window.location.href = 'pending_prescriptions.php?status=' + status;
         }
     }
     
@@ -1541,7 +1590,16 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c💊 Braick - Pending Prescriptions', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    <?php if ($message && $message_type): ?>
+        setTimeout(function() {
+            showToast('<?= $message_type === 'success' ? '✅ Success' : ($message_type === 'warning' ? '⚠️ Warning' : '❌ Error') ?>', 
+                '<?= addslashes($message) ?>', 
+                '<?= $message_type ?>'
+            );
+        }, 500);
+    <?php endif; ?>
+
+    console.log('%c💊 Braick - Pending Prescriptions (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Total: <?= $total_count ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c⏳ Pending: <?= $status_counts['pending'] ?? 0 ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Confirmed: <?= $status_counts['confirmed'] ?? 0 ?>', 'font-size:13px; color:#0B5ED7;');
@@ -1550,6 +1608,7 @@ include_once '../../components/pharmacy_sidebar.php';
     console.log('%c📊 Filter: <?= ucfirst($filter_status) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔄 DISPENSE button → Goes to dispense.php', 'font-size:13px; color:#059669;');
     console.log('%c✅ Confirm button → Creates bill and sends to Cashier', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔒 After POST → Redirects to keep filters', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>
