@@ -2,8 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/add_result.php
 // LABORATORY - ADD TEST RESULT
-// SHOWS: Ultrasound Forms OR Regular Textarea based on test type
-// WITH LOGO SUPPORT - FIXED
+// SUPPORTS BOTH lab_test_id AND request_id
+// SHOWS: Ultrasound Forms OR Regular Textarea with sample results
+// WITH SHARED HEADER (DARK MODE & TIME)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -20,19 +21,22 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
     $_SESSION['branch_name'] = 'Dodoma';
     $_SESSION['username'] = 'lab.dodoma';
     $_SESSION['is_admin'] = false;
+    $_SESSION['specialty'] = 'N/A';
 }
 
 $user_id = $_SESSION['user_id'] ?? 8;
 $user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_specialty = $_SESSION['specialty'] ?? 'N/A';
 
 // ================================================================
-// GET LAB TEST ID
+// GET PARAMETERS - Supports both id and request_id
 // ================================================================
 $lab_test_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$request_id = isset($_GET['request_id']) ? (int)$_GET['request_id'] : 0;
 
-if ($lab_test_id <= 0) {
+if ($lab_test_id <= 0 && $request_id <= 0) {
     header('Location: in_progress.php?error=invalid_id');
     exit;
 }
@@ -48,39 +52,157 @@ $message = '';
 $message_type = '';
 $lab_test = null;
 $templates = [];
+$is_request = false;
+$test_name = '';
+$save_success = false;
 
 // ================================================================
-// GET LAB TEST DETAILS
+// GET LAB TEST OR REQUEST DETAILS
 // ================================================================
 try {
-    $stmt = $db->prepare("
-        SELECT lt.*, 
-               p.full_name as patient_name,
-               p.patient_id as patient_code,
-               p.phone,
-               p.gender,
-               p.date_of_birth,
-               u.full_name as doctor_name,
-               v.visit_number,
-               v.visit_type,
-               lr.request_number,
-               lr.id as request_id
-        FROM lab_tests lt
-        JOIN visits v ON lt.visit_id = v.id
-        JOIN patients p ON v.patient_id = p.id
-        LEFT JOIN users u ON lt.doctor_id = u.id
-        LEFT JOIN lab_requests lr ON lt.visit_id = lr.visit_id
-        WHERE lt.id = ? AND lt.branch_id = ?
-    ");
-    $stmt->execute([$lab_test_id, $user_branch_id]);
-    $lab_test = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (!$lab_test) {
-        header('Location: in_progress.php?error=test_not_found');
-        exit;
+    if ($request_id > 0) {
+        // ✅ Get from lab_requests
+        $stmt = $db->prepare("
+            SELECT 
+                lr.id as request_id,
+                lr.request_number,
+                lr.visit_id,
+                lr.patient_id,
+                lr.doctor_id,
+                lr.lab_technician_id,
+                lr.status as request_status,
+                lr.notes as request_notes,
+                lr.lab_total,
+                lr.requested_at,
+                lr.accepted_at,
+                lr.branch_id,
+                p.full_name as patient_name,
+                p.patient_id as patient_code,
+                p.phone,
+                p.gender,
+                p.date_of_birth,
+                p.blood_group,
+                p.address,
+                p.allergies,
+                u.full_name as doctor_name,
+                u.specialty as doctor_specialty,
+                v.visit_number,
+                v.visit_type,
+                v.diagnosis,
+                v.symptoms,
+                (SELECT GROUP_CONCAT(test_name SEPARATOR ', ') FROM lab_tests WHERE visit_id = lr.visit_id) as test_names,
+                (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id) as total_tests,
+                (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id AND status = 'completed') as completed_tests,
+                (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id AND status = 'in_progress') as in_progress_tests,
+                (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id AND status = 'pending') as pending_tests,
+                NULL as id,
+                NULL as test_name,
+                NULL as test_price,
+                NULL as test_type,
+                NULL as sample_type,
+                NULL as test_date,
+                NULL as results,
+                NULL as reference_range,
+                NULL as test_status,
+                NULL as bill_created,
+                NULL as technician_id,
+                NULL as completed_at,
+                NULL as created_at,
+                NULL as updated_at,
+                NULL as formatted_result,
+                NULL as printed_at,
+                NULL as printed_by
+            FROM lab_requests lr
+            LEFT JOIN visits v ON lr.visit_id = v.id
+            LEFT JOIN patients p ON lr.patient_id = p.id
+            LEFT JOIN users u ON lr.doctor_id = u.id
+            WHERE lr.id = ? AND lr.branch_id = ?
+        ");
+        $stmt->execute([$request_id, $user_branch_id]);
+        $lab_test = $stmt->fetch(PDO::FETCH_ASSOC);
+        $is_request = true;
+        
+        if (!$lab_test) {
+            header('Location: in_progress.php?error=request_not_found');
+            exit;
+        }
+        
+        // Get the first test name for ultrasound detection
+        $test_name = explode(',', $lab_test['test_names'] ?? '')[0] ?? '';
+        
+    } else {
+        // ✅ Get from lab_tests
+        $stmt = $db->prepare("
+            SELECT 
+                lt.id,
+                lt.visit_id,
+                lt.doctor_id,
+                lt.lab_technician_id,
+                lt.test_name,
+                lt.test_price,
+                lt.test_type,
+                lt.sample_type,
+                lt.test_date,
+                lt.results,
+                lt.reference_range,
+                lt.status as test_status,
+                lt.bill_created,
+                lt.notes,
+                lt.technician_id,
+                lt.branch_id,
+                lt.created_at,
+                lt.completed_at,
+                lt.updated_at,
+                lt.formatted_result,
+                lt.printed_at,
+                lt.printed_by,
+                p.full_name as patient_name,
+                p.patient_id as patient_code,
+                p.phone,
+                p.gender,
+                p.date_of_birth,
+                p.blood_group,
+                p.address,
+                p.allergies,
+                u.full_name as doctor_name,
+                u.specialty as doctor_specialty,
+                v.visit_number,
+                v.visit_type,
+                v.diagnosis,
+                v.symptoms,
+                lr.id as request_id,
+                lr.request_number,
+                lr.status as request_status,
+                lr.requested_at,
+                lr.accepted_at,
+                NULL as request_notes,
+                NULL as lab_total,
+                NULL as total_tests,
+                NULL as completed_tests,
+                NULL as in_progress_tests,
+                NULL as pending_tests,
+                NULL as test_names
+            FROM lab_tests lt
+            LEFT JOIN visits v ON lt.visit_id = v.id
+            LEFT JOIN patients p ON v.patient_id = p.id
+            LEFT JOIN users u ON lt.doctor_id = u.id
+            LEFT JOIN lab_requests lr ON lt.visit_id = lr.visit_id
+            WHERE lt.id = ? AND lt.branch_id = ?
+        ");
+        $stmt->execute([$lab_test_id, $user_branch_id]);
+        $lab_test = $stmt->fetch(PDO::FETCH_ASSOC);
+        $is_request = false;
+        
+        if (!$lab_test) {
+            header('Location: in_progress.php?error=test_not_found');
+            exit;
+        }
+        
+        $test_name = $lab_test['test_name'] ?? '';
     }
     
 } catch (Exception $e) {
+    error_log("Add result error: " . $e->getMessage());
     header('Location: in_progress.php?error=database_error');
     exit;
 }
@@ -88,14 +210,14 @@ try {
 // ================================================================
 // CHECK IF TEST IS ULTRASOUND
 // ================================================================
-$test_name = $lab_test['test_name'] ?? '';
 $is_ultrasound = false;
 
 $ultrasound_keywords = [
     'ultrasound', 'sonography', 'US-', 'sono',
     'Obstetric', 'Abdominal', 'Pelvic', 'Pelvis',
     'Twin', 'Single', 'Early Pregnancy',
-    'Abdomen', 'Obst', 'GYN', 'Fetal'
+    'Abdomen', 'Obst', 'GYN', 'Fetal',
+    'Scrotal', '3D', '4D', 'Obstetric'
 ];
 
 foreach ($ultrasound_keywords as $keyword) {
@@ -126,13 +248,15 @@ if ($is_ultrasound) {
 }
 
 // ================================================================
-// HANDLE FORM SUBMISSION
+// ✅ FIX: HANDLE FORM SUBMISSION - IMPROVED
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     if ($action === 'save_result') {
         $result = trim($_POST['result'] ?? '');
+        $reference_range = trim($_POST['reference_range'] ?? '');
+        $interpretation = trim($_POST['interpretation'] ?? '');
         $status = $_POST['status'] ?? 'completed';
         $notes = trim($_POST['notes'] ?? '');
         
@@ -143,67 +267,191 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $db->beginTransaction();
                 
-                // Update lab_tests - WITHOUT technician_id
-                $stmt = $db->prepare("
-                    UPDATE lab_tests 
-                    SET results = ?, status = ?, notes = ?, 
-                        completed_at = NOW(), updated_at = NOW()
-                    WHERE id = ? AND branch_id = ?
-                ");
-                $stmt->execute([$result, $status, $notes, $lab_test_id, $user_branch_id]);
-                
-                // Update lab_request_items
-                $stmt = $db->prepare("
-                    UPDATE lab_request_items 
-                    SET result = ?, status = ?, completed_at = NOW()
-                    WHERE request_id = ? AND test_name = ?
-                ");
-                $stmt->execute([$result, $status, $lab_test['request_id'], $lab_test['test_name']]);
-                
-                // Check if all tests completed
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) as total,
-                           SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
-                    FROM lab_tests 
-                    WHERE visit_id = ?
-                ");
-                $stmt->execute([$lab_test['visit_id']]);
-                $counts = $stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($counts['total'] > 0 && $counts['total'] == $counts['completed']) {
+                if ($is_request) {
+                    // ✅ For lab_requests: Add results to all pending/in_progress tests
+                    $visit_id = $lab_test['visit_id'];
+                    
+                    // Get all pending/in_progress tests for this visit
+                    $stmt = $db->prepare("
+                        SELECT id FROM lab_tests 
+                        WHERE visit_id = ? AND status IN ('pending', 'in_progress')
+                    ");
+                    $stmt->execute([$visit_id]);
+                    $tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    if (count($tests) > 0) {
+                        foreach ($tests as $test) {
+                            $stmt = $db->prepare("
+                                UPDATE lab_tests 
+                                SET results = ?,
+                                    reference_range = ?,
+                                    interpretation = ?,
+                                    notes = ?,
+                                    status = 'completed',
+                                    completed_at = NOW(),
+                                    updated_at = NOW(),
+                                    performed_by = ?
+                                WHERE id = ?
+                            ");
+                            $stmt->execute([
+                                $result,
+                                $reference_range,
+                                $interpretation,
+                                $notes,
+                                $user_id,
+                                $test['id']
+                            ]);
+                        }
+                    } else {
+                        // If no tests found, create a new test record
+                        $stmt = $db->prepare("
+                            INSERT INTO lab_tests (
+                                visit_id, doctor_id, test_name, test_price, 
+                                results, reference_range, interpretation, notes,
+                                status, performed_by, branch_id, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, NOW(), NOW())
+                        ");
+                        $stmt->execute([
+                            $visit_id,
+                            $lab_test['doctor_id'] ?? $user_id,
+                            $test_name,
+                            $lab_test['lab_total'] ?? 0,
+                            $result,
+                            $reference_range,
+                            $interpretation,
+                            $notes,
+                            $user_id,
+                            $user_branch_id
+                        ]);
+                    }
+                    
+                    // Update lab_requests status to completed
                     $stmt = $db->prepare("
                         UPDATE lab_requests 
-                        SET status = 'completed', completed_at = NOW(), updated_at = NOW()
-                        WHERE visit_id = ?
+                        SET status = 'completed', 
+                            completed_at = NOW(), 
+                            updated_at = NOW()
+                        WHERE id = ?
                     ");
-                    $stmt->execute([$lab_test['visit_id']]);
+                    $stmt->execute([$lab_test['request_id']]);
+                    
+                    // Update visit status
+                    $stmt = $db->prepare("
+                        UPDATE visits 
+                        SET status = 'completed', 
+                            completed_at = NOW(), 
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$visit_id]);
+                    
+                    $message = "✅ Results added successfully for all tests in this request!";
+                    $message_type = 'success';
+                    $save_success = true;
+                    
+                } else {
+                    // ✅ For lab_tests: Update single test
+                    $stmt = $db->prepare("
+                        UPDATE lab_tests 
+                        SET results = ?,
+                            reference_range = ?,
+                            interpretation = ?,
+                            notes = ?,
+                            status = 'completed',
+                            completed_at = NOW(),
+                            updated_at = NOW(),
+                            performed_by = ?
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([
+                        $result,
+                        $reference_range,
+                        $interpretation,
+                        $notes,
+                        $user_id,
+                        $lab_test_id
+                    ]);
+                    
+                    // Check if all tests for this visit are completed
+                    $stmt = $db->prepare("SELECT visit_id FROM lab_tests WHERE id = ?");
+                    $stmt->execute([$lab_test_id]);
+                    $test = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($test && $test['visit_id']) {
+                        $stmt = $db->prepare("
+                            SELECT COUNT(*) as total,
+                                   SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+                            FROM lab_tests 
+                            WHERE visit_id = ?
+                        ");
+                        $stmt->execute([$test['visit_id']]);
+                        $counts = $stmt->fetch(PDO::FETCH_ASSOC);
+                        
+                        if ($counts['total'] > 0 && $counts['total'] == $counts['completed']) {
+                            // Update lab_requests
+                            $stmt = $db->prepare("
+                                UPDATE lab_requests 
+                                SET status = 'completed', 
+                                    completed_at = NOW(), 
+                                    updated_at = NOW()
+                                WHERE visit_id = ?
+                            ");
+                            $stmt->execute([$test['visit_id']]);
+                            
+                            // Update visit
+                            $stmt = $db->prepare("
+                                UPDATE visits 
+                                SET status = 'completed', 
+                                    completed_at = NOW(), 
+                                    updated_at = NOW()
+                                WHERE id = ?
+                            ");
+                            $stmt->execute([$test['visit_id']]);
+                        }
+                    }
+                    
+                    $message = "✅ Result added successfully!";
+                    $message_type = 'success';
+                    $save_success = true;
                 }
                 
                 $db->commit();
-                
-                $message = "✅ Result saved successfully!";
-                $message_type = 'success';
-                
-                echo '<script>
-                    setTimeout(function(){ 
-                        window.location.href = "in_progress.php?success=1"; 
-                    }, 1500);
-                </script>';
                 
             } catch (Exception $e) {
                 $db->rollBack();
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
+                error_log("Save result error: " . $e->getMessage());
             }
         }
     }
 }
 
 // ================================================================
-// ✅ GET LOGO HTML - FIXED: Inatafuta logo kwenye paths mbalimbali
+// ✅ FIX: If save was successful, redirect with JavaScript
+// ================================================================
+if ($save_success && $message_type === 'success') {
+    echo '<!DOCTYPE html>
+    <html>
+    <head>
+        <script>
+            window.onload = function() {
+                alert("' . $message . '");
+                window.location.href = "in_progress.php?success=1";
+            };
+        </script>
+    </head>
+    <body>
+        <p>Redirecting...</p>
+    </body>
+    </html>';
+    exit;
+}
+
+// ================================================================
+// ✅ GET LOGO HTML
 // ================================================================
 function getLogoHTML() {
-    // Check multiple possible logo locations
     $logo_paths = [
         '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
         '/dispensary_system/frontend/assets/uploads/profiles/logo.png',
@@ -224,23 +472,19 @@ function getLogoHTML() {
         }
     }
     
-    // If logo found, return img tag
     if (!empty($logo_url)) {
         return '<img src="' . $logo_url . '" alt="Braick Dispensary" style="height:60px;width:auto;max-height:60px;border-radius:8px;">';
     }
     
-    // SVG Fallback - Braick text with blue background
     return '<div style="display:inline-block;background:#0B5ED7;color:white;padding:8px 20px;border-radius:8px;font-size:20px;font-weight:bold;font-family:Arial,sans-serif;">BRAICK</div>';
 }
 
 // ================================================================
 // GENERATE ULTRASOUND FORMS FROM TEMPLATES
 // ================================================================
-function generateFormsFromTemplates($templates, $patient, $user_full_name) {
+function generateFormsFromTemplates($templates, $lab_test, $user_full_name, $user_specialty) {
     $html = '';
     $counter = 0;
-    
-    // ✅ Get logo HTML
     $logo_html = getLogoHTML();
     
     foreach ($templates as $template) {
@@ -249,17 +493,15 @@ function generateFormsFromTemplates($templates, $patient, $user_full_name) {
         $template_html = $template['template_html'];
         
         // Replace placeholders
-        $template_html = str_replace('{patient_name}', htmlspecialchars($patient['patient_name'] ?? 'Unknown'), $template_html);
-        $template_html = str_replace('{age}', calculateAge($patient['date_of_birth'] ?? ''), $template_html);
-        $template_html = str_replace('{gender}', htmlspecialchars($patient['gender'] ?? 'N/A'), $template_html);
+        $template_html = str_replace('{patient_name}', htmlspecialchars($lab_test['patient_name'] ?? 'Unknown'), $template_html);
+        $template_html = str_replace('{patient_id}', htmlspecialchars($lab_test['patient_code'] ?? 'N/A'), $template_html);
+        $template_html = str_replace('{age}', calculateAge($lab_test['date_of_birth'] ?? ''), $template_html);
+        $template_html = str_replace('{gender}', htmlspecialchars($lab_test['gender'] ?? 'N/A'), $template_html);
         $template_html = str_replace('{exam_date}', date('d/m/Y'), $template_html);
         $template_html = str_replace('{report_date}', date('d/m/Y H:i'), $template_html);
         $template_html = str_replace('{technician_name}', htmlspecialchars($user_full_name), $template_html);
-        
-        // ✅ Replace {logo} placeholder with actual logo HTML
+        $template_html = str_replace('{technician_specialty}', htmlspecialchars($user_specialty), $template_html);
         $template_html = str_replace('{logo}', $logo_html, $template_html);
-        
-        // If template uses {logo_url}, replace it too
         $template_html = str_replace('{logo_url}', '', $template_html);
         
         $active_class = ($counter === 1) ? 'active' : '';
@@ -296,6 +538,8 @@ function generateFormSelector($templates) {
             $icon = '🌱';
         } elseif (stripos($template['template_name'], 'Abdominal') !== false) {
             $icon = '🩺';
+        } elseif (stripos($template['template_name'], 'Scrotal') !== false) {
+            $icon = '🫂';
         }
         
         $html .= '
@@ -319,6 +563,28 @@ function calculateAge($dob) {
     return $birthDate->diff($today)->y;
 }
 
+function getStatusBadge($status) {
+    $map = [
+        'pending' => 'badge-warning',
+        'in_progress' => 'badge-info',
+        'completed' => 'badge-success',
+        'accepted' => 'badge-success',
+        'cancelled' => 'badge-danger'
+    ];
+    return $map[$status] ?? 'badge-info';
+}
+
+function getStatusLabel($status) {
+    $map = [
+        'pending' => '⏳ Pending',
+        'in_progress' => '🔄 In Progress',
+        'completed' => '✅ Completed',
+        'accepted' => '✅ Accepted',
+        'cancelled' => '❌ Cancelled'
+    ];
+    return $map[$status] ?? ucfirst($status);
+}
+
 // ================================================================
 // SAMPLE RESULTS (For regular tests)
 // ================================================================
@@ -331,6 +597,9 @@ $sample_results = [
     'Pregnancy Test (Urine)' => ['Negative' => 'Negative', 'Positive' => 'Positive - HCG detected'],
     'Urinalysis' => ['Normal' => 'pH: 4.5-8.0, Protein: Negative, Glucose: Negative'],
     'COVID-19 Rapid Antigen Test' => ['Negative' => 'Negative', 'Positive' => 'Positive - SARS-CoV-2 antigen detected'],
+    'Hepatitis B Surface Antigen (HBsAg)' => ['Negative' => 'Non-reactive', 'Positive' => 'Reactive'],
+    'Renal Function Test (RFT)' => ['Normal' => 'Creatinine: 0.6-1.2, BUN: 7-20, Uric Acid: 3.5-7.2'],
+    'Pregnancy Test (Blood - Beta HCG)' => ['Negative' => 'Negative - No HCG detected', 'Positive' => 'Positive - HCG detected'],
 ];
 
 $samples = [];
@@ -376,7 +645,7 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/laboratory_header.php';
 include_once __DIR__ . '/../../components/laboratory_sidebar.php';
@@ -620,7 +889,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         .btn-success:hover {
-            background: var(--success-dark);
+            background: #047857;
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
         }
@@ -720,7 +989,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         /* ================================================================
-           ULTRASOUND FORM STYLES - WITH LOGO SUPPORT
+           ULTRASOUND FORM STYLES
            ================================================================ */
         .ultrasound-form {
             background: #fff;
@@ -975,7 +1244,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             margin-bottom: 4px;
         }
         
-        /* Sample Results */
+        /* ================================================================
+           SAMPLE RESULTS - For Regular Tests
+           ================================================================ */
         .sample-result-item {
             padding: 8px 12px;
             border: 2px solid var(--border-color);
@@ -1003,72 +1274,23 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* Print Styles */
+        /* ================================================================
+           PRINT STYLES
+           ================================================================ */
         @media print {
-            .top-nav,
-            .sidebar,
-            .btn,
-            .btn-outline,
-            .btn-success,
-            .btn-print,
-            .btn-primary,
-            .form-selector,
-            .form-option,
-            .page-header .btn-outline-light,
-            .alert,
-            .footer {
+            .top-nav, .sidebar, .btn, .btn-outline, .btn-success, .btn-print, .btn-primary,
+            .form-selector, .form-option, .page-header .btn-outline-light, .alert, .footer {
                 display: none !important;
             }
-            
-            .main-content {
-                margin-left: 0 !important;
-                padding: 0 !important;
-                background: white !important;
-            }
-            
-            .page-header {
-                background: white !important;
-                box-shadow: none !important;
-                border: 1px solid #ddd !important;
-                padding: 15px !important;
-            }
-            
-            .page-header .page-title {
-                color: #0B5ED7 !important;
-            }
-            
-            .page-header .page-subtitle {
-                color: #333 !important;
-            }
-            
-            .card {
-                border: 1px solid #ddd !important;
-                box-shadow: none !important;
-                page-break-inside: avoid !important;
-            }
-            
-            .ultrasound-form {
-                border: 1px solid #0B5ED7 !important;
-                box-shadow: none !important;
-                display: block !important;
-                padding: 15px !important;
-                max-width: 100% !important;
-            }
-            
-            .ultrasound-form.active {
-                display: block !important;
-            }
-            
-            .ultrasound-form input,
-            .ultrasound-form textarea {
-                border: 1px solid #ccc !important;
-                background: white !important;
-                color: #000 !important;
-            }
-            
-            .ultrasound-form .report-header .logo-container img {
-                height: 50px !important;
-            }
+            .main-content { margin-left: 0 !important; padding: 0 !important; background: white !important; }
+            .page-header { background: white !important; box-shadow: none !important; border: 1px solid #ddd !important; padding: 15px !important; }
+            .page-header .page-title { color: #0B5ED7 !important; }
+            .page-header .page-subtitle { color: #333 !important; }
+            .card { border: 1px solid #ddd !important; box-shadow: none !important; page-break-inside: avoid !important; }
+            .ultrasound-form { border: 1px solid #0B5ED7 !important; box-shadow: none !important; display: block !important; padding: 15px !important; max-width: 100% !important; }
+            .ultrasound-form.active { display: block !important; }
+            .ultrasound-form input, .ultrasound-form textarea { border: 1px solid #ccc !important; background: white !important; color: #000 !important; }
+            .ultrasound-form .report-header .logo-container img { height: 50px !important; }
         }
         
         .footer {
@@ -1139,7 +1361,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 </head>
 <body>
 
-<!-- TOP NAVIGATION -->
+<!-- ================================================================ -->
+<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -1184,9 +1408,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-flask"></i>
-                Enter result for <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
+                <?php if ($is_request): ?>
+                    Request: <strong><?= htmlspecialchars($lab_test['request_number'] ?? 'N/A') ?></strong>
+                    <span class="separator">|</span>
+                <?php endif; ?>
+                Test: <strong><?= htmlspecialchars($test_name ?? 'N/A') ?></strong>
                 <span class="separator">|</span>
                 Patient: <strong><?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?></strong>
+                <?php if ($is_request): ?>
+                    <span class="badge badge-info ml-2"><?= $lab_test['total_tests'] ?? 0 ?> tests</span>
+                <?php endif; ?>
                 <?php if ($show_ultrasound): ?>
                     <span class="badge badge-purple ml-2">🩺 Ultrasound</span>
                     <span class="badge badge-info ml-1"><?= count($templates) ?> Templates</span>
@@ -1206,7 +1437,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- Message -->
-    <?php if ($message): ?>
+    <?php if ($message && !$save_success): ?>
         <div class="alert alert-<?= $message_type ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'warning' ? 'fa-exclamation-triangle' : 'fa-exclamation-circle') ?>"></i>
             <?= htmlspecialchars($message) ?>
@@ -1224,7 +1455,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             
             <div class="detail-row">
                 <span class="detail-label">Test Name</span>
-                <span class="detail-value font-semibold"><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></span>
+                <span class="detail-value font-semibold"><?= htmlspecialchars($test_name ?? 'N/A') ?></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Patient</span>
@@ -1239,15 +1470,47 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <span class="detail-value">Dr. <?= htmlspecialchars($lab_test['doctor_name'] ?? 'N/A') ?></span>
             </div>
             <div class="detail-row">
+                <span class="detail-label">Specialty</span>
+                <span class="detail-value"><?= htmlspecialchars($lab_test['doctor_specialty'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-row">
                 <span class="detail-label">Visit</span>
                 <span class="detail-value"><?= htmlspecialchars($lab_test['visit_number'] ?? 'N/A') ?></span>
             </div>
+            <?php if ($is_request): ?>
+                <div class="detail-row">
+                    <span class="detail-label">Request #</span>
+                    <span class="detail-value"><?= htmlspecialchars($lab_test['request_number'] ?? 'N/A') ?></span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Tests</span>
+                    <span class="detail-value"><?= htmlspecialchars($lab_test['test_names'] ?? 'N/A') ?></span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">Progress</span>
+                    <span class="detail-value">
+                        <?= $lab_test['completed_tests'] ?? 0 ?> / <?= $lab_test['total_tests'] ?? 0 ?> completed
+                        <?php if (($lab_test['in_progress_tests'] ?? 0) > 0): ?>
+                            <span class="badge badge-info"><?= $lab_test['in_progress_tests'] ?> in progress</span>
+                        <?php endif; ?>
+                        <?php if (($lab_test['pending_tests'] ?? 0) > 0): ?>
+                            <span class="badge badge-warning"><?= $lab_test['pending_tests'] ?> pending</span>
+                        <?php endif; ?>
+                    </span>
+                </div>
+            <?php endif; ?>
             <div class="detail-row">
                 <span class="detail-label">Status</span>
                 <span class="detail-value">
-                    <span class="badge <?= ($lab_test['status'] ?? '') === 'completed' ? 'badge-success' : 'badge-warning' ?>">
-                        <?= ucfirst($lab_test['status'] ?? 'Pending') ?>
-                    </span>
+                    <?php if ($is_request): ?>
+                        <span class="badge <?= getStatusBadge($lab_test['request_status'] ?? 'pending') ?>">
+                            <?= getStatusLabel($lab_test['request_status'] ?? 'Pending') ?>
+                        </span>
+                    <?php else: ?>
+                        <span class="badge <?= ($lab_test['test_status'] ?? '') === 'completed' ? 'badge-success' : 'badge-warning' ?>">
+                            <?= ucfirst($lab_test['test_status'] ?? 'Pending') ?>
+                        </span>
+                    <?php endif; ?>
                 </span>
             </div>
             <div class="detail-row">
@@ -1260,6 +1523,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     <?php endif; ?>
                 </span>
             </div>
+            <?php if (!empty($lab_test['diagnosis'])): ?>
+                <div class="detail-row" style="grid-column: span 2;">
+                    <span class="detail-label">Diagnosis</span>
+                    <span class="detail-value"><?= htmlspecialchars($lab_test['diagnosis']) ?></span>
+                </div>
+            <?php endif; ?>
         </div>
         
         <!-- RIGHT: Result Form -->
@@ -1282,8 +1551,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 
                 <form method="POST" action="" id="ultrasoundForm">
                     <input type="hidden" name="action" value="save_result">
+                    <input type="hidden" name="reference_range" value="">
+                    <input type="hidden" name="interpretation" value="">
                     
-                    <?= generateFormsFromTemplates($templates, $lab_test, $user_full_name) ?>
+                    <?= generateFormsFromTemplates($templates, $lab_test, $user_full_name, $user_specialty) ?>
                     
                     <input type="hidden" name="result" id="ultrasoundResult" value="">
                     
@@ -1294,7 +1565,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         <button type="button" class="btn btn-print" onclick="printUltrasoundForm()">
                             <i class="fas fa-print"></i> Print Form
                         </button>
-                        <button type="reset" class="btn btn-outline" onclick="clearUltrasoundForm()">
+                        <button type="button" class="btn btn-outline" onclick="clearUltrasoundForm()">
                             <i class="fas fa-undo"></i> Clear Form
                         </button>
                         <a href="in_progress.php" class="btn btn-outline">
@@ -1305,11 +1576,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 
             <?php else: ?>
                 <!-- ================================================================ -->
-                <!-- REGULAR TEST RESULT FORM -->
+                <!-- REGULAR TEST RESULT FORM - WITH SAMPLE RESULTS -->
                 <!-- ================================================================ -->
-                <form method="POST" action="">
+                <form method="POST" action="" id="regularForm">
                     <input type="hidden" name="action" value="save_result">
                     
+                    <!-- Sample Results -->
                     <?php if (!empty($samples)): ?>
                         <div class="mb-4">
                             <label class="form-label">
@@ -1326,11 +1598,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         </div>
                     <?php endif; ?>
                     
+                    <!-- Result Textarea -->
                     <div class="form-group mb-3">
                         <label class="form-label">Result <span class="text-danger">*</span></label>
                         <textarea name="result" class="form-control" id="resultText" rows="4" placeholder="Enter test result..."></textarea>
                     </div>
                     
+                    <!-- Reference Range -->
+                    <div class="form-group mb-3">
+                        <label class="form-label">Reference Range</label>
+                        <input type="text" name="reference_range" class="form-control" placeholder="e.g. 0.5 - 1.2 mg/dL">
+                    </div>
+                    
+                    <!-- Interpretation -->
+                    <div class="form-group mb-3">
+                        <label class="form-label">Interpretation</label>
+                        <textarea name="interpretation" class="form-control" rows="2" placeholder="Clinical interpretation of the results..."></textarea>
+                    </div>
+                    
+                    <!-- Status -->
                     <div class="form-group mb-3">
                         <label class="form-label">Status</label>
                         <select name="status" class="form-control">
@@ -1339,13 +1625,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         </select>
                     </div>
                     
+                    <!-- Notes -->
                     <div class="form-group">
                         <label class="form-label">Notes (Optional)</label>
                         <input type="text" name="notes" class="form-control" placeholder="Additional notes...">
                     </div>
                     
+                    <!-- Buttons -->
                     <div class="mt-4 flex flex-wrap gap-3">
-                        <button type="submit" class="btn btn-success">
+                        <button type="submit" class="btn btn-success" id="saveBtn">
                             <i class="fas fa-save"></i> Save Result
                         </button>
                         <button type="reset" class="btn btn-outline" onclick="document.getElementById('resultText').value = '';">
@@ -1471,6 +1759,21 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     }
 
+    // ✅ FIX: FORM VALIDATION AND SUBMIT
+    document.getElementById('regularForm')?.addEventListener('submit', function(e) {
+        var result = document.getElementById('resultText').value.trim();
+        if (!result) {
+            e.preventDefault();
+            showToast('Error', 'Please enter the test result.', 'error');
+            return false;
+        }
+        
+        var btn = document.getElementById('saveBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+        return true;
+    });
+
     // Save Ultrasound Result
     function saveUltrasoundResult() {
         var activeForm = document.querySelector('.ultrasound-form.active');
@@ -1516,7 +1819,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         showToast('Info', 'Form cleared', 'info');
     }
 
-    // ✅ PRINT ULTRASOUND FORM - With Logo Support
+    // PRINT ULTRASOUND FORM
     function printUltrasoundForm() {
         var activeForm = document.querySelector('.ultrasound-form.active');
         if (!activeForm) {
@@ -1532,17 +1835,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         var formHTML = activeForm.outerHTML;
         
-        // Get logo from the form
-        var logoImg = activeForm.querySelector('.logo-container img');
-        var logoHTML = '';
-        if (logoImg) {
-            logoHTML = logoImg.outerHTML;
-        } else {
-            // Fallback logo
-            logoHTML = '<div style="display:inline-block;background:#0B5ED7;color:white;padding:8px 20px;border-radius:8px;font-size:20px;font-weight:bold;font-family:Arial,sans-serif;">BRAICK</div>';
-        }
-        
-        // Replace input fields with their values for printing
         var inputs = activeForm.querySelectorAll('input, textarea');
         inputs.forEach(function(input) {
             var value = input.value || '___________________';
@@ -1551,7 +1843,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             formHTML = formHTML.replace(inputHTML, replacement);
         });
         
-        // Create print document
         printWindow.document.write('<!DOCTYPE html><html><head><title>Ultrasound Report</title>');
         printWindow.document.write('<style>');
         printWindow.document.write('body { font-family: Arial, sans-serif; padding: 40px; background: white; }');
@@ -1604,17 +1895,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c🧪 Add Result - Laboratory (WITH LOGO)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c📋 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🧪 Add Result - Laboratory (FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ Supports both lab_test_id AND request_id', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Fixed: Redirect after successful save', 'font-size:13px; color:#34D399;');
+    console.log('%c📋 Test: <?= htmlspecialchars($test_name ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    <?php if ($show_ultrasound): ?>
-        console.log('%c🩺 Ultrasound - Showing forms with logo', 'font-size:13px; color:#7C3AED;');
-        console.log('%c📄 Templates Available: <?= count($templates) ?>', 'font-size:13px; color:#7C3AED;');
-        console.log('%c🖨️ Print button available - Click to print filled form', 'font-size:13px; color:#34D399;');
-        console.log('%c🏢 Logo loaded from file system', 'font-size:13px; color:#34D399;');
-    <?php else: ?>
-        console.log('%c📊 Regular test - Showing textarea', 'font-size:13px; color:#0B5ED7;');
-    <?php endif; ?>
 </script>
 
 </body>
