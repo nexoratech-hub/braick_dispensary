@@ -7,6 +7,7 @@
 // - Prescribed: Doctor saved, waiting for payment
 // - Completed: All paid and completed
 // - Auto-update every 3 seconds without refresh
+// - Uses SHARED HEADER (dark mode, date/time, status toggle inherited)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -24,6 +25,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
     $_SESSION['phone'] = '+255 700 000 011';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
+    $_SESSION['branch_name'] = 'Dodoma';
     $_SESSION['specialty'] = 'General Medicine';
     $_SESSION['profile_pic'] = '';
     $_SESSION['is_online'] = 1;
@@ -32,6 +34,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
 $doctor_id = $_SESSION['user_id'] ?? 5;
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 // ================================================================
 // GET FILTER PARAMETER
@@ -48,7 +51,9 @@ if (!in_array($filter, $allowed_filters)) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+require_once __DIR__ . '/../../../backend/config/config.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
+
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
@@ -147,15 +152,12 @@ if (!empty($search)) {
 // Build status condition based on filter
 switch ($filter) {
     case 'pending':
-        // Active consultations (with_doctor, assigned, pending)
         $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
         break;
     case 'lab_test':
-        // Waiting for lab results
         $status_condition = "AND v.status = 'lab_test' AND v.is_completed = 0";
         break;
     case 'prescribed':
-        // Doctor saved, waiting for payment
         $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
         break;
     case 'completed':
@@ -217,77 +219,31 @@ $prescribed_count = 0;
 $completed_count = 0;
 $cancelled_count = 0;
 
-// Pending (active consultations)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status IN ('pending', 'assigned', 'with_doctor') 
-    AND is_completed = 0
-");
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor') AND is_completed = 0");
 $stmt->execute([$doctor_id]);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// Lab Test (waiting for lab results)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status = 'lab_test' 
-    AND is_completed = 0
-");
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'lab_test' AND is_completed = 0");
 $stmt->execute([$doctor_id]);
 $lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// Prescribed (waiting for payment)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status = 'prescribed' 
-    AND is_completed = 0
-");
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'prescribed' AND is_completed = 0");
 $stmt->execute([$doctor_id]);
 $prescribed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// Completed
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status = 'completed' 
-    AND is_completed = 1
-");
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'completed' AND is_completed = 1");
 $stmt->execute([$doctor_id]);
 $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// Cancelled
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status = 'cancelled'
-");
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'cancelled'");
 $stmt->execute([$doctor_id]);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$doctor_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
-
-// ================================================================
-// INCLUDE HEADER & SIDEBAR
-// ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!DOCTYPE html>
@@ -298,247 +254,25 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <title><?= ucfirst($filter) ?> Consultations - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
     
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
+    <!-- The header already includes Tailwind, FontAwesome, and styles -->
+    <!-- Page-specific styles -->
     <style>
         /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --success: #059669;
-            --success-dark: #047857;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --prescribed: #7C3AED;
-            --prescribed-bg: #EDE9FE;
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            --lab-test: #8B5CF6;
-            --lab-test-bg: #EDE9FE;
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
-            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        /* ================================================================
-           MAIN CONTENT
+           PAGE-SPECIFIC STYLES (Overrides/complements shared header)
            ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
-        .page-header {
+        /* Page Header inside content */
+        .page-header-custom {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
             padding: 24px 32px;
@@ -553,7 +287,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             overflow: hidden;
         }
         
-        .page-header::before {
+        .page-header-custom::before {
             content: '';
             position: absolute;
             top: -50%;
@@ -565,9 +299,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             pointer-events: none;
         }
         
-        .page-header .page-title {
+        .page-header-custom .page-title {
             color: white;
-            font-size: 1.8rem;
+            font-size: 1.6rem;
             font-weight: 700;
             display: flex;
             align-items: center;
@@ -577,12 +311,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             z-index: 1;
         }
         
-        .page-header .page-title i {
+        .page-header-custom .page-title i {
             font-size: 2rem;
             opacity: 0.9;
         }
         
-        .page-header .page-subtitle {
+        .page-header-custom .page-subtitle {
             color: rgba(255,255,255,0.85);
             font-size: 0.95rem;
             display: flex;
@@ -593,12 +327,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             z-index: 1;
         }
         
-        .page-header .page-subtitle strong {
+        .page-header-custom .page-subtitle strong {
             color: white;
             font-weight: 600;
         }
         
-        .page-header .role-badge-display {
+        .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 4px 14px;
@@ -606,11 +340,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             font-size: 0.65rem;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
         }
         
-        .page-header .header-badge {
+        .header-badge {
             background: rgba(255,255,255,0.15);
             color: white;
             padding: 4px 14px;
@@ -624,7 +356,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        .page-header .btn-outline-light {
+        .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
             border: 1px solid rgba(255,255,255,0.2);
@@ -642,15 +374,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             z-index: 1;
         }
         
-        .page-header .btn-outline-light:hover {
+        .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           FILTER TABS
-           ================================================================ */
+        /* Filter Tabs */
         .filter-tabs {
             display: flex;
             gap: 6px;
@@ -705,34 +434,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             color: var(--gray-500);
         }
         
-        .filter-tab .tab-badge.prescribed-badge {
-            background: #7C3AED;
-            color: white;
-        }
+        .filter-tab .tab-badge.prescribed-badge { background: #7C3AED; color: white; }
+        .filter-tab .tab-badge.danger { background: #EF4444; color: white; }
+        .filter-tab .tab-badge.green { background: #059669; color: white; }
+        .filter-tab .tab-badge.gray { background: #64748B; color: white; }
+        .filter-tab .tab-badge.lab-badge { background: #8B5CF6; color: white; }
         
-        .filter-tab .tab-badge.danger {
-            background: #EF4444;
-            color: white;
-        }
-        
-        .filter-tab .tab-badge.green {
-            background: #059669;
-            color: white;
-        }
-        
-        .filter-tab .tab-badge.gray {
-            background: #64748B;
-            color: white;
-        }
-        
-        .filter-tab .tab-badge.lab-badge {
-            background: #8B5CF6;
-            color: white;
-        }
-        
-        /* ================================================================
-           CONSULTATION CARD
-           ================================================================ */
+        /* Consultation Card */
         .consultation-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -813,74 +521,22 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             text-transform: uppercase;
         }
         
-        .status-badge.prescribed {
-            background: var(--prescribed-bg);
-            color: var(--prescribed);
-        }
+        .status-badge.prescribed { background: var(--prescribed-bg); color: var(--prescribed); }
+        .status-badge.pending { background: var(--warning-bg); color: var(--warning); }
+        .status-badge.assigned { background: var(--primary-bg); color: var(--primary); }
+        .status-badge.with_doctor { background: var(--primary-bg); color: var(--primary); }
+        .status-badge.lab_test { background: var(--lab-test-bg); color: var(--lab-test); }
+        .status-badge.completed { background: var(--success-bg); color: var(--success); }
+        .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); }
         
-        .status-badge.pending {
-            background: var(--warning-bg);
-            color: var(--warning);
-        }
-        
-        .status-badge.assigned {
-            background: var(--primary-bg);
-            color: var(--primary);
-        }
-        
-        .status-badge.with_doctor {
-            background: var(--primary-bg);
-            color: var(--primary);
-        }
-        
-        .status-badge.lab_test {
-            background: var(--lab-test-bg);
-            color: var(--lab-test);
-        }
-        
-        .status-badge.completed {
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        .status-badge.cancelled {
-            background: var(--danger-bg);
-            color: var(--danger);
-        }
-        
-        .consultation-card .lab-indicator {
-            font-size: 0.7rem;
-            color: var(--purple);
-        }
-        
-        .consultation-card .lab-indicator .pending {
-            color: var(--warning);
-        }
-        
-        .consultation-card .lab-indicator .completed {
-            color: var(--success);
-        }
-        
-        .consultation-card .bill-indicator {
-            font-size: 0.7rem;
-        }
-        
-        .consultation-card .bill-indicator .pending {
-            color: var(--warning);
-        }
-        
-        .consultation-card .bill-indicator .paid {
-            color: var(--success);
-        }
-        
-        .consultation-card .bill-amount {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .consultation-card .bill-amount .amount {
-            font-weight: 600;
-        }
+        .consultation-card .lab-indicator { font-size: 0.7rem; color: var(--purple); }
+        .consultation-card .lab-indicator .pending { color: var(--warning); }
+        .consultation-card .lab-indicator .completed { color: var(--success); }
+        .consultation-card .bill-indicator { font-size: 0.7rem; }
+        .consultation-card .bill-indicator .pending { color: var(--warning); }
+        .consultation-card .bill-indicator .paid { color: var(--success); }
+        .consultation-card .bill-amount { font-size: 0.7rem; color: var(--text-secondary); }
+        .consultation-card .bill-amount .amount { font-weight: 600; }
         
         .consultation-card .card-footer {
             display: flex;
@@ -898,9 +554,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             color: var(--text-secondary);
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
+        /* Buttons */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -915,160 +569,25 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             text-decoration: none;
         }
         
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11,94,215,0.3); }
+        .btn-success { background: var(--success); color: white; }
+        .btn-success:hover { background: var(--success-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5,150,105,0.3); }
+        .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
+        .btn-outline:hover { background: var(--bg-body); border-color: var(--primary); color: var(--primary); }
+        .btn-sm { padding: 4px 10px; font-size: 0.65rem; border-radius: 6px; }
         
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-warning {
-            background: var(--warning);
-            color: white;
-        }
-        
-        .btn-warning:hover {
-            background: #B45309;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-sm { 
-            padding: 4px 10px; 
-            font-size: 0.65rem; 
-            border-radius: 6px; 
-        }
-        
-        .btn-danger {
-            background: var(--danger);
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: var(--danger-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-        }
-        
-        .btn-purple {
-            background: var(--purple);
-            color: white;
-        }
-        
-        .btn-purple:hover {
-            background: #6D28D9;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
-        }
-        
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
+        /* Empty State */
         .empty-state {
             text-align: center;
             padding: 60px 20px;
             color: var(--text-secondary);
         }
+        .empty-state i { font-size: 3rem; color: var(--border-color); display: block; margin-bottom: 12px; }
+        .empty-state .empty-title { font-size: 1.2rem; font-weight: 600; color: var(--text-primary); }
+        .empty-state .empty-sub { font-size: 0.85rem; color: var(--text-secondary); }
         
-        .empty-state i {
-            font-size: 3rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 12px;
-        }
-        
-        .empty-state .empty-title {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .empty-state .empty-sub {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-        }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { 
-            color: var(--primary); 
-            font-weight: 600; 
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .role-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
+        /* Toast */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1086,58 +605,22 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             color: white;
             box-shadow: var(--shadow-lg);
         }
-        
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
+        /* Footer */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
         }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .consultation-card { padding: 14px 16px; }
-            .filter-tabs { padding: 6px 8px; }
-            .filter-tab { padding: 6px 12px; font-size: 0.7rem; }
-        }
-        
-        @media (max-width: 640px) {
-            .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .consultation-card { padding: 10px 12px; }
-            .consultation-card .card-header { flex-direction: column; }
-            .filter-tabs { flex-wrap: wrap; }
-            .filter-tab { flex: 1; justify-content: center; }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         .live-badge {
             display: inline-flex;
@@ -1152,61 +635,46 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             border: 1px solid rgba(52, 211, 153, 0.3);
         }
         .live-badge i { font-size: 0.4rem; }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
+        
+        @media (max-width: 1024px) {
+            .main-content { margin-left: 0; padding: 16px; }
+            .sidebar-toggle-btn { display: block; }
+        }
+        
+        @media (max-width: 768px) {
+            .page-header-custom { padding: 16px 18px; }
+            .page-header-custom .page-title { font-size: 1.3rem; }
+            .consultation-card { padding: 14px 16px; }
+            .filter-tabs { padding: 6px 8px; }
+            .filter-tab { padding: 6px 12px; font-size: 0.7rem; }
+        }
+        
+        @media (max-width: 640px) {
+            .main-content { padding: 10px; }
+            .consultation-card { padding: 10px 12px; }
+            .consultation-card .card-header { flex-direction: column; }
+            .filter-tabs { flex-wrap: wrap; }
+            .filter-tab { flex: 1; justify-content: center; }
+        }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search consultations..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($_SESSION['branch_name'] ?? 'Dodoma') ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
+<!-- MAIN CONTENT (Header and Sidebar are included from components) -->
 <!-- ================================================================ -->
 <main class="main-content">
 
     <!-- ================================================================ -->
     <!-- PAGE HEADER -->
     <!-- ================================================================ -->
-    <div class="page-header">
+    <div class="page-header-custom">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-stethoscope"></i>
@@ -1229,7 +697,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </span>
             </p>
         </div>
-        <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
@@ -1456,91 +924,48 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - Uses shared header's dark mode
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
+    // The shared header already handles dark mode via cookie
+    // This page's dark mode is controlled by the header
     
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
     // ================================================================
-    // SIDEBAR TOGGLE
+    // SIDEBAR TOGGLE (for responsive)
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
+    if (sidebarToggle && sidebar) {
+        sidebarToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+        });
+    }
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
     });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME (for footer timestamp)
     // ================================================================
-    function updateDateTime() {
+    function updateFooterTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
         
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = timeStr;
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var filter = '<?= $filter ?>';
-        if (query.length > 0) {
-            window.location.href = 'consultations.php?filter=' + filter + '&search=' + encodeURIComponent(query);
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
+    updateFooterTime();
 
     // ================================================================
     // TOAST
@@ -1589,9 +1014,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     if (lastHash !== data.hash) {
                         lastHash = data.hash;
                         updateConsultations(data.data);
-                        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + data.timestamp;
+                        updateFooterTime();
                         
-                        // Show notification on change
+                        // Show notification on change (after first update)
                         if (updateCount > 1) {
                             showToast('🔄 Updated', 'Consultations auto-updated at ' + data.timestamp, 'info');
                         }
@@ -1610,11 +1035,17 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         if (!container) return;
         
         // Update counts in filter tabs
-        document.querySelector('.filter-tab[href*="filter=pending"] .tab-badge').textContent = data.counts.pending;
-        document.querySelector('.filter-tab[href*="filter=lab_test"] .tab-badge').textContent = data.counts.lab_test;
-        document.querySelector('.filter-tab[href*="filter=prescribed"] .tab-badge').textContent = data.counts.prescribed;
-        document.querySelector('.filter-tab[href*="filter=completed"] .tab-badge').textContent = data.counts.completed;
-        document.querySelector('.filter-tab[href*="filter=cancelled"] .tab-badge').textContent = data.counts.cancelled;
+        var pendingTab = document.querySelector('.filter-tab[href*="filter=pending"] .tab-badge');
+        var labTestTab = document.querySelector('.filter-tab[href*="filter=lab_test"] .tab-badge');
+        var prescribedTab = document.querySelector('.filter-tab[href*="filter=prescribed"] .tab-badge');
+        var completedTab = document.querySelector('.filter-tab[href*="filter=completed"] .tab-badge');
+        var cancelledTab = document.querySelector('.filter-tab[href*="filter=cancelled"] .tab-badge');
+        
+        if (pendingTab) pendingTab.textContent = data.counts.pending;
+        if (labTestTab) labTestTab.textContent = data.counts.lab_test;
+        if (prescribedTab) prescribedTab.textContent = data.counts.prescribed;
+        if (completedTab) completedTab.textContent = data.counts.completed;
+        if (cancelledTab) cancelledTab.textContent = data.counts.cancelled;
         
         // Update page header total
         var totalBadge = document.querySelector('.header-badge');
@@ -1681,8 +1112,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
+            var searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
         }
         if (e.key === 'F5') {
             e.preventDefault();
@@ -1699,11 +1133,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Full Consultations (Auto-Update)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Pending: <?= $pending_count ?> | Lab Test: <?= $lab_test_count ?> | Prescribed: <?= $prescribed_count ?> | Completed: <?= $completed_count ?> | Cancelled: <?= $cancelled_count ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👨‍⚕️ Braick - Consultations (Using Shared Header)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Pending: <?= $pending_count ?> | Lab Test: <?= $lab_test_count ?> | Waiting: <?= $prescribed_count ?> | Completed: <?= $completed_count ?> | Cancelled: <?= $cancelled_count ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Auto-update every 3 seconds without refresh', 'font-size:13px; color:#059669;');
     console.log('%c📋 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Status: pending, assigned, with_doctor, lab_test, prescribed, completed, cancelled', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Uses shared header for dark mode, date/time, status toggle', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
