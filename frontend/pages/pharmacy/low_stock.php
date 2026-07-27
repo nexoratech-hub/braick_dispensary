@@ -4,6 +4,8 @@
 // PHARMACY - LOW STOCK & OUT OF STOCK REPORT
 // BRAICK DISPENSARY
 // ================================================================
+// FIXED: Expiring medicines shown FIRST (sorted by expiry date)
+// ================================================================
 
 session_start();
 
@@ -43,7 +45,7 @@ $filter = isset($_GET['filter']) ? $_GET['filter'] : 'all'; // all, low, out
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ================================================================
-// BUILD QUERY
+// BUILD QUERY - SORT: EXPIRING FIRST
 // ================================================================
 $query = "
     SELECT *, 
@@ -72,7 +74,20 @@ if (!empty($search)) {
     $params[] = "%$search%";
 }
 
-$query .= " ORDER BY quantity ASC, medication_name ASC";
+// ================================================================
+// ✅ FIX: Sort by expiry date first (expiring soon at top)
+// ================================================================
+$query .= " ORDER BY 
+    CASE 
+        WHEN expiry_date IS NULL THEN 2
+        WHEN expiry_date < CURDATE() THEN 0  -- Expired (highest priority)
+        WHEN expiry_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY) THEN 1  -- Expiring in 7 days
+        WHEN expiry_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY) THEN 3  -- Expiring in 30 days
+        ELSE 4  -- Valid for longer
+    END ASC,
+    expiry_date ASC,
+    quantity ASC,
+    medication_name ASC";
 
 $stmt = $db->prepare($query);
 $stmt->execute($params);
@@ -102,6 +117,20 @@ $out_of_stock_count = $stmt->fetch()['count'] ?? 0;
 
 // Total Low Stock (both low and out)
 $total_low_stock = $low_stock_count + $out_of_stock_count;
+
+// ================================================================
+// GET EXPIRING SOON COUNT (for header badge)
+// ================================================================
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM medications_inventory 
+    WHERE branch_id = ? 
+    AND status = 'active'
+    AND expiry_date IS NOT NULL 
+    AND expiry_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+");
+$stmt->execute([$user_branch_id]);
+$expiring_soon_count = $stmt->fetch()['count'] ?? 0;
 
 // ================================================================
 // GET STATISTICS FOR SIDEBAR
@@ -720,6 +749,40 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border-color: #F87171;
     }
     
+    /* ================================================================
+       EXPIRING SOON HIGHLIGHT ROW
+       ================================================================ */
+    .row-expiring-soon {
+        border-left: 4px solid var(--warning) !important;
+        background: var(--warning-light) !important;
+    }
+    
+    .row-expired {
+        border-left: 4px solid var(--danger) !important;
+        background: var(--danger-light) !important;
+    }
+    
+    .row-expiring-soon td:first-child {
+        border-radius: 8px 0 0 8px;
+    }
+    
+    .row-expiring-soon td:last-child {
+        border-radius: 0 8px 8px 0;
+    }
+    
+    [data-theme="dark"] .row-expiring-soon {
+        background: #3D2E0A !important;
+        border-left-color: #FBBF24 !important;
+    }
+    
+    [data-theme="dark"] .row-expired {
+        background: #3A1A1A !important;
+        border-left-color: #F87171 !important;
+    }
+    
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
     .animate-fade-in-up {
         animation: fadeInUp 0.5s ease forwards;
         opacity: 0;
@@ -823,6 +886,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
                     <i class="fas fa-exclamation-triangle mr-1"></i> <?= $total_low_stock ?> need attention
                 </span>
+                <?php if ($expiring_soon_count > 0): ?>
+                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200 animate-pulse">
+                    <i class="fas fa-clock mr-1"></i> <?= $expiring_soon_count ?> expiring soon
+                </span>
+                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -864,6 +932,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-trend"><i class="fas fa-times-circle"></i> Empty</span>
             </div>
             <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
+        </a>
+        
+        <a href="low_stock.php?filter=all" class="stat-card purple">
+            <div>
+                <p class="stat-label">Expiring Soon</p>
+                <p class="stat-number"><?= number_format($expiring_soon_count) ?></p>
+                <span class="stat-trend"><i class="fas fa-clock"></i> Within 30 days</span>
+            </div>
+            <div class="stat-icon"><i class="fas fa-clock"></i></div>
         </a>
     </div>
 
@@ -910,7 +987,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- LOW STOCK TABLE -->
+    <!-- LOW STOCK TABLE - SORTED BY EXPIRY DATE (EXPIRING FIRST) -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="card-header">
@@ -918,6 +995,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <i class="fas fa-list title-orange mr-2"></i>
                 Medicines Needing Restock
                 <span class="result-count ml-2">(<strong><?= number_format(count($medicines)) ?></strong> record(s))</span>
+                <?php if ($expiring_soon_count > 0): ?>
+                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200 animate-pulse">
+                    <i class="fas fa-clock mr-1"></i> Expiring soon shown first
+                </span>
+                <?php endif; ?>
             </h3>
         </div>
         
@@ -932,8 +1014,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             <th>Current Qty</th>
                             <th>Reorder Level</th>
                             <th>Status</th>
-                            <th>Batch Number</th>
                             <th>Expiry Date</th>
+                            <th>Days Left</th>
+                            <th>Batch Number</th>
                             <th>Supplier</th>
                             <th style="border-radius: 0 8px 0 0;">Actions</th>
                         </tr>
@@ -949,17 +1032,33 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     $stock_label = 'Out of Stock';
                                 }
                                 
+                                // Expiry status
                                 $expiry_status = 'valid';
+                                $days_remaining = '-';
+                                $days_class = 'good';
+                                $row_class = '';
+                                
                                 if (!empty($item['expiry_date'])) {
-                                    $days_until_expiry = (strtotime($item['expiry_date']) - time()) / 86400;
-                                    if ($days_until_expiry < 0) {
+                                    $days_remaining = $item['days_remaining'];
+                                    if ($days_remaining < 0) {
                                         $expiry_status = 'expired';
-                                    } elseif ($days_until_expiry <= 30) {
+                                        $days_class = 'danger';
+                                        $row_class = 'row-expired';
+                                    } elseif ($days_remaining <= 7) {
                                         $expiry_status = 'expiring';
+                                        $days_class = 'danger';
+                                        $row_class = 'row-expiring-soon';
+                                    } elseif ($days_remaining <= 30) {
+                                        $expiry_status = 'expiring';
+                                        $days_class = 'warning';
+                                        $row_class = 'row-expiring-soon';
+                                    } else {
+                                        $expiry_status = 'valid';
+                                        $days_class = 'good';
                                     }
                                 }
                             ?>
-                            <tr>
+                            <tr class="<?= $row_class ?>">
                                 <td><?= $counter++ ?></td>
                                 <td>
                                     <strong><?= htmlspecialchars($item['medication_name']) ?></strong>
@@ -979,17 +1078,34 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <?php if (!empty($item['batch_number'])): ?>
-                                        <span class="batch-number"><?= htmlspecialchars($item['batch_number']) ?></span>
+                                    <?php if (!empty($item['expiry_date'])): ?>
+                                        <span class="expiry-badge <?= $expiry_status ?>">
+                                            <?= date('M d, Y', strtotime($item['expiry_date'])) ?>
+                                        </span>
                                     <?php else: ?>
                                         <span class="text-xs text-gray-400">N/A</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <?php if (!empty($item['expiry_date'])): ?>
-                                        <span class="expiry-badge <?= $expiry_status ?>">
-                                            <?= date('M d, Y', strtotime($item['expiry_date'])) ?>
+                                    <?php if (!empty($item['expiry_date']) && $days_remaining !== '-'): ?>
+                                        <span class="days-remaining <?= $days_class ?>" style="font-size:0.7rem;font-weight:600;padding:2px 8px;border-radius:10px;display:inline-flex;align-items:center;gap:4px;background:<?= $days_class === 'danger' ? 'var(--danger-light)' : ($days_class === 'warning' ? 'var(--warning-light)' : 'var(--success-light)') ?>;color:<?= $days_class === 'danger' ? 'var(--danger)' : ($days_class === 'warning' ? 'var(--warning)' : 'var(--success)') ?>;">
+                                            <?php if ($days_remaining < 0): ?>
+                                                <i class="fas fa-skull"></i> EXPIRED
+                                            <?php elseif ($days_remaining <= 7): ?>
+                                                <i class="fas fa-clock"></i> <?= $days_remaining ?> days ⚠️
+                                            <?php elseif ($days_remaining <= 30): ?>
+                                                <i class="fas fa-clock"></i> <?= $days_remaining ?> days
+                                            <?php else: ?>
+                                                <i class="fas fa-check"></i> <?= $days_remaining ?> days
+                                            <?php endif; ?>
                                         </span>
+                                    <?php else: ?>
+                                        <span class="text-xs text-gray-400">N/A</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if (!empty($item['batch_number'])): ?>
+                                        <span class="batch-number"><?= htmlspecialchars($item['batch_number']) ?></span>
                                     <?php else: ?>
                                         <span class="text-xs text-gray-400">N/A</span>
                                     <?php endif; ?>
@@ -1036,24 +1152,42 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 Restock Recommendations
             </h3>
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div class="p-4 border rounded-lg" style="border-color: var(--border-color);">
-                <h4 class="font-semibold text-orange-600 mb-2">
-                    <i class="fas fa-exclamation-triangle mr-1"></i> Priority - Out of Stock
+                <h4 class="font-semibold text-red-600 mb-2">
+                    <i class="fas fa-skull mr-1"></i> Expired
                 </h4>
                 <p class="text-sm text-gray-600">
                     <?php 
-                        $out_items = array_filter($medicines, function($item) {
-                            return $item['quantity'] <= 0;
+                        $expired_items = array_filter($medicines, function($item) {
+                            return !empty($item['expiry_date']) && $item['days_remaining'] < 0;
                         });
                     ?>
-                    <strong><?= count($out_items) ?></strong> medicine(s) are completely out of stock.
-                    <?php if (count($out_items) > 0): ?>
+                    <strong><?= count($expired_items) ?></strong> medicine(s) have expired.
+                    <?php if (count($expired_items) > 0): ?>
+                        <span class="block text-xs text-red-500 mt-1 font-semibold">
+                            ⚠️ Should be removed from inventory!
+                        </span>
+                    <?php endif; ?>
+                </p>
+            </div>
+            <div class="p-4 border rounded-lg" style="border-color: var(--border-color);">
+                <h4 class="font-semibold text-orange-600 mb-2">
+                    <i class="fas fa-clock mr-1"></i> Expiring Soon (30 days)
+                </h4>
+                <p class="text-sm text-gray-600">
+                    <?php 
+                        $expiring_items = array_filter($medicines, function($item) {
+                            return !empty($item['expiry_date']) && $item['days_remaining'] >= 0 && $item['days_remaining'] <= 30;
+                        });
+                    ?>
+                    <strong><?= count($expiring_items) ?></strong> medicine(s) expiring within 30 days.
+                    <?php if (count($expiring_items) > 0): ?>
                         <span class="block text-xs text-gray-400 mt-1">
                             <?php 
-                                $names = array_slice(array_column($out_items, 'medication_name'), 0, 5);
+                                $names = array_slice(array_column($expiring_items, 'medication_name'), 0, 5);
                                 echo implode(', ', $names);
-                                if (count($out_items) > 5) echo ' and ' . (count($out_items) - 5) . ' more';
+                                if (count($expiring_items) > 5) echo ' and ' . (count($expiring_items) - 5) . ' more';
                             ?>
                         </span>
                     <?php endif; ?>
@@ -1061,21 +1195,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
             <div class="p-4 border rounded-lg" style="border-color: var(--border-color);">
                 <h4 class="font-semibold text-orange-600 mb-2">
-                    <i class="fas fa-clock mr-1"></i> Low Stock - Order Soon
+                    <i class="fas fa-exclamation-triangle mr-1"></i> Out of Stock
                 </h4>
                 <p class="text-sm text-gray-600">
                     <?php 
-                        $low_items = array_filter($medicines, function($item) {
-                            return $item['quantity'] > 0 && $item['quantity'] <= $item['reorder_level'];
+                        $out_items = array_filter($medicines, function($item) {
+                            return $item['quantity'] <= 0;
                         });
                     ?>
-                    <strong><?= count($low_items) ?></strong> medicine(s) are below reorder level.
-                    <?php if (count($low_items) > 0): ?>
+                    <strong><?= count($out_items) ?></strong> medicine(s) completely out of stock.
+                    <?php if (count($out_items) > 0): ?>
                         <span class="block text-xs text-gray-400 mt-1">
                             <?php 
-                                $names = array_slice(array_column($low_items, 'medication_name'), 0, 5);
+                                $names = array_slice(array_column($out_items, 'medication_name'), 0, 5);
                                 echo implode(', ', $names);
-                                if (count($low_items) > 5) echo ' and ' . (count($low_items) - 5) . ' more';
+                                if (count($out_items) > 5) echo ' and ' . (count($out_items) - 5) . ' more';
                             ?>
                         </span>
                     <?php endif; ?>
@@ -1240,9 +1374,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick - Low Stock Report', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c💊 Braick - Low Stock Report (Expiring First)', 'font-size:18px; font-weight:bold; color:#D97706;');
     console.log('%c📦 Low Stock: <?= $low_stock_count ?> | Out of Stock: <?= $out_of_stock_count ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c⚠️ Total items needing attention: <?= $total_low_stock ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c⏰ Expiring Soon: <?= $expiring_soon_count ?> (shown first)', 'font-size:13px; color:#DC2626;');
+    console.log('%c⚠️ Total items needing attention: <?= $total_low_stock ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Sorted by: Expiry Date (expiring first) → Quantity ASC → Name ASC', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

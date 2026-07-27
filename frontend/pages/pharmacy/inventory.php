@@ -1,10 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/inventory.php
-// PHARMACY - MEDICINE INVENTORY (VIEW ONLY + ADD)
-// BRAICK DISPENSARY
+// PHARMACY - MEDICINE INVENTORY (VIEW + ADD)
 // ================================================================
-// FIXED: Added "Add Medicine" button with working modal
+// FIXED: 
+// 1. Out of stock items removed from main inventory
+// 2. Low Stock card includes out of stock
+// 3. No separate Out of Stock card
 // ================================================================
 
 session_start();
@@ -135,7 +137,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = "✅ Medicine added successfully! Batch: <strong>$batch_number</strong>";
                 $message_type = 'success';
                 
-                // Redirect to refresh
                 $_SESSION['inventory_message'] = $message;
                 $_SESSION['inventory_message_type'] = $message_type;
                 header('Location: inventory.php?added=1');
@@ -172,12 +173,15 @@ $stock_filter = isset($_GET['stock']) ? trim($_GET['stock']) : '';
 $expiry_filter = isset($_GET['expiry']) ? trim($_GET['expiry']) : '';
 $view_id = isset($_GET['view']) ? (int)$_GET['view'] : 0;
 
-// Build query
+// ================================================================
+// BUILD QUERY - EXCLUDE OUT OF STOCK FROM MAIN INVENTORY
+// ================================================================
 $query = "
     SELECT *, 
         DATEDIFF(expiry_date, CURDATE()) as days_remaining
     FROM medications_inventory 
     WHERE branch_id = ?
+    AND quantity > 0  -- ✅ EXCLUDE OUT OF STOCK
 ";
 $params = [$user_branch_id];
 
@@ -198,8 +202,10 @@ if ($status_filter === 'active') {
 }
 
 if ($stock_filter === 'low') {
+    // ✅ LOW STOCK: includes quantity <= reorder_level AND quantity > 0
     $query .= " AND quantity <= reorder_level AND quantity > 0 AND status = 'active'";
 } elseif ($stock_filter === 'out') {
+    // ✅ OUT OF STOCK: quantity = 0
     $query .= " AND quantity = 0 AND status = 'active'";
 }
 
@@ -228,18 +234,23 @@ if ($view_id > 0) {
 // ================================================================
 // GET STATISTICS
 // ================================================================
+// Total active medicines (including out of stock for counting)
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM medications_inventory WHERE branch_id = ? AND status = 'active'");
 $stmt->execute([$user_branch_id]);
 $total_medicines = $stmt->fetch()['count'] ?? 0;
 
+// Low Stock + Out of Stock combined
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM medications_inventory 
-    WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
+    WHERE branch_id = ? 
+    AND status = 'active' 
+    AND quantity <= reorder_level
 ");
 $stmt->execute([$user_branch_id]);
 $low_stock_count = $stmt->fetch()['count'] ?? 0;
 
+// Out of Stock only (for display in filter)
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM medications_inventory 
@@ -248,6 +259,7 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $out_of_stock = $stmt->fetch()['count'] ?? 0;
 
+// Expiring soon
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM medications_inventory 
@@ -574,7 +586,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
-       BUTTONS - ADD MEDICINE (VISIBLE)
+       BUTTONS
        ================================================================ */
     .btn-add {
         background: var(--success);
@@ -1556,7 +1568,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <i class="fas fa-warehouse mr-2" style="color: var(--primary);"></i> Medicine Inventory
             </h1>
             <p class="page-subtitle">
-                View all medicines in stock
+                View all medicines in stock (out of stock hidden)
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
@@ -1576,7 +1588,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
+    <!-- STATISTICS CARDS - OUT OF STOCK REMOVED -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <a href="inventory.php" class="stat-card blue">
@@ -1590,20 +1602,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         <a href="inventory.php?stock=low" class="stat-card orange">
             <div>
-                <p class="stat-label">Low Stock</p>
-                <p class="stat-number"><?= number_format($low_stock_count) ?></p>
+                <p class="stat-label">Low Stock <span style="font-size:0.6rem;">(inc. out of stock)</span></p>
+                <p class="stat-number"><?= number_format($low_stock_count + $out_of_stock) ?></p>
                 <span class="stat-trend"><i class="fas fa-exclamation-triangle"></i> Click to filter</span>
             </div>
             <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
-        </a>
-        
-        <a href="inventory.php?stock=out" class="stat-card red">
-            <div>
-                <p class="stat-label">Out of Stock</p>
-                <p class="stat-number"><?= number_format($out_of_stock) ?></p>
-                <span class="stat-trend"><i class="fas fa-times-circle"></i> Click to filter</span>
-            </div>
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
         </a>
         
         <a href="inventory.php?expiry=expiring" class="stat-card red">
@@ -1613,6 +1616,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-trend"><i class="fas fa-clock"></i> Click to filter</span>
             </div>
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
+        </a>
+        
+        <!-- ✅ New Card: Show in stock only (quantity > 0) -->
+        <?php 
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM medications_inventory WHERE branch_id = ? AND quantity > 0 AND status = 'active'");
+            $stmt->execute([$user_branch_id]);
+            $in_stock_count = $stmt->fetch()['count'] ?? 0;
+        ?>
+        <a href="inventory.php?status=active" class="stat-card purple">
+            <div>
+                <p class="stat-label">In Stock</p>
+                <p class="stat-number"><?= number_format($in_stock_count) ?></p>
+                <span class="stat-trend"><i class="fas fa-check-circle"></i> Click to view</span>
+            </div>
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
         </a>
     </div>
 
@@ -1631,10 +1649,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <div class="card mb-5 animate-fade-in-up">
         <div class="filter-group">
-            <a href="inventory.php" class="filter-btn <?= empty($status_filter) && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
+            <a href="inventory.php" class="filter-btn <?= empty($status_filter) && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All (In Stock)</a>
             <a href="inventory.php?status=active" class="filter-btn <?= $status_filter === 'active' ? 'active' : '' ?>">Active</a>
+            <a href="inventory.php?stock=low" class="filter-btn <?= $stock_filter === 'low' ? 'active' : '' ?>">Low Stock</a>
+            <a href="inventory.php?stock=out" class="filter-btn <?= $stock_filter === 'out' ? 'active' : '' ?>">Out of Stock</a>
             <a href="inventory.php?status=inactive" class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">Inactive</a>
-            <?php if (!empty($stock_filter) || !empty($expiry_filter)): ?>
+            <?php if (!empty($stock_filter) || !empty($expiry_filter) || !empty($status_filter)): ?>
                 <a href="inventory.php" class="filter-btn clear-filter">
                     <i class="fas fa-times"></i> Clear Filter
                 </a>
@@ -1677,6 +1697,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <?php if (!empty($stock_filter) || !empty($expiry_filter)): ?>
                     <span class="ml-2 inline-flex bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs border border-orange-200">
                         <i class="fas fa-filter mr-1"></i> Filtered
+                    </span>
+                <?php endif; ?>
+                <?php if ($stock_filter === 'out'): ?>
+                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                        <i class="fas fa-exclamation-circle mr-1"></i> Out of Stock
                     </span>
                 <?php endif; ?>
             </h3>
@@ -2361,13 +2386,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
     
-    console.log('%c💊 Braick - Inventory (VIEW + ADD)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📦 Total: <?= $total_medicines ?> | Low Stock: <?= $low_stock_count ?>', 'font-size:13px; color:#059669;');
+    console.log('%c💊 Braick - Inventory (Out of Stock Hidden)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📦 Total: <?= $total_medicines ?> | Low Stock: <?= $low_stock_count + $out_of_stock ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📦 In Stock: <?= $in_stock_count ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c📦 Out of Stock: <?= $out_of_stock ?> (hidden from main list)', 'font-size:13px; color:#DC2626;');
     console.log('%c📅 Expiring Soon: <?= $expiring_soon ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Edit & Delete buttons REMOVED - View only', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Add Medicine button VISIBLE - Working modal', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Cards - Clickable to filter table', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Days Remaining - Shows days until expiry', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Out of stock removed from main inventory', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Low Stock card includes out of stock', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Click "Out of Stock" filter to view them', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>
