@@ -2,7 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/add_result.php
 // LABORATORY - ADD TEST RESULT
-// WITH SAMPLE RESULTS TO PICK OR TYPE MANUALLY
+// SHOWS: Ultrasound Forms OR Regular Textarea based on test type
+// WITH PRINT BUTTON
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -46,118 +47,7 @@ $db = getDB();
 $message = '';
 $message_type = '';
 $lab_test = null;
-
-// ================================================================
-// SAMPLE RESULTS FOR DIFFERENT TEST TYPES
-// ================================================================
-$sample_results = [
-    'Blood Glucose (Fasting)' => [
-        'Normal' => '70-100 mg/dL',
-        'Prediabetes' => '100-125 mg/dL',
-        'Diabetes' => '>126 mg/dL',
-    ],
-    'Blood Glucose (Random)' => [
-        'Normal' => '<140 mg/dL',
-        'Prediabetes' => '140-199 mg/dL',
-        'Diabetes' => '>200 mg/dL',
-    ],
-    'Complete Blood Count (CBC)' => [
-        'Normal' => 'RBC: 4.5-5.5M, WBC: 4.5-11K, HGB: 13-17g/dL, PLT: 150-400K',
-        'Anemia' => 'HGB < 13g/dL (Male) or < 12g/dL (Female)',
-        'Infection' => 'WBC > 11K',
-    ],
-    'Lipid Profile' => [
-        'Normal' => 'Total: <200, LDL: <100, HDL: >40, TG: <150',
-        'High Cholesterol' => 'Total: >240, LDL: >160',
-        'Low HDL' => 'HDL: <40 (Male) or <50 (Female)',
-    ],
-    'Liver Function Test (LFT)' => [
-        'Normal' => 'AST: 10-40, ALT: 7-56, ALP: 44-147, T.Bili: 0.1-1.2',
-        'Hepatitis' => 'ALT > 100, AST > 80',
-        'Biliary Obstruction' => 'ALP > 300, T.Bili > 5',
-    ],
-    'Renal Function Test (RFT)' => [
-        'Normal' => 'Creatinine: 0.6-1.2, BUN: 7-20, Uric Acid: 3.5-7.2',
-        'Kidney Disease' => 'Creatinine > 1.5, BUN > 30',
-        'Dehydration' => 'BUN > 25, BUN/Cr > 20',
-    ],
-    'Malaria Rapid Test' => [
-        'Negative' => 'Negative',
-        'Positive (Pf)' => 'Positive - Plasmodium falciparum',
-        'Positive (Pv)' => 'Positive - Plasmodium vivax',
-        'Mixed' => 'Positive - Mixed infection',
-    ],
-    'Typhoid Test (Widal)' => [
-        'Negative' => 'O: <1:80, H: <1:160',
-        'Positive' => 'O: ≥1:160, H: ≥1:320',
-    ],
-    'HIV Rapid Test' => [
-        'Negative' => 'Non-reactive',
-        'Positive' => 'Reactive - Confirm with ELISA',
-    ],
-    'Pregnancy Test (Urine)' => [
-        'Negative' => 'Negative',
-        'Positive' => 'Positive - HCG detected',
-    ],
-    'Thyroid Function Test (TFT)' => [
-        'Normal' => 'TSH: 0.4-4.0, Free T4: 0.8-1.8, Free T3: 2.3-4.2',
-        'Hyperthyroidism' => 'TSH < 0.4, Free T4 > 1.8',
-        'Hypothyroidism' => 'TSH > 4.0, Free T4 < 0.8',
-    ],
-    'Urinalysis' => [
-        'Normal' => 'pH: 4.5-8.0, Protein: Negative, Glucose: Negative, RBC: 0-2/hpf, WBC: 0-5/hpf',
-        'UTI' => 'WBC > 10/hpf, Bacteria present, Nitrite positive',
-        'Proteinuria' => 'Protein > 30 mg/dL',
-        'Glucosuria' => 'Glucose Positive',
-    ],
-    'COVID-19 Rapid Antigen Test' => [
-        'Negative' => 'Negative',
-        'Positive' => 'Positive - SARS-CoV-2 antigen detected',
-    ],
-    'COVID-19 PCR Test' => [
-        'Negative' => 'Negative (Not detected)',
-        'Positive' => 'Positive (Detected) - Ct value: < 35',
-    ],
-    'Hepatitis B Surface Antigen (HBsAg)' => [
-        'Negative' => 'Non-reactive',
-        'Positive' => 'Reactive - Hepatitis B infection',
-    ],
-    'Hepatitis C Antibody (Anti-HCV)' => [
-        'Negative' => 'Non-reactive',
-        'Positive' => 'Reactive - Hepatitis C exposure',
-    ],
-    'CD4 Count' => [
-        'Normal' => '> 500 cells/mm³',
-        'Mild Immunosuppression' => '200-499 cells/mm³',
-        'Severe Immunosuppression' => '< 200 cells/mm³',
-    ],
-    'Viral Load HIV' => [
-        'Undetectable' => '< 20 copies/mL (Undetectable)',
-        'Low' => '20-1000 copies/mL',
-        'High' => '> 1000 copies/mL',
-    ],
-    'Echocardiogram' => [
-        'Normal' => 'Normal study - No significant abnormalities',
-        'Mild Abnormality' => 'Mild left ventricular hypertrophy',
-        'Moderate Abnormality' => 'Moderate mitral regurgitation',
-        'Severe Abnormality' => 'Severe aortic stenosis',
-    ],
-    'ECG (Electrocardiogram)' => [
-        'Normal' => 'Normal sinus rhythm, normal axis, normal intervals',
-        'Abnormal' => 'ST-T changes, borderline ECG',
-        'Ischemia' => 'ST depression, T wave inversion',
-    ],
-    'Chest X-Ray' => [
-        'Normal' => 'Normal chest X-ray',
-        'Abnormal' => 'Abnormal - Requires further evaluation',
-        'Pneumonia' => 'Consolidation, infiltrates',
-    ],
-    'Abdominal Ultrasound' => [
-        'Normal' => 'Normal study - No significant abnormalities',
-        'Abnormal' => 'Abnormal - Requires further evaluation',
-        'Gallstones' => 'Gallstones present',
-    ],
-];
+$templates = [];
 
 // ================================================================
 // GET LAB TEST DETAILS
@@ -196,6 +86,46 @@ try {
 }
 
 // ================================================================
+// CHECK IF TEST IS ULTRASOUND
+// ================================================================
+$test_name = $lab_test['test_name'] ?? '';
+$is_ultrasound = false;
+
+$ultrasound_keywords = [
+    'ultrasound', 'sonography', 'US-', 'sono',
+    'Obstetric', 'Abdominal', 'Pelvic', 'Pelvis',
+    'Twin', 'Single', 'Early Pregnancy',
+    'Abdomen', 'Obst', 'GYN', 'Fetal'
+];
+
+foreach ($ultrasound_keywords as $keyword) {
+    if (stripos($test_name, $keyword) !== false) {
+        $is_ultrasound = true;
+        break;
+    }
+}
+
+// ================================================================
+// GET TEMPLATES FROM DATABASE (Only if Ultrasound)
+// ================================================================
+if ($is_ultrasound) {
+    try {
+        $stmt = $db->prepare("
+            SELECT id, template_name, test_type, category, template_html 
+            FROM lab_result_templates 
+            WHERE is_active = 1 
+            AND category = 'ultrasound'
+            ORDER BY template_name
+        ");
+        $stmt->execute();
+        $templates = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        error_log("Templates error: " . $e->getMessage());
+        $templates = [];
+    }
+}
+
+// ================================================================
 // HANDLE FORM SUBMISSION
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -213,7 +143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $db->beginTransaction();
                 
-                // Update lab_tests
+                // ✅ FIX: Update lab_tests WITHOUT technician_id
                 $stmt = $db->prepare("
                     UPDATE lab_tests 
                     SET results = ?, status = ?, notes = ?, 
@@ -222,7 +152,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $stmt->execute([$result, $status, $notes, $lab_test_id, $user_branch_id]);
                 
-                // Update lab_request_items if exists
+                // Update lab_request_items
                 $stmt = $db->prepare("
                     UPDATE lab_request_items 
                     SET result = ?, status = ?, completed_at = NOW()
@@ -230,7 +160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $stmt->execute([$result, $status, $lab_test['request_id'], $lab_test['test_name']]);
                 
-                // Check if all tests for this visit are completed
+                // Check if all tests completed
                 $stmt = $db->prepare("
                     SELECT COUNT(*) as total,
                            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
@@ -241,7 +171,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $counts = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($counts['total'] > 0 && $counts['total'] == $counts['completed']) {
-                    // All tests completed - update lab_requests
                     $stmt = $db->prepare("
                         UPDATE lab_requests 
                         SET status = 'completed', completed_at = NOW(), updated_at = NOW()
@@ -271,26 +200,119 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
-// GET SAMPLE RESULTS FOR THIS TEST
+// GENERATE ULTRASOUND FORMS FROM TEMPLATES
 // ================================================================
-$samples = [];
-$test_name = $lab_test['test_name'] ?? '';
-foreach ($sample_results as $key => $sample) {
-    if (stripos($key, $test_name) !== false || stripos($test_name, $key) !== false) {
-        $samples = $sample;
-        break;
+function generateFormsFromTemplates($templates, $patient, $user_full_name) {
+    $html = '';
+    $counter = 0;
+    
+    foreach ($templates as $template) {
+        $counter++;
+        $form_id = 'form_' . $template['id'];
+        $template_html = $template['template_html'];
+        
+        // Replace placeholders
+        $template_html = str_replace('{patient_name}', htmlspecialchars($patient['patient_name'] ?? 'Unknown'), $template_html);
+        $template_html = str_replace('{age}', calculateAge($patient['date_of_birth'] ?? ''), $template_html);
+        $template_html = str_replace('{gender}', htmlspecialchars($patient['gender'] ?? 'N/A'), $template_html);
+        $template_html = str_replace('{exam_date}', date('d/m/Y'), $template_html);
+        $template_html = str_replace('{report_date}', date('d/m/Y H:i'), $template_html);
+        $template_html = str_replace('{technician_name}', htmlspecialchars($user_full_name), $template_html);
+        
+        $active_class = ($counter === 1) ? 'active' : '';
+        
+        $html .= '
+        <div id="' . $form_id . '" class="ultrasound-form ' . $active_class . '" data-template-id="' . $template['id'] . '">
+            ' . $template_html . '
+        </div>';
     }
+    
+    return $html;
 }
-// If no match, use first word of test name
-if (empty($samples)) {
-    $first_word = explode(' ', $test_name)[0] ?? $test_name;
+
+// ================================================================
+// GENERATE FORM SELECTOR
+// ================================================================
+function generateFormSelector($templates) {
+    if (empty($templates)) {
+        return '<div class="text-center text-gray-500 py-4">No ultrasound templates available.</div>';
+    }
+    
+    $html = '<div class="form-selector">';
+    $counter = 0;
+    foreach ($templates as $template) {
+        $counter++;
+        $active_class = ($counter === 1) ? 'active' : '';
+        $icon = '📋';
+        
+        if (stripos($template['template_name'], 'Twin') !== false) {
+            $icon = '🤰';
+        } elseif (stripos($template['template_name'], 'Single') !== false) {
+            $icon = '👶';
+        } elseif (stripos($template['template_name'], 'Early') !== false) {
+            $icon = '🌱';
+        } elseif (stripos($template['template_name'], 'Abdominal') !== false) {
+            $icon = '🩺';
+        }
+        
+        $html .= '
+        <div class="form-option ' . $active_class . '" onclick="selectForm(\'form_' . $template['id'] . '\', this)" data-form="form_' . $template['id'] . '">
+            <span class="option-icon">' . $icon . '</span>
+            ' . htmlspecialchars($template['template_name']) . '
+        </div>';
+    }
+    $html .= '</div>';
+    
+    return $html;
+}
+
+// ================================================================
+// HELPER FUNCTIONS
+// ================================================================
+function calculateAge($dob) {
+    if (empty($dob)) return 'N/A';
+    $birthDate = new DateTime($dob);
+    $today = new DateTime('today');
+    return $birthDate->diff($today)->y;
+}
+
+// ================================================================
+// SAMPLE RESULTS (For regular tests)
+// ================================================================
+$sample_results = [
+    'Blood Glucose (Fasting)' => ['Normal' => '70-100 mg/dL', 'Prediabetes' => '100-125 mg/dL', 'Diabetes' => '>126 mg/dL'],
+    'Blood Glucose (Random)' => ['Normal' => '<140 mg/dL', 'Prediabetes' => '140-199 mg/dL', 'Diabetes' => '>200 mg/dL'],
+    'Complete Blood Count (CBC)' => ['Normal' => 'RBC: 4.5-5.5M, WBC: 4.5-11K, HGB: 13-17g/dL, PLT: 150-400K'],
+    'Malaria Rapid Test' => ['Negative' => 'Negative', 'Positive (Pf)' => 'Positive - Plasmodium falciparum'],
+    'HIV Rapid Test' => ['Negative' => 'Non-reactive', 'Positive' => 'Reactive - Confirm with ELISA'],
+    'Pregnancy Test (Urine)' => ['Negative' => 'Negative', 'Positive' => 'Positive - HCG detected'],
+    'Urinalysis' => ['Normal' => 'pH: 4.5-8.0, Protein: Negative, Glucose: Negative'],
+    'COVID-19 Rapid Antigen Test' => ['Negative' => 'Negative', 'Positive' => 'Positive - SARS-CoV-2 antigen detected'],
+];
+
+$samples = [];
+if (!$is_ultrasound || empty($templates)) {
     foreach ($sample_results as $key => $sample) {
-        if (stripos($key, $first_word) !== false) {
+        if (stripos($key, $test_name) !== false || stripos($test_name, $key) !== false) {
             $samples = $sample;
             break;
         }
     }
+    if (empty($samples)) {
+        $first_word = explode(' ', $test_name)[0] ?? $test_name;
+        foreach ($sample_results as $key => $sample) {
+            if (stripos($key, $first_word) !== false) {
+                $samples = $sample;
+                break;
+            }
+        }
+    }
 }
+
+// ================================================================
+// DETERMINE WHICH FORM TO SHOW
+// ================================================================
+$show_ultrasound = ($is_ultrasound && !empty($templates));
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -330,6 +352,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* ================================================================
+           MAIN STYLES
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -385,173 +410,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
         }
         
         .page-header {
@@ -567,18 +430,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
             position: relative;
             overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
         }
         
         .page-header .page-title {
@@ -609,11 +460,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
         .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
@@ -622,8 +468,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-size: 0.65rem;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
         }
         
         .btn-outline-light {
@@ -640,14 +484,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             align-items: center;
             gap: 8px;
             backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
         }
         
         .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
         .card {
@@ -667,15 +508,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         [data-theme="dark"] .card {
             background: var(--gray-800);
             border-color: var(--gray-700);
-        }
-        
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
         }
         
         .card-title {
@@ -738,18 +570,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-family: inherit;
         }
         
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.2);
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
-        }
-        
         .btn-success {
             background: var(--success);
             color: white;
@@ -774,9 +594,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: var(--primary);
         }
         
-        .btn-sm {
-            padding: 4px 12px;
-            font-size: 0.7rem;
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.2);
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
         }
         
         .badge {
@@ -815,6 +642,219 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
         .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
         
+        .detail-row {
+            display: flex;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .detail-row:last-child { border-bottom: none; }
+        
+        .detail-label {
+            font-weight: 600;
+            color: var(--text-secondary);
+            width: 120px;
+            flex-shrink: 0;
+            font-size: 0.8rem;
+        }
+        
+        .detail-value {
+            flex: 1;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+        }
+        
+        /* ================================================================
+           ULTRASOUND FORM STYLES
+           ================================================================ */
+        .ultrasound-form {
+            background: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            border: 2px solid #0B5ED7;
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            display: none;
+        }
+        
+        .ultrasound-form.active {
+            display: block !important;
+        }
+        
+        .ultrasound-form .report-header {
+            text-align: center;
+            border-bottom: 3px double #0B5ED7;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .ultrasound-form .report-header h2 {
+            color: #0B5ED7;
+            font-size: 20px;
+            margin: 0;
+        }
+        
+        .ultrasound-form .report-header h3 {
+            font-size: 16px;
+            color: #333;
+            margin: 5px 0;
+        }
+        
+        .ultrasound-form .patient-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .ultrasound-form .patient-info p {
+            margin: 0;
+            font-size: 14px;
+        }
+        
+        .ultrasound-form h4 {
+            color: #0B5ED7;
+            border-bottom: 2px solid #0B5ED7;
+            padding-bottom: 5px;
+            margin: 0 0 10px 0;
+        }
+        
+        .ultrasound-form .findings p {
+            margin: 5px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .ultrasound-form .findings p strong {
+            min-width: 150px;
+        }
+        
+        .ultrasound-form .biometry {
+            margin-bottom: 15px;
+            overflow-x: auto;
+        }
+        
+        .ultrasound-form .biometry table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        
+        .ultrasound-form .biometry table th,
+        .ultrasound-form .biometry table td {
+            border: 1px solid #ddd;
+            padding: 6px;
+            text-align: left;
+        }
+        
+        .ultrasound-form .biometry table th {
+            background: #E8F0FE;
+        }
+        
+        .ultrasound-form .biometry table td input {
+            width: 100px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 3px 6px;
+        }
+        
+        .ultrasound-form .conclusion textarea {
+            width: 100%;
+            min-height: 60px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 8px;
+            font-size: 14px;
+        }
+        
+        .ultrasound-form .report-footer {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #888;
+            border-top: 1px solid #ddd;
+            padding-top: 10px;
+        }
+        
+        .ultrasound-form input.form-control,
+        .ultrasound-form textarea.form-control {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 13px;
+            width: 100%;
+            transition: border-color 0.3s;
+        }
+        
+        .ultrasound-form input.form-control:focus,
+        .ultrasound-form textarea.form-control:focus {
+            border-color: #0B5ED7;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(11, 94, 215, 0.15);
+        }
+        
+        [data-theme="dark"] .ultrasound-form {
+            background: #1E293B !important;
+            border-color: #3B82F6 !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form h2,
+        [data-theme="dark"] .ultrasound-form h3,
+        [data-theme="dark"] .ultrasound-form h4,
+        [data-theme="dark"] .ultrasound-form strong,
+        [data-theme="dark"] .ultrasound-form td {
+            color: #F1F5F9 !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form input.form-control,
+        [data-theme="dark"] .ultrasound-form textarea.form-control {
+            background: #1E293B;
+            border-color: #475569;
+            color: #F1F5F9;
+        }
+        
+        .form-selector {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .form-selector .form-option {
+            padding: 12px 16px;
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: var(--transition);
+            text-align: center;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-weight: 500;
+            font-size: 0.8rem;
+        }
+        
+        .form-selector .form-option:hover {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+            transform: translateY(-2px);
+        }
+        
+        .form-selector .form-option.active {
+            border-color: var(--primary);
+            background: var(--primary);
+            color: white;
+        }
+        
+        .form-selector .form-option .option-icon {
+            display: block;
+            font-size: 1.5rem;
+            margin-bottom: 4px;
+        }
+        
+        /* Sample Results */
         .sample-result-item {
             padding: 8px 12px;
             border: 2px solid var(--border-color);
@@ -842,30 +882,149 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: var(--text-primary);
         }
         
-        [data-theme="dark"] .sample-result-item:hover {
-            background: #1E3A5F;
+        /* Print Button Styles */
+        .btn-print {
+            background: #6B7280;
+            color: white;
+            box-shadow: 0 2px 8px rgba(107, 114, 128, 0.2);
         }
         
-        .detail-row {
-            display: flex;
-            padding: 6px 0;
-            border-bottom: 1px solid var(--border-color);
+        .btn-print:hover {
+            background: #4B5563;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(107, 114, 128, 0.3);
         }
         
-        .detail-row:last-child { border-bottom: none; }
-        
-        .detail-label {
-            font-weight: 600;
-            color: var(--text-secondary);
-            width: 120px;
-            flex-shrink: 0;
-            font-size: 0.8rem;
-        }
-        
-        .detail-value {
-            flex: 1;
-            color: var(--text-primary);
-            font-size: 0.85rem;
+        /* Print Styles */
+        @media print {
+            .top-nav,
+            .sidebar,
+            .btn,
+            .btn-outline,
+            .btn-success,
+            .btn-print,
+            .btn-primary,
+            .form-selector,
+            .form-option,
+            .page-header .btn-outline-light,
+            .alert,
+            .footer {
+                display: none !important;
+            }
+            
+            .main-content {
+                margin-left: 0 !important;
+                padding: 0 !important;
+                background: white !important;
+            }
+            
+            .page-header {
+                background: white !important;
+                box-shadow: none !important;
+                border: 1px solid #ddd !important;
+                padding: 15px !important;
+            }
+            
+            .page-header .page-title {
+                color: #0B5ED7 !important;
+            }
+            
+            .page-header .page-subtitle {
+                color: #333 !important;
+            }
+            
+            .card {
+                border: 1px solid #ddd !important;
+                box-shadow: none !important;
+                page-break-inside: avoid !important;
+            }
+            
+            .ultrasound-form {
+                border: 1px solid #0B5ED7 !important;
+                box-shadow: none !important;
+                display: block !important;
+                padding: 15px !important;
+                max-width: 100% !important;
+            }
+            
+            .ultrasound-form.active {
+                display: block !important;
+            }
+            
+            .ultrasound-form input,
+            .ultrasound-form textarea {
+                border: 1px solid #ccc !important;
+                background: white !important;
+                color: #000 !important;
+            }
+            
+            .ultrasound-form .report-header h2 {
+                color: #0B5ED7 !important;
+            }
+            
+            .ultrasound-form .report-header h3 {
+                color: #333 !important;
+            }
+            
+            .ultrasound-form .patient-info p {
+                color: #333 !important;
+            }
+            
+            .ultrasound-form .patient-info strong {
+                color: #333 !important;
+            }
+            
+            .ultrasound-form h4 {
+                color: #0B5ED7 !important;
+            }
+            
+            .ultrasound-form .biometry table th {
+                background: #E8F0FE !important;
+                color: #333 !important;
+            }
+            
+            .ultrasound-form .biometry table td {
+                color: #333 !important;
+            }
+            
+            .ultrasound-form .report-footer {
+                color: #666 !important;
+            }
+            
+            .grid {
+                display: block !important;
+            }
+            
+            .lg\\:col-span-1,
+            .lg\\:col-span-2 {
+                grid-column: span 1 !important;
+            }
+            
+            .gap-5 {
+                gap: 10px !important;
+            }
+            
+            .mt-4 {
+                margin-top: 10px !important;
+            }
+            
+            .flex-wrap {
+                flex-wrap: wrap !important;
+            }
+            
+            /* Hide form selector buttons in print */
+            .form-selector {
+                display: none !important;
+            }
+            
+            /* Show all forms in print */
+            .ultrasound-form {
+                display: none !important;
+            }
+            
+            .ultrasound-form.active {
+                display: block !important;
+            }
         }
         
         .footer {
@@ -880,11 +1039,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .footer .footer-brand {
             color: var(--primary);
             font-weight: 600;
-        }
-        
-        [data-theme="dark"] .footer {
-            border-color: var(--gray-700);
-            color: var(--gray-400);
         }
         
         .toast-custom {
@@ -912,58 +1066,39 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .toast-custom.warning { background: var(--warning); }
         
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .card { padding: 14px 16px; }
             .detail-row { flex-direction: column; }
             .detail-label { width: 100%; }
-            .sample-result-item { padding: 6px 10px; }
+            .ultrasound-form .patient-info { grid-template-columns: 1fr; }
+            .ultrasound-form .findings p { flex-direction: column; align-items: flex-start; }
+            .ultrasound-form .findings p strong { min-width: auto; }
+            .form-selector { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
             .card { padding: 10px 12px; }
+            .ultrasound-form { padding: 10px !important; }
+            .form-selector { grid-template-columns: 1fr 1fr; }
+            .form-selector .form-option { font-size: 0.7rem; padding: 8px 10px; }
+            .form-selector .form-option .option-icon { font-size: 1.2rem; }
         }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        .text-success { color: var(--success); }
-        .text-warning { color: var(--warning); }
-        .text-primary { color: var(--primary); }
-        .text-danger { color: var(--danger); }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
         </button>
-        
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
             <input type="text" id="searchInput" placeholder="Search...">
@@ -972,7 +1107,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </button>
         </div>
     </div>
-    
     <div class="flex items-center gap-3">
         <span class="branch-badge-display">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
@@ -981,10 +1115,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
-        </button>
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
@@ -1011,12 +1141,21 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 Enter result for <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
                 <span class="separator">|</span>
                 Patient: <strong><?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?></strong>
+                <?php if ($show_ultrasound): ?>
+                    <span class="badge badge-purple ml-2">🩺 Ultrasound</span>
+                    <span class="badge badge-info ml-1"><?= count($templates) ?> Templates</span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="in_progress.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
+            <?php if ($show_ultrasound): ?>
+                <button onclick="printUltrasoundForm()" class="btn-outline-light" style="background:rgba(255,255,255,0.25);">
+                    <i class="fas fa-print"></i> Print Form
+                </button>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -1030,9 +1169,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
         
-        <!-- ================================================================ -->
         <!-- LEFT: Test Details -->
-        <!-- ================================================================ -->
         <div class="card lg:col-span-1">
             <h3 class="card-title">
                 <i class="fas fa-info-circle title-blue mr-2"></i>
@@ -1068,89 +1205,122 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 </span>
             </div>
             <div class="detail-row">
-                <span class="detail-label">Requested</span>
-                <span class="detail-value"><?= date('M d, Y h:i A', strtotime($lab_test['created_at'] ?? 'now')) ?></span>
+                <span class="detail-label">Type</span>
+                <span class="detail-value">
+                    <?php if ($show_ultrasound): ?>
+                        <span class="badge badge-purple">🩺 Ultrasound</span>
+                    <?php else: ?>
+                        <span class="badge badge-info">📊 Regular Test</span>
+                    <?php endif; ?>
+                </span>
             </div>
         </div>
         
-        <!-- ================================================================ -->
-        <!-- RIGHT: Add Result Form -->
-        <!-- ================================================================ -->
+        <!-- RIGHT: Result Form -->
         <div class="card lg:col-span-2">
             <h3 class="card-title">
                 <i class="fas fa-file-medical-alt title-green mr-2"></i>
-                Enter Result
-                <?php if (!empty($samples)): ?>
-                    <span class="text-xs font-normal text-gray-400">(Click sample to auto-fill)</span>
+                <?= $show_ultrasound ? 'Select Ultrasound Template & Fill Report' : 'Enter Result' ?>
+                <?php if ($show_ultrasound): ?>
+                    <button onclick="printUltrasoundForm()" class="btn btn-print btn-sm" style="float:right;padding:4px 14px;font-size:0.7rem;">
+                        <i class="fas fa-print"></i> Print
+                    </button>
                 <?php endif; ?>
             </h3>
             
-            <form method="POST" action="">
-                <input type="hidden" name="action" value="save_result">
+            <?php if ($show_ultrasound): ?>
+                <!-- ================================================================ -->
+                <!-- ULTRASOUND FORMS -->
+                <!-- ================================================================ -->
+                <?= generateFormSelector($templates) ?>
                 
-                <!-- Sample Results -->
-                <?php if (!empty($samples)): ?>
-                    <div class="mb-4">
-                        <label class="form-label">
-                            <i class="fas fa-list mr-1"></i> Sample Results (Click to fill)
-                        </label>
-                        <div class="space-y-1">
-                            <?php foreach ($samples as $label => $value): ?>
-                                <div class="sample-result-item" onclick="fillResult('<?= addslashes($value) ?>', this)">
-                                    <span class="sample-label"><?= htmlspecialchars($label) ?>:</span>
-                                    <span class="sample-value"><?= htmlspecialchars($value) ?></span>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
+                <form method="POST" action="" id="ultrasoundForm">
+                    <input type="hidden" name="action" value="save_result">
+                    
+                    <?= generateFormsFromTemplates($templates, $lab_test, $user_full_name) ?>
+                    
+                    <input type="hidden" name="result" id="ultrasoundResult" value="">
+                    
+                    <div class="mt-4 flex flex-wrap gap-3">
+                        <button type="button" class="btn btn-success" onclick="saveUltrasoundResult()">
+                            <i class="fas fa-save"></i> Save Report
+                        </button>
+                        <button type="button" class="btn btn-print" onclick="printUltrasoundForm()">
+                            <i class="fas fa-print"></i> Print Form
+                        </button>
+                        <button type="reset" class="btn btn-outline" onclick="clearUltrasoundForm()">
+                            <i class="fas fa-undo"></i> Clear Form
+                        </button>
+                        <a href="in_progress.php" class="btn btn-outline">
+                            <i class="fas fa-times"></i> Cancel
+                        </a>
                     </div>
-                <?php endif; ?>
+                </form>
                 
-                <!-- Result Textarea -->
-                <div class="form-group mb-3">
-                    <label class="form-label">Result <span class="text-danger">*</span></label>
-                    <textarea name="result" class="form-control" id="resultText" rows="4" placeholder="Enter test result..."></textarea>
-                </div>
-                
-                <!-- Status -->
-                <div class="form-group mb-3">
-                    <label class="form-label">Status</label>
-                    <select name="status" class="form-control">
-                        <option value="completed">✅ Completed</option>
-                        <option value="in_progress">🔄 In Progress</option>
-                    </select>
-                </div>
-                
-                <!-- Notes -->
-                <div class="form-group">
-                    <label class="form-label">Notes (Optional)</label>
-                    <input type="text" name="notes" class="form-control" placeholder="Additional notes...">
-                </div>
-                
-                <!-- Actions -->
-                <div class="mt-4 flex flex-wrap gap-3">
-                    <button type="submit" class="btn btn-success">
-                        <i class="fas fa-save"></i> Save Result
-                    </button>
-                    <button type="reset" class="btn btn-outline" onclick="document.getElementById('resultText').value = '';">
-                        <i class="fas fa-undo"></i> Clear
-                    </button>
-                    <a href="in_progress.php" class="btn btn-outline">
-                        <i class="fas fa-times"></i> Cancel
-                    </a>
-                </div>
-            </form>
+            <?php else: ?>
+                <!-- ================================================================ -->
+                <!-- REGULAR TEST RESULT FORM -->
+                <!-- ================================================================ -->
+                <form method="POST" action="">
+                    <input type="hidden" name="action" value="save_result">
+                    
+                    <?php if (!empty($samples)): ?>
+                        <div class="mb-4">
+                            <label class="form-label">
+                                <i class="fas fa-list mr-1"></i> Sample Results (Click to fill)
+                            </label>
+                            <div class="space-y-1">
+                                <?php foreach ($samples as $label => $value): ?>
+                                    <div class="sample-result-item" onclick="fillResult('<?= addslashes($value) ?>', this)">
+                                        <span class="sample-label"><?= htmlspecialchars($label) ?>:</span>
+                                        <span class="sample-value"><?= htmlspecialchars($value) ?></span>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                    
+                    <div class="form-group mb-3">
+                        <label class="form-label">Result <span class="text-danger">*</span></label>
+                        <textarea name="result" class="form-control" id="resultText" rows="4" placeholder="Enter test result..."></textarea>
+                    </div>
+                    
+                    <div class="form-group mb-3">
+                        <label class="form-label">Status</label>
+                        <select name="status" class="form-control">
+                            <option value="completed">✅ Completed</option>
+                            <option value="in_progress">🔄 In Progress</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Notes (Optional)</label>
+                        <input type="text" name="notes" class="form-control" placeholder="Additional notes...">
+                    </div>
+                    
+                    <div class="mt-4 flex flex-wrap gap-3">
+                        <button type="submit" class="btn btn-success">
+                            <i class="fas fa-save"></i> Save Result
+                        </button>
+                        <button type="reset" class="btn btn-outline" onclick="document.getElementById('resultText').value = '';">
+                            <i class="fas fa-undo"></i> Clear
+                        </button>
+                        <a href="in_progress.php" class="btn btn-outline">
+                            <i class="fas fa-times"></i> Cancel
+                        </a>
+                    </div>
+                </form>
+            <?php endif; ?>
         </div>
         
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Add Result
+            <?= $show_ultrasound ? 'Ultrasound Report' : 'Add Result' ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1158,9 +1328,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
+<!-- Toast -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
     <div>
@@ -1173,9 +1341,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
+    // Dark Mode
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1203,27 +1369,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
+    // Sidebar Toggle
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
+    // Date & Time
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1240,13 +1394,27 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // FILL RESULT FROM SAMPLE
-    // ================================================================
+    // Select Ultrasound Form
+    function selectForm(formId, element) {
+        document.querySelectorAll('.ultrasound-form').forEach(function(form) {
+            form.classList.remove('active');
+        });
+        var selectedForm = document.getElementById(formId);
+        if (selectedForm) {
+            selectedForm.classList.add('active');
+            selectedForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        document.querySelectorAll('.form-option').forEach(function(opt) {
+            opt.classList.remove('active');
+        });
+        if (element) {
+            element.classList.add('active');
+        }
+    }
+
+    // Fill Result from Sample
     function fillResult(value, element) {
         document.getElementById('resultText').value = value;
-        
-        // Highlight selected
         document.querySelectorAll('.sample-result-item').forEach(function(el) {
             el.style.borderColor = 'var(--border-color)';
             el.style.background = '';
@@ -1257,9 +1425,115 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     }
 
-    // ================================================================
-    // TOAST
-    // ================================================================
+    // Save Ultrasound Result
+    function saveUltrasoundResult() {
+        var activeForm = document.querySelector('.ultrasound-form.active');
+        if (!activeForm) {
+            showToast('Error', 'No form selected', 'error');
+            return;
+        }
+        
+        var formData = [];
+        var inputs = activeForm.querySelectorAll('input, textarea');
+        inputs.forEach(function(input) {
+            if (input.type === 'hidden') return;
+            var label = input.dataset.placeholder || input.placeholder || 'field';
+            label = label.replace(/_/g, ' ').replace(/\b\w/g, function(l) { return l.toUpperCase(); });
+            if (input.value) {
+                formData.push(label + ': ' + input.value);
+            }
+        });
+        
+        var resultText = formData.join('\n');
+        
+        if (!resultText.trim()) {
+            showToast('Error', 'Please fill in the form before saving', 'error');
+            return;
+        }
+        
+        document.getElementById('ultrasoundResult').value = resultText;
+        document.getElementById('ultrasoundForm').submit();
+    }
+
+    // Clear Ultrasound Form
+    function clearUltrasoundForm() {
+        if (!confirm('Clear all fields on the ultrasound form?')) return;
+        var activeForm = document.querySelector('.ultrasound-form.active');
+        if (activeForm) {
+            var inputs = activeForm.querySelectorAll('input, textarea');
+            inputs.forEach(function(input) {
+                if (input.type !== 'submit' && input.type !== 'button' && input.type !== 'hidden') {
+                    input.value = '';
+                }
+            });
+        }
+        showToast('Info', 'Form cleared', 'info');
+    }
+
+    // ✅ PRINT ULTRASOUND FORM
+    function printUltrasoundForm() {
+        var activeForm = document.querySelector('.ultrasound-form.active');
+        if (!activeForm) {
+            showToast('Error', 'No form selected to print', 'error');
+            return;
+        }
+        
+        // Get all input values and create a printable version
+        var printWindow = window.open('', '_blank', 'width=800,height=600');
+        if (!printWindow) {
+            showToast('Error', 'Please allow popups for printing', 'error');
+            return;
+        }
+        
+        var formHTML = activeForm.outerHTML;
+        
+        // Replace input fields with their values for printing
+        var inputs = activeForm.querySelectorAll('input, textarea');
+        inputs.forEach(function(input) {
+            var value = input.value || '___________________';
+            var placeholder = input.placeholder || '';
+            var label = input.dataset.placeholder || placeholder || 'field';
+            
+            // Replace the input with its value
+            var inputHTML = input.outerHTML;
+            var replacement = '<span style="display:inline-block;min-width:100px;border-bottom:1px solid #333;padding:2px 4px;font-weight:normal;">' + (value || '___________________') + '</span>';
+            formHTML = formHTML.replace(inputHTML, replacement);
+        });
+        
+        // Create print document
+        printWindow.document.write('<!DOCTYPE html><html><head><title>Ultrasound Report</title>');
+        printWindow.document.write('<style>');
+        printWindow.document.write('body { font-family: Arial, sans-serif; padding: 40px; background: white; }');
+        printWindow.document.write('.ultrasound-form { max-width: 900px; margin: 0 auto; padding: 20px; border: 2px solid #0B5ED7; border-radius: 10px; }');
+        printWindow.document.write('.report-header { text-align: center; border-bottom: 3px double #0B5ED7; padding-bottom: 10px; margin-bottom: 15px; }');
+        printWindow.document.write('.report-header h2 { color: #0B5ED7; font-size: 20px; margin: 0; }');
+        printWindow.document.write('.report-header h3 { font-size: 16px; color: #333; margin: 5px 0; }');
+        printWindow.document.write('.patient-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }');
+        printWindow.document.write('.patient-info p { margin: 0; font-size: 14px; }');
+        printWindow.document.write('.patient-info strong { color: #333; }');
+        printWindow.document.write('.findings p { margin: 5px 0; display: flex; gap: 10px; }');
+        printWindow.document.write('.findings p strong { min-width: 150px; }');
+        printWindow.document.write('h4 { color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 5px; margin: 0 0 10px 0; }');
+        printWindow.document.write('.biometry { margin-bottom: 15px; overflow-x: auto; }');
+        printWindow.document.write('.biometry table { width: 100%; border-collapse: collapse; font-size: 14px; }');
+        printWindow.document.write('.biometry table th, .biometry table td { border: 1px solid #ddd; padding: 6px; text-align: left; }');
+        printWindow.document.write('.biometry table th { background: #E8F0FE; }');
+        printWindow.document.write('.conclusion textarea { width: 100%; min-height: 60px; border: 1px solid #ddd; border-radius: 4px; padding: 8px; font-size: 14px; }');
+        printWindow.document.write('.report-footer { display: flex; justify-content: space-between; font-size: 12px; color: #666; border-top: 1px solid #ddd; padding-top: 10px; }');
+        printWindow.document.write('span { display: inline-block; }');
+        printWindow.document.write('</style>');
+        printWindow.document.write('</head><body>');
+        printWindow.document.write(formHTML);
+        printWindow.document.write('</body></html>');
+        printWindow.document.close();
+        
+        // Wait for content to load then print
+        setTimeout(function() {
+            printWindow.print();
+        }, 500);
+    }
+
+    // Toast
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1277,11 +1551,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c🧪 Add Result - Laboratory', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🧪 Add Result - Laboratory (WITH PRINT)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c📋 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Sample Results Available: <?= count($samples) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💡 Click sample to auto-fill', 'font-size:13px; color:#34D399;');
+    <?php if ($show_ultrasound): ?>
+        console.log('%c🩺 Ultrasound - Showing forms', 'font-size:13px; color:#7C3AED;');
+        console.log('%c📄 Templates Available: <?= count($templates) ?>', 'font-size:13px; color:#7C3AED;');
+        console.log('%c🖨️ Print button available - Click to print filled form', 'font-size:13px; color:#34D399;');
+    <?php else: ?>
+        console.log('%c📊 Regular test - Showing textarea', 'font-size:13px; color:#0B5ED7;');
+    <?php endif; ?>
 </script>
 
 </body>
