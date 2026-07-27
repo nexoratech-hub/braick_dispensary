@@ -42,11 +42,9 @@ require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 $db = getDB();
-$lab_test = null;
-$all_tests = [];
-$bill_items = [];
 $message = '';
 $message_type = '';
+$lab_test = null;
 
 // ================================================================
 // GET LAB TEST DETAILS
@@ -54,43 +52,33 @@ $message_type = '';
 try {
     $stmt = $db->prepare("
         SELECT lt.*, 
-               p.id as patient_id,
                p.full_name as patient_name,
                p.patient_id as patient_code,
                p.phone,
-               p.email,
                p.gender,
                p.date_of_birth,
                p.address,
                p.blood_group,
-               p.allergies,
-               p.emergency_contact,
-               u.id as doctor_id,
                u.full_name as doctor_name,
                u.specialty,
-               u.phone as doctor_phone,
-               v.id as visit_id,
                v.visit_number,
                v.visit_type,
-               v.status as visit_status,
-               v.symptoms,
                v.diagnosis,
-               v.treatment,
-               v.created_at as visit_created_at,
-               v.completed_at as visit_completed_at,
-               lr.id as request_id,
+               v.symptoms,
                lr.request_number,
                lr.status as request_status,
-               lr.requested_at,
-               lr.accepted_at,
-               lr.completed_at as request_completed_at,
-               b.name as branch_name
+               lr.created_at as request_date,
+               (
+                   SELECT COUNT(*) FROM lab_tests WHERE visit_id = lt.visit_id
+               ) as total_tests,
+               (
+                   SELECT COUNT(*) FROM lab_tests WHERE visit_id = lt.visit_id AND status = 'completed'
+               ) as completed_tests
         FROM lab_tests lt
         JOIN visits v ON lt.visit_id = v.id
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON lt.doctor_id = u.id
         LEFT JOIN lab_requests lr ON lt.visit_id = lr.visit_id
-        LEFT JOIN branches b ON lt.branch_id = b.id
         WHERE lt.id = ? AND lt.branch_id = ?
     ");
     $stmt->execute([$lab_test_id, $user_branch_id]);
@@ -101,36 +89,71 @@ try {
         exit;
     }
     
-    // ================================================================
-    // GET ALL TESTS FOR THIS VISIT
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT lt.*, 
-               (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lt.visit_id) as total_tests,
-               (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lt.visit_id AND status = 'completed') as completed_tests
-        FROM lab_tests lt
-        WHERE lt.visit_id = ?
-        ORDER BY lt.created_at ASC
-    ");
-    $stmt->execute([$lab_test['visit_id']]);
-    $all_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ================================================================
-    // GET BILL ITEMS FOR THIS VISIT
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT bi.*, pb.bill_number, pb.status as bill_status, pb.total_amount, pb.paid_amount
-        FROM bill_items bi
-        JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.visit_id = ?
-        ORDER BY bi.created_at DESC
-    ");
-    $stmt->execute([$lab_test['visit_id']]);
-    $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
 } catch (Exception $e) {
-    $message = "Database error: " . $e->getMessage();
-    $message_type = 'error';
+    header('Location: in_progress.php?error=database_error');
+    exit;
+}
+
+// ================================================================
+// GET STATISTICS
+// ================================================================
+$stats = [];
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            COUNT(*) as total_tests,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_tests,
+            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_tests,
+            SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress_tests
+        FROM lab_tests 
+        WHERE visit_id = ?
+    ");
+    $stmt->execute([$lab_test['visit_id']]);
+    $stats = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $stats = ['total_tests' => 0, 'completed_tests' => 0, 'pending_tests' => 0, 'in_progress_tests' => 0];
+}
+
+// ✅ FIX: Use null coalescing operator to avoid undefined array key errors
+$total_tests = $stats['total_tests'] ?? 0;
+$completed_tests = $stats['completed_tests'] ?? 0;
+$pending_tests = $stats['pending_tests'] ?? 0;
+$in_progress_tests = $stats['in_progress_tests'] ?? 0;
+$completed_percentage = ($total_tests > 0) ? round(($completed_tests / $total_tests) * 100, 1) : 0;
+
+// ================================================================
+// HELPER FUNCTIONS
+// ================================================================
+function getStatusBadgeClass($status) {
+    $map = [
+        'pending' => 'badge-warning',
+        'in_progress' => 'badge-info',
+        'completed' => 'badge-success',
+        'cancelled' => 'badge-danger'
+    ];
+    return $map[$status] ?? 'badge-warning';
+}
+
+function getStatusLabel($status) {
+    $map = [
+        'pending' => '⏳ Pending',
+        'in_progress' => '🔄 In Progress',
+        'completed' => '✅ Completed',
+        'cancelled' => '❌ Cancelled'
+    ];
+    return $map[$status] ?? ucfirst($status);
+}
+
+function calculateAge($dob) {
+    if (empty($dob)) return 'N/A';
+    $birthDate = new DateTime($dob);
+    $today = new DateTime('today');
+    return $birthDate->diff($today)->y;
+}
+
+function formatDate($datetime) {
+    if (empty($datetime)) return 'N/A';
+    return date('d/m/Y h:i A', strtotime($datetime));
 }
 
 // ================================================================
@@ -152,46 +175,6 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// HELPER FUNCTIONS
-// ================================================================
-function formatDate($datetime) {
-    if (empty($datetime)) return 'N/A';
-    return date('M d, Y h:i A', strtotime($datetime));
-}
-
-function formatCurrency($amount) {
-    return 'TSh ' . number_format($amount, 0);
-}
-
-function getStatusBadgeClass($status) {
-    $map = [
-        'pending' => 'badge-warning',
-        'in_progress' => 'badge-warning',
-        'completed' => 'badge-success',
-        'cancelled' => 'badge-danger',
-        'accepted' => 'badge-info'
-    ];
-    return $map[$status] ?? 'badge-info';
-}
-
-function getStatusLabel($status) {
-    $map = [
-        'pending' => '⏳ Pending',
-        'in_progress' => '🔄 In Progress',
-        'completed' => '✅ Completed',
-        'cancelled' => '❌ Cancelled',
-        'accepted' => '📋 Accepted'
-    ];
-    return $map[$status] ?? ucfirst(str_replace('_', ' ', $status));
-}
-
-function getUserColor($name) {
-    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
-    $index = abs(crc32($name)) % count($colors);
-    return $colors[$index];
-}
-
-// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/laboratory_header.php';
@@ -211,9 +194,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           STYLES
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -225,8 +205,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -271,13 +249,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -381,24 +352,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: var(--primary);
         }
         
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
         .dark-toggle-btn {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
@@ -418,8 +371,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             background: var(--bg-card);
         }
         
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
         .branch-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -435,27 +386,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: #34D399;
         }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
         }
         
-        [data-theme="dark"] .main-content {
-            background: var(--gray-900);
-            color: var(--gray-100);
-        }
-        
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
@@ -469,18 +406,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
             position: relative;
             overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
         }
         
         .page-header .page-title {
@@ -511,11 +436,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
         .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
@@ -524,22 +444,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-size: 0.65rem;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .header-badge {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
         }
         
         .btn-outline-light {
@@ -556,19 +460,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             align-items: center;
             gap: 8px;
             backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
         }
         
         .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           CARDS
-           ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -588,15 +486,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border-color: var(--gray-700);
         }
         
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
         .card-title {
             font-size: 0.95rem;
             font-weight: 600;
@@ -605,26 +494,20 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .card-title .title-blue { color: var(--primary); }
         .card-title .title-green { color: var(--success); }
-        .card-title .title-purple { color: var(--purple); }
-        .card-title .title-orange { color: var(--warning); }
+        .card-title .title-purple { color: #7C3AED; }
         
-        /* ================================================================
-           DETAIL ROWS
-           ================================================================ */
         .detail-row {
             display: flex;
-            padding: 8px 0;
+            padding: 6px 0;
             border-bottom: 1px solid var(--border-color);
         }
         
-        .detail-row:last-child {
-            border-bottom: none;
-        }
+        .detail-row:last-child { border-bottom: none; }
         
         .detail-label {
             font-weight: 600;
             color: var(--text-secondary);
-            width: 130px;
+            width: 140px;
             flex-shrink: 0;
             font-size: 0.8rem;
         }
@@ -635,13 +518,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-size: 0.85rem;
         }
         
-        [data-theme="dark"] .detail-row {
-            border-color: var(--gray-700);
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge {
             display: inline-block;
             padding: 2px 10px;
@@ -654,44 +530,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .badge-warning { background: var(--warning-bg); color: var(--warning); }
         .badge-info { background: var(--primary-bg); color: var(--primary); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); }
-        .badge-purple { background: var(--purple-bg); color: var(--purple); }
+        .badge-purple { background: #EDE9FE; color: #7C3AED; }
         
-        .status-badge {
-            display: inline-block;
-            font-size: 0.7rem;
-            font-weight: 600;
-            padding: 4px 16px;
-            border-radius: 20px;
-            text-transform: capitalize;
-        }
-        
-        .status-badge.pending {
-            background: var(--primary-bg);
-            color: var(--primary);
-            border: 1px solid var(--primary);
-        }
-        
-        .status-badge.in_progress {
-            background: var(--warning-bg);
-            color: var(--warning);
-            border: 1px solid var(--warning);
-        }
-        
-        .status-badge.completed {
-            background: var(--success-bg);
-            color: var(--success);
-            border: 1px solid var(--success);
-        }
-        
-        .status-badge.cancelled {
-            background: var(--danger-bg);
-            color: var(--danger);
-            border: 1px solid var(--danger);
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -731,17 +571,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
         }
         
-        .btn-warning {
-            background: var(--warning);
-            color: white;
-        }
-        
-        .btn-warning:hover {
-            background: #B45309;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.3);
-        }
-        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
@@ -757,65 +586,40 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .btn-sm {
             padding: 4px 12px;
             font-size: 0.7rem;
-            border-radius: 6px;
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
-        .table-container {
-            overflow-x: auto;
-            border-radius: var(--radius);
-            border: 1px solid var(--border-color);
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
         }
         
-        .table-container table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.82rem;
+        .stat-box {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 14px 16px;
+            border: 2px solid var(--border-color);
+            text-align: center;
+            transition: all 0.3s ease;
         }
         
-        .table-container thead {
-            background: var(--primary);
-            color: white;
+        .stat-box:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
         }
         
-        .table-container thead th {
-            padding: 10px 14px;
-            text-align: left;
-            font-weight: 600;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            white-space: nowrap;
+        .stat-box .number {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--primary);
         }
         
-        .table-container tbody tr {
-            border-bottom: 1px solid var(--border-color);
-            transition: var(--transition);
-        }
+        .stat-box .number.green { color: var(--success); }
+        .stat-box .number.orange { color: var(--warning); }
+        .stat-box .number.purple { color: #7C3AED; }
+        .stat-box .label { font-size: 0.7rem; color: var(--text-secondary); font-weight: 500; margin-top: 2px; }
         
-        .table-container tbody tr:hover {
-            background: var(--primary-bg);
-        }
-        
-        [data-theme="dark"] .table-container tbody tr:hover {
-            background: #1E3A5F;
-        }
-        
-        .table-container tbody td {
-            padding: 8px 14px;
-            vertical-align: middle;
-            color: var(--text-primary);
-        }
-        
-        .table-container tbody tr:last-child {
-            border-bottom: none;
-        }
-        
-        /* ================================================================
-           ALERT
-           ================================================================ */
         .alert {
             padding: 14px 20px;
             border-radius: var(--radius);
@@ -838,9 +642,37 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
         .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
+        .result-box {
+            background: var(--bg-body);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            border: 1px solid var(--border-color);
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 0.85rem;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand {
+            color: var(--primary);
+            font-weight: 600;
+        }
+        
+        [data-theme="dark"] .footer {
+            border-color: var(--gray-700);
+            color: var(--gray-400);
+        }
+        
         .toast-custom {
             position: fixed;
             bottom: 30px;
@@ -865,122 +697,35 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 600;
-        }
-        
-        [data-theme="dark"] .footer {
-            border-color: var(--gray-700);
-            color: var(--gray-400);
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .card { padding: 14px 16px; }
             .detail-row { flex-direction: column; }
-            .detail-label { width: 100%; margin-bottom: 2px; }
-            .table-container thead th { padding: 6px 8px; font-size: 0.6rem; }
-            .table-container tbody td { padding: 4px 8px; font-size: 0.7rem; }
+            .detail-label { width: 100%; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .result-box { font-size: 0.7rem; max-height: 250px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
             .card { padding: 10px 12px; }
-            .page-title { font-size: 1.1rem; }
-        }
-        
-        .font-mono { font-family: monospace; }
-        .font-semibold { font-weight: 600; }
-        .text-success { color: var(--success); }
-        .text-warning { color: var(--warning); }
-        .text-primary { color: var(--primary); }
-        .text-danger { color: var(--danger); }
-        .mt-2 { margin-top: 8px; }
-        .mt-3 { margin-top: 12px; }
-        .mb-3 { margin-bottom: 12px; }
-        .mb-4 { margin-bottom: 16px; }
-        .flex { display: flex; }
-        .flex-wrap { flex-wrap: wrap; }
-        .gap-2 { gap: 8px; }
-        .gap-3 { gap: 12px; }
-        .items-center { align-items: center; }
-        .justify-between { justify-content: space-between; }
-        
-        .patient-avatar-lg {
-            width: 56px;
-            height: 56px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 700;
-            font-size: 1.4rem;
-            flex-shrink: 0;
-        }
-        
-        .summary-box {
-            background: var(--primary-bg);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            border: 2px solid var(--primary-light);
-            text-align: center;
-        }
-        
-        [data-theme="dark"] .summary-box {
-            background: #1E3A5F;
-            border-color: var(--primary);
-        }
-        
-        .summary-box .number {
-            font-size: 2rem;
-            font-weight: 700;
-            color: var(--primary);
-        }
-        
-        .summary-box .label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
+            .stats-grid { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
         </button>
-        
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
             <input type="text" id="searchInput" placeholder="Search...">
@@ -989,24 +734,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </button>
         </div>
     </div>
-    
     <div class="flex items-center gap-3">
         <span class="branch-badge-display">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
-        
         <span class="datetime" id="currentDateTime"></span>
-        
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
@@ -1019,8 +755,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <?php if ($lab_test): ?>
-    
     <!-- Page Header -->
     <div class="page-header">
         <div>
@@ -1028,405 +762,205 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <i class="fas fa-flask"></i>
                 Test Details
                 <span class="role-badge-display">LABORATORY</span>
-                <span class="header-badge">
-                    <i class="fas fa-hashtag"></i> <?= htmlspecialchars($lab_test['request_number'] ?? 'N/A') ?>
-                </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-user"></i>
+                <i class="fas fa-prescription"></i>
+                <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
+                <span class="separator">|</span>
                 Patient: <strong><?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?></strong>
-                (<?= htmlspecialchars($lab_test['patient_code'] ?? 'N/A') ?>)
                 <span class="separator">|</span>
-                Test: <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
-                <span class="separator">|</span>
-                Status: 
-                <span class="status-badge <?= $lab_test['status'] ?? 'pending' ?>">
+                Status: <span class="badge <?= getStatusBadgeClass($lab_test['status'] ?? 'pending') ?>">
                     <?= getStatusLabel($lab_test['status'] ?? 'pending') ?>
                 </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="in_progress.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back
-            </a>
             <?php if (($lab_test['status'] ?? '') !== 'completed'): ?>
-                <a href="add_result.php?id=<?= $lab_test_id ?>" class="btn-outline-light" style="background:rgba(255,255,255,0.25);">
+                <a href="add_result.php?id=<?= $lab_test['id'] ?>" class="btn-outline-light">
                     <i class="fas fa-edit"></i> Add Result
                 </a>
             <?php endif; ?>
-            <button onclick="window.print()" class="btn-outline-light">
-                <i class="fas fa-print"></i> Print
-            </button>
+            <a href="in_progress.php" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back
+            </a>
         </div>
     </div>
 
-    <!-- Message -->
-    <?php if ($message): ?>
-        <div class="alert alert-<?= $message_type ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <?= htmlspecialchars($message) ?>
-        </div>
-    <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- SUMMARY STATS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-        <div class="summary-box">
-            <p class="number"><?= count($all_tests) ?></p>
+    <!-- Stats -->
+    <div class="stats-grid">
+        <div class="stat-box">
+            <p class="number purple"><?= $total_tests ?></p>
             <p class="label">Total Tests</p>
         </div>
-        <div class="summary-box">
-            <p class="number"><?= $lab_test['completed_tests'] ?? 0 ?></p>
+        <div class="stat-box">
+            <p class="number green"><?= $completed_tests ?></p>
             <p class="label">Completed</p>
         </div>
-        <div class="summary-box">
-            <p class="number"><?= $lab_test['completed_tests'] > 0 ? round(($lab_test['completed_tests'] / count($all_tests)) * 100) : 0 ?>%</p>
-            <p class="label">Progress</p>
+        <div class="stat-box">
+            <p class="number orange"><?= $pending_tests ?></p>
+            <p class="label">Pending</p>
         </div>
-        <div class="summary-box">
-            <p class="number"><?= count($bill_items) ?></p>
-            <p class="label">Bill Items</p>
+        <div class="stat-box">
+            <p class="number purple"><?= $completed_percentage ?>%</p>
+            <p class="label">Completion Rate</p>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- TEST DETAILS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+    <!-- Test Details -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
         
-        <!-- Test Information -->
+        <!-- Left: Patient Info -->
         <div class="card">
             <h3 class="card-title">
-                <i class="fas fa-info-circle title-blue mr-2"></i>
-                Test Information
-            </h3>
-            <div class="detail-row">
-                <span class="detail-label">Test Name</span>
-                <span class="detail-value font-semibold"><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Test Type</span>
-                <span class="detail-value"><?= htmlspecialchars($lab_test['test_type'] ?? 'N/A') ?></span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Sample Type</span>
-                <span class="detail-value"><?= htmlspecialchars($lab_test['sample_type'] ?? 'N/A') ?></span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Status</span>
-                <span class="detail-value">
-                    <span class="status-badge <?= $lab_test['status'] ?? 'pending' ?>">
-                        <?= getStatusLabel($lab_test['status'] ?? 'pending') ?>
-                    </span>
-                </span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Request Number</span>
-                <span class="detail-value font-mono"><?= htmlspecialchars($lab_test['request_number'] ?? 'N/A') ?></span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Request Status</span>
-                <span class="detail-value">
-                    <span class="badge <?= getStatusBadgeClass($lab_test['request_status'] ?? 'pending') ?>">
-                        <?= getStatusLabel($lab_test['request_status'] ?? 'pending') ?>
-                    </span>
-                </span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Requested At</span>
-                <span class="detail-value"><?= formatDate($lab_test['requested_at'] ?? '') ?></span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Accepted At</span>
-                <span class="detail-value"><?= formatDate($lab_test['accepted_at'] ?? '') ?></span>
-            </div>
-            <?php if (!empty($lab_test['results'])): ?>
-                <div class="detail-row">
-                    <span class="detail-label">Result</span>
-                    <span class="detail-value font-semibold text-success"><?= nl2br(htmlspecialchars($lab_test['results'])) ?></span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Completed At</span>
-                    <span class="detail-value"><?= formatDate($lab_test['completed_at'] ?? '') ?></span>
-                </div>
-            <?php endif; ?>
-            <?php if (!empty($lab_test['notes'])): ?>
-                <div class="detail-row">
-                    <span class="detail-label">Notes</span>
-                    <span class="detail-value"><?= nl2br(htmlspecialchars($lab_test['notes'])) ?></span>
-                </div>
-            <?php endif; ?>
-        </div>
-        
-        <!-- Patient Information -->
-        <div class="card">
-            <h3 class="card-title">
-                <i class="fas fa-user title-green mr-2"></i>
+                <i class="fas fa-user-circle title-blue mr-2"></i>
                 Patient Information
             </h3>
-            <div style="display:flex;align-items:center;gap:16px;padding:12px 16px;background:var(--primary-bg);border-radius:var(--radius);margin-bottom:16px;">
-                <div class="patient-avatar-lg" style="background: <?= getUserColor($lab_test['patient_name'] ?? 'Unknown') ?>;">
-                    <?= strtoupper(substr($lab_test['patient_name'] ?? 'U', 0, 1)) ?>
-                </div>
-                <div>
-                    <h4 class="text-lg font-semibold"><?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?></h4>
-                    <p class="text-sm text-gray-500"><?= htmlspecialchars($lab_test['patient_code'] ?? 'N/A') ?></p>
-                    <p class="text-sm text-gray-500"><?= htmlspecialchars($lab_test['gender'] ?? '') ?> • <?= date('M d, Y', strtotime($lab_test['date_of_birth'] ?? 'now')) ?></p>
-                </div>
+            
+            <div class="detail-row">
+                <span class="detail-label">Full Name</span>
+                <span class="detail-value"><strong><?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?></strong></span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Patient ID</span>
+                <span class="detail-value"><?= htmlspecialchars($lab_test['patient_code'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Gender</span>
+                <span class="detail-value"><?= htmlspecialchars($lab_test['gender'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Date of Birth</span>
+                <span class="detail-value"><?= !empty($lab_test['date_of_birth']) ? date('d/m/Y', strtotime($lab_test['date_of_birth'])) : 'N/A' ?> (<?= calculateAge($lab_test['date_of_birth'] ?? '') ?> yrs)</span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Phone</span>
                 <span class="detail-value"><?= htmlspecialchars($lab_test['phone'] ?? 'N/A') ?></span>
             </div>
             <div class="detail-row">
-                <span class="detail-label">Email</span>
-                <span class="detail-value"><?= htmlspecialchars($lab_test['email'] ?? 'N/A') ?></span>
-            </div>
-            <div class="detail-row">
                 <span class="detail-label">Blood Group</span>
                 <span class="detail-value"><?= htmlspecialchars($lab_test['blood_group'] ?? 'N/A') ?></span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Allergies</span>
-                <span class="detail-value"><?= htmlspecialchars($lab_test['allergies'] ?? 'None') ?></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Address</span>
                 <span class="detail-value"><?= htmlspecialchars($lab_test['address'] ?? 'N/A') ?></span>
             </div>
-            <div class="detail-row">
-                <span class="detail-label">Emergency Contact</span>
-                <span class="detail-value"><?= htmlspecialchars($lab_test['emergency_contact'] ?? 'N/A') ?></span>
-            </div>
         </div>
         
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- DOCTOR & VISIT INFORMATION -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
-        
-        <!-- Doctor Information -->
+        <!-- Right: Test Info -->
         <div class="card">
             <h3 class="card-title">
-                <i class="fas fa-user-md title-blue mr-2"></i>
-                Doctor Information
+                <i class="fas fa-flask title-purple mr-2"></i>
+                Test Information
             </h3>
+            
             <div class="detail-row">
-                <span class="detail-label">Doctor Name</span>
-                <span class="detail-value font-semibold">Dr. <?= htmlspecialchars($lab_test['doctor_name'] ?? 'N/A') ?></span>
+                <span class="detail-label">Test Name</span>
+                <span class="detail-value"><strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong></span>
             </div>
             <div class="detail-row">
-                <span class="detail-label">Specialty</span>
-                <span class="detail-value"><?= htmlspecialchars($lab_test['specialty'] ?? 'General Practitioner') ?></span>
+                <span class="detail-label">Test Price</span>
+                <span class="detail-value">TSh <?= number_format($lab_test['test_price'] ?? 0, 2) ?></span>
             </div>
             <div class="detail-row">
-                <span class="detail-label">Phone</span>
-                <span class="detail-value"><?= htmlspecialchars($lab_test['doctor_phone'] ?? 'N/A') ?></span>
-            </div>
-        </div>
-        
-        <!-- Visit Information -->
-        <div class="card">
-            <h3 class="card-title">
-                <i class="fas fa-clinic-medical title-green mr-2"></i>
-                Visit Information
-            </h3>
-            <div class="detail-row">
-                <span class="detail-label">Visit Number</span>
-                <span class="detail-value font-mono"><?= htmlspecialchars($lab_test['visit_number'] ?? 'N/A') ?></span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Visit Type</span>
-                <span class="detail-value"><?= ucfirst($lab_test['visit_type'] ?? 'New') ?></span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Visit Status</span>
+                <span class="detail-label">Status</span>
                 <span class="detail-value">
-                    <span class="badge <?= getStatusBadgeClass($lab_test['visit_status'] ?? 'pending') ?>">
-                        <?= ucfirst(str_replace('_', ' ', $lab_test['visit_status'] ?? 'Pending')) ?>
+                    <span class="badge <?= getStatusBadgeClass($lab_test['status'] ?? 'pending') ?>">
+                        <?= getStatusLabel($lab_test['status'] ?? 'pending') ?>
                     </span>
                 </span>
             </div>
             <div class="detail-row">
-                <span class="detail-label">Created At</span>
-                <span class="detail-value"><?= formatDate($lab_test['visit_created_at'] ?? '') ?></span>
+                <span class="detail-label">Visit Number</span>
+                <span class="detail-value"><?= htmlspecialchars($lab_test['visit_number'] ?? 'N/A') ?></span>
             </div>
-            <?php if (!empty($lab_test['visit_completed_at'])): ?>
+            <div class="detail-row">
+                <span class="detail-label">Doctor</span>
+                <span class="detail-value">Dr. <?= htmlspecialchars($lab_test['doctor_name'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Request Number</span>
+                <span class="detail-value"><?= htmlspecialchars($lab_test['request_number'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Request Date</span>
+                <span class="detail-value"><?= formatDate($lab_test['request_date'] ?? $lab_test['created_at'] ?? '') ?></span>
+            </div>
+            <?php if (!empty($lab_test['completed_at'])): ?>
                 <div class="detail-row">
-                    <span class="detail-label">Completed At</span>
-                    <span class="detail-value"><?= formatDate($lab_test['visit_completed_at']) ?></span>
-                </div>
-            <?php endif; ?>
-            <?php if (!empty($lab_test['symptoms'])): ?>
-                <div class="detail-row">
-                    <span class="detail-label">Symptoms</span>
-                    <span class="detail-value"><?= nl2br(htmlspecialchars($lab_test['symptoms'])) ?></span>
+                    <span class="detail-label">Completed</span>
+                    <span class="detail-value"><?= formatDate($lab_test['completed_at']) ?></span>
                 </div>
             <?php endif; ?>
             <?php if (!empty($lab_test['diagnosis'])): ?>
                 <div class="detail-row">
                     <span class="detail-label">Diagnosis</span>
-                    <span class="detail-value"><?= nl2br(htmlspecialchars($lab_test['diagnosis'])) ?></span>
+                    <span class="detail-value"><?= htmlspecialchars($lab_test['diagnosis']) ?></span>
                 </div>
             <?php endif; ?>
         </div>
-        
     </div>
 
-    <!-- ================================================================ -->
-    <!-- ALL TESTS FOR THIS VISIT -->
-    <!-- ================================================================ -->
-    <div class="card mb-5">
+    <!-- Result -->
+    <div class="card mt-5">
         <h3 class="card-title">
-            <i class="fas fa-list title-purple mr-2"></i>
-            All Tests for This Visit
-            <span class="text-sm font-normal text-gray-400">(<?= count($all_tests) ?> tests)</span>
+            <i class="fas fa-file-medical-alt title-green mr-2"></i>
+            Result
+            <?php if (($lab_test['status'] ?? '') === 'completed'): ?>
+                <span class="badge badge-success ml-2">✅ Completed</span>
+            <?php elseif (($lab_test['status'] ?? '') === 'in_progress'): ?>
+                <span class="badge badge-warning ml-2">🔄 In Progress</span>
+            <?php else: ?>
+                <span class="badge badge-warning ml-2">⏳ Pending</span>
+            <?php endif; ?>
         </h3>
         
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Test Name</th>
-                        <th>Status</th>
-                        <th>Result</th>
-                        <th>Created</th>
-                        <th style="text-align:center;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php $i = 1; foreach ($all_tests as $test): ?>
-                        <tr>
-                            <td><?= $i++ ?></td>
-                            <td class="font-semibold"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
-                            <td>
-                                <span class="status-badge <?= $test['status'] ?? 'pending' ?>">
-                                    <?= getStatusLabel($test['status'] ?? 'pending') ?>
-                                </span>
-                            </td>
-                            <td>
-                                <?php if (!empty($test['results'])): ?>
-                                    <span class="text-success font-semibold"><?= htmlspecialchars(substr($test['results'], 0, 30)) ?></span>
-                                    <?php if (strlen($test['results']) > 30): ?>...<?php endif; ?>
-                                <?php else: ?>
-                                    <span class="text-gray-400">Not yet</span>
-                                <?php endif; ?>
-                            </td>
-                            <td class="text-sm"><?= date('M d, Y', strtotime($test['created_at'] ?? 'now')) ?></td>
-                            <td style="text-align:center;">
-                                <a href="view_test.php?id=<?= $test['id'] ?>" class="btn btn-primary btn-sm">
-                                    <i class="fas fa-eye"></i>
-                                </a>
-                                <?php if (($test['status'] ?? '') !== 'completed'): ?>
-                                    <a href="add_result.php?id=<?= $test['id'] ?>" class="btn btn-success btn-sm">
-                                        <i class="fas fa-edit"></i>
-                                    </a>
-                                <?php endif; ?>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
+        <?php if (!empty($lab_test['results'])): ?>
+            <div class="result-box">
+                <?= nl2br(htmlspecialchars($lab_test['results'])) ?>
+            </div>
+            <?php if (!empty($lab_test['notes'])): ?>
+                <div class="mt-3 text-sm text-gray-500">
+                    <i class="fas fa-sticky-note"></i> <strong>Notes:</strong> <?= htmlspecialchars($lab_test['notes']) ?>
+                </div>
+            <?php endif; ?>
+        <?php else: ?>
+            <div class="text-center py-8 text-gray-400">
+                <i class="fas fa-flask text-3xl block mb-2"></i>
+                <p>No result entered yet</p>
+                <p class="text-sm mt-1">Result will appear here once completed</p>
+                <?php if (($lab_test['status'] ?? '') !== 'completed'): ?>
+                    <a href="add_result.php?id=<?= $lab_test['id'] ?>" class="btn btn-primary mt-3">
+                        <i class="fas fa-edit"></i> Add Result
+                    </a>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- BILL ITEMS -->
-    <!-- ================================================================ -->
-    <?php if (count($bill_items) > 0): ?>
-        <div class="card mb-5">
+    <!-- Actions -->
+    <?php if (($lab_test['status'] ?? '') !== 'completed'): ?>
+        <div class="card mt-5" style="border-color:var(--primary-light);background:var(--primary-bg);">
             <h3 class="card-title">
-                <i class="fas fa-receipt title-orange mr-2"></i>
-                Bill Items
-                <span class="text-sm font-normal text-gray-400">(<?= count($bill_items) ?> items)</span>
+                <i class="fas fa-cogs title-blue mr-2"></i>
+                Actions
             </h3>
-            
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Item Name</th>
-                            <th>Type</th>
-                            <th>Qty</th>
-                            <th style="text-align:right;">Unit Price</th>
-                            <th style="text-align:right;">Total</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php $i = 1; foreach ($bill_items as $item): ?>
-                            <tr>
-                                <td><?= $i++ ?></td>
-                                <td><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></td>
-                                <td><span class="badge badge-info"><?= ucfirst($item['item_type'] ?? 'N/A') ?></span></td>
-                                <td><?= $item['quantity'] ?? 1 ?></td>
-                                <td style="text-align:right;"><?= formatCurrency($item['unit_price'] ?? 0) ?></td>
-                                <td style="text-align:right;font-weight:600;"><?= formatCurrency($item['total_price'] ?? 0) ?></td>
-                                <td>
-                                    <span class="badge <?= ($item['is_paid'] ?? 0) ? 'badge-success' : 'badge-warning' ?>">
-                                        <?= ($item['is_paid'] ?? 0) ? '✅ Paid' : '⏳ Pending' ?>
-                                    </span>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+            <div class="flex flex-wrap gap-3">
+                <a href="add_result.php?id=<?= $lab_test['id'] ?>" class="btn btn-success">
+                    <i class="fas fa-edit"></i> Add Result
+                </a>
+                <a href="in_progress.php" class="btn btn-outline">
+                    <i class="fas fa-arrow-left"></i> Back
+                </a>
             </div>
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- ACTIONS -->
-    <!-- ================================================================ -->
-    <div class="card">
-        <div class="flex flex-wrap gap-3">
-            <a href="in_progress.php" class="btn btn-outline">
-                <i class="fas fa-arrow-left"></i> Back to List
-            </a>
-            <?php if (($lab_test['status'] ?? '') !== 'completed'): ?>
-                <a href="add_result.php?id=<?= $lab_test_id ?>" class="btn btn-success">
-                    <i class="fas fa-edit"></i> Add Result
-                </a>
-            <?php endif; ?>
-            <button onclick="window.print()" class="btn btn-outline">
-                <i class="fas fa-print"></i> Print
-            </button>
-            <?php if (($lab_test['status'] ?? '') !== 'completed'): ?>
-                <form method="POST" action="in_progress.php" style="display:inline;">
-                    <input type="hidden" name="action" value="update_status">
-                    <input type="hidden" name="lab_test_id" value="<?= $lab_test_id ?>">
-                    <input type="hidden" name="status" value="completed">
-                    <button type="submit" class="btn btn-warning" onclick="return confirm('Mark this test as completed?')">
-                        <i class="fas fa-check-circle"></i> Mark Completed
-                    </button>
-                </form>
-            <?php endif; ?>
-        </div>
-    </div>
-
-    <?php else: ?>
-        <div class="text-center py-8 text-gray-400">
-            <i class="fas fa-flask text-4xl block mb-3"></i>
-            <p class="text-lg">Test not found</p>
-            <a href="in_progress.php" class="text-primary hover:underline">Back to In Progress</a>
-        </div>
-    <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             View Test
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1434,9 +968,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
+<!-- Toast -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
     <div>
@@ -1449,9 +981,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
+    // Dark Mode
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1479,27 +1009,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
+    // Sidebar Toggle
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
+    // Date & Time
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1512,35 +1030,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         if (el) {
             el.textContent = dateStr + ' • ' + timeStr;
         }
-        var footer = document.getElementById('footerTimestamp');
-        if (footer) {
-            footer.textContent = 'Last updated: ' + timeStr;
-        }
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // TOAST
-    // ================================================================
+    // Toast
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1558,10 +1052,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c🧪 View Test Details', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🔬 View Test - Laboratory', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Status: <?= $lab_test['status'] ?? 'N/A' ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Status: <?= $lab_test['status'] ?? 'pending' ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Total Tests: <?= $total_tests ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Completed: <?= $completed_tests ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Completion Rate: <?= $completed_percentage ?>%', 'font-size:13px; color:#059669;');
+    <?php if (($lab_test['status'] ?? '') === 'completed'): ?>
+        console.log('%c💾 Result: <?= substr($lab_test['results'] ?? '', 0, 100) ?>...', 'font-size:13px; color:#34D399;');
+    <?php endif; ?>
 </script>
 
 </body>

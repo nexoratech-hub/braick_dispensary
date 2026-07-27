@@ -3,7 +3,7 @@
 // FILE: frontend/pages/laboratory/add_result.php
 // LABORATORY - ADD TEST RESULT
 // SHOWS: Ultrasound Forms OR Regular Textarea based on test type
-// WITH PRINT BUTTON
+// WITH LOGO SUPPORT - FIXED
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -143,7 +143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $db->beginTransaction();
                 
-                // ✅ FIX: Update lab_tests WITHOUT technician_id
+                // Update lab_tests - WITHOUT technician_id
                 $stmt = $db->prepare("
                     UPDATE lab_tests 
                     SET results = ?, status = ?, notes = ?, 
@@ -200,11 +200,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
+// ✅ GET LOGO HTML - FIXED: Inatafuta logo kwenye paths mbalimbali
+// ================================================================
+function getLogoHTML() {
+    // Check multiple possible logo locations
+    $logo_paths = [
+        '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
+        '/dispensary_system/frontend/assets/uploads/profiles/logo.png',
+        '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.jpg',
+        '/dispensary_system/frontend/assets/uploads/profiles/logo.jpg',
+        '/dispensary_system/frontend/assets/img/braick_logo.png',
+        '/dispensary_system/frontend/assets/img/logo.png',
+        '/dispensary_system/frontend/assets/images/braick_logo.png',
+        '/dispensary_system/frontend/assets/images/logo.png'
+    ];
+    
+    $logo_url = '';
+    foreach ($logo_paths as $path) {
+        $full_path = $_SERVER['DOCUMENT_ROOT'] . $path;
+        if (file_exists($full_path)) {
+            $logo_url = $path;
+            break;
+        }
+    }
+    
+    // If logo found, return img tag
+    if (!empty($logo_url)) {
+        return '<img src="' . $logo_url . '" alt="Braick Dispensary" style="height:60px;width:auto;max-height:60px;border-radius:8px;">';
+    }
+    
+    // SVG Fallback - Braick text with blue background
+    return '<div style="display:inline-block;background:#0B5ED7;color:white;padding:8px 20px;border-radius:8px;font-size:20px;font-weight:bold;font-family:Arial,sans-serif;">BRAICK</div>';
+}
+
+// ================================================================
 // GENERATE ULTRASOUND FORMS FROM TEMPLATES
 // ================================================================
 function generateFormsFromTemplates($templates, $patient, $user_full_name) {
     $html = '';
     $counter = 0;
+    
+    // ✅ Get logo HTML
+    $logo_html = getLogoHTML();
     
     foreach ($templates as $template) {
         $counter++;
@@ -218,6 +255,12 @@ function generateFormsFromTemplates($templates, $patient, $user_full_name) {
         $template_html = str_replace('{exam_date}', date('d/m/Y'), $template_html);
         $template_html = str_replace('{report_date}', date('d/m/Y H:i'), $template_html);
         $template_html = str_replace('{technician_name}', htmlspecialchars($user_full_name), $template_html);
+        
+        // ✅ Replace {logo} placeholder with actual logo HTML
+        $template_html = str_replace('{logo}', $logo_html, $template_html);
+        
+        // If template uses {logo_url}, replace it too
+        $template_html = str_replace('{logo_url}', '', $template_html);
         
         $active_class = ($counter === 1) ? 'active' : '';
         
@@ -606,6 +649,18 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
         }
         
+        .btn-print {
+            background: #6B7280;
+            color: white;
+            box-shadow: 0 2px 8px rgba(107, 114, 128, 0.2);
+        }
+        
+        .btn-print:hover {
+            background: #4B5563;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(107, 114, 128, 0.3);
+        }
+        
         .badge {
             display: inline-block;
             padding: 2px 10px;
@@ -665,7 +720,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         /* ================================================================
-           ULTRASOUND FORM STYLES
+           ULTRASOUND FORM STYLES - WITH LOGO SUPPORT
            ================================================================ */
         .ultrasound-form {
             background: #fff;
@@ -689,16 +744,49 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             margin-bottom: 15px;
         }
         
+        .ultrasound-form .report-header .logo-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .ultrasound-form .report-header .logo-container img {
+            height: 60px;
+            width: auto;
+            max-height: 60px;
+            border-radius: 8px;
+        }
+        
+        .ultrasound-form .report-header .logo-container .logo-text {
+            display: inline-block;
+            background: #0B5ED7;
+            color: white;
+            padding: 8px 20px;
+            border-radius: 8px;
+            font-size: 20px;
+            font-weight: bold;
+            font-family: Arial, sans-serif;
+        }
+        
         .ultrasound-form .report-header h2 {
             color: #0B5ED7;
-            font-size: 20px;
+            font-size: 22px;
             margin: 0;
         }
         
         .ultrasound-form .report-header h3 {
             font-size: 16px;
             color: #333;
-            margin: 5px 0;
+            margin: 5px 0 0 0;
+        }
+        
+        .ultrasound-form .report-header .subtitle {
+            font-size: 12px;
+            color: #666;
+            margin: 0;
         }
         
         .ultrasound-form .patient-info {
@@ -711,6 +799,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .ultrasound-form .patient-info p {
             margin: 0;
             font-size: 14px;
+        }
+        
+        .ultrasound-form .patient-info strong {
+            color: #333;
         }
         
         .ultrasound-form h4 {
@@ -801,12 +893,28 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border-color: #3B82F6 !important;
         }
         
-        [data-theme="dark"] .ultrasound-form h2,
-        [data-theme="dark"] .ultrasound-form h3,
-        [data-theme="dark"] .ultrasound-form h4,
-        [data-theme="dark"] .ultrasound-form strong,
-        [data-theme="dark"] .ultrasound-form td {
+        [data-theme="dark"] .ultrasound-form .report-header h2 {
+            color: #60A5FA !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form .report-header h3 {
             color: #F1F5F9 !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form .report-header .subtitle {
+            color: #94A3B8 !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form .patient-info strong {
+            color: #F1F5F9 !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form .patient-info p {
+            color: #94A3B8 !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form h4 {
+            color: #60A5FA !important;
         }
         
         [data-theme="dark"] .ultrasound-form input.form-control,
@@ -814,6 +922,19 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             background: #1E293B;
             border-color: #475569;
             color: #F1F5F9;
+        }
+        
+        [data-theme="dark"] .ultrasound-form .biometry table th {
+            background: #1E3A5F !important;
+            color: #F1F5F9 !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form .biometry table td {
+            color: #F1F5F9 !important;
+        }
+        
+        [data-theme="dark"] .ultrasound-form .report-footer {
+            color: #94A3B8 !important;
         }
         
         .form-selector {
@@ -882,19 +1003,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* Print Button Styles */
-        .btn-print {
-            background: #6B7280;
-            color: white;
-            box-shadow: 0 2px 8px rgba(107, 114, 128, 0.2);
-        }
-        
-        .btn-print:hover {
-            background: #4B5563;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(107, 114, 128, 0.3);
-        }
-        
         /* Print Styles */
         @media print {
             .top-nav,
@@ -958,72 +1066,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 color: #000 !important;
             }
             
-            .ultrasound-form .report-header h2 {
-                color: #0B5ED7 !important;
-            }
-            
-            .ultrasound-form .report-header h3 {
-                color: #333 !important;
-            }
-            
-            .ultrasound-form .patient-info p {
-                color: #333 !important;
-            }
-            
-            .ultrasound-form .patient-info strong {
-                color: #333 !important;
-            }
-            
-            .ultrasound-form h4 {
-                color: #0B5ED7 !important;
-            }
-            
-            .ultrasound-form .biometry table th {
-                background: #E8F0FE !important;
-                color: #333 !important;
-            }
-            
-            .ultrasound-form .biometry table td {
-                color: #333 !important;
-            }
-            
-            .ultrasound-form .report-footer {
-                color: #666 !important;
-            }
-            
-            .grid {
-                display: block !important;
-            }
-            
-            .lg\\:col-span-1,
-            .lg\\:col-span-2 {
-                grid-column: span 1 !important;
-            }
-            
-            .gap-5 {
-                gap: 10px !important;
-            }
-            
-            .mt-4 {
-                margin-top: 10px !important;
-            }
-            
-            .flex-wrap {
-                flex-wrap: wrap !important;
-            }
-            
-            /* Hide form selector buttons in print */
-            .form-selector {
-                display: none !important;
-            }
-            
-            /* Show all forms in print */
-            .ultrasound-form {
-                display: none !important;
-            }
-            
-            .ultrasound-form.active {
-                display: block !important;
+            .ultrasound-form .report-header .logo-container img {
+                height: 50px !important;
             }
         }
         
@@ -1079,6 +1123,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             .ultrasound-form .findings p { flex-direction: column; align-items: flex-start; }
             .ultrasound-form .findings p strong { min-width: auto; }
             .form-selector { grid-template-columns: repeat(2, 1fr); }
+            .ultrasound-form .report-header .logo-container { flex-direction: column; }
         }
         
         @media (max-width: 480px) {
@@ -1088,6 +1133,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             .form-selector { grid-template-columns: 1fr 1fr; }
             .form-selector .form-option { font-size: 0.7rem; padding: 8px 10px; }
             .form-selector .form-option .option-icon { font-size: 1.2rem; }
+            .ultrasound-form .biometry table td input { width: 60px !important; }
         }
     </style>
 </head>
@@ -1230,7 +1276,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             
             <?php if ($show_ultrasound): ?>
                 <!-- ================================================================ -->
-                <!-- ULTRASOUND FORMS -->
+                <!-- ULTRASOUND FORMS WITH LOGO -->
                 <!-- ================================================================ -->
                 <?= generateFormSelector($templates) ?>
                 
@@ -1470,7 +1516,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         showToast('Info', 'Form cleared', 'info');
     }
 
-    // ✅ PRINT ULTRASOUND FORM
+    // ✅ PRINT ULTRASOUND FORM - With Logo Support
     function printUltrasoundForm() {
         var activeForm = document.querySelector('.ultrasound-form.active');
         if (!activeForm) {
@@ -1478,7 +1524,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             return;
         }
         
-        // Get all input values and create a printable version
         var printWindow = window.open('', '_blank', 'width=800,height=600');
         if (!printWindow) {
             showToast('Error', 'Please allow popups for printing', 'error');
@@ -1487,16 +1532,22 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         var formHTML = activeForm.outerHTML;
         
+        // Get logo from the form
+        var logoImg = activeForm.querySelector('.logo-container img');
+        var logoHTML = '';
+        if (logoImg) {
+            logoHTML = logoImg.outerHTML;
+        } else {
+            // Fallback logo
+            logoHTML = '<div style="display:inline-block;background:#0B5ED7;color:white;padding:8px 20px;border-radius:8px;font-size:20px;font-weight:bold;font-family:Arial,sans-serif;">BRAICK</div>';
+        }
+        
         // Replace input fields with their values for printing
         var inputs = activeForm.querySelectorAll('input, textarea');
         inputs.forEach(function(input) {
             var value = input.value || '___________________';
-            var placeholder = input.placeholder || '';
-            var label = input.dataset.placeholder || placeholder || 'field';
-            
-            // Replace the input with its value
             var inputHTML = input.outerHTML;
-            var replacement = '<span style="display:inline-block;min-width:100px;border-bottom:1px solid #333;padding:2px 4px;font-weight:normal;">' + (value || '___________________') + '</span>';
+            var replacement = '<span style="display:inline-block;min-width:100px;border-bottom:1px solid #333;padding:2px 4px;font-weight:normal;font-family:Arial,sans-serif;">' + (value || '___________________') + '</span>';
             formHTML = formHTML.replace(inputHTML, replacement);
         });
         
@@ -1504,10 +1555,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         printWindow.document.write('<!DOCTYPE html><html><head><title>Ultrasound Report</title>');
         printWindow.document.write('<style>');
         printWindow.document.write('body { font-family: Arial, sans-serif; padding: 40px; background: white; }');
-        printWindow.document.write('.ultrasound-form { max-width: 900px; margin: 0 auto; padding: 20px; border: 2px solid #0B5ED7; border-radius: 10px; }');
+        printWindow.document.write('.ultrasound-report { max-width: 900px; margin: 0 auto; padding: 20px; border: 2px solid #0B5ED7; border-radius: 10px; }');
         printWindow.document.write('.report-header { text-align: center; border-bottom: 3px double #0B5ED7; padding-bottom: 10px; margin-bottom: 15px; }');
-        printWindow.document.write('.report-header h2 { color: #0B5ED7; font-size: 20px; margin: 0; }');
-        printWindow.document.write('.report-header h3 { font-size: 16px; color: #333; margin: 5px 0; }');
+        printWindow.document.write('.logo-container { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 10px; flex-wrap: wrap; }');
+        printWindow.document.write('.logo-container img { height: 60px; width: auto; max-height: 60px; border-radius: 8px; }');
+        printWindow.document.write('.report-header h2 { color: #0B5ED7; font-size: 22px; margin: 0; }');
+        printWindow.document.write('.report-header h3 { font-size: 16px; color: #333; margin: 5px 0 0 0; }');
+        printWindow.document.write('.report-header .subtitle { font-size: 12px; color: #666; margin: 0; }');
         printWindow.document.write('.patient-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }');
         printWindow.document.write('.patient-info p { margin: 0; font-size: 14px; }');
         printWindow.document.write('.patient-info strong { color: #333; }');
@@ -1527,7 +1581,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         printWindow.document.write('</body></html>');
         printWindow.document.close();
         
-        // Wait for content to load then print
         setTimeout(function() {
             printWindow.print();
         }, 500);
@@ -1551,13 +1604,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c🧪 Add Result - Laboratory (WITH PRINT)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🧪 Add Result - Laboratory (WITH LOGO)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c📋 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     <?php if ($show_ultrasound): ?>
-        console.log('%c🩺 Ultrasound - Showing forms', 'font-size:13px; color:#7C3AED;');
+        console.log('%c🩺 Ultrasound - Showing forms with logo', 'font-size:13px; color:#7C3AED;');
         console.log('%c📄 Templates Available: <?= count($templates) ?>', 'font-size:13px; color:#7C3AED;');
         console.log('%c🖨️ Print button available - Click to print filled form', 'font-size:13px; color:#34D399;');
+        console.log('%c🏢 Logo loaded from file system', 'font-size:13px; color:#34D399;');
     <?php else: ?>
         console.log('%c📊 Regular test - Showing textarea', 'font-size:13px; color:#0B5ED7;');
     <?php endif; ?>
