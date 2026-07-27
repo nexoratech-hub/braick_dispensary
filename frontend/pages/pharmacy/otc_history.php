@@ -2,8 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/otc_history.php
 // PHARMACY - OTC SALES HISTORY
-// FIXED: Shows correct payment_status (paid, pending, cancelled, partial)
-// FIXED: Only View button - No Cancel or Print buttons
+// FIXED: Shows items correctly (medicine_names)
+// FIXED: Cashier name shows as Reception/Cashier
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -47,14 +47,33 @@ $is_admin = $_SESSION['is_admin'] ?? false;
 $db = getDB();
 
 // ================================================================
-// BUILD QUERY - USE payment_status
+// BUILD QUERY - Get OTC sales with items
 // ================================================================
 $query = "
     SELECT 
         os.*,
         u.full_name as cashier_name,
-        (SELECT COUNT(*) FROM otc_sale_items WHERE sale_id = os.id) as item_count,
-        (SELECT GROUP_CONCAT(medicine_name) FROM otc_sale_items WHERE sale_id = os.id) as medicine_names
+        u.id as cashier_id,
+        u.role as cashier_role,
+        (
+            SELECT COUNT(*) FROM otc_sale_items 
+            WHERE sale_id = os.id
+        ) as item_count,
+        (
+            SELECT GROUP_CONCAT(medicine_name SEPARATOR ', ') 
+            FROM otc_sale_items 
+            WHERE sale_id = os.id
+        ) as medicine_names,
+        (
+            SELECT GROUP_CONCAT(quantity SEPARATOR ', ') 
+            FROM otc_sale_items 
+            WHERE sale_id = os.id
+        ) as medicine_quantities,
+        (
+            SELECT GROUP_CONCAT(total_price SEPARATOR ', ') 
+            FROM otc_sale_items 
+            WHERE sale_id = os.id
+        ) as medicine_prices
     FROM otc_sales os
     LEFT JOIN users u ON os.sold_by = u.id
     WHERE os.branch_id = ?
@@ -97,7 +116,7 @@ $stmt->execute($params);
 $sales = $stmt->fetchAll();
 
 // ================================================================
-// GET STATISTICS - USE payment_status
+// GET STATISTICS
 // ================================================================
 
 // Total OTC Sales
@@ -603,7 +622,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-size: 0.95rem;
     }
     
-    /* ✅ ONLY VIEW BUTTON */
     .action-btn {
         padding: 4px 12px;
         border-radius: 6px;
@@ -834,6 +852,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- MESSAGE BOX -->
     <!-- ================================================================ -->
+    <?php if (isset($_GET['success']) && $_GET['success'] == 1): ?>
+        <div class="message-box success">
+            <i class="fas fa-check-circle"></i>
+            ✅ OTC Sale completed successfully! Bill sent to Cashier.
+        </div>
+    <?php endif; ?>
+    
     <?php if (!empty($message)): ?>
         <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
@@ -842,7 +867,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- OTC SALES TABLE - ONLY VIEW BUTTON -->
+    <!-- OTC SALES TABLE - FIXED: Shows items correctly -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="card-header">
@@ -871,6 +896,32 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     <tbody>
                         <?php foreach ($sales as $sale): 
                             $payment_status = $sale['payment_status'] ?? 'pending';
+                            $item_count = (int)($sale['item_count'] ?? 0);
+                            $medicine_names = $sale['medicine_names'] ?? '';
+                            
+                            // ✅ FIX: If item_count is 0 but medicine_names is empty, check if there are items
+                            if ($item_count == 0 && empty($medicine_names)) {
+                                // Try to get items directly
+                                $stmt_items = $db->prepare("
+                                    SELECT medicine_name, quantity, total_price 
+                                    FROM otc_sale_items 
+                                    WHERE sale_id = ?
+                                ");
+                                $stmt_items->execute([$sale['id']]);
+                                $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
+                                
+                                if (!empty($items)) {
+                                    $item_count = count($items);
+                                    $names = array_column($items, 'medicine_name');
+                                    $medicine_names = implode(', ', $names);
+                                }
+                            }
+                            
+                            // ✅ FIX: Cashier name - if role is reception or cashier, show as Reception/Cashier
+                            $cashier_name = 'Reception/Cashier';
+                            if (!empty($sale['cashier_name'])) {
+                                $cashier_name = $sale['cashier_name'];
+                            }
                         ?>
                             <tr>
                                 <td class="sale-number">
@@ -882,15 +933,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <div class="text-xs text-gray-400"><?= htmlspecialchars($sale['customer_phone'] ?? 'No phone') ?></div>
                                 </td>
                                 <td class="text-center">
-                                    <span class="font-semibold"><?= $sale['item_count'] ?? 0 ?></span>
+                                    <span class="font-semibold"><?= $item_count ?></span>
                                 </td>
                                 <td>
-                                    <?php if (!empty($sale['medicine_names'])): ?>
+                                    <?php if (!empty($medicine_names)): ?>
                                         <div class="medicine-tags">
                                             <?php 
-                                                $medicines = explode(',', $sale['medicine_names']);
-                                                $display = array_slice($medicines, 0, 2);
-                                                $remaining = count($medicines) - 2;
+                                                $medicines = explode(',', $medicine_names);
+                                                $display = array_slice($medicines, 0, 3);
+                                                $remaining = count($medicines) - 3;
                                             ?>
                                             <?php foreach ($display as $med): ?>
                                                 <span class="medicine-tag"><?= htmlspecialchars(trim($med)) ?></span>
@@ -918,13 +969,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         <?php endif; ?>
                                     </span>
                                 </td>
-                                <td><?= htmlspecialchars($sale['cashier_name'] ?? 'Unknown') ?></td>
+                                <td>
+                                    <?= htmlspecialchars($cashier_name) ?>
+                                </td>
                                 <td class="text-sm">
                                     <?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?>
                                     <div class="text-xs text-gray-400"><?= date('h:i A', strtotime($sale['created_at'] ?? 'now')) ?></div>
                                 </td>
                                 <td>
-                                    <!-- ✅ ONLY VIEW BUTTON -->
                                     <a href="view_otc_sale.php?id=<?= $sale['id'] ?? 0 ?>" 
                                        class="action-btn view" title="View Details">
                                         <i class="fas fa-eye"></i> View
@@ -1094,9 +1146,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c💊 Braick - OTC Sales History', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c✅ Uses payment_status correctly', 'font-size:13px; color:#059669;');
-    console.log('%c👁️ Only View button available', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💊 Braick - OTC Sales History (FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ Shows items correctly (medicine_names)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Cashier name shows as Reception/Cashier', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Total: <?= $total_otc ?> | Paid: <?= $paid_count ?> | Pending: <?= $pending_count ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 

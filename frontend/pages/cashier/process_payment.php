@@ -5,6 +5,7 @@
 // FIXED: Partial amount stays as entered (not reduced by discount)
 // FIXED: All items displayed in table with prices
 // FIXED: Comma formatting for amount fields
+// FIXED: Updates OTC sales payment_status when bill is paid
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -132,6 +133,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     WHERE bill_id = ? AND (is_paid = 0 OR is_paid IS NULL)
                 ");
                 $stmt->execute([$bill_id]);
+                
+                // ================================================================
+                // ✅ FIX: UPDATE OTC SALES WHEN BILL IS PAID
+                // ================================================================
+                // Check if this bill is linked to an OTC sale
+                $stmt = $db->prepare("
+                    SELECT id FROM otc_sales 
+                    WHERE bill_id = ? AND payment_status IN ('pending', 'partial')
+                ");
+                $stmt->execute([$bill_id]);
+                $otc_sale = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($otc_sale) {
+                    // Update OTC sale payment_status to 'paid'
+                    $stmt = $db->prepare("
+                        UPDATE otc_sales 
+                        SET payment_status = 'paid',
+                            updated_at = NOW()
+                        WHERE bill_id = ?
+                    ");
+                    $stmt->execute([$bill_id]);
+                }
                 
                 $stmt = $db->prepare("
                     INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
@@ -278,6 +301,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ");
                 $stmt->execute([$bill_payment, $new_balance, $bill_discount, $new_status, $bill_id]);
                 
+                // ================================================================
+                // ✅ FIX: UPDATE OTC SALES WHEN BILL IS PAID
+                // ================================================================
+                if ($new_status === 'paid') {
+                    // Check if this bill is linked to an OTC sale
+                    $stmt = $db->prepare("
+                        SELECT id FROM otc_sales 
+                        WHERE bill_id = ? AND payment_status IN ('pending', 'partial')
+                    ");
+                    $stmt->execute([$bill_id]);
+                    $otc_sale = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($otc_sale) {
+                        // Update OTC sale payment_status to 'paid'
+                        $stmt = $db->prepare("
+                            UPDATE otc_sales 
+                            SET payment_status = 'paid',
+                                updated_at = NOW()
+                            WHERE bill_id = ?
+                        ");
+                        $stmt->execute([$bill_id]);
+                    }
+                }
+                
                 $stmt = $db->prepare("
                     INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
                     VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
@@ -359,6 +406,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     SET payment_status = 'cancelled', 
                         status = 'cancelled'
                     WHERE bill_id = ? AND (is_paid = 0 OR is_paid IS NULL)
+                ");
+                $stmt->execute([$bill_id]);
+                
+                // ================================================================
+                // ✅ FIX: UPDATE OTC SALES WHEN BILL IS CANCELLED
+                // ================================================================
+                $stmt = $db->prepare("
+                    UPDATE otc_sales 
+                    SET payment_status = 'cancelled',
+                        updated_at = NOW()
+                    WHERE bill_id = ? AND payment_status IN ('pending', 'partial')
                 ");
                 $stmt->execute([$bill_id]);
                 
@@ -2108,11 +2166,12 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         }
     }
 
-    console.log('%c💰 Braick - Process Payments (FULLY FIXED v2)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick - Process Payments (UPDATED - OTC Support)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c✅ Partial amount stays as entered (not reduced by discount)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ All items displayed in table with prices', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Comma formatting for amount fields', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Remaining balance = Total - Partial - Discount', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ OTC Sales payment_status updated when bill is paid', 'font-size:13px; color:#34D399;');
     <?php if ($has_selected_bill && $selected_bill): ?>
         console.log('%c📋 Selected Bill: <?= $selected_bill['bill_number'] ?>', 'font-size:13px; color:#3B82F6;');
         console.log('%c👤 Patient: <?= $selected_bill['patient_name'] ?>', 'font-size:13px; color:#64748B;');
