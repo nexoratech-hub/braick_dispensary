@@ -1,7 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
-// PHARMACY - NEW OTC SALE (WITH DISCOUNT - WIDE INPUT)
+// PHARMACY - NEW OTC SALE (WITH DISCOUNT - AMOUNT INPUT)
+// DISCOUNT: Enter amount in TSh (not percentage)
+// BILL: Sent to Cashier for payment
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -50,7 +52,7 @@ $stmt->execute([$user_branch_id]);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
-// PROCESS OTC SALE
+// PROCESS OTC SALE - SENDS BILL TO CASHIER
 // ================================================================
 $message = '';
 $message_type = '';
@@ -60,7 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $customer_name = trim($_POST['customer_name'] ?? 'Walk-in Customer');
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $payment_method = $_POST['payment_method'] ?? 'cash';
-    $discount_percent = (float)($_POST['discount_percent'] ?? 0);
+    // ✅ Discount is amount in TSh
+    $discount_amount = (float)($_POST['discount_amount'] ?? 0);
     $items = json_decode($_POST['items_json'] ?? '[]', true);
     
     // Calculate totals
@@ -70,8 +73,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $subtotal += $item['total'];
     }
     
-    $discount_amount = ($subtotal * $discount_percent) / 100;
+    // ✅ Discount amount validation
+    if ($discount_amount > $subtotal) {
+        $discount_amount = $subtotal;
+    }
     $grand_total = $subtotal - $discount_amount;
+    if ($grand_total < 0) $grand_total = 0;
     
     // Validation
     $errors = [];
@@ -99,14 +106,93 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $db->beginTransaction();
             
             $sale_number = 'OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+            $bill_number = 'BILL-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
-            // Insert OTC sale
+            // ================================================================
+            // 1. CREATE PATIENT BILL (for Cashier)
+            // ================================================================
+            $stmt = $db->prepare("
+                INSERT INTO patient_bills (
+                    bill_number, patient_id, visit_id, 
+                    subtotal, total_amount, discount_amount, balance, 
+                    status, created_by, branch_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW(), NOW())
+            ");
+            
+            // Use customer name as patient (or create temp patient)
+            // Check if patient exists with this phone
+            $patient_id = null;
+            if (!empty($customer_phone)) {
+                $stmt_check = $db->prepare("SELECT id FROM patients WHERE phone = ? AND branch_id = ? LIMIT 1");
+                $stmt_check->execute([$customer_phone, $user_branch_id]);
+                $existing = $stmt_check->fetch(PDO::FETCH_ASSOC);
+                if ($existing) {
+                    $patient_id = $existing['id'];
+                }
+            }
+            
+            // If no patient found, create one
+            if (!$patient_id) {
+                $patient_code = 'PAT-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+                $stmt = $db->prepare("
+                    INSERT INTO patients (patient_id, full_name, phone, branch_id, created_at)
+                    VALUES (?, ?, ?, ?, NOW())
+                ");
+                $stmt->execute([$patient_code, $customer_name, $customer_phone ?: 'N/A', $user_branch_id]);
+                $patient_id = $db->lastInsertId();
+            }
+            
+            // Insert bill
+            $stmt = $db->prepare("
+                INSERT INTO patient_bills (
+                    bill_number, patient_id, 
+                    subtotal, total_amount, discount_amount, balance, 
+                    status, created_by, branch_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW(), NOW())
+            ");
+            $stmt->execute([
+                $bill_number,
+                $patient_id,
+                $subtotal,
+                $subtotal,
+                $discount_amount,
+                $grand_total,
+                $user_id,
+                $user_branch_id
+            ]);
+            $bill_id = $db->lastInsertId();
+            
+            // ================================================================
+            // 2. ADD BILL ITEMS
+            // ================================================================
+            foreach ($items as $item) {
+                $stmt = $db->prepare("
+                    INSERT INTO bill_items (
+                        bill_id, item_type, item_name, 
+                        quantity, unit_price, total_price,
+                        payment_status, is_paid, status, created_at
+                    ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
+                ");
+                $stmt->execute([
+                    $bill_id,
+                    $item['name'],
+                    $item['quantity'],
+                    $item['price'],
+                    $item['total']
+                ]);
+            }
+            
+            // ================================================================
+            // 3. CREATE OTC SALE RECORD
+            // ================================================================
             $stmt = $db->prepare("
                 INSERT INTO otc_sales (
                     sale_number, customer_name, customer_phone, 
-                    total_amount, discount_amount, net_amount,
+                    total_amount, discount_amount, net_amount, bill_id,
                     payment_method, payment_status, sold_by, branch_id, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, ?, NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NOW())
             ");
             $stmt->execute([
                 $sale_number,
@@ -115,28 +201,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $subtotal,
                 $discount_amount,
                 $grand_total,
+                $bill_id,
                 $payment_method,
                 $user_id,
                 $user_branch_id,
-                'OTC Sale - ' . date('Y-m-d H:i:s')
+                'OTC Sale - Bill sent to Cashier'
             ]);
             $sale_id = $db->lastInsertId();
             
-            // Insert items and update stock
+            // ================================================================
+            // 4. UPDATE STOCK
+            // ================================================================
             foreach ($items as $item) {
-                $stmt = $db->prepare("
-                    INSERT INTO otc_sale_items (sale_id, inventory_id, medicine_name, quantity, unit_price, total_price)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ");
-                $stmt->execute([
-                    $sale_id,
-                    $item['inventory_id'],
-                    $item['name'],
-                    $item['quantity'],
-                    $item['price'],
-                    $item['total']
-                ]);
-                
                 $stmt = $db->prepare("
                     UPDATE medications_inventory 
                     SET quantity = quantity - ? 
@@ -147,21 +223,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $stmt = $db->prepare("
                     INSERT INTO stock_movements 
                     (inventory_id, sale_type, sale_id, quantity, movement_type, performed_by, notes)
-                    VALUES (?, 'otc', ?, ?, 'out', ?, 'OTC Sale')
+                    VALUES (?, 'otc', ?, ?, 'out', ?, 'OTC Sale - Bill sent to Cashier')
                 ");
                 $stmt->execute([$item['inventory_id'], $sale_id, $item['quantity'], $user_id]);
             }
             
+            // ================================================================
+            // 5. UPDATE OTC SALE WITH BILL ID
+            // ================================================================
+            $stmt = $db->prepare("
+                UPDATE otc_sales 
+                SET bill_id = ?, updated_at = NOW() 
+                WHERE id = ?
+            ");
+            $stmt->execute([$bill_id, $sale_id]);
+            
             $db->commit();
             
-            $message = "✅ OTC Sale completed successfully!";
+            $message = "✅ OTC Sale completed! Bill sent to Cashier.";
             $message_type = 'success';
             
-            // Redirect to print receipt
+            // Redirect to pending prescriptions or show success
             echo '<script>
                 setTimeout(function() {
-                    window.location.href = "print_receipt.php?type=otc&id=' . $sale_id . '";
-                }, 1500);
+                    window.location.href = "otc_history.php?success=1";
+                }, 2000);
             </script>';
             
         } catch (Exception $e) {
@@ -180,7 +266,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // ================================================================
 $pending_prescriptions = 0;
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescription_sales WHERE branch_id = ? AND status = 'pending'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$user_branch_id]);
     $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
 } catch (Exception $e) {
@@ -406,9 +492,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         transform: scale(0.97);
     }
     
-    /* ================================================================
-       CART ITEMS
-       ================================================================ */
+    /* Cart */
     .cart-container {
         border: 2px solid var(--border-color);
         border-radius: 12px;
@@ -483,7 +567,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     .cart-item .btn-remove:hover {
-        background: var(--danger-dark);
+        background: #B91C1C;
         transform: scale(1.05);
     }
     
@@ -511,7 +595,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
-       DISCOUNT SECTION - WIDE INPUT
+       DISCOUNT SECTION - AMOUNT INPUT (TSh)
        ================================================================ */
     .discount-section {
         background: var(--bg-body);
@@ -556,14 +640,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         flex-wrap: wrap;
     }
     
-    /* ✅ DISCOUNT INPUT - WIDE & CLEAR */
+    /* ✅ DISCOUNT INPUT - WIDE & CLEAR (Amount in TSh) */
     .discount-section .discount-input-group .discount-input {
-        width: 160px;
-        max-width: 200px;
+        width: 200px;
+        max-width: 280px;
         padding: 10px 16px;
         font-size: 1.2rem;
         font-weight: 700;
-        text-align: center;
+        text-align: right;
         border: 2px solid var(--border-color);
         border-radius: 10px;
         background: var(--bg-card);
@@ -586,11 +670,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--text-muted);
     }
     
-    .discount-section .discount-input-group .percent-sign {
+    .discount-section .discount-input-group .currency-prefix {
         font-weight: 700;
         color: var(--text-secondary);
-        font-size: 1.2rem;
+        font-size: 1rem;
         font-family: 'Courier New', monospace;
+        padding-right: 4px;
     }
     
     .btn-apply-discount {
@@ -636,7 +721,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     .btn-remove-discount:hover {
-        background: var(--danger-dark);
+        background: #B91C1C;
         transform: translateY(-2px);
         box-shadow: 0 4px 15px rgba(220, 38, 38, 0.3);
     }
@@ -689,15 +774,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-weight: 800;
     }
     
-    .discount-display .info-item .discount-percent-label {
-        font-size: 0.75rem;
-        color: var(--text-muted);
-        font-weight: 600;
-    }
-    
-    /* ================================================================
-       CART SUMMARY
-       ================================================================ */
+    /* Cart Summary */
     .cart-summary {
         background: var(--bg-body);
         border-radius: 12px;
@@ -738,9 +815,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--gold);
     }
     
-    /* ================================================================
-       PAYMENT METHODS
-       ================================================================ */
+    /* Payment Methods */
     .payment-methods {
         display: flex;
         gap: 8px;
@@ -775,9 +850,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
     }
     
-    /* ================================================================
-       ACTION BUTTONS
-       ================================================================ */
+    /* Action Buttons */
     .action-buttons {
         display: flex;
         gap: 12px;
@@ -830,7 +903,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     .btn-clear-cart:hover {
-        background: var(--danger-dark);
+        background: #B91C1C;
         transform: translateY(-3px);
         box-shadow: 0 8px 25px rgba(220, 38, 38, 0.3);
     }
@@ -857,9 +930,35 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         transform: translateY(-2px);
     }
     
-    /* ================================================================
-       MESSAGE BOX
-       ================================================================ */
+    /* Bill Info Box */
+    .bill-info-box {
+        background: var(--primary-bg);
+        border: 2px solid var(--primary);
+        border-radius: 10px;
+        padding: 12px 18px;
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 0.85rem;
+        color: var(--primary);
+    }
+    
+    .bill-info-box i {
+        font-size: 1.2rem;
+    }
+    
+    .bill-info-box strong {
+        font-weight: 700;
+    }
+    
+    [data-theme="dark"] .bill-info-box {
+        background: #1E3A5F;
+        border-color: #3B82F6;
+        color: #93C5FD;
+    }
+    
+    /* Message Box */
     .message-box {
         padding: 14px 20px;
         border-radius: 12px;
@@ -904,9 +1003,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border-color: #F87171;
     }
     
-    /* ================================================================
-       ANIMATIONS
-       ================================================================ */
+    /* Animations */
     .animate-fade-in-up {
         animation: fadeInUp 0.5s ease forwards;
         opacity: 0;
@@ -927,9 +1024,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         100% { transform: scale(1); }
     }
     
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
+    /* Responsive */
     @media (max-width: 768px) {
         .sale-form-card {
             padding: 16px 18px;
@@ -1016,12 +1111,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <i class="fas fa-plus-circle mr-2" style="color: var(--otc-color);"></i> New OTC Sale
             </h1>
             <p class="page-subtitle">
-                Sell medicines over-the-counter with discount
+                Sell medicines over-the-counter with discount (TSh amount)
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-pills mr-1"></i> <?= count($medicines) ?> medicines in stock
+                </span>
+                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
+                    <i class="fas fa-receipt mr-1"></i> Bill sent to Cashier
                 </span>
             </p>
         </div>
@@ -1044,13 +1142,24 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
+    <!-- BILL INFO - Shows bill will go to Cashier -->
+    <!-- ================================================================ -->
+    <div class="bill-info-box">
+        <i class="fas fa-info-circle"></i>
+        <span>
+            <strong>💳 Bill Flow:</strong> 
+            Complete sale → Bill sent to <strong>Cashier</strong> → Customer pays at Cashier → Stock updates automatically
+        </span>
+    </div>
+
+    <!-- ================================================================ -->
     <!-- OTC SALE FORM -->
     <!-- ================================================================ -->
     <div class="sale-form-card animate-fade-in-up">
         <form method="POST" action="" id="otcSaleForm">
             <input type="hidden" name="action" value="complete_sale">
             <input type="hidden" name="items_json" id="itemsJson" value="[]">
-            <input type="hidden" name="discount_percent" id="discountPercentHidden" value="0">
+            <input type="hidden" name="discount_amount" id="discountAmountHidden" value="0">
             
             <!-- ================================================================ -->
             <!-- CUSTOMER INFORMATION -->
@@ -1137,17 +1246,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
             
             <!-- ================================================================ -->
-            <!-- DISCOUNT SECTION - WIDE INPUT -->
+            <!-- DISCOUNT SECTION - AMOUNT INPUT (TSh) -->
             <!-- ================================================================ -->
             <div class="discount-section">
                 <div class="discount-row">
                     <span class="discount-label">
-                        <i class="fas fa-percent"></i> Discount (%)
+                        <i class="fas fa-tags"></i> Discount (TSh)
                     </span>
                     <div class="discount-input-group">
-                        <input type="number" id="discountPercentInput" class="form-control discount-input" 
-                               placeholder="0" min="0" max="100" value="0" step="0.5">
-                        <span class="percent-sign">%</span>
+                        <span class="currency-prefix">TSh</span>
+                        <input type="number" id="discountAmountInput" class="form-control discount-input" 
+                               placeholder="0" min="0" value="0" step="100"
+                               oninput="applyDiscountFromInput()">
                         <button type="button" class="btn-apply-discount" onclick="applyDiscount()">
                             <i class="fas fa-check"></i> Apply
                         </button>
@@ -1166,7 +1276,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     <div class="info-item">
                         <span class="label">Discount:</span>
                         <span class="value discount-value" id="displayDiscount">TSh 0</span>
-                        <span class="discount-percent-label" id="displayDiscountPercent">(0%)</span>
                     </div>
                     <div class="info-item" style="border-color: var(--success); background: var(--success-light);">
                         <span class="label" style="font-weight:700;">Grand Total:</span>
@@ -1215,7 +1324,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <!-- ================================================================ -->
             <div class="action-buttons">
                 <button type="submit" class="btn-complete-sale" id="completeSaleBtn" disabled>
-                    <i class="fas fa-check-circle"></i> Complete Sale
+                    <i class="fas fa-receipt"></i> Complete Sale & Send to Cashier
                 </button>
                 <button type="button" class="btn-clear-cart" onclick="clearCart()">
                     <i class="fas fa-trash"></i> Clear Cart
@@ -1263,7 +1372,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     // ================================================================
     var cart = [];
     var itemIdCounter = 0;
-    var currentDiscountPercent = 0;
+    var currentDiscountAmount = 0;
     var subtotal = 0;
     var grandTotal = 0;
 
@@ -1358,9 +1467,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (cart.length === 0) return;
         if (!confirm('Clear all items from cart?')) return;
         cart = [];
-        currentDiscountPercent = 0;
-        document.getElementById('discountPercentInput').value = 0;
-        document.getElementById('discountPercentHidden').value = 0;
+        currentDiscountAmount = 0;
+        document.getElementById('discountAmountInput').value = 0;
+        document.getElementById('discountAmountHidden').value = 0;
         renderCart();
         updateTotals();
         showToast('Info', 'Cart cleared', 'info');
@@ -1420,38 +1529,54 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             subtotal += item.total;
         });
         
-        // Calculate discount
-        var discountPercent = currentDiscountPercent;
-        var discountAmount = (subtotal * discountPercent) / 100;
+        // ✅ FIX: Discount is amount in TSh, not percentage
+        var discountAmount = currentDiscountAmount;
+        if (discountAmount > subtotal) {
+            discountAmount = subtotal;
+            document.getElementById('discountAmountInput').value = discountAmount;
+            document.getElementById('discountAmountHidden').value = discountAmount;
+        }
         grandTotal = subtotal - discountAmount;
+        if (grandTotal < 0) grandTotal = 0;
         
         // Update display
         document.getElementById('displaySubtotal').textContent = 'TSh ' + subtotal.toLocaleString();
         document.getElementById('displayDiscount').textContent = 'TSh ' + discountAmount.toLocaleString();
-        document.getElementById('displayDiscountPercent').textContent = '(' + discountPercent + '%)';
         document.getElementById('displayGrandTotal').textContent = 'TSh ' + grandTotal.toLocaleString();
         
         // Update items_json
         document.getElementById('itemsJson').value = JSON.stringify(cart);
         
         // Update discount hidden
-        document.getElementById('discountPercentHidden').value = discountPercent;
+        document.getElementById('discountAmountHidden').value = discountAmount;
     }
 
     // ================================================================
-    // APPLY DISCOUNT
+    // APPLY DISCOUNT FROM INPUT (Triggered on input change)
+    // ================================================================
+    function applyDiscountFromInput() {
+        var input = document.getElementById('discountAmountInput');
+        var discount = parseFloat(input.value) || 0;
+        
+        if (discount < 0) {
+            discount = 0;
+            input.value = 0;
+        }
+        
+        currentDiscountAmount = discount;
+        document.getElementById('discountAmountHidden').value = discount;
+        updateTotals();
+    }
+
+    // ================================================================
+    // APPLY DISCOUNT (Button click)
     // ================================================================
     function applyDiscount() {
-        var input = document.getElementById('discountPercentInput');
+        var input = document.getElementById('discountAmountInput');
         var discount = parseFloat(input.value) || 0;
         
         if (discount < 0) {
             showToast('Error', 'Discount cannot be negative', 'error');
-            return;
-        }
-        
-        if (discount > 100) {
-            showToast('Error', 'Discount cannot exceed 100%', 'error');
             return;
         }
         
@@ -1460,24 +1585,30 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             return;
         }
         
-        currentDiscountPercent = discount;
-        document.getElementById('discountPercentHidden').value = discount;
+        if (discount > subtotal) {
+            showToast('Warning', 'Discount cannot exceed subtotal. Adjusted to ' + subtotal.toLocaleString(), 'warning');
+            discount = subtotal;
+            input.value = discount;
+        }
+        
+        currentDiscountAmount = discount;
+        document.getElementById('discountAmountHidden').value = discount;
         updateTotals();
         
         // Highlight the grand total
         var grandTotalEl = document.getElementById('displayGrandTotal');
         grandTotalEl.parentElement.classList.add('animate-pulse-once');
         
-        showToast('Success', discount + '% discount applied!', 'success');
+        showToast('Success', 'Discount TSh ' + discount.toLocaleString() + ' applied!', 'success');
     }
 
     // ================================================================
     // REMOVE DISCOUNT
     // ================================================================
     function removeDiscount() {
-        currentDiscountPercent = 0;
-        document.getElementById('discountPercentInput').value = 0;
-        document.getElementById('discountPercentHidden').value = 0;
+        currentDiscountAmount = 0;
+        document.getElementById('discountAmountInput').value = 0;
+        document.getElementById('discountAmountHidden').value = 0;
         updateTotals();
         showToast('Info', 'Discount removed', 'info');
     }
@@ -1588,7 +1719,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             searchInput?.focus();
             searchInput?.select();
         }
-        if (e.key === 'Enter' && document.activeElement?.id === 'discountPercentInput') {
+        if (e.key === 'Enter' && document.activeElement?.id === 'discountAmountInput') {
             applyDiscount();
         }
     });
@@ -1596,10 +1727,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c💊 Braick - New OTC Sale (With Discount - Wide Input)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c💊 Braick - New OTC Sale (Discount Amount + Bill to Cashier)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Medicines in stock: <?= count($medicines) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💰 Discount input width: 160px (clear and readable)', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💰 Discount: Enter amount in TSh (not percentage)', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💳 Bill sent to Cashier for payment', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

@@ -1,8 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/inventory.php
-// PHARMACY - MEDICINE INVENTORY (FULLY FIXED)
+// PHARMACY - MEDICINE INVENTORY (VIEW ONLY + ADD)
 // BRAICK DISPENSARY
+// ================================================================
+// FIXED: Added "Add Medicine" button with working modal
 // ================================================================
 
 session_start();
@@ -35,43 +37,6 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 $db = getDB();
-
-// ================================================================
-// HANDLE AJAX REQUEST FOR GETTING MEDICINE DATA
-// ================================================================
-if (isset($_GET['get_data']) && is_numeric($_GET['get_data'])) {
-    header('Content-Type: application/json');
-    $id = (int)$_GET['get_data'];
-    
-    try {
-        $stmt = $db->prepare("SELECT * FROM medications_inventory WHERE id = ? AND branch_id = ?");
-        $stmt->execute([$id, $user_branch_id]);
-        $data = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if ($data) {
-            echo json_encode([
-                'success' => true,
-                'id' => $data['id'],
-                'medication_name' => $data['medication_name'],
-                'category' => $data['category'],
-                'unit' => $data['unit'],
-                'quantity' => $data['quantity'],
-                'reorder_level' => $data['reorder_level'],
-                'unit_cost' => $data['unit_cost'],
-                'selling_price' => $data['selling_price'],
-                'supplier' => $data['supplier'],
-                'expiry_date' => $data['expiry_date'],
-                'batch_number' => $data['batch_number'],
-                'status' => $data['status']
-            ]);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Medicine not found']);
-        }
-    } catch (Exception $e) {
-        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-    }
-    exit;
-}
 
 // ================================================================
 // GET CATEGORIES FOR DROPDOWN
@@ -107,7 +72,7 @@ $predefined_categories = [
 ];
 
 // ================================================================
-// PROCESS POST REQUESTS
+// PROCESS POST REQUESTS - ADD MEDICINE
 // ================================================================
 $message = '';
 $message_type = '';
@@ -170,76 +135,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = "✅ Medicine added successfully! Batch: <strong>$batch_number</strong>";
                 $message_type = 'success';
                 
-            } catch (Exception $e) {
-                $message = "❌ Error: " . $e->getMessage();
-                $message_type = 'error';
-            }
-        } else {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
-    }
-    
-    // ================================================================
-    // UPDATE MEDICINE (EDIT)
-    // ================================================================
-    if ($action === 'update_medicine') {
-        $id = (int)($_POST['id'] ?? 0);
-        $medication_name = trim($_POST['medication_name'] ?? '');
-        $category = trim($_POST['category'] ?? '');
-        if (empty($category) && !empty($_POST['category_manual'])) {
-            $category = trim($_POST['category_manual']);
-        }
-        $unit = trim($_POST['unit'] ?? '');
-        $quantity = (int)($_POST['quantity'] ?? 0);
-        $reorder_level = (int)($_POST['reorder_level'] ?? 10);
-        $unit_cost = (float)($_POST['unit_cost'] ?? 0);
-        $selling_price = (float)($_POST['selling_price'] ?? 0);
-        $supplier = trim($_POST['supplier'] ?? '');
-        $expiry_date = $_POST['expiry_date'] ?? '';
-        $batch_number = trim($_POST['batch_number'] ?? '');
-        $status = $_POST['status'] ?? 'active';
-        
-        if (empty($batch_number)) {
-            $stmt = $db->prepare("SELECT batch_number FROM medications_inventory WHERE id = ? AND branch_id = ?");
-            $stmt->execute([$id, $user_branch_id]);
-            $existing = $stmt->fetch();
-            if ($existing) {
-                $batch_number = $existing['batch_number'];
-            } else {
-                $batch_number = 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
-            }
-        }
-        
-        $errors = [];
-        if (empty($medication_name)) {
-            $errors[] = 'Medicine name is required';
-        }
-        if ($quantity < 0) {
-            $errors[] = 'Quantity cannot be negative';
-        }
-        if ($selling_price < 0) {
-            $errors[] = 'Selling price cannot be negative';
-        }
-        
-        if (empty($errors) && $id > 0) {
-            try {
-                $stmt = $db->prepare("
-                    UPDATE medications_inventory 
-                    SET medication_name = ?, category = ?, unit = ?, quantity = ?,
-                        reorder_level = ?, unit_cost = ?, selling_price = ?,
-                        supplier = ?, expiry_date = ?, batch_number = ?, status = ?
-                    WHERE id = ? AND branch_id = ?
-                ");
-                $stmt->execute([
-                    $medication_name, $category, $unit, $quantity,
-                    $reorder_level, $unit_cost, $selling_price,
-                    $supplier, $expiry_date, $batch_number, $status,
-                    $id, $user_branch_id
-                ]);
-                
-                $message = "✅ Medicine updated successfully!";
-                $message_type = 'success';
+                // Redirect to refresh
+                $_SESSION['inventory_message'] = $message;
+                $_SESSION['inventory_message_type'] = $message_type;
+                header('Location: inventory.php?added=1');
+                exit;
                 
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
@@ -250,31 +150,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message_type = 'error';
         }
     }
-    
-    // ================================================================
-    // DELETE MEDICINE - SOFT DELETE
-    // ================================================================
-    if ($action === 'delete_medicine') {
-        $id = (int)($_POST['id'] ?? 0);
-        
-        if ($id > 0) {
-            try {
-                $stmt = $db->prepare("
-                    UPDATE medications_inventory 
-                    SET status = 'inactive' 
-                    WHERE id = ? AND branch_id = ?
-                ");
-                $stmt->execute([$id, $user_branch_id]);
-                
-                $message = "✅ Medicine hidden from inventory successfully!";
-                $message_type = 'success';
-                
-            } catch (Exception $e) {
-                $message = "❌ Error: " . $e->getMessage();
-                $message_type = 'error';
-            }
-        }
-    }
+}
+
+// ================================================================
+// CHECK FOR SESSION MESSAGES
+// ================================================================
+if (isset($_SESSION['inventory_message'])) {
+    $message = $_SESSION['inventory_message'];
+    $message_type = $_SESSION['inventory_message_type'] ?? 'success';
+    unset($_SESSION['inventory_message']);
+    unset($_SESSION['inventory_message_type']);
 }
 
 // ================================================================
@@ -531,18 +416,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         margin-top: 4px;
     }
     
-    .stat-card .stat-arrow {
-        opacity: 0;
-        transition: all 0.3s ease;
-        margin-left: 4px;
-        font-size: 0.65rem;
-    }
-    
-    .stat-card:hover .stat-arrow {
-        opacity: 1;
-        transform: translateX(4px);
-    }
-    
     /* ================================================================
        CARD
        ================================================================ */
@@ -701,63 +574,61 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
-       BUTTONS
+       BUTTONS - ADD MEDICINE (VISIBLE)
        ================================================================ */
     .btn-add {
         background: var(--success);
         color: white;
-        padding: 8px 20px;
+        padding: 10px 24px;
         border-radius: 10px;
         font-weight: 600;
-        font-size: 0.85rem;
+        font-size: 0.9rem;
         border: none;
         cursor: pointer;
         transition: all 0.3s ease;
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
     }
     
     .btn-add:hover {
         background: var(--success-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        transform: translateY(-3px);
+        box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
+    }
+    
+    .btn-add i {
+        font-size: 1rem;
     }
     
     .btn-outline {
         background: transparent;
         color: var(--text-secondary);
         border: 2px solid var(--border-color);
-        padding: 6px 16px;
-        border-radius: 8px;
+        padding: 8px 18px;
+        border-radius: 10px;
         font-weight: 600;
-        font-size: 0.78rem;
+        font-size: 0.82rem;
         cursor: pointer;
         transition: all 0.3s ease;
         text-decoration: none;
         display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 6px;
     }
     
     .btn-outline:hover {
         border-color: var(--primary);
         color: var(--primary);
+        background: var(--primary-light);
     }
     
-    .btn-sm {
-        padding: 3px 10px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-    }
-    
-    .btn-success {
-        background: var(--success);
-        color: white;
-    }
-    
-    .btn-success:hover {
-        background: var(--success-dark);
+    .header-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
     }
     
     /* ================================================================
@@ -949,7 +820,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .data-table .col-batch { min-width: 150px; }
     .data-table .col-supplier { min-width: 120px; }
     .data-table .col-status { min-width: 80px; text-align: center; }
-    .data-table .col-actions { min-width: 120px; text-align: center; }
+    .data-table .col-actions { min-width: 80px; text-align: center; }
     
     /* ================================================================
        BADGES
@@ -1101,7 +972,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
-       ACTION BUTTONS
+       ACTION BUTTONS - ONLY VIEW REMAINS
        ================================================================ */
     .action-btn {
         padding: 4px 10px;
@@ -1124,26 +995,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .action-btn.view:hover {
         background: #6D28D9;
-        transform: scale(1.05);
-    }
-    
-    .action-btn.edit {
-        background: var(--primary);
-        color: white;
-    }
-    
-    .action-btn.edit:hover {
-        background: var(--primary-dark);
-        transform: scale(1.05);
-    }
-    
-    .action-btn.delete {
-        background: var(--danger);
-        color: white;
-    }
-    
-    .action-btn.delete:hover {
-        background: var(--danger-dark);
         transform: scale(1.05);
     }
     
@@ -1261,7 +1112,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
-       MODAL
+       ADD MODAL
        ================================================================ */
     .modal-overlay {
         display: none;
@@ -1517,6 +1368,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-size: 0.9rem;
         cursor: pointer;
         transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
     
     .btn-cancel-modal:hover {
@@ -1639,6 +1494,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             height: 36px;
             font-size: 1rem;
         }
+        .header-actions {
+            flex-direction: column;
+            align-items: stretch;
+            width: 100%;
+        }
+        .header-actions .btn-add,
+        .header-actions .btn-outline {
+            width: 100%;
+            justify-content: center;
+        }
     }
     
     @media (max-width: 480px) {
@@ -1691,7 +1556,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <i class="fas fa-warehouse mr-2" style="color: var(--primary);"></i> Medicine Inventory
             </h1>
             <p class="page-subtitle">
-                Manage all medicines in stock
+                View all medicines in stock
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
@@ -1700,7 +1565,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </span>
             </p>
         </div>
-        <div>
+        <div class="header-actions">
             <button onclick="openAddModal()" class="btn-add">
                 <i class="fas fa-plus-circle"></i> Add Medicine
             </button>
@@ -1741,7 +1606,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
         </a>
         
-        <!-- Expire Soon - RED CARD -->
         <a href="inventory.php?expiry=expiring" class="stat-card red">
             <div>
                 <p class="stat-label">Expiring Soon</p>
@@ -1949,22 +1813,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         <div class="flex gap-1 justify-center">
                                             <a href="inventory.php?view=<?= $item['id'] ?>" 
                                                class="action-btn view" title="View Details">
-                                                <i class="fas fa-eye"></i>
+                                                <i class="fas fa-eye"></i> View
                                             </a>
-                                            <button onclick="openEditModal(<?= $item['id'] ?>)" 
-                                                    class="action-btn edit" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </button>
-                                            <?php if (($item['status'] ?? '') === 'active'): ?>
-                                                <form method="POST" style="display:inline;" 
-                                                      onsubmit="return confirm('⚠️ Warning: This will hide the medicine from inventory. Patient records with this medicine will NOT be affected. Continue?')">
-                                                    <input type="hidden" name="action" value="delete_medicine">
-                                                    <input type="hidden" name="id" value="<?= $item['id'] ?>">
-                                                    <button type="submit" class="action-btn delete" title="Soft Delete">
-                                                        <i class="fas fa-trash"></i>
-                                                    </button>
-                                                </form>
-                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
@@ -2098,9 +1948,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </div>
             
             <div class="form-actions">
-                <button onclick="openEditModal(<?= $view_data['id'] ?>)" class="btn-save" style="background:var(--primary);">
-                    <i class="fas fa-edit"></i> Edit Medicine
-                </button>
                 <a href="inventory.php" class="btn-cancel-modal">
                     <i class="fas fa-times"></i> Close
                 </a>
@@ -2108,6 +1955,137 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
     </div>
     <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- ADD MEDICINE MODAL -->
+    <!-- ================================================================ -->
+    <div class="modal-overlay" id="addModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fas fa-plus-circle"></i> Add New Medicine
+                </div>
+                <button class="modal-close" onclick="closeModal('addModal')">&times;</button>
+            </div>
+            
+            <form method="POST" action="">
+                <input type="hidden" name="action" value="add_medicine">
+                
+                <div class="form-grid">
+                    <div class="full-width form-row">
+                        <label class="form-label">Medicine Name <span class="required">*</span></label>
+                        <input type="text" name="medication_name" class="form-control" 
+                               placeholder="Enter medicine name" required>
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Category</label>
+                        <div class="category-input-group">
+                            <select name="category" id="categorySelect" class="form-control">
+                                <option value="">Select or type manually</option>
+                                <?php foreach ($predefined_categories as $cat): ?>
+                                    <option value="<?= htmlspecialchars($cat) ?>"><?= htmlspecialchars($cat) ?></option>
+                                <?php endforeach; ?>
+                                <option value="__other__">+ Other (Type manually)</option>
+                            </select>
+                            <input type="text" name="category_manual" id="categoryManual" class="form-control" 
+                                   placeholder="Enter custom category..." style="display:none;">
+                            <button type="button" class="btn-category-toggle" onclick="toggleCategoryInput()">
+                                <i class="fas fa-edit"></i> Manual
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Unit</label>
+                        <select name="unit" class="form-control">
+                            <option value="pcs">Pieces (pcs)</option>
+                            <option value="tablets">Tablets</option>
+                            <option value="capsules">Capsules</option>
+                            <option value="ml">Milliliters (ml)</option>
+                            <option value="mg">Milligrams (mg)</option>
+                            <option value="g">Grams (g)</option>
+                            <option value="bottle">Bottle</option>
+                            <option value="box">Box</option>
+                            <option value="strip">Strip</option>
+                            <option value="vial">Vial</option>
+                            <option value="sachet">Sachet</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Current Quantity <span class="required">*</span></label>
+                        <input type="number" name="quantity" class="form-control" 
+                               placeholder="Current stock" min="0" required>
+                        <div class="help-text">Current available stock</div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Reorder Level <span class="required">*</span></label>
+                        <input type="number" name="reorder_level" class="form-control" 
+                               placeholder="Alert when stock reaches" value="10" min="0" required>
+                        <div class="help-text">When stock reaches this level, system will show LOW STOCK alert</div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Buying Price (TSh)</label>
+                        <input type="number" name="unit_cost" class="form-control" 
+                               placeholder="0" step="100" min="0">
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
+                        <input type="number" name="selling_price" class="form-control" 
+                               placeholder="0" step="100" min="0" required>
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Supplier</label>
+                        <input type="text" name="supplier" class="form-control" 
+                               placeholder="Supplier name">
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Expiry Date</label>
+                        <input type="date" name="expiry_date" class="form-control">
+                        <div class="help-text">System will show days remaining</div>
+                    </div>
+                    
+                    <div class="full-width form-row">
+                        <label class="form-label">Batch Number</label>
+                        <div class="batch-input-group">
+                            <input type="text" name="batch_number" id="batchNumberInput" class="form-control" 
+                                   placeholder="BATCH-YYYYMMDD-XXXX" 
+                                   value="<?= 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)) ?>">
+                            <button type="button" class="btn-generate-batch" onclick="generateBatchNumber()">
+                                <i class="fas fa-sync-alt"></i> Generate
+                            </button>
+                        </div>
+                        <div class="batch-help-text">
+                            <i class="fas fa-info-circle"></i> Auto-generated. Click "Generate" for a new batch number.
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <label class="form-label">Status</label>
+                        <select name="status" class="form-control">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn-save">
+                        <i class="fas fa-save"></i> Save Medicine
+                    </button>
+                    <button type="button" class="btn-cancel-modal" onclick="closeModal('addModal')">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -2123,258 +2101,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </footer>
 
 </main>
-
-<!-- ================================================================ -->
-<!-- ADD MEDICINE MODAL -->
-<!-- ================================================================ -->
-<div class="modal-overlay" id="addModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-plus-circle"></i> Add New Medicine
-            </div>
-            <button class="modal-close" onclick="closeModal('addModal')">&times;</button>
-        </div>
-        
-        <form method="POST" action="">
-            <input type="hidden" name="action" value="add_medicine">
-            
-            <div class="form-grid">
-                <div class="full-width form-row">
-                    <label class="form-label">Medicine Name <span class="required">*</span></label>
-                    <input type="text" name="medication_name" class="form-control" 
-                           placeholder="Enter medicine name" required>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Category</label>
-                    <div class="category-input-group">
-                        <select name="category" id="categorySelect" class="form-control">
-                            <option value="">Select or type manually</option>
-                            <?php foreach ($predefined_categories as $cat): ?>
-                                <option value="<?= htmlspecialchars($cat) ?>"><?= htmlspecialchars($cat) ?></option>
-                            <?php endforeach; ?>
-                            <option value="__other__">+ Other (Type manually)</option>
-                        </select>
-                        <input type="text" name="category_manual" id="categoryManual" class="form-control" 
-                               placeholder="Enter custom category..." style="display:none;">
-                        <button type="button" class="btn-category-toggle" onclick="toggleCategoryInput()">
-                            <i class="fas fa-edit"></i> Manual
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Unit</label>
-                    <select name="unit" class="form-control">
-                        <option value="pcs">Pieces (pcs)</option>
-                        <option value="tablets">Tablets</option>
-                        <option value="capsules">Capsules</option>
-                        <option value="ml">Milliliters (ml)</option>
-                        <option value="mg">Milligrams (mg)</option>
-                        <option value="g">Grams (g)</option>
-                        <option value="bottle">Bottle</option>
-                        <option value="box">Box</option>
-                        <option value="strip">Strip</option>
-                        <option value="vial">Vial</option>
-                        <option value="sachet">Sachet</option>
-                    </select>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Current Quantity <span class="required">*</span></label>
-                    <input type="number" name="quantity" class="form-control" 
-                           placeholder="Current stock" min="0" required>
-                    <div class="help-text">Current available stock</div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Reorder Level <span class="required">*</span></label>
-                    <input type="number" name="reorder_level" class="form-control" 
-                           placeholder="Alert when stock reaches" value="10" min="0" required>
-                    <div class="help-text">When stock reaches this level, system will show LOW STOCK alert</div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Buying Price (TSh)</label>
-                    <input type="number" name="unit_cost" class="form-control" 
-                           placeholder="0" step="100" min="0">
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                    <input type="number" name="selling_price" class="form-control" 
-                           placeholder="0" step="100" min="0" required>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Supplier</label>
-                    <input type="text" name="supplier" class="form-control" 
-                           placeholder="Supplier name">
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Expiry Date</label>
-                    <input type="date" name="expiry_date" class="form-control">
-                    <div class="help-text">System will show days remaining</div>
-                </div>
-                
-                <div class="full-width form-row">
-                    <label class="form-label">Batch Number</label>
-                    <div class="batch-input-group">
-                        <input type="text" name="batch_number" id="batchNumberInput" class="form-control" 
-                               placeholder="BATCH-YYYYMMDD-XXXX" 
-                               value="<?= 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)) ?>">
-                        <button type="button" class="btn-generate-batch" onclick="generateBatchNumber()">
-                            <i class="fas fa-sync-alt"></i> Generate
-                        </button>
-                    </div>
-                    <div class="batch-help-text">
-                        <i class="fas fa-info-circle"></i> Auto-generated. Click "Generate" for a new batch number.
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Status</label>
-                    <select name="status" class="form-control">
-                        <option value="active">Active</option>
-                        <option value="inactive">Inactive</option>
-                    </select>
-                </div>
-            </div>
-            
-            <div class="form-actions">
-                <button type="submit" class="btn-save">
-                    <i class="fas fa-save"></i> Save Medicine
-                </button>
-                <button type="button" class="btn-cancel-modal" onclick="closeModal('addModal')">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- EDIT MEDICINE MODAL -->
-<!-- ================================================================ -->
-<div class="modal-overlay" id="editModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-edit"></i> Edit Medicine
-            </div>
-            <button class="modal-close" onclick="closeModal('editModal')">&times;</button>
-        </div>
-        
-        <form method="POST" action="" id="editForm">
-            <input type="hidden" name="action" value="update_medicine">
-            <input type="hidden" name="id" id="edit_id">
-            
-            <div class="form-grid">
-                <div class="full-width form-row">
-                    <label class="form-label">Medicine Name <span class="required">*</span></label>
-                    <input type="text" name="medication_name" id="edit_medication_name" class="form-control" required>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Category</label>
-                    <div class="category-input-group">
-                        <select name="category" id="edit_category_select" class="form-control">
-                            <option value="">Select or type manually</option>
-                            <?php foreach ($predefined_categories as $cat): ?>
-                                <option value="<?= htmlspecialchars($cat) ?>"><?= htmlspecialchars($cat) ?></option>
-                            <?php endforeach; ?>
-                            <option value="__other__">+ Other (Type manually)</option>
-                        </select>
-                        <input type="text" name="category_manual" id="edit_category_manual" class="form-control" 
-                               placeholder="Enter custom category..." style="display:none;">
-                        <button type="button" class="btn-category-toggle" onclick="toggleEditCategoryInput()">
-                            <i class="fas fa-edit"></i> Manual
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Unit</label>
-                    <select name="unit" id="edit_unit" class="form-control">
-                        <option value="pcs">Pieces (pcs)</option>
-                        <option value="tablets">Tablets</option>
-                        <option value="capsules">Capsules</option>
-                        <option value="ml">Milliliters (ml)</option>
-                        <option value="mg">Milligrams (mg)</option>
-                        <option value="g">Grams (g)</option>
-                        <option value="bottle">Bottle</option>
-                        <option value="box">Box</option>
-                        <option value="strip">Strip</option>
-                        <option value="vial">Vial</option>
-                        <option value="sachet">Sachet</option>
-                    </select>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Current Quantity <span class="required">*</span></label>
-                    <input type="number" name="quantity" id="edit_quantity" class="form-control" min="0" required>
-                    <div class="help-text">Current stock available</div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Reorder Level <span class="required">*</span></label>
-                    <input type="number" name="reorder_level" id="edit_reorder_level" class="form-control" min="0" required>
-                    <div class="help-text">Low stock alert threshold</div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Buying Price (TSh)</label>
-                    <input type="number" name="unit_cost" id="edit_unit_cost" class="form-control" step="100" min="0">
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                    <input type="number" name="selling_price" id="edit_selling_price" class="form-control" step="100" min="0" required>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Supplier</label>
-                    <input type="text" name="supplier" id="edit_supplier" class="form-control">
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Expiry Date</label>
-                    <input type="date" name="expiry_date" id="edit_expiry_date" class="form-control">
-                    <div class="help-text">System will calculate days remaining</div>
-                </div>
-                
-                <div class="full-width form-row">
-                    <label class="form-label">Batch Number</label>
-                    <div class="batch-input-group">
-                        <input type="text" name="batch_number" id="edit_batch_number" class="form-control" placeholder="Batch number">
-                        <button type="button" class="btn-generate-batch" onclick="generateEditBatchNumber()">
-                            <i class="fas fa-sync-alt"></i> Generate
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Status</label>
-                    <select name="status" id="edit_status" class="form-control">
-                        <option value="active">Active</option>
-                        <option value="inactive">Inactive</option>
-                    </select>
-                </div>
-            </div>
-            
-            <div class="form-actions">
-                <button type="submit" class="btn-save">
-                    <i class="fas fa-save"></i> Update Medicine
-                </button>
-                <button type="button" class="btn-cancel-modal" onclick="closeModal('editModal')">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-            </div>
-        </form>
-    </div>
-</div>
 
 <!-- ================================================================ -->
 <!-- TOAST -->
@@ -2411,34 +2137,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     }
     
-    function toggleEditCategoryInput() {
-        var select = document.getElementById('edit_category_select');
-        var manual = document.getElementById('edit_category_manual');
-        var btn = document.querySelector('#editModal .category-input-group .btn-category-toggle');
-        
-        if (manual.style.display === 'none') {
-            manual.style.display = 'block';
-            select.style.display = 'none';
-            btn.innerHTML = '<i class="fas fa-list"></i> Select';
-            manual.focus();
-        } else {
-            manual.style.display = 'none';
-            select.style.display = 'block';
-            btn.innerHTML = '<i class="fas fa-edit"></i> Manual';
-        }
-    }
-    
     document.getElementById('categorySelect')?.addEventListener('change', function() {
         if (this.value === '__other__') {
             document.getElementById('categoryManual').style.display = 'block';
             document.getElementById('categoryManual').focus();
-        }
-    });
-    
-    document.getElementById('edit_category_select')?.addEventListener('change', function() {
-        if (this.value === '__other__') {
-            document.getElementById('edit_category_manual').style.display = 'block';
-            document.getElementById('edit_category_manual').focus();
         }
     });
     
@@ -2453,16 +2155,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var random = Math.random().toString(36).substring(2, 8).toUpperCase();
         var batch = 'BATCH-' + dateStr + '-' + random;
         document.getElementById('batchNumberInput').value = batch;
-    }
-    
-    function generateEditBatchNumber() {
-        var now = new Date();
-        var dateStr = now.getFullYear() + 
-                      String(now.getMonth() + 1).padStart(2, '0') + 
-                      String(now.getDate()).padStart(2, '0');
-        var random = Math.random().toString(36).substring(2, 8).toUpperCase();
-        var batch = 'BATCH-' + dateStr + '-' + random;
-        document.getElementById('edit_batch_number').value = batch;
     }
     
     // ================================================================
@@ -2544,81 +2236,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     });
     
     // ================================================================
-    // EDIT MEDICINE - LOAD DATA (FIXED - No external file needed)
+    // TOAST
     // ================================================================
-    function openEditModal(id) {
-        if (!id || id <= 0) {
-            showToast('Error', 'Invalid medicine ID', 'error');
-            return;
-        }
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
         
-        var modal = document.getElementById('editModal');
-        var title = modal.querySelector('.modal-title');
-        var originalTitle = title.innerHTML;
-        title.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
         
-        var url = window.location.pathname + '?get_data=' + id;
-        
-        fetch(url)
-            .then(function(response) {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok: ' + response.status);
-                }
-                return response.json();
-            })
-            .then(function(data) {
-                title.innerHTML = originalTitle;
-                
-                if (data.success) {
-                    document.getElementById('edit_id').value = data.id;
-                    document.getElementById('edit_medication_name').value = data.medication_name || '';
-                    
-                    var cat = data.category || '';
-                    var select = document.getElementById('edit_category_select');
-                    var manual = document.getElementById('edit_category_manual');
-                    var found = false;
-                    
-                    for (var i = 0; i < select.options.length; i++) {
-                        if (select.options[i].value === cat) {
-                            select.value = cat;
-                            found = true;
-                            break;
-                        }
-                    }
-                    
-                    if (!found && cat) {
-                        manual.style.display = 'block';
-                        select.style.display = 'none';
-                        manual.value = cat;
-                        var btn = document.querySelector('#editModal .category-input-group .btn-category-toggle');
-                        if (btn) btn.innerHTML = '<i class="fas fa-list"></i> Select';
-                    } else {
-                        manual.style.display = 'none';
-                        select.style.display = 'block';
-                        select.value = cat || '';
-                    }
-                    
-                    document.getElementById('edit_unit').value = data.unit || 'pcs';
-                    document.getElementById('edit_quantity').value = data.quantity || 0;
-                    document.getElementById('edit_reorder_level').value = data.reorder_level || 10;
-                    document.getElementById('edit_unit_cost').value = data.unit_cost || 0;
-                    document.getElementById('edit_selling_price').value = data.selling_price || 0;
-                    document.getElementById('edit_supplier').value = data.supplier || '';
-                    document.getElementById('edit_expiry_date').value = data.expiry_date || '';
-                    document.getElementById('edit_batch_number').value = data.batch_number || '';
-                    document.getElementById('edit_status').value = data.status || 'active';
-                    
-                    modal.classList.add('show');
-                    document.body.style.overflow = 'hidden';
-                } else {
-                    showToast('Error', data.message || 'Failed to load medicine data', 'error');
-                }
-            })
-            .catch(function(error) {
-                console.error('Error:', error);
-                title.innerHTML = originalTitle;
-                showToast('Error', 'Failed to load medicine data: ' + error.message, 'error');
-            });
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3500);
     }
     
     // ================================================================
@@ -2693,29 +2330,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     setInterval(updateDateTime, 1000);
     
     // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-    
-    // ================================================================
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
@@ -2747,11 +2361,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
     
-    console.log('%c💊 Braick - Inventory (FULLY FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - Inventory (VIEW + ADD)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📦 Total: <?= $total_medicines ?> | Low Stock: <?= $low_stock_count ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📅 Expiring Soon: <?= $expiring_soon ?> (RED CARD)', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Edit - Uses same file with ?get_data=id', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Delete - Soft Delete (Hides from inventory, keeps patient records)', 'font-size:13px; color:#DC2626;');
+    console.log('%c📅 Expiring Soon: <?= $expiring_soon ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ Edit & Delete buttons REMOVED - View only', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Add Medicine button VISIBLE - Working modal', 'font-size:13px; color:#059669;');
     console.log('%c✅ Cards - Clickable to filter table', 'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ Days Remaining - Shows days until expiry', 'font-size:13px; color:#059669;');
 </script>

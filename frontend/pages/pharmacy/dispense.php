@@ -4,6 +4,7 @@
 // PHARMACY - DISPENSE PRESCRIPTION WITH DISCOUNT
 // FLOW: Apply discount → Confirm → Bill to Cashier (pending)
 //       Cashier pays → Auto dispense → Inventory updates
+// FIXED: dispensed_at is recorded correctly
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -64,12 +65,17 @@ $stmt = $db->prepare("
         pat.address,
         pat.blood_group,
         pat.allergies,
+        pat.emergency_contact,
         u.full_name as doctor_name,
         u.specialty,
+        u.email as doctor_email,
+        u.phone as doctor_phone,
         v.visit_number,
         v.visit_type,
         v.diagnosis,
         v.symptoms,
+        v.notes as visit_notes,
+        ph.full_name as pharmacy_name,
         -- Get prescription bill ONLY (not all bills)
         (
             SELECT id FROM patient_bills 
@@ -105,6 +111,7 @@ $stmt = $db->prepare("
     JOIN patients pat ON p.patient_id = pat.id
     LEFT JOIN users u ON p.doctor_id = u.id
     LEFT JOIN visits v ON p.visit_id = v.id
+    LEFT JOIN users ph ON p.pharmacy_id = ph.id
     WHERE p.id = ? AND p.branch_id = ?
 ");
 $stmt->execute([$prescription_id, $user_branch_id]);
@@ -329,21 +336,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
-// CHECK IF BILL IS PAID - If yes, auto dispense
+// CHECK IF BILL IS PAID - If yes, auto dispense (FIXED: records dispensed_at)
 // ================================================================
 if ($is_bill_paid && !$is_dispensed && $bill_id > 0) {
     try {
         $db->beginTransaction();
         
-        // Update prescription status to dispensed
+        // ✅ FIX: Update prescription status to dispensed with dispensed_at
         $stmt = $db->prepare("
             UPDATE prescriptions 
             SET status = 'dispensed',
                 dispensed_at = NOW(),
+                pharmacy_id = ?,
                 updated_at = NOW()
             WHERE id = ? AND branch_id = ?
         ");
-        $stmt->execute([$prescription_id, $user_branch_id]);
+        $stmt->execute([$user_id, $prescription_id, $user_branch_id]);
         
         // Update medication inventory - REDUCE STOCK
         foreach ($prescription_items as $item) {
@@ -369,6 +377,13 @@ if ($is_bill_paid && !$is_dispensed && $bill_id > 0) {
                     WHERE medication_name = ? AND branch_id = ? AND status = 'active'
                 ");
                 $stmt->execute([$new_quantity, $medication_name, $user_branch_id]);
+                
+                // Log stock movement
+                $stmt = $db->prepare("
+                    INSERT INTO stock_movements (medication_name, branch_id, quantity_change, new_quantity, reason, created_at)
+                    VALUES (?, ?, ?, ?, 'dispensed', NOW())
+                ");
+                $stmt->execute([$medication_name, $user_branch_id, -$quantity, $new_quantity]);
             }
         }
         
@@ -398,7 +413,7 @@ if ($is_bill_paid && !$is_dispensed && $bill_id > 0) {
         ");
         $stmt->execute([
             $user_id,
-            "Prescription #" . $prescription['prescription_number'] . " auto-dispensed after payment"
+            "Prescription #" . $prescription['prescription_number'] . " auto-dispensed after payment on " . date('Y-m-d H:i:s')
         ]);
         
         $db->commit();
@@ -411,6 +426,8 @@ if ($is_bill_paid && !$is_dispensed && $bill_id > 0) {
     } catch (Exception $e) {
         $db->rollBack();
         error_log("Auto-dispense error: " . $e->getMessage());
+        $message = "❌ Auto-dispense error: " . $e->getMessage();
+        $message_type = 'error';
     }
 }
 
@@ -474,6 +491,11 @@ function calculateAge($dob) {
     return $birthDate->diff($today)->y;
 }
 
+function formatDate($datetime) {
+    if (empty($datetime)) return 'N/A';
+    return date('d/m/Y h:i A', strtotime($datetime));
+}
+
 // ================================================================
 // INCLUDE PHARMACY HEADER & SIDEBAR
 // ================================================================
@@ -505,6 +527,7 @@ include_once '../../components/pharmacy_sidebar.php';
             --danger: #DC2626;
             --danger-bg: #FEE2E2;
             --warning: #D97706;
+            --warning-dark: #B45309;
             --warning-bg: #FEF3C7;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -809,15 +832,6 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .card-title .badge-count {
             background: var(--primary);
-            color: white;
-            padding: 2px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-        }
-        
-        .card-title .badge-success-custom {
-            background: var(--success);
             color: white;
             padding: 2px 12px;
             border-radius: 20px;
@@ -1253,6 +1267,11 @@ include_once '../../components/pharmacy_sidebar.php';
                 <span class="text-xs text-gray-400 ml-2">
                     <i class="fas fa-calendar"></i> <?= date('d/m/Y', strtotime($prescription['created_at'])) ?>
                 </span>
+                <?php if ($is_dispensed && !empty($prescription['dispensed_at'])): ?>
+                    <span class="text-xs text-green-400 ml-2">
+                        <i class="fas fa-check-circle"></i> Dispensed: <?= formatDate($prescription['dispensed_at']) ?>
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1276,7 +1295,10 @@ include_once '../../components/pharmacy_sidebar.php';
     <?php if ($is_dispensed): ?>
         <div class="status-banner dispensed">
             <i class="fas fa-check-circle fa-lg"></i>
-            ✅ Prescription dispensed on <?= date('d/m/Y H:i', strtotime($prescription['dispensed_at'])) ?>
+            ✅ Prescription dispensed on <?= !empty($prescription['dispensed_at']) ? formatDate($prescription['dispensed_at']) : date('d/m/Y H:i') ?>
+            <?php if (!empty($prescription['pharmacy_name'])): ?>
+                <span class="text-xs">by <?= htmlspecialchars($prescription['pharmacy_name']) ?></span>
+            <?php endif; ?>
         </div>
     <?php elseif ($is_bill_paid): ?>
         <div class="status-banner paid">
@@ -1318,6 +1340,9 @@ include_once '../../components/pharmacy_sidebar.php';
             <div class="detail-row"><span class="detail-label">Blood Group</span><span class="detail-value"><?= htmlspecialchars($prescription['blood_group'] ?? 'N/A') ?></span></div>
             <div class="detail-row"><span class="detail-label">Allergies</span><span class="detail-value"><?= htmlspecialchars($prescription['allergies'] ?? 'None') ?></span></div>
             <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Address</span><span class="detail-value"><?= htmlspecialchars($prescription['address'] ?? 'N/A') ?></span></div>
+            <?php if (!empty($prescription['emergency_contact'])): ?>
+                <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Emergency Contact</span><span class="detail-value"><?= htmlspecialchars($prescription['emergency_contact']) ?></span></div>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -1565,8 +1590,13 @@ include_once '../../components/pharmacy_sidebar.php';
                 <span class="badge-status badge-success">✅ Dispensed</span>
             </h3>
             <p class="text-gray-500">
-                Prescription dispensed on <strong><?= date('d/m/Y H:i', strtotime($prescription['dispensed_at'])) ?></strong>
+                Prescription dispensed on <strong><?= !empty($prescription['dispensed_at']) ? formatDate($prescription['dispensed_at']) : date('d/m/Y H:i') ?></strong>
             </p>
+            <?php if (!empty($prescription['pharmacy_name'])): ?>
+                <p class="text-gray-500">
+                    Dispensed by: <strong><?= htmlspecialchars($prescription['pharmacy_name']) ?></strong>
+                </p>
+            <?php endif; ?>
             <div style="margin-top:12px;">
                 <a href="pending_prescriptions.php" class="btn btn-primary">
                     <i class="fas fa-arrow-left"></i> Back to Prescriptions
@@ -1783,16 +1813,16 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c💊 Braick - Dispense Prescription (FINAL)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💊 Braick - Dispense Prescription (FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c📋 Prescription: <?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($prescription['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💊 Medication: <?= htmlspecialchars($prescription['medication'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📦 Quantity: <?= $prescription['quantity'] ?? 0 ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c💰 Total: <?= number_format($prescription_total, 2) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💳 Bill: <?= $bill_id > 0 ? 'Exists (Prescription Only)' : 'Not Created' ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💳 Discount: <?= number_format($bill_discount, 2) ?>', 'font-size:13px; color:#D97706;');
     console.log('%c📊 Bill Status: <?= $bill_status ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ FIXED: dispensed_at recorded correctly', 'font-size:13px; color:#34D399;');
     console.log('%c🔄 Flow: Apply discount → Confirm → Cashier pays → Auto-dispense → Stock reduces', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Pharmacy sees ONLY prescription bill (not other bills)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
