@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/refer_patient.php
 // DOCTOR - REFER PATIENT
-// Internal: Select doctor from dropdown (SAME BRANCH ONLY)
+// Internal: Select doctor from dropdown (SAME BRANCH ONLY) with ONLINE/OFFLINE status
 // External: Form with Braick logo
 // BRAICK DISPENSARY
 // ================================================================
@@ -82,21 +82,32 @@ try {
 }
 
 // ================================================================
-// GET DOCTORS LIST (For Internal Referral) - SAME BRANCH ONLY
+// GET DOCTORS LIST (For Internal Referral) - SAME BRANCH ONLY WITH ONLINE STATUS
 // ================================================================
 $doctors = [];
+$online_count = 0;
+$offline_count = 0;
 try {
     $stmt = $db->prepare("
-        SELECT id, full_name, specialty, phone, email 
+        SELECT id, full_name, specialty, phone, email, is_online, last_online, profile_pic
         FROM users 
         WHERE role = 'doctor' 
         AND id != ? 
         AND branch_id = ?
         AND status = 'active'
-        ORDER BY full_name
+        ORDER BY is_online DESC, full_name ASC
     ");
     $stmt->execute([$user_id, $user_branch_id]);
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Count online/offline
+    foreach ($doctors as $doctor) {
+        if ($doctor['is_online'] == 1) {
+            $online_count++;
+        } else {
+            $offline_count++;
+        }
+    }
 } catch (Exception $e) {
     $doctors = [];
 }
@@ -155,6 +166,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $external_facility = trim($_POST['external_facility'] ?? '');
         $external_address = trim($_POST['external_address'] ?? '');
         $external_phone = trim($_POST['external_phone'] ?? '');
+        $external_email = trim($_POST['external_email'] ?? '');
         $external_contact_person = trim($_POST['external_contact_person'] ?? '');
         $referral_reason = trim($_POST['referral_reason'] ?? '');
         $clinical_summary = trim($_POST['clinical_summary'] ?? '');
@@ -203,6 +215,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $full_notes .= "Facility: " . $external_facility . "\n";
                     $full_notes .= "Address: " . $external_address . "\n";
                     $full_notes .= "Phone: " . $external_phone . "\n";
+                    $full_notes .= "Email: " . $external_email . "\n";
                     $full_notes .= "Contact Person: " . $external_contact_person . "\n";
                     $full_notes .= "Reason: " . $referral_reason . "\n";
                     $full_notes .= "Clinical Summary: " . $clinical_summary;
@@ -300,6 +313,29 @@ function calculateAge($dob) {
     $birthDate = new DateTime($dob);
     $today = new DateTime('today');
     return $birthDate->diff($today)->y;
+}
+
+function getStatusBadge($is_online) {
+    if ($is_online) {
+        return '<span class="status-badge online"><i class="fas fa-circle"></i> Online</span>';
+    }
+    return '<span class="status-badge offline"><i class="fas fa-circle"></i> Offline</span>';
+}
+
+function getLastOnline($last_online) {
+    if (empty($last_online)) return 'Never';
+    $timestamp = strtotime($last_online);
+    $diff = time() - $timestamp;
+    
+    if ($diff < 60) {
+        return 'Just now';
+    } elseif ($diff < 3600) {
+        return floor($diff / 60) . ' min ago';
+    } elseif ($diff < 86400) {
+        return floor($diff / 3600) . ' hours ago';
+    } else {
+        return date('d/m/Y H:i', $timestamp);
+    }
 }
 
 // ================================================================
@@ -545,7 +581,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         .btn-success:hover {
-            background: var(--success-dark);
+            background: #047857;
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
         }
@@ -630,6 +666,147 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex: 1;
             color: var(--text-primary);
             font-size: 0.85rem;
+        }
+        
+        /* ================================================================
+           STATUS BADGE - ONLINE/OFFLINE
+           ================================================================ */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 12px;
+            margin-left: 6px;
+        }
+        
+        .status-badge i {
+            font-size: 0.4rem;
+        }
+        
+        .status-badge.online {
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        .status-badge.offline {
+            background: var(--gray-200);
+            color: var(--gray-500);
+        }
+        
+        [data-theme="dark"] .status-badge.offline {
+            background: var(--gray-700);
+            color: var(--gray-400);
+        }
+        
+        /* ================================================================
+           DOCTOR SELECT - CUSTOM DROPDOWN WITH STATUS
+           ================================================================ */
+        .doctor-select-wrapper {
+            position: relative;
+        }
+        
+        .doctor-select-wrapper select {
+            appearance: none;
+            -webkit-appearance: none;
+            padding-right: 36px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748B' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 12px;
+        }
+        
+        .doctor-select-wrapper select option {
+            padding: 8px 12px;
+        }
+        
+        .doctor-select-wrapper select option.doctor-online {
+            background-color: var(--success-bg);
+            color: var(--success);
+            font-weight: 600;
+        }
+        
+        .doctor-select-wrapper select option.doctor-offline {
+            background-color: var(--gray-100);
+            color: var(--gray-500);
+        }
+        
+        .doctor-select-wrapper select optgroup {
+            font-weight: 700;
+            color: var(--text-primary);
+            background: var(--bg-card);
+        }
+        
+        [data-theme="dark"] .doctor-select-wrapper select option.doctor-online {
+            background-color: #064E3B;
+            color: #34D399;
+        }
+        
+        [data-theme="dark"] .doctor-select-wrapper select option.doctor-offline {
+            background-color: var(--gray-700);
+            color: var(--gray-400);
+        }
+        
+        [data-theme="dark"] .doctor-select-wrapper select optgroup {
+            background: var(--gray-800);
+            color: var(--gray-200);
+        }
+        
+        .doctor-info-text {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: var(--gray-50);
+            border-radius: var(--radius);
+            border: 1px solid var(--border-color);
+        }
+        
+        [data-theme="dark"] .doctor-info-text {
+            background: var(--gray-700);
+            border-color: var(--gray-600);
+        }
+        
+        .doctor-info-text .status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        
+        .doctor-info-text .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        
+        .doctor-info-text .status-dot.online {
+            background: var(--success);
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .doctor-info-text .status-dot.offline {
+            background: var(--gray-400);
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+        }
+        
+        .doctor-info-text .total-doctors {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+        
+        .doctor-info-text .total-doctors strong {
+            color: var(--text-primary);
         }
         
         /* ================================================================
@@ -835,6 +1012,23 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-weight: 600;
         }
         
+        /* Online indicator in dropdown */
+        .online-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        
+        .online-indicator.online {
+            background: #059669;
+        }
+        
+        .online-indicator.offline {
+            background: #94A3B8;
+        }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
         }
@@ -849,6 +1043,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .referral-letter { padding: 16px; }
             .referral-letter .letter-body .field-row { flex-direction: column; }
             .referral-letter .letter-body .field-row .field-label { width: 100%; }
+            .doctor-info-text { flex-direction: column; align-items: flex-start; gap: 4px; }
         }
         
         @media (max-width: 480px) {
@@ -1016,30 +1211,65 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div class="form-group">
                         <label class="form-label">Referred To <span class="text-danger">*</span></label>
-                        <select name="referred_to_doctor" class="form-control" required>
-                            <option value="">-- Select Doctor --</option>
+                        <div class="doctor-select-wrapper">
+                            <select name="referred_to_doctor" class="form-control" required id="doctorSelect">
+                                <option value="">-- Select Doctor --</option>
+                                <?php if (count($doctors) > 0): ?>
+                                    <?php if ($online_count > 0): ?>
+                                        <optgroup label="🟢 Online Doctors (<?= $online_count ?>)">
+                                            <?php foreach ($doctors as $doctor): ?>
+                                                <?php if ($doctor['is_online'] == 1): ?>
+                                                    <option value="<?= $doctor['id'] ?>" class="doctor-online">
+                                                        🟢 <?= htmlspecialchars($doctor['full_name']) ?> 
+                                                        <?= !empty($doctor['specialty']) ? '(' . htmlspecialchars($doctor['specialty']) . ')' : '' ?>
+                                                        - Online
+                                                    </option>
+                                                <?php endif; ?>
+                                            <?php endforeach; ?>
+                                        </optgroup>
+                                    <?php endif; ?>
+                                    
+                                    <?php if ($offline_count > 0): ?>
+                                        <optgroup label="⚪ Offline Doctors (<?= $offline_count ?>)">
+                                            <?php foreach ($doctors as $doctor): ?>
+                                                <?php if ($doctor['is_online'] == 0): ?>
+                                                    <option value="<?= $doctor['id'] ?>" class="doctor-offline">
+                                                        ⚪ <?= htmlspecialchars($doctor['full_name']) ?> 
+                                                        <?= !empty($doctor['specialty']) ? '(' . htmlspecialchars($doctor['specialty']) . ')' : '' ?>
+                                                        - Offline
+                                                    </option>
+                                                <?php endif; ?>
+                                            <?php endforeach; ?>
+                                        </optgroup>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <option value="" disabled>⚠️ No other doctors available in this branch</option>
+                                <?php endif; ?>
+                            </select>
+                        </div>
+                        
+                        <!-- Doctor Status Info -->
+                        <div class="doctor-info-text" id="doctorInfoText">
                             <?php if (count($doctors) > 0): ?>
-                                <?php foreach ($doctors as $doctor): ?>
-                                    <option value="<?= $doctor['id'] ?>">
-                                        <?= htmlspecialchars($doctor['full_name']) ?> 
-                                        <?= !empty($doctor['specialty']) ? '(' . htmlspecialchars($doctor['specialty']) . ')' : '' ?>
-                                    </option>
-                                <?php endforeach; ?>
+                                <span class="status-item">
+                                    <span class="status-dot online"></span>
+                                    <strong><?= $online_count ?></strong> Online
+                                </span>
+                                <span class="status-item">
+                                    <span class="status-dot offline"></span>
+                                    <strong><?= $offline_count ?></strong> Offline
+                                </span>
+                                <span class="total-doctors">
+                                    <i class="fas fa-users"></i> 
+                                    <strong><?= count($doctors) ?></strong> doctor(s) in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
+                                </span>
                             <?php else: ?>
-                                <option value="" disabled>⚠️ No other doctors available in this branch</option>
+                                <span class="status-item" style="color:var(--danger);">
+                                    <i class="fas fa-exclamation-triangle"></i> 
+                                    No other doctors found in <strong><?= htmlspecialchars($user_branch_name) ?></strong> branch
+                                </span>
                             <?php endif; ?>
-                        </select>
-                        <?php if (count($doctors) > 0): ?>
-                            <small style="color:var(--text-secondary);font-size:0.7rem;display:block;margin-top:4px;">
-                                <i class="fas fa-info-circle"></i> 
-                                <?= count($doctors) ?> doctor(s) available in <strong><?= htmlspecialchars($user_branch_name) ?></strong> branch
-                            </small>
-                        <?php else: ?>
-                            <small style="color:var(--danger);font-size:0.7rem;display:block;margin-top:4px;">
-                                <i class="fas fa-exclamation-triangle"></i> 
-                                No other doctors found in <strong><?= htmlspecialchars($user_branch_name) ?></strong> branch
-                            </small>
-                        <?php endif; ?>
+                        </div>
                     </div>
                     
                     <div class="form-group">
@@ -1406,11 +1636,109 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c👨‍⚕️ Refer Patient - FULL FIXED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // LIVE DOCTOR STATUS UPDATE - Auto refresh every 30 seconds
+    // ================================================================
+    function updateDoctorStatus() {
+        var select = document.getElementById('doctorSelect');
+        if (!select) return;
+        
+        // Get current selected value
+        var selectedValue = select.value;
+        
+        fetch(window.location.href + '?ajax=1&action=get_doctor_status&branch_id=<?= $user_branch_id ?>')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Clear current options except first
+                    while (select.options.length > 1) {
+                        select.remove(1);
+                    }
+                    
+                    // Rebuild options with updated status
+                    var onlineDoctors = data.doctors.filter(d => d.is_online == 1);
+                    var offlineDoctors = data.doctors.filter(d => d.is_online == 0);
+                    
+                    if (onlineDoctors.length > 0) {
+                        var group = document.createElement('optgroup');
+                        group.label = '🟢 Online Doctors (' + onlineDoctors.length + ')';
+                        onlineDoctors.forEach(function(doc) {
+                            var option = document.createElement('option');
+                            option.value = doc.id;
+                            option.text = '🟢 ' + doc.full_name + (doc.specialty ? ' (' + doc.specialty + ')' : '') + ' - Online';
+                            option.className = 'doctor-online';
+                            if (doc.id == selectedValue) {
+                                option.selected = true;
+                            }
+                            group.appendChild(option);
+                        });
+                        select.appendChild(group);
+                    }
+                    
+                    if (offlineDoctors.length > 0) {
+                        var group = document.createElement('optgroup');
+                        group.label = '⚪ Offline Doctors (' + offlineDoctors.length + ')';
+                        offlineDoctors.forEach(function(doc) {
+                            var option = document.createElement('option');
+                            option.value = doc.id;
+                            option.text = '⚪ ' + doc.full_name + (doc.specialty ? ' (' + doc.specialty + ')' : '') + ' - Offline';
+                            option.className = 'doctor-offline';
+                            if (doc.id == selectedValue) {
+                                option.selected = true;
+                            }
+                            group.appendChild(option);
+                        });
+                        select.appendChild(group);
+                    }
+                    
+                    // Update info text
+                    var infoText = document.getElementById('doctorInfoText');
+                    if (infoText) {
+                        infoText.innerHTML = `
+                            <span class="status-item">
+                                <span class="status-dot online"></span>
+                                <strong>${onlineDoctors.length}</strong> Online
+                            </span>
+                            <span class="status-item">
+                                <span class="status-dot offline"></span>
+                                <strong>${offlineDoctors.length}</strong> Offline
+                            </span>
+                            <span class="total-doctors">
+                                <i class="fas fa-users"></i> 
+                                <strong>${data.doctors.length}</strong> doctor(s) in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
+                            </span>
+                        `;
+                    }
+                }
+            })
+            .catch(function(error) {
+                console.log('Status update error:', error);
+            });
+    }
+
+    // Auto update doctor status every 30 seconds
+    var statusInterval = setInterval(updateDoctorStatus, 30000);
+
+    // Stop interval when page is hidden
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            clearInterval(statusInterval);
+        } else {
+            statusInterval = setInterval(updateDoctorStatus, 30000);
+            updateDoctorStatus();
+        }
+    });
+
+    // Initial status update after page load
+    setTimeout(updateDoctorStatus, 1000);
+
+    console.log('%c👨‍⚕️ Refer Patient - WITH ONLINE STATUS', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $user_branch_id ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Internal Doctors: <?= count($doctors) ?> from SAME branch only', 'font-size:13px; color:#059669;');
+    console.log('%c🟢 Online: <?= $online_count ?> | ⚪ Offline: <?= $offline_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c🌍 External: Form with Braick logo', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔄 Auto-update doctor status every 30 seconds', 'font-size:12px; color:#64748B;');
     
     <?php if (count($doctors) === 0): ?>
     console.log('%c⚠️ WARNING: No other doctors found in this branch!', 'font-size:13px; color:#DC2626;');
