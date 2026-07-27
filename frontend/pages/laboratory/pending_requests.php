@@ -6,6 +6,7 @@
 // FIXED: Duplicate bill_items prevention
 // FIXED: Status check before confirm
 // FIXED: Auto-update prevents duplicates
+// FIXED: Bill status auto-updates (paid → partial when new items added)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -33,6 +34,65 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 // ================================================================
 require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// FUNCTION: UPDATE BILL TOTAL AND STATUS - AUTO UPDATE
+// ================================================================
+function updateBillTotalAndStatus($db, $bill_id) {
+    // Get total of ALL items (both paid and unpaid)
+    $stmt = $db->prepare("
+        SELECT SUM(total_price) as total 
+        FROM bill_items 
+        WHERE bill_id = ? 
+        AND status != 'cancelled'
+    ");
+    $stmt->execute([$bill_id]);
+    $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    
+    // Get paid amount
+    $stmt = $db->prepare("
+        SELECT SUM(total_price) as paid_total 
+        FROM bill_items 
+        WHERE bill_id = ? 
+        AND status != 'cancelled' 
+        AND is_paid = 1
+    ");
+    $stmt->execute([$bill_id]);
+    $paid_total = $stmt->fetch(PDO::FETCH_ASSOC)['paid_total'] ?? 0;
+    
+    $balance = $total - $paid_total;
+    if ($balance < 0) $balance = 0;
+    
+    // Auto-determine status
+    if ($total == 0) {
+        $status = 'pending';
+    } elseif ($balance <= 0) {
+        $status = 'paid';
+    } elseif ($paid_total > 0 && $balance > 0) {
+        $status = 'partial';
+    } else {
+        $status = 'pending';
+    }
+    
+    $stmt = $db->prepare("
+        UPDATE patient_bills 
+        SET subtotal = ?, 
+            total_amount = ?, 
+            paid_amount = ?, 
+            balance = ?,
+            status = ?,
+            updated_at = NOW()
+        WHERE id = ?
+    ");
+    $stmt->execute([$total, $total, $paid_total, $balance, $status, $bill_id]);
+    
+    return [
+        'total' => $total, 
+        'paid' => $paid_total, 
+        'balance' => $balance,
+        'status' => $status
+    ];
+}
 
 // ================================================================
 // HANDLE CONFIRM / CANCEL ACTIONS - WITH DUPLICATE CHECK
@@ -131,21 +191,21 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                                 $stmt->execute([$bill_id, $test['test_name'], $price, $price]);
                             }
                             
-                            // Update bill total
-                            $stmt = $db->prepare("SELECT COALESCE(SUM(total_price), 0) as total FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
-                            $stmt->execute([$bill_id]);
-                            $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+                            // ✅ UPDATE BILL TOTAL AND STATUS - AUTO UPDATE
+                            $bill_result = updateBillTotalAndStatus($db, $bill_id);
                             
-                            $stmt = $db->prepare("
-                                UPDATE patient_bills 
-                                SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
-                                WHERE id = ?
-                            ");
-                            $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
+                            $status_msg = "";
+                            if ($bill_result['status'] === 'partial') {
+                                $status_msg = " Bill status updated to PARTIAL (balance: TSh " . number_format($bill_result['balance']) . ")";
+                            } elseif ($bill_result['status'] === 'paid') {
+                                $status_msg = " Bill status: PAID (fully paid)";
+                            } else {
+                                $status_msg = " Bill status: " . strtoupper($bill_result['status']);
+                            }
                         }
                         
                         $db->commit();
-                        $action_message = "✅ Test confirmed! Fee sent to Cashier. Test moved to In Progress.";
+                        $action_message = "✅ Test confirmed! Fee sent to Cashier. Test moved to In Progress." . $status_msg;
                         $action_message_type = 'success';
                     }
                 }
@@ -175,6 +235,8 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                     
                     if ($request_data) {
                         $first = $request_data[0];
+                        $bill_updated = false;
+                        $bill_result = null;
                         
                         // Update lab_request status to 'accepted'
                         $stmt = $db->prepare("UPDATE lab_requests SET status = 'accepted', accepted_at = NOW(), lab_technician_id = ?, updated_at = NOW() WHERE id = ?");
@@ -233,24 +295,28 @@ if (isset($_GET['action']) && isset($_GET['id'])) {
                                         ) VALUES (?, 'lab_test', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
                                     ");
                                     $stmt->execute([$bill_id, $item['test_name'], $item['price'], $item['price']]);
+                                    $bill_updated = true;
                                 }
-                                
-                                // Update bill total
-                                $stmt = $db->prepare("SELECT COALESCE(SUM(total_price), 0) as total FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
-                                $stmt->execute([$bill_id]);
-                                $new_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-                                
-                                $stmt = $db->prepare("
-                                    UPDATE patient_bills 
-                                    SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
-                                    WHERE id = ?
-                                ");
-                                $stmt->execute([$new_total, $new_total, $new_total, $bill_id]);
                             }
                         }
                         
+                        // ✅ UPDATE BILL TOTAL AND STATUS - AUTO UPDATE
+                        if ($bill_updated && isset($bill_id)) {
+                            $bill_result = updateBillTotalAndStatus($db, $bill_id);
+                        }
+                        
                         $db->commit();
-                        $action_message = "✅ Lab request confirmed! Fees sent to Cashier. Tests moved to In Progress.";
+                        
+                        $status_msg = "";
+                        if ($bill_result && $bill_result['status'] === 'partial') {
+                            $status_msg = " Bill status updated to PARTIAL (balance: TSh " . number_format($bill_result['balance']) . ")";
+                        } elseif ($bill_result && $bill_result['status'] === 'paid') {
+                            $status_msg = " Bill status: PAID (fully paid)";
+                        } elseif ($bill_result) {
+                            $status_msg = " Bill status: " . strtoupper($bill_result['status']);
+                        }
+                        
+                        $action_message = "✅ Lab request confirmed! Fees sent to Cashier. Tests moved to In Progress." . $status_msg;
                         $action_message_type = 'success';
                     }
                 }
@@ -900,7 +966,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                                         <?php if ($status === 'pending' || $status === '' || $status === null): ?>
                                             <a href="<?= $confirm_link ?>" 
                                                class="btn btn-green btn-sm" title="Confirm & Start"
-                                               onclick="return confirm('Confirm this test?\n\n✅ Fee will be sent to Cashier\n🔬 Test will move to In Progress')">
+                                               onclick="return confirm('Confirm this test?\n\n✅ Fee will be sent to Cashier\n🔬 Test will move to In Progress\n💰 Bill status will auto-update')">
                                                 <i class="fas fa-check"></i> Confirm
                                             </a>
                                             <a href="<?= $cancel_link ?>" 
@@ -1090,10 +1156,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         return false; // Not processed yet
     }
 
-    console.log('%c🧪 Braick - Pending Tests (WITH DUPLICATE CHECK)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c🧪 Braick - Pending Tests (WITH BILL STATUS AUTO-UPDATE)', 'font-size:18px; font-weight:bold; color:#D97706;');
     console.log('%c📊 Pending: <?= $total_pending ?> | In Progress: <?= $in_progress_total ?> | Completed Today: <?= $completed_today_total ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ Confirm: Sends fee to Cashier ONCE & moves to In Progress', 'font-size:13px; color:#059669;');
-    console.log('%c❌ Cancel: Cancels the test/request', 'font-size:13px; color:#DC2626;');
+    console.log('%c💰 Bill status auto-updates: paid → partial when lab added', 'font-size:13px; color:#7C3AED;');
     console.log('%c🛡️ Duplicate prevention: Status check + Bill item check', 'font-size:13px; color:#7C3AED;');
     console.log('%c⚠️ Already processed tests/requests are ignored', 'font-size:13px; color:#D97706;');
 </script>
