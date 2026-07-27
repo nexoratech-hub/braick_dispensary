@@ -2,6 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/pending_prescriptions.php
 // PHARMACY - PENDING PRESCRIPTIONS WITH DISPENSE BUTTON
+// ================================================================
+// FIXED: Added Dispensed Card (Green) - was missing
+// SHOWS ONLY: pending AND confirmed (NOT dispensed)
 // DISPENSE BUTTON → Redirects to dispense.php
 // CONFIRM BUTTON → Creates bill and sends to Cashier
 // BRAICK DISPENSARY
@@ -187,7 +190,7 @@ try {
                 }
             }
             
-            // ✅ FIX: Redirect after POST to prevent resubmission
+            // Redirect after POST to prevent resubmission
             $redirect_url = 'pending_prescriptions.php';
             if (!empty($_GET)) {
                 $params = [];
@@ -221,11 +224,12 @@ try {
     $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
     
     // ================================================================
-    // BUILD QUERY
+    // BUILD QUERY - SHOW ONLY PENDING AND CONFIRMED
     // ================================================================
-    $conditions = ["p.branch_id = ?"];
+    $conditions = ["p.branch_id = ?", "p.status IN ('pending', 'confirmed')"];
     $params = [$user_branch_id];
     
+    // Filter by status (only pending or confirmed)
     if ($filter_status !== 'all') {
         $conditions[] = "p.status = ?";
         $params[] = $filter_status;
@@ -286,9 +290,9 @@ try {
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET STATUS COUNTS
+    // GET STATUS COUNTS - All statuses including dispensed
     // ================================================================
-    $statuses = ['pending', 'confirmed', 'dispensed', 'cancelled'];
+    $statuses = ['pending', 'confirmed', 'dispensed'];
     $status_counts = [];
     foreach ($statuses as $status) {
         $stmt = $db->prepare("
@@ -300,8 +304,12 @@ try {
         $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     }
     
-    // Total
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ?");
+    // Total pending (pending + confirmed)
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM prescriptions 
+        WHERE branch_id = ? AND status IN ('pending', 'confirmed')
+    ");
     $stmt->execute([$user_branch_id]);
     $total_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
@@ -310,7 +318,7 @@ try {
     $message_type = 'error';
     $prescriptions = [];
     $total_count = 0;
-    $status_counts = ['pending' => 0, 'confirmed' => 0, 'dispensed' => 0, 'cancelled' => 0];
+    $status_counts = ['pending' => 0, 'confirmed' => 0, 'dispensed' => 0];
 }
 
 // ================================================================
@@ -700,9 +708,12 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        /* ================================================================
+           STATS ROW - 4 CARDS (including Dispensed - Green)
+           ================================================================ */
         .stats-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
             margin-bottom: 24px;
         }
@@ -744,11 +755,14 @@ include_once '../../components/pharmacy_sidebar.php';
             margin-bottom: 2px;
         }
         
+        .stat-card.total { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
         .stat-card.pending { background: linear-gradient(135deg, #D97706, #B45309); }
         .stat-card.confirmed { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .stat-card.dispensed { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.total { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.cancelled { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+        
+        /* ✅ FIXED: Dispensed Card - GREEN */
+        .stat-card.dispensed { 
+            background: linear-gradient(135deg, #059669, #047857); 
+        }
         
         .filter-section {
             background: var(--bg-card);
@@ -969,7 +983,6 @@ include_once '../../components/pharmacy_sidebar.php';
             transform: none !important;
         }
         
-        /* DISPENSE BUTTON - Green and Prominent */
         .btn-dispense {
             background: var(--success);
             color: white;
@@ -992,12 +1005,6 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
-        .btn-dispense:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none !important;
-        }
-        
         .btn-confirm {
             background: var(--primary);
             color: white;
@@ -1018,12 +1025,6 @@ include_once '../../components/pharmacy_sidebar.php';
             background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-confirm:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none !important;
         }
         
         .role-badge-display {
@@ -1123,7 +1124,6 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* ✅ FIX: Action buttons container */
         .action-buttons {
             display: flex;
             flex-wrap: wrap;
@@ -1217,10 +1217,10 @@ include_once '../../components/pharmacy_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-prescription"></i>
-                Prescriptions
+                Pending Prescriptions
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">PHARMACY</span>
                 <span class="header-badge" style="background:rgba(255,255,255,0.15);">
-                    <i class="fas fa-list"></i> <?= $total_count ?> Total
+                    <i class="fas fa-list"></i> <?= $total_count ?> Pending
                 </span>
                 <?php if ($filter_status !== 'all'): ?>
                     <span class="header-badge" style="background:rgba(255,255,255,0.15);">
@@ -1230,7 +1230,7 @@ include_once '../../components/pharmacy_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-prescription"></i>
-                Manage prescriptions in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                Manage pending prescriptions in <strong><?= htmlspecialchars($branch_name) ?></strong>
                 <span class="text-xs text-gray-400 ml-2">
                     <i class="fas fa-info-circle"></i> 
                     <strong>Dispense</strong> = Go to dispense page | 
@@ -1239,6 +1239,9 @@ include_once '../../components/pharmacy_sidebar.php';
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="prescription_history.php" class="btn-outline-light">
+                <i class="fas fa-history"></i> History
+            </a>
             <button onclick="window.location.reload()" class="btn-outline-light">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
@@ -1254,13 +1257,13 @@ include_once '../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
+    <!-- STATS CARDS - 4 CARDS (Added Dispensed - Green) -->
     <!-- ================================================================ -->
     <div class="stats-row">
         <a href="?status=all" class="stat-card total <?= $filter_status === 'all' ? 'ring-2 ring-white ring-opacity-50' : '' ?>">
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div class="stat-number"><?= $total_count ?></div>
-            <div class="stat-label">Total</div>
+            <div class="stat-label">Total Pending</div>
         </a>
         <a href="?status=pending" class="stat-card pending <?= $filter_status === 'pending' ? 'ring-2 ring-white ring-opacity-50' : '' ?>">
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
@@ -1272,15 +1275,11 @@ include_once '../../components/pharmacy_sidebar.php';
             <div class="stat-number"><?= $status_counts['confirmed'] ?? 0 ?></div>
             <div class="stat-label">✅ Confirmed</div>
         </a>
-        <a href="?status=dispensed" class="stat-card dispensed <?= $filter_status === 'dispensed' ? 'ring-2 ring-white ring-opacity-50' : '' ?>">
+        <!-- ✅ FIXED: Dispensed Card - GREEN -->
+        <a href="prescription_history.php?status=dispensed" class="stat-card dispensed">
             <div class="stat-icon"><i class="fas fa-prescription-bottle"></i></div>
             <div class="stat-number"><?= $status_counts['dispensed'] ?? 0 ?></div>
             <div class="stat-label">💊 Dispensed</div>
-        </a>
-        <a href="?status=cancelled" class="stat-card cancelled <?= $filter_status === 'cancelled' ? 'ring-2 ring-white ring-opacity-50' : '' ?>">
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-            <div class="stat-number"><?= $status_counts['cancelled'] ?? 0 ?></div>
-            <div class="stat-label">❌ Cancelled</div>
         </a>
     </div>
 
@@ -1292,8 +1291,6 @@ include_once '../../components/pharmacy_sidebar.php';
             <a href="?status=all<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
             <a href="?status=pending<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
             <a href="?status=confirmed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'confirmed' ? 'active' : '' ?>">✅ Confirmed</a>
-            <a href="?status=dispensed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'dispensed' ? 'active' : '' ?>">💊 Dispensed</a>
-            <a href="?status=cancelled<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
             
             <div style="flex:1;"></div>
             
@@ -1313,7 +1310,7 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TABLE -->
+    <!-- TABLE - Only Pending and Confirmed -->
     <!-- ================================================================ -->
     <div class="table-container">
         <div class="table-scroll">
@@ -1415,14 +1412,6 @@ include_once '../../components/pharmacy_sidebar.php';
                                                 </button>
                                             </form>
                                         <?php endif; ?>
-                                        
-                                        <?php if (($pres['status'] ?? '') === 'dispensed'): ?>
-                                            <span class="text-xs text-green-600 font-semibold">✅ Done</span>
-                                        <?php endif; ?>
-                                        
-                                        <?php if (($pres['status'] ?? '') === 'cancelled'): ?>
-                                            <span class="text-xs text-red-600 font-semibold">❌ Cancelled</span>
-                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -1432,16 +1421,19 @@ include_once '../../components/pharmacy_sidebar.php';
                             <td colspan="9">
                                 <div class="text-center py-8 text-gray-400">
                                     <i class="fas fa-prescription text-3xl block mb-2"></i>
-                                    <p>No prescriptions found</p>
+                                    <p>No pending prescriptions found</p>
                                     <p class="text-sm mt-1">
                                         <?php if (!empty($search)): ?>
                                             No results for "<strong><?= htmlspecialchars($search) ?></strong>"
                                         <?php elseif ($filter_status !== 'all'): ?>
                                             No <?= ucfirst($filter_status) ?> prescriptions
                                         <?php else: ?>
-                                            No prescriptions available in this branch
+                                            All prescriptions have been processed ✅
                                         <?php endif; ?>
                                     </p>
+                                    <a href="prescription_history.php" class="btn btn-primary mt-3">
+                                        <i class="fas fa-history"></i> View Prescription History
+                                    </a>
                                 </div>
                             </td>
                         </tr>
@@ -1453,10 +1445,10 @@ include_once '../../components/pharmacy_sidebar.php';
         <!-- Table Footer -->
         <div class="table-footer">
             <span>
-                <i class="fas fa-list"></i> Showing <strong><?= count($prescriptions) ?></strong> prescriptions
+                <i class="fas fa-list"></i> Showing <strong><?= count($prescriptions) ?></strong> pending prescriptions
             </span>
             <span>
-                <span class="count-badge"><?= $total_count ?></span> Total prescriptions
+                <span class="count-badge"><?= $total_count ?></span> Total pending
                 <?php if ($filter_status !== 'all'): ?>
                     <span class="text-xs text-gray-400 ml-2">(Filtered: <?= ucfirst($filter_status) ?>)</span>
                 <?php endif; ?>
@@ -1471,7 +1463,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Prescriptions
+            Pending Prescriptions
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1600,15 +1592,14 @@ include_once '../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     console.log('%c💊 Braick - Pending Prescriptions (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Total: <?= $total_count ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Total Pending: <?= $total_count ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c⏳ Pending: <?= $status_counts['pending'] ?? 0 ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Confirmed: <?= $status_counts['confirmed'] ?? 0 ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💊 Dispensed: <?= $status_counts['dispensed'] ?? 0 ?>', 'font-size:13px; color:#059669;');
-    console.log('%c❌ Cancelled: <?= $status_counts['cancelled'] ?? 0 ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c💊 Dispensed: <?= $status_counts['dispensed'] ?? 0 ?> (GREEN CARD)', 'font-size:13px; color:#059669;');
     console.log('%c📊 Filter: <?= ucfirst($filter_status) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔄 DISPENSE button → Goes to dispense.php', 'font-size:13px; color:#059669;');
     console.log('%c✅ Confirm button → Creates bill and sends to Cashier', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 After POST → Redirects to keep filters', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Dispensed Card ADDED - Green color', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

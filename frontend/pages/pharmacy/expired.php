@@ -1,12 +1,15 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/pharmacy/low_stock.php
-// PHARMACY - LOW STOCK & OUT OF STOCK REPORT
+// FILE: frontend/pages/pharmacy/expired.php
+// PHARMACY - EXPIRED MEDICINES REPORT
 // BRAICK DISPENSARY
 // ================================================================
-// FIXED: Expiring medicines shown FIRST (sorted by expiry date)
-// FIXED: Removed Add and Edit buttons - Only View button remains
-// FIXED: Days remaining calculation fixed
+// FIXED:
+// 1. Shows ALL expired medicines (active + inactive)
+// 2. Only Dodoma branch
+// 3. Sort by expiry date (oldest first)
+// 4. Shows status badge (Active/Inactive)
+// 5. NO EDIT BUTTON - Only View and Delete (Inactive)
 // ================================================================
 
 session_start();
@@ -43,31 +46,28 @@ $db = getDB();
 // ================================================================
 // GET FILTERS
 // ================================================================
-$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all'; // all, low, out
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$status_filter = isset($_GET['status']) ? trim($_GET['status']) : 'all';
 
 // ================================================================
-// BUILD QUERY - SORT: EXPIRING FIRST
+// BUILD QUERY - SHOWS ALL EXPIRED (ACTIVE + INACTIVE)
 // ================================================================
 $query = "
     SELECT *, 
-        DATEDIFF(expiry_date, CURDATE()) as days_remaining
+        DATEDIFF(CURDATE(), expiry_date) as days_expired
     FROM medications_inventory 
     WHERE branch_id = ?
+    AND expiry_date IS NOT NULL 
+    AND expiry_date < CURDATE()
 ";
 
 $params = [$user_branch_id];
 
-// Only show active medicines
-$query .= " AND status = 'active'";
-
-// Filter by stock status
-if ($filter === 'low') {
-    $query .= " AND quantity <= reorder_level AND quantity > 0";
-} elseif ($filter === 'out') {
-    $query .= " AND quantity = 0";
-} elseif ($filter === 'all') {
-    $query .= " AND quantity <= reorder_level";
+// Status filter (active/inactive/all)
+if ($status_filter === 'active') {
+    $query .= " AND status = 'active'";
+} elseif ($status_filter === 'inactive') {
+    $query .= " AND status = 'inactive'";
 }
 
 // Search filter
@@ -76,63 +76,56 @@ if (!empty($search)) {
     $params[] = "%$search%";
 }
 
-// ================================================================
-// FIX: Sort by expiry date first (expiring soon at top)
-// ================================================================
-$query .= " ORDER BY 
-    CASE 
-        WHEN expiry_date IS NULL THEN 2
-        WHEN expiry_date < CURDATE() THEN 0  -- Expired (highest priority)
-        WHEN expiry_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY) THEN 1  -- Expiring in 7 days
-        WHEN expiry_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY) THEN 3  -- Expiring in 30 days
-        ELSE 4  -- Valid for longer
-    END ASC,
-    expiry_date ASC,
-    quantity ASC,
-    medication_name ASC";
+$query .= " ORDER BY expiry_date ASC";
 
 $stmt = $db->prepare($query);
 $stmt->execute($params);
-$medicines = $stmt->fetchAll();
+$expired_medicines = $stmt->fetchAll();
 
 // ================================================================
 // GET STATISTICS
 // ================================================================
 
-// Low Stock Count (quantity <= reorder_level AND quantity > 0)
+// Total expired (all)
 $stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM medications_inventory 
-    WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
-");
-$stmt->execute([$user_branch_id]);
-$low_stock_count = $stmt->fetch()['count'] ?? 0;
-
-// Out of Stock Count (quantity = 0)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM medications_inventory 
-    WHERE branch_id = ? AND quantity = 0 AND status = 'active'
-");
-$stmt->execute([$user_branch_id]);
-$out_of_stock_count = $stmt->fetch()['count'] ?? 0;
-
-// Total Low Stock (both low and out)
-$total_low_stock = $low_stock_count + $out_of_stock_count;
-
-// ================================================================
-// GET EXPIRING SOON COUNT (for header badge)
-// ================================================================
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
+    SELECT COUNT(*) as count, SUM(quantity) as total_quantity
     FROM medications_inventory 
     WHERE branch_id = ? 
-    AND status = 'active'
     AND expiry_date IS NOT NULL 
-    AND expiry_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+    AND expiry_date < CURDATE()
 ");
 $stmt->execute([$user_branch_id]);
-$expiring_soon_count = $stmt->fetch()['count'] ?? 0;
+$total_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_expired = $total_data['count'] ?? 0;
+$total_expired_units = $total_data['total_quantity'] ?? 0;
+
+// Active expired
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count, SUM(quantity) as total_quantity
+    FROM medications_inventory 
+    WHERE branch_id = ? 
+    AND expiry_date IS NOT NULL 
+    AND expiry_date < CURDATE()
+    AND status = 'active'
+");
+$stmt->execute([$user_branch_id]);
+$active_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$active_expired = $active_data['count'] ?? 0;
+$active_expired_units = $active_data['total_quantity'] ?? 0;
+
+// Inactive expired
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count, SUM(quantity) as total_quantity
+    FROM medications_inventory 
+    WHERE branch_id = ? 
+    AND expiry_date IS NOT NULL 
+    AND expiry_date < CURDATE()
+    AND status = 'inactive'
+");
+$stmt->execute([$user_branch_id]);
+$inactive_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$inactive_expired = $inactive_data['count'] ?? 0;
+$inactive_expired_units = $inactive_data['total_quantity'] ?? 0;
 
 // ================================================================
 // GET STATISTICS FOR SIDEBAR
@@ -232,10 +225,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         box-shadow: 0 8px 30px rgba(0,0,0,0.2);
     }
     
-    .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
     .stat-card.red { background: linear-gradient(135deg, #DC2626, #991B1B); }
+    .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    .stat-card.gray { background: linear-gradient(135deg, #6B7280, #4B5563); }
     .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-    .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
     
     .stat-card .stat-icon {
         width: 44px;
@@ -309,7 +302,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--text-primary);
     }
     
-    .card-title .title-orange { color: var(--warning); }
     .card-title .title-red { color: var(--danger); }
     .card-title .title-blue { color: var(--primary); }
     
@@ -322,9 +314,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--primary);
     }
     
-    /* ================================================================
-       FILTERS
-       ================================================================ */
     .filter-group {
         display: flex;
         flex-wrap: wrap;
@@ -361,19 +350,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border-color: var(--primary-dark);
     }
     
-    .filter-btn.orange.active {
-        background: var(--warning);
-        border-color: var(--warning);
-    }
-    
     .filter-btn.red.active {
         background: var(--danger);
         border-color: var(--danger);
     }
     
-    /* ================================================================
-       SEARCH FORM
-       ================================================================ */
+    .filter-btn.clear-filter {
+        border-color: var(--danger);
+        color: var(--danger);
+    }
+    
+    .filter-btn.clear-filter:hover {
+        background: var(--danger);
+        color: white;
+    }
+    
     .search-form {
         display: flex;
         gap: 8px;
@@ -435,9 +426,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--danger);
     }
     
-    /* ================================================================
-       BUTTONS
-       ================================================================ */
     .btn-outline {
         background: transparent;
         color: var(--text-secondary);
@@ -459,15 +447,27 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--primary);
     }
     
-    .btn-sm {
-        padding: 3px 10px;
-        font-size: 0.7rem;
-        border-radius: 6px;
+    .btn-add {
+        background: var(--success);
+        color: white;
+        padding: 8px 20px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
     
-    /* ================================================================
-       TABLE
-       ================================================================ */
+    .btn-add:hover {
+        background: var(--success-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+    }
+    
     .table-wrap {
         overflow-x: auto;
     }
@@ -486,8 +486,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: white;
-        background: var(--primary);
-        border-bottom: 3px solid var(--primary-dark);
+        background: var(--danger);
+        border-bottom: 3px solid #991B1B;
         white-space: nowrap;
     }
     
@@ -500,19 +500,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     .data-table tbody tr:nth-child(even) {
-        background: var(--primary-light);
+        background: var(--danger-light);
     }
     
     .data-table tbody tr:hover td {
-        background: var(--success-light);
+        background: var(--warning-light);
     }
     
     [data-theme="dark"] .data-table tbody tr:nth-child(even) {
-        background: #1E293B;
+        background: #3A1A1A;
     }
     
     [data-theme="dark"] .data-table tbody tr:hover td {
-        background: #1A3A2A;
+        background: #3D2E0A;
     }
     
     .data-table td {
@@ -520,54 +520,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border-bottom: 1px solid var(--border-color);
         color: var(--text-primary);
         vertical-align: middle;
-    }
-    
-    /* Status badges */
-    .stock-badge {
-        padding: 2px 10px;
-        border-radius: 10px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .stock-badge.low {
-        background: var(--warning-light);
-        color: var(--warning);
-        animation: pulse-low 1.5s infinite;
-    }
-    
-    .stock-badge.out {
-        background: var(--danger-light);
-        color: var(--danger);
-        animation: pulse-low 1s infinite;
-    }
-    
-    .stock-badge.in-stock {
-        background: var(--success-light);
-        color: var(--success);
-    }
-    
-    @keyframes pulse-low {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.6; }
-    }
-    
-    [data-theme="dark"] .stock-badge.low {
-        background: #3D2E0A;
-        color: #FBBF24;
-    }
-    
-    [data-theme="dark"] .stock-badge.out {
-        background: #3A1A1A;
-        color: #F87171;
-    }
-    
-    [data-theme="dark"] .stock-badge.in-stock {
-        background: #1A3A2A;
-        color: #34D399;
     }
     
     .status-badge {
@@ -600,28 +552,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: #F87171;
     }
     
-    .expiry-badge {
+    .expired-badge {
         padding: 2px 10px;
         border-radius: 10px;
         font-size: 0.65rem;
         font-weight: 600;
-    }
-    
-    .expiry-badge.valid {
-        background: var(--success-light);
-        color: var(--success);
-    }
-    
-    .expiry-badge.expiring {
-        background: var(--warning-light);
-        color: var(--warning);
-        animation: pulse-low 1.5s infinite;
-    }
-    
-    .expiry-badge.expired {
         background: var(--danger-light);
         color: var(--danger);
-        animation: pulse-low 1s infinite;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    [data-theme="dark"] .expired-badge {
+        background: #3A1A1A;
+        color: #F87171;
     }
     
     .batch-number {
@@ -639,9 +584,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: #6EA8FE;
     }
     
-    /* ✅ FIX: Only View button - no Edit or Add */
+    /* ✅ ONLY View and Delete buttons - NO EDIT */
     .action-btn {
-        padding: 4px 12px;
+        padding: 4px 10px;
         border-radius: 6px;
         font-size: 0.7rem;
         font-weight: 600;
@@ -655,12 +600,22 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     .action-btn.view {
-        background: var(--primary);
+        background: var(--purple);
         color: white;
     }
     
     .action-btn.view:hover {
-        background: var(--primary-dark);
+        background: #6D28D9;
+        transform: scale(1.05);
+    }
+    
+    .action-btn.delete {
+        background: var(--danger);
+        color: white;
+    }
+    
+    .action-btn.delete:hover {
+        background: #991B1B;
         transform: scale(1.05);
     }
     
@@ -709,10 +664,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border: 2px solid #6EE7B7;
     }
     
-    .message-box.error {
-        background: var(--danger-light);
-        color: #991B1B;
-        border: 2px solid #FCA5A5;
+    .message-box.warning {
+        background: var(--warning-light);
+        color: #92400E;
+        border: 2px solid #FCD34D;
     }
     
     .message-box i {
@@ -725,91 +680,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border-color: #34D399;
     }
     
-    [data-theme="dark"] .message-box.error {
-        background: #3A1A1A;
-        color: #F87171;
-        border-color: #F87171;
-    }
-    
-    /* ================================================================
-       EXPIRING SOON HIGHLIGHT ROW
-       ================================================================ */
-    .row-expiring-soon {
-        border-left: 4px solid var(--warning) !important;
-        background: var(--warning-light) !important;
-    }
-    
-    .row-expired {
-        border-left: 4px solid var(--danger) !important;
-        background: var(--danger-light) !important;
-    }
-    
-    .row-expiring-soon td:first-child {
-        border-radius: 8px 0 0 8px;
-    }
-    
-    .row-expiring-soon td:last-child {
-        border-radius: 0 8px 8px 0;
-    }
-    
-    [data-theme="dark"] .row-expiring-soon {
-        background: #3D2E0A !important;
-        border-left-color: #FBBF24 !important;
-    }
-    
-    [data-theme="dark"] .row-expired {
-        background: #3A1A1A !important;
-        border-left-color: #F87171 !important;
-    }
-    
-    /* ================================================================
-       DAYS REMAINING STYLES
-       ================================================================ */
-    .days-remaining {
-        font-size: 0.7rem;
-        font-weight: 600;
-        padding: 2px 10px;
-        border-radius: 10px;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .days-remaining.good {
-        background: var(--success-light);
-        color: var(--success);
-    }
-    
-    .days-remaining.warning {
-        background: var(--warning-light);
-        color: var(--warning);
-        animation: pulse-low 1.5s infinite;
-    }
-    
-    .days-remaining.danger {
-        background: var(--danger-light);
-        color: var(--danger);
-        animation: pulse-low 1s infinite;
-    }
-    
-    [data-theme="dark"] .days-remaining.good {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    
-    [data-theme="dark"] .days-remaining.warning {
+    [data-theme="dark"] .message-box.warning {
         background: #3D2E0A;
         color: #FBBF24;
+        border-color: #FBBF24;
     }
     
-    [data-theme="dark"] .days-remaining.danger {
-        background: #3A1A1A;
-        color: #F87171;
-    }
-    
-    /* ================================================================
-       ANIMATIONS
-       ================================================================ */
     .animate-fade-in-up {
         animation: fadeInUp 0.5s ease forwards;
         opacity: 0;
@@ -824,9 +700,37 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         to { opacity: 1; transform: translateY(0); }
     }
     
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
+    .days-expired {
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: var(--danger-light);
+        color: var(--danger);
+    }
+    
+    [data-theme="dark"] .days-expired {
+        background: #3A1A1A;
+        color: #F87171;
+    }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 1px solid var(--border-color);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand { 
+        color: var(--primary); 
+        font-weight: 600; 
+    }
+    
     @media (max-width: 768px) {
         .stats-grid {
             grid-template-columns: repeat(2, 1fr);
@@ -903,21 +807,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-exclamation-triangle mr-2" style="color: var(--danger);"></i> Low Stock Report
+                <i class="fas fa-skull mr-2" style="color: var(--danger);"></i> Expired Medicines
             </h1>
             <p class="page-subtitle">
-                View all medicines with low or out of stock
+                View all expired medicines (active + inactive)
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
                 <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
-                    <i class="fas fa-exclamation-triangle mr-1"></i> <?= $total_low_stock ?> need attention
+                    <i class="fas fa-exclamation-triangle mr-1"></i> <?= $total_expired ?> expired items
                 </span>
-                <?php if ($expiring_soon_count > 0): ?>
-                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200 animate-pulse">
-                    <i class="fas fa-clock mr-1"></i> <?= $expiring_soon_count ?> expiring soon
-                </span>
-                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -931,50 +830,47 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
-        <a href="low_stock.php?filter=all" class="stat-card orange">
+        <a href="expired.php" class="stat-card red">
             <div>
-                <p class="stat-label">Total Low Stock</p>
-                <p class="stat-number"><?= number_format($total_low_stock) ?></p>
-                <span class="stat-trend"><i class="fas fa-warehouse"></i> Need attention</span>
+                <p class="stat-label">Total Expired</p>
+                <p class="stat-number"><?= number_format($total_expired) ?></p>
+                <span class="stat-trend"><i class="fas fa-skull"></i> <?= number_format($total_expired_units) ?> units</span>
             </div>
-            <div class="stat-icon"><i class="fas fa-warehouse"></i></div>
+            <div class="stat-icon"><i class="fas fa-skull"></i></div>
         </a>
         
-        <a href="low_stock.php?filter=low" class="stat-card orange">
+        <a href="expired.php?status=active" class="stat-card orange">
             <div>
-                <p class="stat-label">Low Stock</p>
-                <p class="stat-number"><?= number_format($low_stock_count) ?></p>
-                <span class="stat-trend"><i class="fas fa-exclamation-triangle"></i> Below reorder level</span>
+                <p class="stat-label">Active (Still in stock)</p>
+                <p class="stat-number"><?= number_format($active_expired) ?></p>
+                <span class="stat-trend"><i class="fas fa-exclamation-triangle"></i> <?= number_format($active_expired_units) ?> units</span>
             </div>
             <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
         </a>
         
-        <a href="low_stock.php?filter=out" class="stat-card red">
+        <a href="expired.php?status=inactive" class="stat-card gray">
             <div>
-                <p class="stat-label">Out of Stock</p>
-                <p class="stat-number"><?= number_format($out_of_stock_count) ?></p>
-                <span class="stat-trend"><i class="fas fa-times-circle"></i> Empty</span>
+                <p class="stat-label">Inactive (Hidden)</p>
+                <p class="stat-number"><?= number_format($inactive_expired) ?></p>
+                <span class="stat-trend"><i class="fas fa-check-circle"></i> <?= number_format($inactive_expired_units) ?> units</span>
             </div>
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-        </a>
-        
-        <a href="low_stock.php?filter=all" class="stat-card purple">
-            <div>
-                <p class="stat-label">Expiring Soon</p>
-                <p class="stat-number"><?= number_format($expiring_soon_count) ?></p>
-                <span class="stat-trend"><i class="fas fa-clock"></i> Within 30 days</span>
-            </div>
-            <div class="stat-icon"><i class="fas fa-clock"></i></div>
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
         </a>
     </div>
 
     <!-- ================================================================ -->
     <!-- MESSAGE -->
     <!-- ================================================================ -->
-    <?php if (count($medicines) == 0 && empty($search)): ?>
+    <?php if (count($expired_medicines) == 0 && empty($search)): ?>
         <div class="message-box success">
             <i class="fas fa-check-circle"></i>
-            🎉 All medicines are well stocked! No low stock items found.
+            🎉 No expired medicines found! All medicines are within expiry date.
+        </div>
+    <?php elseif (count($expired_medicines) > 0 && $active_expired > 0): ?>
+        <div class="message-box warning">
+            <i class="fas fa-exclamation-triangle"></i>
+            ⚠️ <strong><?= $active_expired ?></strong> expired medicine(s) are still <strong>ACTIVE</strong> in inventory. 
+            Please remove or mark as inactive!
         </div>
     <?php endif; ?>
 
@@ -983,51 +879,58 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <div class="card mb-5 animate-fade-in-up">
         <div class="filter-group">
-            <a href="low_stock.php?filter=all" class="filter-btn <?= $filter === 'all' ? 'active' : '' ?>">
+            <a href="expired.php" class="filter-btn <?= $status_filter === 'all' ? 'active' : '' ?>">
                 <i class="fas fa-list"></i> All
             </a>
-            <a href="low_stock.php?filter=low" class="filter-btn orange <?= $filter === 'low' ? 'active' : '' ?>">
-                <i class="fas fa-exclamation-triangle"></i> Low Stock
+            <a href="expired.php?status=active" class="filter-btn red <?= $status_filter === 'active' ? 'active' : '' ?>">
+                <i class="fas fa-exclamation-triangle"></i> Active
             </a>
-            <a href="low_stock.php?filter=out" class="filter-btn red <?= $filter === 'out' ? 'active' : '' ?>">
-                <i class="fas fa-times-circle"></i> Out of Stock
+            <a href="expired.php?status=inactive" class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">
+                <i class="fas fa-check-circle"></i> Inactive
             </a>
+            <?php if (!empty($search) || $status_filter !== 'all'): ?>
+                <a href="expired.php" class="filter-btn clear-filter">
+                    <i class="fas fa-times"></i> Clear Filter
+                </a>
+            <?php endif; ?>
         </div>
         
         <form method="GET" class="search-form">
-            <input type="hidden" name="filter" value="<?= $filter ?>">
+            <?php if ($status_filter !== 'all'): ?>
+                <input type="hidden" name="status" value="<?= $status_filter ?>">
+            <?php endif; ?>
             
-            <input type="text" name="search" placeholder="🔍 Search medicine..." 
+            <input type="text" name="search" placeholder="🔍 Search expired medicine..." 
                    value="<?= htmlspecialchars($search) ?>">
             
             <button type="submit" class="btn-search">
                 <i class="fas fa-search"></i> Search
             </button>
             
-            <a href="low_stock.php?filter=<?= $filter ?>" class="btn-reset">
+            <a href="expired.php" class="btn-reset">
                 <i class="fas fa-times"></i> Reset
             </a>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- LOW STOCK TABLE - SORTED BY EXPIRY DATE (EXPIRING FIRST) -->
+    <!-- EXPIRED MEDICINES TABLE - NO EDIT BUTTON -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list title-orange mr-2"></i>
-                Medicines Needing Restock
-                <span class="result-count ml-2">(<strong><?= number_format(count($medicines)) ?></strong> record(s))</span>
-                <?php if ($expiring_soon_count > 0): ?>
-                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200 animate-pulse">
-                    <i class="fas fa-clock mr-1"></i> Expiring soon shown first
-                </span>
+                <i class="fas fa-list title-red mr-2"></i>
+                Expired Medicines
+                <span class="result-count ml-2">(<strong><?= number_format(count($expired_medicines)) ?></strong> record(s))</span>
+                <?php if ($active_expired > 0): ?>
+                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200 animate-pulse">
+                        <i class="fas fa-exclamation-circle mr-1"></i> <?= $active_expired ?> active
+                    </span>
                 <?php endif; ?>
             </h3>
         </div>
         
-        <?php if (count($medicines) > 0): ?>
+        <?php if (count($expired_medicines) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
                     <thead>
@@ -1035,62 +938,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             <th style="border-radius: 8px 0 0 0;">#</th>
                             <th>Medicine Name</th>
                             <th>Category</th>
-                            <th>Current Qty</th>
-                            <th>Reorder Level</th>
-                            <th>Status</th>
+                            <th>Quantity</th>
                             <th>Expiry Date</th>
-                            <th>Days Left</th>
+                            <th>Days Expired</th>
                             <th>Batch Number</th>
-                            <th>Supplier</th>
+                            <th>Status</th>
                             <th style="border-radius: 0 8px 0 0;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php $counter = 1; ?>
-                        <?php foreach ($medicines as $item): ?>
-                            <?php
-                                $stock_status = 'in-stock';
-                                $stock_label = 'In Stock';
-                                $stock_icon = 'fa-check-circle';
-                                
-                                if ($item['quantity'] <= 0) {
-                                    $stock_status = 'out';
-                                    $stock_label = 'Out of Stock';
-                                    $stock_icon = 'fa-times-circle';
-                                } elseif ($item['quantity'] <= $item['reorder_level']) {
-                                    $stock_status = 'low';
-                                    $stock_label = 'Low Stock';
-                                    $stock_icon = 'fa-exclamation-triangle';
-                                }
-                                
-                                // Expiry status
-                                $expiry_status = 'valid';
-                                $days_remaining = '-';
-                                $days_class = 'good';
-                                $row_class = '';
-                                
-                                if (!empty($item['expiry_date'])) {
-                                    $days_remaining = (int)$item['days_remaining'];
-                                    
-                                    if ($days_remaining < 0) {
-                                        $expiry_status = 'expired';
-                                        $days_class = 'danger';
-                                        $row_class = 'row-expired';
-                                    } elseif ($days_remaining <= 7) {
-                                        $expiry_status = 'expiring';
-                                        $days_class = 'danger';
-                                        $row_class = 'row-expiring-soon';
-                                    } elseif ($days_remaining <= 30) {
-                                        $expiry_status = 'expiring';
-                                        $days_class = 'warning';
-                                        $row_class = 'row-expiring-soon';
-                                    } else {
-                                        $expiry_status = 'valid';
-                                        $days_class = 'good';
-                                    }
-                                }
-                            ?>
-                            <tr class="<?= $row_class ?>">
+                        <?php foreach ($expired_medicines as $item): ?>
+                            <tr>
                                 <td><?= $counter++ ?></td>
                                 <td>
                                     <strong><?= htmlspecialchars($item['medication_name']) ?></strong>
@@ -1098,45 +957,22 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 </td>
                                 <td><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
                                 <td>
-                                    <strong style="color: <?= $item['quantity'] <= 0 ? 'var(--danger)' : ($item['quantity'] <= $item['reorder_level'] ? 'var(--warning)' : 'var(--success)') ?>;">
-                                        <?= $item['quantity'] ?>
-                                    </strong>
-                                    <?php if ($item['quantity'] <= $item['reorder_level'] && $item['quantity'] > 0): ?>
-                                        <span class="text-xs text-gray-400 block">Reorder: <?= $item['reorder_level'] ?></span>
+                                    <strong style="color: var(--danger);"><?= $item['quantity'] ?></strong>
+                                    <?php if ($item['status'] === 'inactive'): ?>
+                                        <span class="text-xs text-gray-400">(hidden)</span>
                                     <?php endif; ?>
                                 </td>
-                                <td><?= $item['reorder_level'] ?></td>
                                 <td>
-                                    <span class="stock-badge <?= $stock_status ?>">
-                                        <i class="fas <?= $stock_icon ?>"></i>
-                                        <?= $stock_label ?>
+                                    <span class="expired-badge">
+                                        <i class="fas fa-calendar-times mr-1"></i>
+                                        <?= date('M d, Y', strtotime($item['expiry_date'])) ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <?php if (!empty($item['expiry_date'])): ?>
-                                        <span class="expiry-badge <?= $expiry_status ?>">
-                                            <?= date('M d, Y', strtotime($item['expiry_date'])) ?>
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="text-xs text-gray-400">N/A</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if (!empty($item['expiry_date']) && $days_remaining !== '-'): ?>
-                                        <span class="days-remaining <?= $days_class ?>">
-                                            <?php if ($days_remaining < 0): ?>
-                                                <i class="fas fa-skull"></i> EXPIRED
-                                            <?php elseif ($days_remaining <= 7): ?>
-                                                <i class="fas fa-clock"></i> <?= $days_remaining ?> days ⚠️
-                                            <?php elseif ($days_remaining <= 30): ?>
-                                                <i class="fas fa-clock"></i> <?= $days_remaining ?> days
-                                            <?php else: ?>
-                                                <i class="fas fa-check"></i> <?= $days_remaining ?> days
-                                            <?php endif; ?>
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="text-xs text-gray-400">N/A</span>
-                                    <?php endif; ?>
+                                    <span class="days-expired">
+                                        <i class="fas fa-clock"></i>
+                                        <?= $item['days_expired'] ?> days ago
+                                    </span>
                                 </td>
                                 <td>
                                     <?php if (!empty($item['batch_number'])): ?>
@@ -1145,13 +981,30 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         <span class="text-xs text-gray-400">N/A</span>
                                     <?php endif; ?>
                                 </td>
-                                <td><?= htmlspecialchars($item['supplier'] ?? 'N/A') ?></td>
                                 <td>
-                                    <!-- ✅ ONLY VIEW BUTTON - No Edit or Add -->
-                                    <a href="view_inventory.php?id=<?= $item['id'] ?>" 
-                                       class="action-btn view" title="View Details">
-                                        <i class="fas fa-eye"></i> View
-                                    </a>
+                                    <span class="status-badge <?= $item['status'] ?? 'active' ?>">
+                                        <?= ucfirst($item['status'] ?? 'Active') ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="flex gap-1">
+                                        <!-- ✅ ONLY View Button -->
+                                        <a href="view_inventory.php?id=<?= $item['id'] ?>" 
+                                           class="action-btn view" title="View Details">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                        <!-- ✅ Delete Button (Mark as Inactive) - Only for active items -->
+                                        <?php if (($item['status'] ?? '') === 'active'): ?>
+                                            <form method="POST" action="inventory.php" style="display:inline;" 
+                                                  onsubmit="return confirm('⚠️ Warning: This will hide the medicine from inventory. Continue?')">
+                                                <input type="hidden" name="action" value="delete_medicine">
+                                                <input type="hidden" name="id" value="<?= $item['id'] ?>">
+                                                <button type="submit" class="action-btn delete" title="Mark as Inactive">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1161,8 +1014,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         <?php else: ?>
             <div class="empty-state">
                 <i class="fas fa-check-circle" style="color: var(--success);"></i>
-                <p>No low stock medicines found</p>
-                <p class="sub">All medicines are well stocked! 🎉</p>
+                <p>No expired medicines found</p>
+                <p class="sub">All medicines are within expiry date 🎉</p>
             </div>
         <?php endif; ?>
     </div>
@@ -1170,75 +1023,56 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- RECOMMENDATIONS -->
     <!-- ================================================================ -->
-    <?php if (count($medicines) > 0): ?>
-    <div class="card mt-4 animate-fade-in-up" style="border-color: var(--warning);">
+    <?php if (count($expired_medicines) > 0): ?>
+    <div class="card mt-4 animate-fade-in-up" style="border-color: var(--danger);">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-lightbulb" style="color: var(--warning);"></i>
-                Restock Recommendations
+                <i class="fas fa-lightbulb" style="color: var(--danger);"></i>
+                Recommendations
             </h3>
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div class="p-4 border rounded-lg" style="border-color: var(--border-color);">
                 <h4 class="font-semibold text-red-600 mb-2">
-                    <i class="fas fa-skull mr-1"></i> Expired
+                    <i class="fas fa-skull mr-1"></i> Active Expired Medicines
                 </h4>
                 <p class="text-sm text-gray-600">
-                    <?php 
-                        $expired_items = array_filter($medicines, function($item) {
-                            return !empty($item['expiry_date']) && $item['days_remaining'] < 0;
-                        });
-                    ?>
-                    <strong><?= count($expired_items) ?></strong> medicine(s) have expired.
-                    <?php if (count($expired_items) > 0): ?>
-                        <span class="block text-xs text-red-500 mt-1 font-semibold">
-                            ⚠️ Should be removed from inventory!
+                    <?php if ($active_expired > 0): ?>
+                        <strong><?= $active_expired ?></strong> expired medicine(s) are still <span class="text-red-600 font-semibold">ACTIVE</span> in inventory.
+                        <span class="block text-xs text-gray-400 mt-1">
+                            ⚠️ These medicines should be <strong>marked as inactive</strong> or <strong>removed</strong> from inventory.
                         </span>
+                        <span class="block text-xs text-gray-400 mt-1">
+                            <?php 
+                                $active_names = array_slice(array_column(
+                                    array_filter($expired_medicines, function($item) {
+                                        return $item['status'] === 'active';
+                                    }), 'medication_name'), 0, 5);
+                                if (!empty($active_names)) {
+                                    echo '📌 ' . implode(', ', $active_names);
+                                    if (count($active_names) > 5) echo ' and ' . (count($active_names) - 5) . ' more';
+                                }
+                            ?>
+                        </span>
+                    <?php else: ?>
+                        ✅ All expired medicines are already marked as <span class="text-green-600 font-semibold">INACTIVE</span>.
                     <?php endif; ?>
                 </p>
             </div>
             <div class="p-4 border rounded-lg" style="border-color: var(--border-color);">
                 <h4 class="font-semibold text-orange-600 mb-2">
-                    <i class="fas fa-clock mr-1"></i> Expiring Soon (30 days)
+                    <i class="fas fa-clock mr-1"></i> Actions Required
                 </h4>
                 <p class="text-sm text-gray-600">
-                    <?php 
-                        $expiring_items = array_filter($medicines, function($item) {
-                            return !empty($item['expiry_date']) && $item['days_remaining'] >= 0 && $item['days_remaining'] <= 30;
-                        });
-                    ?>
-                    <strong><?= count($expiring_items) ?></strong> medicine(s) expiring within 30 days.
-                    <?php if (count($expiring_items) > 0): ?>
-                        <span class="block text-xs text-gray-400 mt-1">
-                            <?php 
-                                $names = array_slice(array_column($expiring_items, 'medication_name'), 0, 5);
-                                echo implode(', ', $names);
-                                if (count($expiring_items) > 5) echo ' and ' . (count($expiring_items) - 5) . ' more';
-                            ?>
-                        </span>
-                    <?php endif; ?>
-                </p>
-            </div>
-            <div class="p-4 border rounded-lg" style="border-color: var(--border-color);">
-                <h4 class="font-semibold text-orange-600 mb-2">
-                    <i class="fas fa-exclamation-triangle mr-1"></i> Out of Stock
-                </h4>
-                <p class="text-sm text-gray-600">
-                    <?php 
-                        $out_items = array_filter($medicines, function($item) {
-                            return $item['quantity'] <= 0;
-                        });
-                    ?>
-                    <strong><?= count($out_items) ?></strong> medicine(s) completely out of stock.
-                    <?php if (count($out_items) > 0): ?>
-                        <span class="block text-xs text-gray-400 mt-1">
-                            <?php 
-                                $names = array_slice(array_column($out_items, 'medication_name'), 0, 5);
-                                echo implode(', ', $names);
-                                if (count($out_items) > 5) echo ' and ' . (count($out_items) - 5) . ' more';
-                            ?>
-                        </span>
-                    <?php endif; ?>
+                    <ul class="list-disc list-inside text-sm text-gray-600 space-y-1">
+                        <li>📌 Review expired medicines regularly</li>
+                        <li>🗑️ Remove or mark as inactive expired stock</li>
+                        <li>📦 Check if any expired medicines are still in active prescriptions</li>
+                        <li>🔄 Update inventory to prevent dispensing expired medicines</li>
+                        <?php if ($active_expired > 0): ?>
+                            <li class="text-red-600 font-semibold">⚠️ <strong><?= $active_expired ?></strong> item(s) need immediate attention!</li>
+                        <?php endif; ?>
+                    </ul>
                 </p>
             </div>
         </div>
@@ -1248,11 +1082,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Low Stock Report
+            Expired Medicines Report
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1400,12 +1234,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick - Low Stock Report (Expiring First)', 'font-size:18px; font-weight:bold; color:#D97706;');
-    console.log('%c📦 Low Stock: <?= $low_stock_count ?> | Out of Stock: <?= $out_of_stock_count ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c⏰ Expiring Soon: <?= $expiring_soon_count ?> (shown first)', 'font-size:13px; color:#DC2626;');
-    console.log('%c⚠️ Total items needing attention: <?= $total_low_stock ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Sorted by: Expiry Date (expiring first) → Quantity ASC → Name ASC', 'font-size:13px; color:#34D399;');
-    console.log('%c👁️ Only View button available (Edit and Add removed)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💊 Braick - Expired Medicines Report', 'font-size:18px; font-weight:bold; color:#DC2626;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🗑️ Total Expired: <?= $total_expired ?> (units: <?= $total_expired_units ?>)', 'font-size:13px; color:#DC2626;');
+    console.log('%c⚠️ Active Expired: <?= $active_expired ?> (units: <?= $active_expired_units ?>)', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Inactive Expired: <?= $inactive_expired ?> (units: <?= $inactive_expired_units ?>)', 'font-size:13px; color:#6B7280;');
+    console.log('%c✅ Shows ALL expired medicines (active + inactive)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Only Dodoma branch (branch_id=1)', 'font-size:13px; color:#34D399;');
+    console.log('%c🚫 NO EDIT button - Only View and Delete (Inactive)', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

@@ -2,6 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/reports.php
 // PHARMACY - REPORTS DASHBOARD (STOCK & MEDICINES ONLY)
+// ================================================================
+// FIXED:
+// 1. Removed "Total Stock" card
+// 2. Added "Generate PDF Report" button
+// 3. Export functionality
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -43,7 +48,6 @@ $db = getDB();
 $report_type = isset($_GET['type']) ? $_GET['type'] : 'stock';
 
 // ================================================================
-// ================================================================
 // STOCK REPORTS
 // ================================================================
 
@@ -75,13 +79,12 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $out_of_stock = $stmt->fetch()['count'] ?? 0;
 
-// 5. Expired Medicines
+// 5. Expired Medicines (all - active + inactive)
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM medications_inventory 
     WHERE branch_id = ? AND expiry_date IS NOT NULL 
     AND expiry_date < CURDATE()
-    AND status = 'active'
 ");
 $stmt->execute([$user_branch_id]);
 $expired_count = $stmt->fetch()['count'] ?? 0;
@@ -454,6 +457,33 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--primary);
     }
     
+    /* ✅ GENERATE PDF BUTTON */
+    .btn-pdf {
+        background: var(--danger);
+        color: white;
+        padding: 8px 20px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
+    }
+    
+    .btn-pdf:hover {
+        background: #B91C1C;
+        transform: translateY(-3px);
+        box-shadow: 0 6px 20px rgba(220, 38, 38, 0.35);
+    }
+    
+    .btn-pdf i {
+        font-size: 1rem;
+    }
+    
     .btn-sm {
         padding: 4px 12px;
         font-size: 0.7rem;
@@ -567,6 +597,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         to { opacity: 1; transform: translateY(0); }
     }
     
+    .header-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    
     @media (max-width: 768px) {
         .stats-grid {
             grid-template-columns: repeat(2, 1fr);
@@ -599,6 +636,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .data-table th,
         .data-table td {
             padding: 4px 8px;
+        }
+        .header-actions {
+            flex-direction: column;
+            width: 100%;
+        }
+        .header-actions .btn-pdf,
+        .header-actions .btn-outline {
+            width: 100%;
+            justify-content: center;
         }
     }
     
@@ -647,7 +693,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <?php endif; ?>
             </p>
         </div>
-        <div>
+        <div class="header-actions">
+            <!-- ✅ GENERATE PDF REPORT BUTTON -->
+            <button onclick="generatePDFReport()" class="btn-pdf">
+                <i class="fas fa-file-pdf"></i> Generate PDF Report
+            </button>
             <button onclick="window.print()" class="btn-outline">
                 <i class="fas fa-print"></i> Print Report
             </button>
@@ -680,6 +730,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php if ($report_type === 'stock'): ?>
     
     <div class="stats-grid animate-fade-in-up">
+        <!-- ✅ REMOVED: Total Stock Card -->
         <div class="stat-card blue">
             <div>
                 <p class="stat-number"><?= number_format($total_medicines) ?></p>
@@ -687,15 +738,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-trend">Active</span>
             </div>
             <div class="stat-icon"><i class="fas fa-pills"></i></div>
-        </div>
-        
-        <div class="stat-card teal">
-            <div>
-                <p class="stat-number"><?= number_format($total_stock) ?></p>
-                <p class="stat-label"><i class="fas fa-boxes mr-1"></i> Total Stock</p>
-                <span class="stat-trend">All quantities</span>
-            </div>
-            <div class="stat-icon"><i class="fas fa-boxes"></i></div>
         </div>
         
         <div class="stat-card orange">
@@ -1074,6 +1116,35 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
+    // ✅ GENERATE PDF REPORT
+    // ================================================================
+    function generatePDFReport() {
+        showToast('📄 Generating PDF', 'Please wait while we generate your report...', 'info');
+        
+        var btn = document.querySelector('.btn-pdf');
+        var originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+        btn.disabled = true;
+        
+        // Get current report type
+        var reportType = '<?= $report_type ?>';
+        var url = 'export_pdf.php?type=' + reportType + '&branch_id=<?= $user_branch_id ?>';
+        
+        // Open PDF in new window
+        var win = window.open(url, '_blank');
+        
+        setTimeout(function() {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+            if (!win || win.closed) {
+                showToast('⚠️ Pop-up Blocked', 'Please allow pop-ups for this site to download PDF', 'warning');
+            } else {
+                showToast('✅ PDF Generated', 'Report is being downloaded', 'success');
+            }
+        }, 2000);
+    }
+
+    // ================================================================
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
@@ -1081,14 +1152,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             e.preventDefault();
             window.print();
         }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
+            e.preventDefault();
+            generatePDFReport();
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+            e.preventDefault();
+            window.location.href = 'dashboard.php';
+        }
     });
 
-    console.log('%c📊 Braick - Reports Dashboard', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Braick - Reports Dashboard (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Report Type: <?= ucfirst($report_type) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Total Medicines: <?= $total_medicines ?> | Low Stock: <?= $low_stock_count ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c🗑️ Expired: <?= $expired_count ?> | Expiring Soon: <?= $expiring_soon ?>', 'font-size:13px; color:#DC2626;');
     <?php if ($is_admin): ?>
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
     <?php endif; ?>
+    console.log('%c✅ "Total Stock" card REMOVED', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ "Generate PDF Report" button ADDED', 'font-size:13px; color:#34D399;');
+    console.log('%c⌨️ Shortcut: Ctrl+E to generate PDF', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

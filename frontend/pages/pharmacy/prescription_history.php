@@ -3,6 +3,7 @@
 // FILE: frontend/pages/pharmacy/prescription_history.php
 // PHARMACY - PRESCRIPTION HISTORY
 // Shows all dispensed and cancelled prescriptions
+// TABLE: Blue theme | Dispensed: Green | Cancelled: Red
 // NO VIEW BILL BUTTON
 // BRAICK DISPENSARY
 // ================================================================
@@ -52,7 +53,7 @@ $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 $conditions = ["p.branch_id = ?"];
 $params = [$user_branch_id];
 
-// Show dispensed and cancelled only (not pending or confirmed)
+// Show dispensed and cancelled only
 if ($filter_status === 'all') {
     $conditions[] = "p.status IN ('dispensed', 'cancelled')";
 } else {
@@ -148,13 +149,10 @@ $stmt->execute($params);
 $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - Only Dispensed and Cancelled
 // ================================================================
 $total_dispensed = 0;
 $total_cancelled = 0;
-$total_amount = 0;
-$total_discount = 0;
-$total_balance = 0;
 
 foreach ($prescriptions as $pres) {
     if ($pres['status'] === 'dispensed') {
@@ -162,9 +160,6 @@ foreach ($prescriptions as $pres) {
     } elseif ($pres['status'] === 'cancelled') {
         $total_cancelled++;
     }
-    $total_amount += (float)($pres['bill_total'] ?? 0);
-    $total_discount += (float)($pres['bill_discount'] ?? 0);
-    $total_balance += (float)($pres['bill_balance'] ?? 0);
 }
 
 // ================================================================
@@ -275,6 +270,13 @@ include_once '../../components/pharmacy_sidebar.php';
             --border-color: #E2E8F0;
             --shadow: 0 1px 3px rgba(0,0,0,0.06);
             --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --blue-100: #DBEAFE;
+            --blue-200: #BFDBFE;
+            --blue-300: #93C5FD;
+            --blue-400: #60A5FA;
+            --blue-500: #3B82F6;
+            --blue-600: #2563EB;
+            --blue-700: #1D4ED8;
         }
         
         [data-theme="dark"] {
@@ -427,7 +429,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .page-header {
-            background: linear-gradient(135deg, var(--gray-700), var(--gray-800));
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -436,7 +438,7 @@ include_once '../../components/pharmacy_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
             position: relative;
             overflow: hidden;
         }
@@ -521,41 +523,48 @@ include_once '../../components/pharmacy_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        /* Stats Row */
+        /* ================================================================
+           STATS ROW - Green for Dispensed, Red for Cancelled
+           ================================================================ */
         .stats-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 12px;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
             margin-bottom: 24px;
+            max-width: 500px;
         }
         
         .stat-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            padding: 16px 20px;
+            padding: 20px 24px;
             border: 2px solid var(--border-color);
             transition: var(--transition);
             text-align: center;
         }
         
         .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-2px);
+            transform: translateY(-3px);
             box-shadow: var(--shadow-md);
         }
         
-        .stat-card .stat-number {
-            font-size: 1.6rem;
-            font-weight: 700;
+        .stat-card .stat-icon {
+            font-size: 2rem;
+            display: block;
+            margin-bottom: 4px;
         }
         
-        .stat-card .stat-number.green { color: var(--success); }
-        .stat-card .stat-number.blue { color: var(--primary); }
-        .stat-card .stat-number.orange { color: var(--warning); }
-        .stat-card .stat-number.red { color: var(--danger); }
+        .stat-card .stat-number {
+            font-size: 2.2rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        
+        .stat-card .stat-number.green { color: #059669; }
+        .stat-card .stat-number.red { color: #DC2626; }
         
         .stat-card .stat-label {
-            font-size: 0.7rem;
+            font-size: 0.75rem;
             color: var(--text-secondary);
             font-weight: 500;
             text-transform: uppercase;
@@ -563,13 +572,43 @@ include_once '../../components/pharmacy_sidebar.php';
             margin-top: 2px;
         }
         
-        .stat-card .stat-icon {
-            font-size: 1.2rem;
-            display: block;
-            margin-bottom: 4px;
+        .stat-card .stat-sub {
+            font-size: 0.6rem;
+            color: var(--text-muted);
+            margin-top: 2px;
         }
         
-        /* Filter Section */
+        .stat-card.dispensed {
+            border-color: #059669;
+            background: #D1FAE5;
+        }
+        
+        .stat-card.dispensed .stat-number { color: #059669; }
+        
+        .stat-card.cancelled {
+            border-color: #DC2626;
+            background: #FEE2E2;
+        }
+        
+        .stat-card.cancelled .stat-number { color: #DC2626; }
+        
+        [data-theme="dark"] .stat-card.dispensed {
+            background: #1A3A2A;
+            border-color: #34D399;
+        }
+        
+        [data-theme="dark"] .stat-card.dispensed .stat-number { color: #34D399; }
+        
+        [data-theme="dark"] .stat-card.cancelled {
+            background: #3A1A1A;
+            border-color: #F87171;
+        }
+        
+        [data-theme="dark"] .stat-card.cancelled .stat-number { color: #F87171; }
+        
+        /* ================================================================
+           FILTER SECTION - BLUE THEME
+           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -646,7 +685,9 @@ include_once '../../components/pharmacy_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* Table */
+        /* ================================================================
+           TABLE - BLUE THEME
+           ================================================================ */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -673,8 +714,8 @@ include_once '../../components/pharmacy_sidebar.php';
             text-transform: uppercase;
             letter-spacing: 0.06em;
             color: #ffffff;
-            background: var(--gray-700);
-            border-bottom: 3px solid var(--gray-800);
+            background: var(--primary);
+            border-bottom: 3px solid var(--primary-dark);
             white-space: nowrap;
             position: sticky;
             top: 0;
@@ -783,6 +824,9 @@ include_once '../../components/pharmacy_sidebar.php';
             transform: translateY(-1px);
         }
         
+        /* ================================================================
+           TABLE FOOTER
+           ================================================================ */
         .table-footer {
             padding: 10px 16px;
             border-top: 1px solid var(--border-color);
@@ -810,6 +854,12 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 600;
         }
         
+        .count-badge.green { background: var(--success); }
+        .count-badge.red { background: var(--danger); }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -821,12 +871,44 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* Responsive */
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
-            .stats-row { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -837,7 +919,7 @@ include_once '../../components/pharmacy_sidebar.php';
             .filter-row { flex-direction: column; align-items: stretch; }
             .filter-input { width: 100%; }
             .filter-input[type="date"] { width: 100%; }
-            .stats-row { grid-template-columns: 1fr 1fr; }
+            .stats-row { max-width: 100%; }
             .data-table { font-size: 0.7rem; }
             .data-table thead th, .data-table tbody td { padding: 5px 8px; }
         }
@@ -845,7 +927,9 @@ include_once '../../components/pharmacy_sidebar.php';
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
-            .stats-row { grid-template-columns: 1fr; }
+            .stats-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .stat-card { padding: 14px 16px; }
+            .stat-card .stat-number { font-size: 1.6rem; }
             .page-title { font-size: 1.1rem; }
             .btn { padding: 3px 8px; font-size: 0.55rem; }
         }
@@ -925,33 +1009,25 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS -->
+    <!-- STATS ROW - Green for Dispensed, Red for Cancelled -->
     <!-- ================================================================ -->
     <div class="stats-row">
-        <div class="stat-card">
+        <div class="stat-card dispensed">
             <span class="stat-icon">💊</span>
             <p class="stat-number green"><?= $total_dispensed ?></p>
             <p class="stat-label">Dispensed</p>
+            <p class="stat-sub">Prescriptions dispensed</p>
         </div>
-        <div class="stat-card">
+        <div class="stat-card cancelled">
             <span class="stat-icon">❌</span>
             <p class="stat-number red"><?= $total_cancelled ?></p>
             <p class="stat-label">Cancelled</p>
-        </div>
-        <div class="stat-card">
-            <span class="stat-icon">💰</span>
-            <p class="stat-number blue"><?= number_format($total_amount, 2) ?></p>
-            <p class="stat-label">Total Amount</p>
-        </div>
-        <div class="stat-card">
-            <span class="stat-icon">🏷️</span>
-            <p class="stat-number orange"><?= number_format($total_discount, 2) ?></p>
-            <p class="stat-label">Total Discount</p>
+            <p class="stat-sub">Prescriptions cancelled</p>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- FILTERS -->
+    <!-- FILTERS - BLUE THEME -->
     <!-- ================================================================ -->
     <div class="filter-section">
         <div class="filter-row">
@@ -979,7 +1055,7 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TABLE - NO VIEW BILL BUTTON -->
+    <!-- TABLE - BLUE THEME, NO VIEW BILL BUTTON -->
     <!-- ================================================================ -->
     <div class="table-container">
         <div class="table-scroll">
@@ -1225,11 +1301,12 @@ include_once '../../components/pharmacy_sidebar.php';
     }
 
     console.log('%c📋 Braick - Prescription History', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c💊 Dispensed: <?= $total_dispensed ?>', 'font-size:13px; color:#059669;');
-    console.log('%c❌ Cancelled: <?= $total_cancelled ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c💰 Total Amount: <?= number_format($total_amount, 2) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💊 Dispensed (Green): <?= $total_dispensed ?>', 'font-size:13px; color:#059669;');
+    console.log('%c❌ Cancelled (Red): <?= $total_cancelled ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c📊 Filter: <?= ucfirst($filter_status) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🚫 Bill button removed from history', 'font-size:13px; color:#DC2626;');
+    console.log('%c🔵 Table header: Blue theme', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🟢 Dispensed: Green | 🔴 Cancelled: Red', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -1,8 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
-// PHARMACY - SHARED SIDEBAR (FIXED - WITH AUTO-UPDATE)
-// AUTO-UPDATE EVERY 3 SECONDS - SELF-CONTAINED
+// PHARMACY - SHARED SIDEBAR (FIXED)
+// ================================================================
+// CHANGES:
+// 1. Removed "Dispensing" menu item
+// 2. Added "Expired Stock" menu item
+// 3. Auto-update every 3 seconds from database
+// 4. Self-contained AJAX
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -11,6 +16,7 @@
 // ================================================================
 $pending_prescriptions = 0;
 $low_stock_count = 0;
+$expired_count = 0;
 $today_sales = 0;
 $today_otc = 0;
 
@@ -19,7 +25,7 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
     
     try {
         // Pending Prescriptions
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescription_sales WHERE branch_id = ? AND status = 'pending'");
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
         $stmt->execute([$user_branch_id]);
         $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
@@ -27,16 +33,27 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM medications_inventory 
-            WHERE branch_id = ? AND quantity <= reorder_level AND status = 'active'
+            WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
         ");
         $stmt->execute([$user_branch_id]);
         $low_stock_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // Expired Medicines (active + inactive)
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM medications_inventory 
+            WHERE branch_id = ? 
+            AND expiry_date IS NOT NULL 
+            AND expiry_date < CURDATE()
+        ");
+        $stmt->execute([$user_branch_id]);
+        $expired_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
         // Today's Prescription Sales
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
-            FROM prescription_sales 
-            WHERE branch_id = ? AND DATE(created_at) = CURDATE()
+            FROM prescriptions 
+            WHERE branch_id = ? AND status = 'dispensed' AND DATE(dispensed_at) = CURDATE()
         ");
         $stmt->execute([$user_branch_id]);
         $today_sales = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -89,6 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'success' => false,
         'pending_prescriptions' => 0,
         'low_stock' => 0,
+        'expired' => 0,
         'today_prescriptions' => 0,
         'today_otc' => 0
     ];
@@ -96,7 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (isset($db) && $db !== null) {
         try {
             // Pending Prescriptions
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescription_sales WHERE branch_id = ? AND status = 'pending'");
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
             $stmt->execute([$branch_id]);
             $response['pending_prescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
@@ -104,16 +122,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM medications_inventory 
-                WHERE branch_id = ? AND quantity <= reorder_level AND status = 'active'
+                WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
             ");
             $stmt->execute([$branch_id]);
             $response['low_stock'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // Today's Prescription Sales
+            // Expired Medicines (active + inactive)
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
-                FROM prescription_sales 
-                WHERE branch_id = ? AND DATE(created_at) = CURDATE()
+                FROM medications_inventory 
+                WHERE branch_id = ? 
+                AND expiry_date IS NOT NULL 
+                AND expiry_date < CURDATE()
+            ");
+            $stmt->execute([$branch_id]);
+            $response['expired'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Today's Dispensed Prescriptions
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM prescriptions 
+                WHERE branch_id = ? AND status = 'dispensed' AND DATE(dispensed_at) = CURDATE()
             ");
             $stmt->execute([$branch_id]);
             $response['today_prescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
@@ -277,6 +306,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         background: #0B5ED7;
     }
     
+    .sidebar-link .badge.red {
+        background: #DC2626;
+        animation: pulse-badge 2s infinite;
+    }
+    
     @keyframes pulse-badge {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.1); }
@@ -399,10 +433,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- Dispensing -->
-        <a href="../pharmacy/dispensing.php" class="sidebar-link <?= isActive('dispensing.php') ?>">
-            <i class="fas fa-prescription"></i> Dispensing
-        </a>
+        <!-- ✅ REMOVED: Dispensing (imeondolewa) -->
         
         <!-- Prescription History -->
         <a href="../pharmacy/prescription_history.php" class="sidebar-link <?= isActive('prescription_history.php') ?>">
@@ -439,6 +470,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <span class="badge danger" id="sidebarLowStockBadge"><?= $low_stock_count ?></span>
             <?php else: ?>
                 <span class="badge" id="sidebarLowStockBadge">0</span>
+            <?php endif; ?>
+        </a>
+        
+        <!-- ✅ NEW: Expired Stock -->
+        <a href="../pharmacy/expired.php" class="sidebar-link <?= isActive('expired.php') ?>">
+            <i class="fas fa-skull"></i> Expired Stock
+            <?php if ($expired_count > 0): ?>
+                <span class="badge red" id="sidebarExpiredBadge"><?= $expired_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="sidebarExpiredBadge">0</span>
             <?php endif; ?>
         </a>
         
@@ -501,7 +542,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // ================================================================
     // UPDATE SIDEBAR BADGES (AJAX every 3 seconds)
     // ================================================================
-    function updateSidebarBadges(pending, lowStock, todayPrescriptions, todayOtc) {
+    function updateSidebarBadges(pending, lowStock, expired, todayPrescriptions, todayOtc) {
         // Update Pending Prescriptions Badge
         var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge) {
@@ -514,6 +555,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (lowStockBadge) {
             lowStockBadge.textContent = lowStock;
             lowStockBadge.className = lowStock > 0 ? 'badge danger' : 'badge';
+        }
+        
+        // Update Expired Badge
+        var expiredBadge = document.getElementById('sidebarExpiredBadge');
+        if (expiredBadge) {
+            expiredBadge.textContent = expired;
+            expiredBadge.className = expired > 0 ? 'badge red' : 'badge';
         }
         
         // Update Today Prescriptions Badge
@@ -575,6 +623,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 updateSidebarBadges(
                     data.pending_prescriptions || 0,
                     data.low_stock || 0,
+                    data.expired || 0,
                     data.today_prescriptions || 0,
                     data.today_otc || 0
                 );
@@ -583,7 +632,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         })
         .catch(function(error) {
             // Silent fail - don't spam console
-            // console.warn('Sidebar update error:', error.message);
             sidebarIsUpdating = false;
         });
     }
@@ -636,7 +684,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
     console.log('%c💊 Pharmacy Sidebar (SELF-CONTAINED - Auto-update every 3s)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Pending: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Today Rx: <?= $today_sales ?> | Today OTC: <?= $today_otc ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c📋 Pending: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Expired: <?= $expired_count ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c📊 Today Rx: <?= $today_sales ?> | Today OTC: <?= $today_otc ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
     console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
+    console.log('%c✅ "Dispensing" REMOVED from menu', 'font-size:12px; color:#DC2626;');
+    console.log('%c✅ "Expired Stock" ADDED to menu', 'font-size:12px; color:#34D399;');
 </script>

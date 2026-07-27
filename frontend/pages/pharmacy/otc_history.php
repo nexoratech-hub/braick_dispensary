@@ -1,7 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/otc_history.php
-// PHARMACY - OTC SALES HISTORY (FIXED - NO 'status' COLUMN)
+// PHARMACY - OTC SALES HISTORY
+// FIXED: Shows correct payment_status (paid, pending, cancelled, partial)
+// FIXED: Only View button - No Cancel or Print buttons
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -45,29 +47,7 @@ $is_admin = $_SESSION['is_admin'] ?? false;
 $db = getDB();
 
 // ================================================================
-// HANDLE POST ACTIONS (Cancel) - Tumia payment_status
-// ================================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
-    $sale_id = (int)($_POST['sale_id'] ?? 0);
-    
-    if ($action === 'cancel' && $sale_id > 0) {
-        // Use payment_status instead of status
-        $stmt = $db->prepare("UPDATE otc_sales SET payment_status = 'cancelled' WHERE id = ? AND branch_id = ?");
-        if ($stmt->execute([$sale_id, $user_branch_id])) {
-            $message = "OTC sale cancelled successfully!";
-            $message_type = 'success';
-            header('Location: otc_history.php?filter=' . urlencode($filter));
-            exit;
-        } else {
-            $message = "Failed to cancel OTC sale!";
-            $message_type = 'error';
-        }
-    }
-}
-
-// ================================================================
-// BUILD QUERY - USE payment_status NOT status
+// BUILD QUERY - USE payment_status
 // ================================================================
 $query = "
     SELECT 
@@ -82,15 +62,17 @@ $query = "
 
 $params = [$user_branch_id];
 
-// Filter by payment_status (NOT status)
+// Filter by payment_status
 if ($filter === 'pending') {
     $query .= " AND os.payment_status = 'pending'";
-} elseif ($filter === 'paid' || $filter === 'dispensed' || $filter === 'completed') {
+} elseif ($filter === 'paid') {
     $query .= " AND os.payment_status = 'paid'";
 } elseif ($filter === 'cancelled') {
     $query .= " AND os.payment_status = 'cancelled'";
 } elseif ($filter === 'partial') {
     $query .= " AND os.payment_status = 'partial'";
+} elseif ($filter === 'today') {
+    $query .= " AND DATE(os.created_at) = CURDATE()";
 }
 
 // Date range filter
@@ -132,7 +114,7 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $today_otc = $stmt->fetch()['count'] ?? 0;
 
-// Pending OTC Sales (payment_status = 'pending')
+// Pending OTC Sales
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM otc_sales 
@@ -173,7 +155,7 @@ $partial_count = $stmt->fetch()['count'] ?? 0;
 // ================================================================
 $pending_prescriptions = 0;
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescription_sales WHERE branch_id = ? AND status = 'pending'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$user_branch_id]);
     $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
 } catch (Exception $e) {
@@ -483,41 +465,49 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .status-badge.paid {
         background: var(--success-light);
         color: var(--success);
+        border: 1px solid var(--success);
     }
     
     .status-badge.pending {
         background: var(--warning-light);
         color: var(--warning);
+        border: 1px solid var(--warning);
     }
     
     .status-badge.cancelled {
         background: var(--danger-light);
         color: var(--danger);
+        border: 1px solid var(--danger);
     }
     
     .status-badge.partial {
         background: var(--primary-light);
         color: var(--primary);
+        border: 1px solid var(--primary);
     }
     
     [data-theme="dark"] .status-badge.paid {
         background: #1A3A2A;
         color: #34D399;
+        border-color: #34D399;
     }
     
     [data-theme="dark"] .status-badge.pending {
         background: #3D2E0A;
         color: #FBBF24;
+        border-color: #FBBF24;
     }
     
     [data-theme="dark"] .status-badge.cancelled {
         background: #3A1A1A;
         color: #F87171;
+        border-color: #F87171;
     }
     
     [data-theme="dark"] .status-badge.partial {
         background: #1E3A5F;
         color: #6EA8FE;
+        border-color: #6EA8FE;
     }
     
     .table-wrap {
@@ -613,8 +603,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-size: 0.95rem;
     }
     
+    /* ✅ ONLY VIEW BUTTON */
     .action-btn {
-        padding: 4px 10px;
+        padding: 4px 12px;
         border-radius: 6px;
         font-size: 0.7rem;
         font-weight: 600;
@@ -634,26 +625,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .action-btn.view:hover {
         background: var(--primary-dark);
-        transform: scale(1.05);
-    }
-    
-    .action-btn.cancel {
-        background: var(--danger);
-        color: white;
-    }
-    
-    .action-btn.cancel:hover {
-        background: #B91C1C;
-        transform: scale(1.05);
-    }
-    
-    .action-btn.print {
-        background: var(--purple);
-        color: white;
-    }
-    
-    .action-btn.print:hover {
-        background: #6D28D9;
         transform: scale(1.05);
     }
     
@@ -775,7 +746,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - NO FINANCIAL DATA -->
+    <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <a href="otc_history.php?filter=all" class="stat-card purple">
@@ -871,7 +842,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- OTC SALES TABLE -->
+    <!-- OTC SALES TABLE - ONLY VIEW BUTTON -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="card-header">
@@ -898,7 +869,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($sales as $sale): ?>
+                        <?php foreach ($sales as $sale): 
+                            $payment_status = $sale['payment_status'] ?? 'pending';
+                        ?>
                             <tr>
                                 <td class="sale-number">
                                     <?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?>
@@ -931,8 +904,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="status-badge <?= $sale['payment_status'] ?? 'pending' ?>">
-                                        <?= ucfirst($sale['payment_status'] ?? 'Pending') ?>
+                                    <span class="status-badge <?= $payment_status ?>">
+                                        <?php if ($payment_status === 'paid'): ?>
+                                            <i class="fas fa-check-circle"></i> Paid
+                                        <?php elseif ($payment_status === 'pending'): ?>
+                                            <i class="fas fa-clock"></i> Pending
+                                        <?php elseif ($payment_status === 'cancelled'): ?>
+                                            <i class="fas fa-times-circle"></i> Cancelled
+                                        <?php elseif ($payment_status === 'partial'): ?>
+                                            <i class="fas fa-money-bill-wave"></i> Partial
+                                        <?php else: ?>
+                                            <?= ucfirst($payment_status) ?>
+                                        <?php endif; ?>
                                     </span>
                                 </td>
                                 <td><?= htmlspecialchars($sale['cashier_name'] ?? 'Unknown') ?></td>
@@ -941,30 +924,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     <div class="text-xs text-gray-400"><?= date('h:i A', strtotime($sale['created_at'] ?? 'now')) ?></div>
                                 </td>
                                 <td>
-                                    <div class="flex flex-wrap gap-1">
-                                        <a href="view_otc_sale.php?id=<?= $sale['id'] ?? 0 ?>" 
-                                           class="action-btn view" title="View Details">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        
-                                        <?php if (($sale['payment_status'] ?? '') === 'paid'): ?>
-                                            <button onclick="printReceipt('otc', <?= $sale['id'] ?? 0 ?>)" 
-                                                    class="action-btn print" title="Print Receipt">
-                                                <i class="fas fa-print"></i>
-                                            </button>
-                                        <?php endif; ?>
-                                        
-                                        <?php if (($sale['payment_status'] ?? '') === 'pending'): ?>
-                                            <form method="POST" style="display:inline;" 
-                                                  onsubmit="return confirm('Are you sure you want to cancel this OTC sale?')">
-                                                <input type="hidden" name="action" value="cancel">
-                                                <input type="hidden" name="sale_id" value="<?= $sale['id'] ?? 0 ?>">
-                                                <button type="submit" class="action-btn cancel" title="Cancel">
-                                                    <i class="fas fa-times"></i>
-                                                </button>
-                                            </form>
-                                        <?php endif; ?>
-                                    </div>
+                                    <!-- ✅ ONLY VIEW BUTTON -->
+                                    <a href="view_otc_sale.php?id=<?= $sale['id'] ?? 0 ?>" 
+                                       class="action-btn view" title="View Details">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1130,23 +1094,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // PRINT RECEIPT
-    // ================================================================
-    function printReceipt(type, id) {
-        if (id) {
-            window.open('print_receipt.php?type=' + type + '&id=' + id, '_blank', 'width=400,height=600');
-        } else {
-            showToast('Error', 'Invalid sale ID', 'error');
-        }
-    }
-
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c💊 Braick - OTC Sales History (FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c✅ Uses payment_status instead of status', 'font-size:13px; color:#059669;');
-    console.log('%c🚫 No financial data shown', 'font-size:13px; color:#DC2626;');
+    console.log('%c💊 Braick - OTC Sales History', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ Uses payment_status correctly', 'font-size:13px; color:#059669;');
+    console.log('%c👁️ Only View button available', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Total: <?= $total_otc ?> | Paid: <?= $paid_count ?> | Pending: <?= $pending_count ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
