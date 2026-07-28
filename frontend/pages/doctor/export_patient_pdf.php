@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/export_patient_pdf.php
-// DOCTOR - FULL PATIENT PDF EXPORT WITH BORDERS
-// FIXED: formatDateShort() error, A4 width, Download button
+// DOCTOR - FULL PATIENT PDF EXPORT WITH BLUE THEME
+// FIXED: Bills table shows all items in separate rows
+// FIXED: Uniform borders throughout PDF (no individual card bolders)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -181,7 +182,7 @@ try {
     }
     
     // ================================================================
-    // GET BILLS & PAYMENTS
+    // GET BILLS & PAYMENTS WITH ALL ITEMS
     // ================================================================
     $stmt = $db->prepare("
         SELECT pb.*, u.full_name as created_by_name
@@ -193,16 +194,27 @@ try {
     $stmt->execute([$patient_id]);
     $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get bill items
+    // Get all bill items for each bill
     $bill_items = [];
+    $all_bill_items = [];
     foreach ($bills as $bill) {
         $stmt = $db->prepare("
-            SELECT * FROM bill_items 
-            WHERE bill_id = ?
-            ORDER BY id
+            SELECT bi.*, 
+                   CASE 
+                       WHEN bi.payment_status = 'paid' THEN 'Paid'
+                       WHEN bi.payment_status = 'pending' THEN 'Pending'
+                       ELSE 'Pending'
+                   END as item_status_display
+            FROM bill_items bi
+            WHERE bi.bill_id = ?
+            ORDER BY bi.id
         ");
         $stmt->execute([$bill['id']]);
-        $bill_items[$bill['id']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $bill_items[$bill['id']] = $items;
+        foreach ($items as $item) {
+            $all_bill_items[] = $item;
+        }
     }
     
     // ================================================================
@@ -227,7 +239,7 @@ try {
 }
 
 // ================================================================
-// HELPER FUNCTIONS - ALL FIXED
+// HELPER FUNCTIONS
 // ================================================================
 function calculateAge($dob) {
     if (empty($dob)) return 'N/A';
@@ -279,15 +291,6 @@ function getStatusText($status) {
     return ucfirst(str_replace('_', ' ', $status));
 }
 
-function getVisitTypeLabel($type) {
-    $types = [
-        'new' => 'New Patient',
-        'follow-up' => 'Follow-up',
-        'emergency' => 'Emergency'
-    ];
-    return $types[$type] ?? ucfirst($type);
-}
-
 function getStatusIcon($status) {
     $icons = [
         'completed' => '✅',
@@ -318,10 +321,10 @@ function formatCurrency($amount) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         /* ================================================================
-           PAGE SETUP - A4 WIDTH, NOT FULL SCREEN
+           PAGE SETUP - UNIFORM BORDERS
            ================================================================ */
         @page {
-            margin: 15mm 12mm 15mm 12mm;
+            margin: 12mm 10mm 12mm 10mm;
             size: A4;
         }
         
@@ -346,21 +349,36 @@ function formatCurrency($amount) {
             max-width: 210mm;
             width: 100%;
             background: #FFFFFF;
-            padding: 12mm 14mm 10mm 14mm;
+            padding: 10mm 12mm 8mm 12mm;
             border-radius: 8px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.1);
         }
         
         /* ================================================================
-           HEADER WITH LOGO - LARGER FONT
+           HEADER - BLUE THEME (NO BORDER CHANGE)
            ================================================================ */
         .report-header {
             text-align: center;
             border: 2px solid #0B5ED7;
             border-radius: 8px;
-            padding: 16px 20px;
+            padding: 18px 20px;
             margin-bottom: 16px;
-            background: #F8FAFC;
+            background: linear-gradient(135deg, #F8FAFC, #E8F0FE);
+            position: relative;
+        }
+        
+        .report-header .report-id {
+            position: absolute;
+            top: 8px;
+            right: 14px;
+            font-size: 9px;
+            color: #94A3B8;
+            font-weight: 700;
+            font-family: monospace;
+            background: #E8F0FE;
+            padding: 2px 10px;
+            border-radius: 4px;
+            border: 1px solid #0B5ED7;
         }
         
         .report-header .logo-container {
@@ -381,24 +399,26 @@ function formatCurrency($amount) {
             color: #0B5ED7;
             margin: 0;
             font-weight: 700;
+            letter-spacing: 0.5px;
         }
         
         .report-header .subtitle {
             font-size: 13px;
             color: #64748B;
+            font-weight: 500;
         }
         
         .report-header .patient-name {
             font-size: 20px;
             font-weight: 700;
-            color: #1E293B;
+            color: #0B5ED7;
             margin-top: 8px;
-            border-top: 1px solid #E2E8F0;
+            border-top: 2px solid #0B5ED7;
             padding-top: 8px;
         }
         
         .report-header .meta-info {
-            font-size: 11px;
+            font-size: 10px;
             color: #64748B;
             margin-top: 4px;
         }
@@ -407,15 +427,12 @@ function formatCurrency($amount) {
             margin: 0 4px;
         }
         
-        .report-header .report-id {
-            float: right;
-            font-size: 10px;
-            color: #94A3B8;
-            font-weight: 600;
+        .report-header .meta-info .separator {
+            color: #CBD5E1;
         }
         
         /* ================================================================
-           SECTION - LARGER FONT
+           SECTIONS - UNIFORM BORDER (2px solid #0B5ED7)
            ================================================================ */
         .section {
             margin-bottom: 14px;
@@ -427,7 +444,7 @@ function formatCurrency($amount) {
         }
         
         .section-title {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 700;
             color: #0B5ED7;
             border-bottom: 2px solid #0B5ED7;
@@ -438,13 +455,20 @@ function formatCurrency($amount) {
             gap: 10px;
         }
         
+        .section-title i {
+            font-size: 14px;
+            width: 20px;
+            text-align: center;
+        }
+        
         .section-title .badge {
-            font-size: 10px;
+            font-size: 9px;
             font-weight: 600;
             padding: 2px 12px;
             border-radius: 12px;
             color: white;
             background: #0B5ED7;
+            margin-left: auto;
         }
         
         .section-title .badge.green { background: #059669; }
@@ -454,13 +478,13 @@ function formatCurrency($amount) {
         .section-title .badge.teal { background: #0D9488; }
         
         /* ================================================================
-           PATIENT INFO - LARGER FONT
+           PATIENT INFO - UNIFORM BORDER
            ================================================================ */
         .info-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 6px 16px;
-            border: 2px solid #0B5ED7;
+            border: 1px solid #E2E8F0;
             border-radius: 6px;
             padding: 10px 16px;
             background: #FFFFFF;
@@ -483,8 +507,17 @@ function formatCurrency($amount) {
             padding-top: 2px;
         }
         
+        .info-item .value .marital-badge {
+            display: inline-block;
+            padding: 1px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            color: white;
+        }
+        
         /* ================================================================
-           VITAL SIGNS - LARGER FONT
+           VITAL SIGNS
            ================================================================ */
         .vital-grid {
             display: grid;
@@ -493,7 +526,7 @@ function formatCurrency($amount) {
         }
         
         .vital-card {
-            border: 2px solid #E2E8F0;
+            border: 1px solid #E2E8F0;
             border-radius: 6px;
             padding: 8px 10px;
             text-align: center;
@@ -515,7 +548,7 @@ function formatCurrency($amount) {
         }
         
         .vital-card .vital-normal {
-            font-size: 9px;
+            font-size: 8px;
             color: #059669;
         }
         
@@ -525,10 +558,10 @@ function formatCurrency($amount) {
         }
         
         /* ================================================================
-           VISIT CARDS - LARGER FONT
+           VISIT CARDS - UNIFORM BORDER
            ================================================================ */
         .visit-card {
-            border: 2px solid #E2E8F0;
+            border: 1px solid #E2E8F0;
             border-radius: 6px;
             padding: 10px 14px;
             margin-bottom: 8px;
@@ -545,7 +578,7 @@ function formatCurrency($amount) {
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #E2E8F0;
+            border-bottom: 2px solid #0B5ED7;
             padding-bottom: 5px;
             margin-bottom: 5px;
         }
@@ -569,7 +602,7 @@ function formatCurrency($amount) {
         }
         
         .visit-card .visit-status {
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
         }
         
@@ -578,13 +611,13 @@ function formatCurrency($amount) {
             color: #475569;
             margin: 4px 0;
             padding: 4px 10px;
-            background: #F8FAFC;
+            background: #E8F0FE;
             border-radius: 4px;
-            border: 1px solid #E2E8F0;
+            border: 1px solid #0B5ED7;
         }
         
         .visit-card .visit-symptoms strong {
-            color: #1E293B;
+            color: #0B5ED7;
         }
         
         .visit-card .visit-details-grid {
@@ -646,10 +679,10 @@ function formatCurrency($amount) {
         }
         
         /* ================================================================
-           APPOINTMENT CARDS - LARGER FONT
+           APPOINTMENT CARDS - UNIFORM BORDER
            ================================================================ */
         .appointment-card {
-            border: 2px solid #E2E8F0;
+            border: 1px solid #E2E8F0;
             border-radius: 6px;
             padding: 8px 12px;
             margin-bottom: 6px;
@@ -666,7 +699,7 @@ function formatCurrency($amount) {
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #E2E8F0;
+            border-bottom: 1px solid #0B5ED7;
             padding-bottom: 4px;
             margin-bottom: 4px;
         }
@@ -701,7 +734,7 @@ function formatCurrency($amount) {
         }
         
         /* ================================================================
-           BILLS TABLE - LARGER FONT
+           BILLS TABLE - ALL ITEMS IN SEPARATE ROWS
            ================================================================ */
         .bill-table {
             width: 100%;
@@ -712,7 +745,7 @@ function formatCurrency($amount) {
         
         .bill-table th {
             border: 2px solid #0B5ED7;
-            padding: 5px 8px;
+            padding: 6px 8px;
             background: #E8F0FE;
             color: #0B5ED7;
             font-weight: 700;
@@ -723,15 +756,76 @@ function formatCurrency($amount) {
         
         .bill-table td {
             border: 1px solid #E2E8F0;
-            padding: 4px 8px;
-            vertical-align: top;
+            padding: 5px 8px;
+            vertical-align: middle;
             font-size: 11px;
         }
         
-        .bill-table tr:nth-child(even) td {
+        .bill-table .bill-header-row td {
+            background: #F1F5F9;
+            font-weight: 700;
+            border-top: 2px solid #0B5ED7;
+        }
+        
+        .bill-table .bill-header-row .bill-number {
+            color: #0B5ED7;
+            font-size: 12px;
+        }
+        
+        .bill-table .item-row td {
+            padding-left: 16px;
+            font-size: 10px;
+        }
+        
+        .bill-table .item-row .item-name {
+            padding-left: 24px;
+            color: #1E293B;
+        }
+        
+        .bill-table .item-row .item-type {
+            font-size: 9px;
+            color: #64748B;
+            background: #F1F5F9;
+            padding: 1px 8px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+        
+        .bill-table .item-row .item-status {
+            font-size: 9px;
+            font-weight: 600;
+            padding: 1px 10px;
+            border-radius: 12px;
+        }
+        
+        .bill-table .item-row .item-status.paid {
+            background: #D1FAE5;
+            color: #059669;
+        }
+        
+        .bill-table .item-row .item-status.pending {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        .bill-table .bill-total-row td {
+            font-weight: 700;
+            border-top: 2px solid #0B5ED7;
             background: #F8FAFC;
         }
         
+        .bill-table .bill-total-row .total-label {
+            color: #0B5ED7;
+        }
+        
+        .bill-table .bill-total-row .total-amount {
+            color: #059669;
+            font-size: 12px;
+        }
+        
+        /* ================================================================
+           BILL SUMMARY - UNIFORM BORDER
+           ================================================================ */
         .bill-summary {
             margin-top: 8px;
             padding: 8px 16px;
@@ -759,7 +853,7 @@ function formatCurrency($amount) {
         }
         
         /* ================================================================
-           FOOTER - LARGER FONT
+           FOOTER - UNIFORM BORDER
            ================================================================ */
         .report-footer {
             text-align: center;
@@ -775,6 +869,7 @@ function formatCurrency($amount) {
         .report-footer .brand {
             color: #0B5ED7;
             font-weight: 700;
+            font-size: 12px;
         }
         
         /* ================================================================
@@ -790,7 +885,7 @@ function formatCurrency($amount) {
                 max-width: 100%;
                 box-shadow: none;
                 border-radius: 0;
-                padding: 10mm 12mm 8mm 12mm;
+                padding: 8mm 10mm 6mm 10mm;
             }
             .no-print {
                 display: none !important;
@@ -811,7 +906,7 @@ function formatCurrency($amount) {
                 print-color-adjust: exact !important;
             }
             .info-grid {
-                border-color: #0B5ED7 !important;
+                border-color: #E2E8F0 !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
@@ -838,6 +933,11 @@ function formatCurrency($amount) {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
+            .bill-table .bill-header-row td {
+                background: #F1F5F9 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
             .bill-summary {
                 background: #F0FDF4 !important;
                 border-color: #059669 !important;
@@ -855,7 +955,7 @@ function formatCurrency($amount) {
            ================================================================ */
         @media (max-width: 768px) {
             .page {
-                padding: 8mm 8mm 6mm 8mm;
+                padding: 6mm 6mm 4mm 6mm;
             }
             .info-grid {
                 grid-template-columns: repeat(2, 1fr);
@@ -870,7 +970,7 @@ function formatCurrency($amount) {
         
         @media (max-width: 480px) {
             .page {
-                padding: 5mm 5mm 4mm 5mm;
+                padding: 4mm 4mm 3mm 4mm;
             }
             .info-grid {
                 grid-template-columns: 1fr;
@@ -892,7 +992,7 @@ function formatCurrency($amount) {
         }
         
         /* ================================================================
-           NO-PRINT BUTTONS - FIXED AT BOTTOM
+           NO-PRINT BUTTONS
            ================================================================ */
         .no-print {
             text-align: center;
@@ -968,7 +1068,6 @@ function formatCurrency($amount) {
             margin-right: 4px;
         }
         
-        /* Add padding to body to account for fixed buttons */
         body {
             padding-bottom: 80px;
         }
@@ -987,10 +1086,10 @@ function formatCurrency($amount) {
     <div class="page" id="reportContent">
         
         <!-- ================================================================ -->
-        <!-- HEADER WITH LOGO -->
+        <!-- HEADER -->
         <!-- ================================================================ -->
         <div class="report-header">
-            <div class="report-id">Report #: <?= date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) ?></div>
+            <div class="report-id">#<?= date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) ?></div>
             <div class="logo-container">
                 <?php if (!empty($logo_base64)): ?>
                     <img src="<?= $logo_base64 ?>" alt="Braick Logo" class="logo">
@@ -1004,13 +1103,13 @@ function formatCurrency($amount) {
             </div>
             <div class="patient-name"><?= htmlspecialchars($patient['full_name']) ?></div>
             <div class="meta-info">
-                <span>ID: <?= htmlspecialchars($patient['patient_id']) ?></span>
-                <span>|</span>
-                <span>Generated: <?= date('M d, Y h:i A') ?></span>
-                <span>|</span>
-                <span>Branch: <?= htmlspecialchars($branch_name) ?></span>
-                <span>|</span>
-                <span>Page <span id="pageNumber"></span></span>
+                <span>🆔 <?= htmlspecialchars($patient['patient_id']) ?></span>
+                <span class="separator">|</span>
+                <span>📅 <?= date('M d, Y h:i A') ?></span>
+                <span class="separator">|</span>
+                <span>🏥 <?= htmlspecialchars($branch_name) ?></span>
+                <span class="separator">|</span>
+                <span>📄 Page <span id="pageNumber"></span></span>
             </div>
         </div>
         
@@ -1019,7 +1118,8 @@ function formatCurrency($amount) {
         <!-- ================================================================ -->
         <div class="section">
             <div class="section-title">
-                <i class="fas fa-user" style="font-size:14px;"></i> Patient Information
+                <i class="fas fa-user-circle" style="color:#0B5ED7;"></i> Patient Information
+                <span class="badge">Profile</span>
             </div>
             <div class="info-grid">
                 <div class="info-item">
@@ -1028,7 +1128,7 @@ function formatCurrency($amount) {
                 </div>
                 <div class="info-item">
                     <div class="label">Patient ID</div>
-                    <div class="value font-mono"><?= htmlspecialchars($patient['patient_id']) ?></div>
+                    <div class="value" style="font-family:monospace;"><?= htmlspecialchars($patient['patient_id']) ?></div>
                 </div>
                 <div class="info-item">
                     <div class="label">Gender</div>
@@ -1043,6 +1143,27 @@ function formatCurrency($amount) {
                     <div class="value"><?= calculateAge($patient['date_of_birth']) ?> years</div>
                 </div>
                 <div class="info-item">
+                    <div class="label">Marital Status</div>
+                    <div class="value">
+                        <?php 
+                            $marital = $patient['marital_status'] ?? 'N/A';
+                            $marital_colors = [
+                                'Single' => '#0B5ED7',
+                                'Married' => '#059669',
+                                'Divorced' => '#D97706',
+                                'Widowed' => '#7C3AED',
+                                'Separated' => '#DC2626'
+                            ];
+                            $color = $marital_colors[$marital] ?? '#64748B';
+                        ?>
+                        <span class="marital-badge" style="background:<?= $color ?>;"><?= htmlspecialchars($marital) ?></span>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <div class="label">Blood Group</div>
+                    <div class="value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></div>
+                </div>
+                <div class="info-item">
                     <div class="label">Phone</div>
                     <div class="value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></div>
                 </div>
@@ -1050,17 +1171,13 @@ function formatCurrency($amount) {
                     <div class="label">Email</div>
                     <div class="value"><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></div>
                 </div>
-                <div class="info-item">
-                    <div class="label">Blood Group</div>
-                    <div class="value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></div>
+                <div class="info-item" style="grid-column: span 2;">
+                    <div class="label">Address</div>
+                    <div class="value"><?= htmlspecialchars($patient['address'] ?? 'N/A') ?></div>
                 </div>
                 <div class="info-item" style="grid-column: span 2;">
                     <div class="label">Allergies</div>
                     <div class="value"><?= htmlspecialchars($patient['allergies'] ?? 'None') ?></div>
-                </div>
-                <div class="info-item" style="grid-column: span 2;">
-                    <div class="label">Address</div>
-                    <div class="value"><?= htmlspecialchars($patient['address'] ?? 'N/A') ?></div>
                 </div>
                 <div class="info-item">
                     <div class="label">Branch</div>
@@ -1079,7 +1196,7 @@ function formatCurrency($amount) {
         <?php if (count($vital_signs) > 0): ?>
         <div class="section">
             <div class="section-title">
-                <i class="fas fa-heartbeat" style="font-size:14px;color:#DC2626;"></i> Vital Signs
+                <i class="fas fa-heartbeat" style="color:#DC2626;"></i> Vital Signs
                 <span class="badge green"><?= count($vital_signs) ?> Recordings</span>
             </div>
             
@@ -1122,7 +1239,7 @@ function formatCurrency($amount) {
                         elseif ($bmi < 30) { $category = 'Overweight'; $color = '#D97706'; }
                         else { $category = 'Obese'; $color = '#DC2626'; }
                     ?>
-                        <div class="vital-normal" style="color:<?= $color ?>;"><?= $category ?></div>
+                        <div class="vital-normal" style="color:<?= $color ?>;font-weight:700;"><?= $category ?></div>
                     <?php else: ?>
                         <div class="vital-normal">Normal: 18.5-24.9</div>
                     <?php endif; ?>
@@ -1131,8 +1248,8 @@ function formatCurrency($amount) {
             
             <?php if (count($vital_signs) > 1): ?>
             <div style="margin-top:8px;">
-                <div style="font-size:10px;font-weight:600;color:#64748B;margin-bottom:4px;">📊 History</div>
-                <div style="border:2px solid #E2E8F0;border-radius:4px;overflow-x:auto;">
+                <div style="font-size:10px;font-weight:600;color:#0B5ED7;margin-bottom:4px;">📊 History</div>
+                <div style="border:1px solid #E2E8F0;border-radius:4px;overflow-x:auto;">
                     <table style="width:100%;border-collapse:collapse;font-size:10px;">
                         <thead>
                             <tr>
@@ -1171,7 +1288,7 @@ function formatCurrency($amount) {
         <?php if (count($visits) > 0): ?>
         <div class="section">
             <div class="section-title">
-                <i class="fas fa-hospital" style="font-size:14px;"></i> Visit History
+                <i class="fas fa-hospital" style="color:#0B5ED7;"></i> Visit History
                 <span class="badge purple"><?= count($visits) ?> Visits</span>
             </div>
             
@@ -1183,8 +1300,8 @@ function formatCurrency($amount) {
                         <span class="visit-date"> • <?= formatDateTime($visit['created_at']) ?></span>
                     </div>
                     <div>
-                        <span class="visit-doctor">Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></span>
-                        <span class="visit-status" style="color:<?= getStatusBadgeColor($visit['status']) ?>;">
+                        <span class="visit-doctor">👨‍⚕️ Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></span>
+                        <span class="visit-status" style="color:<?= getStatusBadgeColor($visit['status']) ?>;margin-left:8px;">
                             <?= getStatusIcon($visit['status']) ?> <?= getStatusText($visit['status']) ?>
                         </span>
                     </div>
@@ -1215,7 +1332,6 @@ function formatCurrency($amount) {
                                             if (count($meds) > 3) echo ' ...';
                                         ?>
                                     <?php endif; ?>
-                                    <span style="font-weight:400;">(<?= ucfirst($pres['status'] ?? 'Pending') ?>)</span>
                                 </span>
                             <?php endforeach; ?>
                         </div>
@@ -1232,7 +1348,6 @@ function formatCurrency($amount) {
                                     <?php if ($test['status'] === 'completed' && !empty($test['results'])): ?>
                                         (<?= htmlspecialchars($test['results']) ?>)
                                     <?php endif; ?>
-                                    <span style="font-weight:400;">(<?= ucfirst($test['status'] ?? 'Pending') ?>)</span>
                                 </span>
                             <?php endforeach; ?>
                         </div>
@@ -1246,7 +1361,6 @@ function formatCurrency($amount) {
                             <?php foreach ($visit_procedures[$visit['id']] as $proc): ?>
                                 <span class="item-tag pending">
                                     <?= htmlspecialchars($proc['item_name']) ?>
-                                    <span style="font-weight:400;">(Pending)</span>
                                 </span>
                             <?php endforeach; ?>
                         </div>
@@ -1261,7 +1375,6 @@ function formatCurrency($amount) {
                                 <span class="item-tag <?= $med['status'] === 'paid' ? 'paid' : 'pending' ?>">
                                     <?= htmlspecialchars($med['item_name']) ?>
                                     x<?= $med['quantity'] ?? 1 ?>
-                                    <span style="font-weight:400;">(<?= ucfirst($med['status'] ?? 'Pending') ?>)</span>
                                 </span>
                             <?php endforeach; ?>
                         </div>
@@ -1275,73 +1388,99 @@ function formatCurrency($amount) {
         <?php endif; ?>
         
         <!-- ================================================================ -->
-        <!-- 4. BILLS & PAYMENTS -->
+        <!-- 4. BILLS & PAYMENTS - ALL ITEMS IN SEPARATE ROWS -->
         <!-- ================================================================ -->
         <?php if (count($bills) > 0): ?>
         <div class="section">
             <div class="section-title">
-                <i class="fas fa-money-bill-wave" style="font-size:14px;color:#059669;"></i> Bills & Payments
+                <i class="fas fa-money-bill-wave" style="color:#059669;"></i> Bills & Payments
                 <span class="badge green"><?= count($bills) ?> Bills</span>
             </div>
             
             <table class="bill-table">
                 <thead>
                     <tr>
-                        <th>Bill #</th>
-                        <th>Date</th>
-                        <th>Total</th>
-                        <th>Paid</th>
-                        <th>Balance</th>
-                        <th>Status</th>
-                        <th>Items</th>
+                        <th style="width:15%;">Bill #</th>
+                        <th style="width:12%;">Date</th>
+                        <th style="width:30%;">Item Name</th>
+                        <th style="width:10%;">Type</th>
+                        <th style="width:8%;">Qty</th>
+                        <th style="width:12%;">Unit Price</th>
+                        <th style="width:13%;">Total</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($bills as $bill): ?>
-                    <tr>
-                        <td><strong><?= htmlspecialchars($bill['bill_number']) ?></strong></td>
-                        <td><?= formatDateShort($bill['created_at']) ?></td>
-                        <td><strong><?= formatCurrency($bill['total_amount']) ?></strong></td>
-                        <td><?= formatCurrency($bill['paid_amount']) ?></td>
-                        <td style="color:<?= ($bill['balance'] ?? 0) > 0 ? '#DC2626' : '#059669' ?>;">
-                            <strong><?= formatCurrency($bill['balance']) ?></strong>
-                        </td>
-                        <td>
-                            <span class="status-badge" style="background:<?= getStatusBadgeColor($bill['status']) ?>;">
-                                <?= getStatusText($bill['status']) ?>
-                            </span>
-                        </td>
-                        <td>
-                            <?php if (isset($bill_items[$bill['id']]) && count($bill_items[$bill['id']]) > 0): ?>
-                                <?php foreach (array_slice($bill_items[$bill['id']], 0, 3) as $item): ?>
-                                    <div style="font-size:10px;"><?= htmlspecialchars($item['item_name']) ?> (x<?= $item['quantity'] ?? 1 ?>)</div>
-                                <?php endforeach; ?>
-                                <?php if (count($bill_items[$bill['id']]) > 3): ?>
-                                    <div style="font-size:10px;color:#64748B;">+<?= count($bill_items[$bill['id']]) - 3 ?> more</div>
-                                <?php endif; ?>
-                            <?php else: ?>
-                                <span class="text-muted">No items</span>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
+                    <?php 
+                    $bill_count = 0;
+                    $grand_total = 0;
+                    foreach ($bills as $bill):
+                        $bill_count++;
+                        $items = $bill_items[$bill['id']] ?? [];
+                        $total_items = count($items);
+                        $bill_total = $bill['total_amount'] ?? 0;
+                        $grand_total += $bill_total;
+                    ?>
+                        <!-- Bill Header Row -->
+                        <tr class="bill-header-row">
+                            <td colspan="7">
+                                <span class="bill-number">📋 Bill #<?= htmlspecialchars($bill['bill_number']) ?></span>
+                                <span style="margin-left:16px;font-weight:400;color:#64748B;font-size:10px;">
+                                    <?= formatDateShort($bill['created_at']) ?> 
+                                    | Status: <span style="color:<?= getStatusBadgeColor($bill['status']) ?>;"><?= getStatusText($bill['status']) ?></span>
+                                    | Total: <span style="color:#059669;"><?= formatCurrency($bill_total) ?></span>
+                                </span>
+                            </td>
+                        </tr>
+                        
+                        <!-- Items Rows -->
+                        <?php if ($total_items > 0): ?>
+                            <?php foreach ($items as $item): ?>
+                                <tr class="item-row">
+                                    <td></td>
+                                    <td></td>
+                                    <td class="item-name">• <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></td>
+                                    <td><span class="item-type"><?= htmlspecialchars($item['item_type'] ?? 'Other') ?></span></td>
+                                    <td><?= $item['quantity'] ?? 1 ?></td>
+                                    <td><?= formatCurrency($item['unit_price'] ?? 0) ?></td>
+                                    <td><?= formatCurrency($item['total_price'] ?? 0) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <tr class="item-row">
+                                <td></td>
+                                <td></td>
+                                <td class="item-name" style="color:#94A3B8;">No items found</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td>—</td>
+                                <td>—</td>
+                            </tr>
+                        <?php endif; ?>
+                        
+                        <!-- Bill Total Row -->
+                        <tr class="bill-total-row">
+                            <td colspan="6" style="text-align:right;font-size:11px;color:#0B5ED7;">
+                                <strong>Bill Total:</strong>
+                            </td>
+                            <td style="font-size:12px;color:#059669;font-weight:700;">
+                                <?= formatCurrency($bill_total) ?>
+                            </td>
+                        </tr>
+                        
+                        <!-- Spacer between bills -->
+                        <?php if ($bill_count < count($bills)): ?>
+                            <tr><td colspan="7" style="padding:2px 0;border:none;background:transparent;"></td></tr>
+                        <?php endif; ?>
+                        
                     <?php endforeach; ?>
                 </tbody>
             </table>
             
-            <?php 
-                $total_bills = 0;
-                $total_paid = 0;
-                $total_balance = 0;
-                foreach ($bills as $bill) {
-                    $total_bills += $bill['total_amount'] ?? 0;
-                    $total_paid += $bill['paid_amount'] ?? 0;
-                    $total_balance += $bill['balance'] ?? 0;
-                }
-            ?>
+            <!-- Grand Total Summary -->
             <div class="bill-summary">
-                <span>💰 Total Bills: <strong><?= formatCurrency($total_bills) ?></strong></span>
-                <span>✅ Total Paid: <strong style="color:#059669;"><?= formatCurrency($total_paid) ?></strong></span>
-                <span>📊 Total Balance: <strong style="color:<?= $total_balance > 0 ? '#DC2626' : '#059669' ?>;"><?= formatCurrency($total_balance) ?></strong></span>
+                <span>💰 Total Bills: <strong><?= formatCurrency($grand_total) ?></strong></span>
+                <span>📊 Total Bills Count: <strong><?= count($bills) ?></strong></span>
+                <span>📦 Total Items: <strong><?= count($all_bill_items) ?></strong></span>
             </div>
         </div>
         <?php endif; ?>
@@ -1352,7 +1491,7 @@ function formatCurrency($amount) {
         <?php if (count($appointments) > 0): ?>
         <div class="section">
             <div class="section-title">
-                <i class="fas fa-calendar-check" style="font-size:14px;"></i> Appointments
+                <i class="fas fa-calendar-check" style="color:#0D9488;"></i> Appointments
                 <span class="badge teal"><?= count($appointments) ?> Appointments</span>
             </div>
             
@@ -1364,8 +1503,8 @@ function formatCurrency($amount) {
                         <span class="appt-date"> • <?= formatDateTime($appt['appointment_date']) ?></span>
                     </div>
                     <div>
-                        <span class="appt-doctor">Dr. <?= htmlspecialchars($appt['doctor_name'] ?? 'N/A') ?></span>
-                        <span class="status-badge" style="background:<?= getStatusBadgeColor($appt['status']) ?>;">
+                        <span class="appt-doctor">👨‍⚕️ Dr. <?= htmlspecialchars($appt['doctor_name'] ?? 'N/A') ?></span>
+                        <span class="status-badge" style="background:<?= getStatusBadgeColor($appt['status']) ?>;margin-left:8px;">
                             <?= getStatusText($appt['status']) ?>
                         </span>
                     </div>
@@ -1391,12 +1530,12 @@ function formatCurrency($amount) {
         <!-- ================================================================ -->
         <div class="report-footer">
             <p>
-                <span class="brand">Braick Dispensary</span>
-                <span style="margin:0 4px;">|</span>
+                <span class="brand">🏥 Braick Dispensary</span>
+                <span style="margin:0 4px;color:#CBD5E1;">|</span>
                 Generated: <?= date('M d, Y h:i A') ?>
-                <span style="margin:0 4px;">|</span>
+                <span style="margin:0 4px;color:#CBD5E1;">|</span>
                 By: <?= htmlspecialchars($user_full_name) ?>
-                <span style="margin:0 4px;">|</span>
+                <span style="margin:0 4px;color:#CBD5E1;">|</span>
                 Patient: <?= htmlspecialchars($patient['full_name']) ?>
             </p>
             <p style="margin-top:3px;font-size:9px;color:#CBD5E1;">
@@ -1407,7 +1546,7 @@ function formatCurrency($amount) {
     </div>
     
     <!-- ================================================================ -->
-    <!-- FIXED BUTTONS - Download, Print, Close -->
+    <!-- FIXED BUTTONS -->
     <!-- ================================================================ -->
     <div class="no-print">
         <button onclick="window.print()" class="btn btn-primary">
@@ -1441,7 +1580,6 @@ function formatCurrency($amount) {
         // DOWNLOAD PDF FUNCTION
         // ================================================================
         function downloadPDF() {
-            // Use window.print() with save as PDF option
             window.print();
         }
         
@@ -1456,10 +1594,11 @@ function formatCurrency($amount) {
         };
         <?php endif; ?>
         
-        console.log('%c📄 Braick - Complete Patient PDF Export', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+        console.log('%c📄 Braick - Complete Patient PDF Export (Blue Theme)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
         console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:12px; color:#059669;');
         console.log('%c📋 Visits: <?= count($visits) ?> | Bills: <?= count($bills) ?> | Appointments: <?= count($appointments) ?>', 'font-size:12px; color:#64748B;');
-        console.log('%c🖨️ A4 width | Larger fonts | Download button added', 'font-size:12px; color:#0B5ED7;');
+        console.log('%c💙 Blue Theme - Uniform Borders', 'font-size:12px; color:#0B5ED7;');
+        console.log('%c📋 Bills table shows all items in separate rows', 'font-size:12px; color:#059669;');
     </script>
 </body>
 </html>

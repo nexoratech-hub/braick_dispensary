@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/doctor/view_patient.php
 // DOCTOR - VIEW PATIENT COMPLETE HISTORY
-// WITH FULL VISIT DETAILS (Symptoms, Diagnosis, Treatment, etc.)
+// WITH SEPARATE CARDS: Lab Tests, Diagnosis, Prescriptions, Procedures, Tools, Bills
+// FIXED: Lab Tests now join with visits to get patient_id
+// THEME: BLUE THEME
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -46,7 +48,7 @@ require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET PATIENT DETAILS
+// GET PATIENT DETAILS - INCLUDING MARITAL STATUS
 // ================================================================
 $patient = null;
 try {
@@ -57,7 +59,7 @@ try {
                u.specialty as doctor_specialty,
                (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
                (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
-               (SELECT COUNT(*) FROM lab_tests WHERE patient_id = p.id) as total_lab_tests,
+               (SELECT COUNT(*) FROM lab_tests lt JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests,
                (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id) as total_appointments
         FROM patients p
         LEFT JOIN branches b ON p.branch_id = b.id
@@ -77,9 +79,10 @@ try {
 }
 
 // ================================================================
-// GET ALL VISITS WITH FULL DETAILS
+// GET ALL VISITS WITH FULL DETAILS - ORDERED BY DATE DESC
 // ================================================================
 $visits = [];
+$last_visit = null;
 try {
     $stmt = $db->prepare("
         SELECT v.*, 
@@ -94,8 +97,14 @@ try {
     ");
     $stmt->execute([$patient_id]);
     $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get last visit (first one since ORDER BY DESC)
+    if (count($visits) > 0) {
+        $last_visit = $visits[0];
+    }
 } catch (Exception $e) {
     $visits = [];
+    $last_visit = null;
 }
 
 // ================================================================
@@ -123,7 +132,7 @@ foreach ($visits as $visit) {
     $stmt->execute([$visit_id]);
     $visit_items[$visit_id]['lab_tests'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get procedures for this visit (from bill_items linked via patient_bills)
+    // Get procedures for this visit
     $stmt = $db->prepare("
         SELECT bi.* 
         FROM bill_items bi
@@ -154,7 +163,7 @@ foreach ($visits as $visit) {
     $stmt->execute([$visit_id]);
     $visit_items[$visit_id]['procedures'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get medications for this visit (from bill_items)
+    // Get medications for this visit
     $stmt = $db->prepare("
         SELECT bi.* 
         FROM bill_items bi
@@ -164,6 +173,28 @@ foreach ($visits as $visit) {
     ");
     $stmt->execute([$visit_id]);
     $visit_items[$visit_id]['medications'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// ================================================================
+// GET ALL DIAGNOSES
+// ================================================================
+$diagnoses = [];
+try {
+    $stmt = $db->prepare("
+        SELECT v.id, v.visit_number, v.created_at, v.diagnosis, v.symptoms, v.treatment, 
+               v.complaint, v.notes, v.follow_up_date,
+               u.full_name as doctor_name,
+               (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
+               (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+        FROM visits v
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE v.patient_id = ? AND v.diagnosis IS NOT NULL AND v.diagnosis != ''
+        ORDER BY v.created_at DESC
+    ");
+    $stmt->execute([$patient_id]);
+    $diagnoses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $diagnoses = [];
 }
 
 // ================================================================
@@ -182,7 +213,7 @@ try {
         WHERE p.patient_id = ?
         GROUP BY p.id
         ORDER BY p.created_at DESC
-        LIMIT 30
+        LIMIT 50
     ");
     $stmt->execute([$patient_id]);
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -191,60 +222,26 @@ try {
 }
 
 // ================================================================
-// GET ALL LAB TESTS
+// GET ALL LAB TESTS - FIXED: Join with visits to get patient_id
 // ================================================================
 $lab_tests = [];
 try {
     $stmt = $db->prepare("
         SELECT lt.*, 
                u.full_name as doctor_name,
-               lab.full_name as lab_technician_name
+               lab.full_name as lab_technician_name,
+               v.patient_id
         FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
         LEFT JOIN users u ON lt.doctor_id = u.id
         LEFT JOIN users lab ON lt.lab_technician_id = lab.id
-        WHERE lt.visit_id IN (SELECT id FROM visits WHERE patient_id = ?)
+        WHERE v.patient_id = ?
         ORDER BY lt.created_at DESC
     ");
     $stmt->execute([$patient_id]);
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $lab_tests = [];
-}
-
-// ================================================================
-// GET ALL APPOINTMENTS
-// ================================================================
-$appointments = [];
-try {
-    $stmt = $db->prepare("
-        SELECT a.*, 
-               u.full_name as doctor_name,
-               u.specialty as doctor_specialty
-        FROM appointments a
-        LEFT JOIN users u ON a.doctor_id = u.id
-        WHERE a.patient_id = ?
-        ORDER BY a.appointment_date DESC
-    ");
-    $stmt->execute([$patient_id]);
-    $appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $appointments = [];
-}
-
-// ================================================================
-// GET ALL BILLS
-// ================================================================
-$bills = [];
-try {
-    $stmt = $db->prepare("
-        SELECT * FROM patient_bills 
-        WHERE patient_id = ?
-        ORDER BY created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
-    $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $bills = [];
 }
 
 // ================================================================
@@ -273,7 +270,6 @@ try {
         WHERE pb.patient_id = ? 
         AND (
             bi.item_type = 'procedure' 
-            OR bi.item_type = '' 
             OR bi.item_name LIKE '%Biopsy%'
             OR bi.item_name LIKE '%Casting%'
             OR bi.item_name LIKE '%Cauterization%'
@@ -300,24 +296,90 @@ try {
 }
 
 // ================================================================
-// GET ALL CONSULTATIONS
+// GET ALL TOOLS
 // ================================================================
-$consultations = [];
+$tools = [];
 try {
     $stmt = $db->prepare("
-        SELECT v.id, v.visit_number, v.created_at, v.diagnosis, v.treatment, v.symptoms, v.notes,
-               u.full_name as doctor_name,
-               (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
-               (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
-        FROM visits v
-        LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE v.patient_id = ? AND v.diagnosis IS NOT NULL AND v.diagnosis != ''
-        ORDER BY v.created_at DESC
+        SELECT 
+            bi.id,
+            bi.bill_id,
+            bi.item_type,
+            bi.item_name,
+            bi.quantity,
+            bi.unit_price,
+            bi.total_price,
+            bi.payment_status,
+            bi.status,
+            bi.created_at,
+            pb.patient_id,
+            pb.bill_number,
+            u.full_name as doctor_name
+        FROM bill_items bi
+        JOIN patient_bills pb ON bi.bill_id = pb.id
+        LEFT JOIN users u ON pb.created_by = u.id
+        WHERE pb.patient_id = ? 
+        AND (bi.item_type = 'tool' OR bi.item_type = 'equipment' OR bi.item_type = 'instrument')
+        ORDER BY bi.created_at DESC
     ");
     $stmt->execute([$patient_id]);
-    $consultations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $consultations = [];
+    $tools = [];
+}
+
+// ================================================================
+// GET ALL BILLS WITH THEIR ITEMS
+// ================================================================
+$bills = [];
+$bill_items = [];
+try {
+    // Get all bills
+    $stmt = $db->prepare("
+        SELECT pb.*, 
+               u.full_name as created_by_name
+        FROM patient_bills pb
+        LEFT JOIN users u ON pb.created_by = u.id
+        WHERE pb.patient_id = ?
+        ORDER BY pb.created_at DESC
+    ");
+    $stmt->execute([$patient_id]);
+    $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get all bill items for each bill
+    foreach ($bills as $bill) {
+        $stmt = $db->prepare("
+            SELECT bi.* 
+            FROM bill_items bi
+            WHERE bi.bill_id = ?
+            ORDER BY bi.created_at DESC
+        ");
+        $stmt->execute([$bill['id']]);
+        $bill_items[$bill['id']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {
+    $bills = [];
+    $bill_items = [];
+}
+
+// ================================================================
+// GET ALL APPOINTMENTS
+// ================================================================
+$appointments = [];
+try {
+    $stmt = $db->prepare("
+        SELECT a.*, 
+               u.full_name as doctor_name,
+               u.specialty as doctor_specialty
+        FROM appointments a
+        LEFT JOIN users u ON a.doctor_id = u.id
+        WHERE a.patient_id = ?
+        ORDER BY a.appointment_date DESC
+    ");
+    $stmt->execute([$patient_id]);
+    $appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $appointments = [];
 }
 
 // ================================================================
@@ -416,9 +478,18 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 ?>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
+<!-- STYLES - BLUE THEME -->
 <!-- ================================================================ -->
 <style>
+    :root {
+        --primary: #0B5ED7;
+        --primary-dark: #0A4CA8;
+        --primary-light: #6EA8FE;
+        --primary-bg: #E8F0FE;
+        --primary-gradient: linear-gradient(135deg, #0B5ED7, #1A73E8);
+        --shadow-primary: 0 4px 20px rgba(11, 94, 215, 0.25);
+    }
+    
     .main-content {
         margin-left: 270px;
         margin-top: 68px;
@@ -534,6 +605,29 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
     }
     
+    .btn-print {
+        background: #4B5563;
+        color: white;
+        border: none;
+        padding: 8px 18px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.82rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        text-decoration: none;
+        border: 2px solid #4B5563;
+    }
+    .btn-print:hover {
+        background: #374151;
+        border-color: #374151;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(75, 85, 99, 0.3);
+    }
+    
     /* Patient Profile */
     .patient-profile {
         display: flex;
@@ -601,8 +695,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .tag-info { background: #E8F0FE; color: #0B5ED7; }
     .tag-success { background: #D1FAE5; color: #059669; }
     .tag-warning { background: #FEF3C7; color: #D97706; }
+    .tag-primary { background: #E8F0FE; color: #0B5ED7; }
+    .tag-purple { background: #EDE9FE; color: #7C3AED; }
     
-    /* Stats Grid - 6 Cards */
+    /* Stats Grid - 6 Cards - BLUE THEME */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(6, 1fr);
@@ -654,8 +750,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         letter-spacing: 0.04em;
     }
     
-    /* Consultation Card */
-    .consultation-card {
+    /* History Cards - BLUE THEME */
+    .history-card {
         background: var(--bg-card);
         border-radius: 16px;
         padding: 20px 24px;
@@ -663,7 +759,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         transition: all 0.3s ease;
         margin-bottom: 20px;
     }
-    .consultation-card:hover {
+    .history-card:hover {
         border-color: var(--primary);
         box-shadow: var(--shadow-md);
     }
@@ -686,10 +782,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .title-orange { color: #D97706; }
     .title-red { color: #DC2626; }
     .title-teal { color: #0D9488; }
+    .title-pink { color: #DB2777; }
     
     .info-grid {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(4, 1fr);
         gap: 8px 20px;
     }
     .info-item { display: flex; flex-direction: column; }
@@ -731,6 +828,37 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     .data-table tr:hover td { background: var(--primary-bg); }
     
+    /* Bill Items Sub-table */
+    .bill-items-subtable {
+        width: 100%;
+        margin-top: 4px;
+        font-size: 0.75rem;
+        background: var(--bg-body);
+        border-radius: 6px;
+    }
+    .bill-items-subtable th {
+        font-size: 0.6rem;
+        padding: 4px 8px;
+        background: var(--border-color);
+        color: var(--text-secondary);
+        border: none;
+    }
+    .bill-items-subtable td {
+        padding: 4px 8px;
+        border-bottom: 1px solid var(--border-color);
+        font-size: 0.75rem;
+    }
+    .bill-items-subtable tr:last-child td {
+        border-bottom: none;
+    }
+    .bill-items-subtable .item-total {
+        font-weight: 600;
+        color: var(--primary);
+    }
+    
+    .badge-item-paid { background: #D1FAE5; color: #059669; font-size: 0.55rem; padding: 1px 8px; border-radius: 12px; }
+    .badge-item-pending { background: #FEF3C7; color: #D97706; font-size: 0.55rem; padding: 1px 8px; border-radius: 12px; }
+    
     /* Status Badges */
     .status-badge {
         display: inline-block;
@@ -746,11 +874,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     
     .badge-pending { background: #FEF3C7; color: #D97706; border-color: #FDE68A; }
     .badge-warning { background: #FEF3C7; color: #D97706; border-color: #FDE68A; }
-    .badge-success { background: transparent !important; color: #059669; border: none !important; font-weight: 700; }
+    .badge-success { background: #D1FAE5; color: #059669; border-color: #A7F3D0; }
     .badge-danger { background: #FEE2E2; color: #DC2626; border-color: #FCA5A5; }
     .badge-info { background: #E8F0FE; color: #0B5ED7; border-color: #BFDBFE; }
     .badge-primary { background: #E8F0FE; color: #0B5ED7; border-color: #BFDBFE; }
     .badge-purple { background: #EDE9FE; color: #7C3AED; border-color: #C4B5FD; }
+    .badge-completed { background: #D1FAE5; color: #059669; border-color: #A7F3D0; }
     
     /* Item Type Badge */
     .item-type-badge {
@@ -763,141 +892,53 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border: 1px solid var(--border-color);
     }
     
-    /* Visit Detail Cards */
-    .visit-detail-card {
-        background: var(--bg-body);
-        border-radius: 10px;
-        padding: 14px 18px;
-        margin-bottom: 12px;
-        border: 1px solid var(--border-color);
-        transition: all 0.3s ease;
-    }
-    
-    .visit-detail-card:hover {
-        border-color: var(--primary);
-        box-shadow: var(--shadow-sm);
-    }
-    
-    .visit-detail-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-bottom: 10px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid var(--border-color);
-    }
-    
-    .visit-detail-info {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .visit-number {
-        font-weight: 700;
-        color: var(--primary);
-        font-family: monospace;
-        font-size: 0.85rem;
-    }
-    
-    .visit-date {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-    
-    .visit-doctor {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-    
-    .visit-detail-body {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-    
-    .visit-detail-row {
-        display: flex;
-        padding: 2px 0;
-        gap: 8px;
-    }
-    
-    .visit-detail-label {
-        font-weight: 600;
-        color: var(--text-secondary);
-        min-width: 100px;
-        flex-shrink: 0;
-        font-size: 0.8rem;
-    }
-    
-    .visit-detail-value {
-        color: var(--text-primary);
-        flex: 1;
-        font-size: 0.85rem;
-    }
-    
-    .visit-detail-subsection {
-        margin-top: 6px;
-        padding-top: 6px;
-        border-top: 1px dashed var(--border-color);
-    }
-    
-    .visit-detail-subsection .visit-detail-label {
-        display: block;
-        margin-bottom: 4px;
-        min-width: auto;
-    }
-    
-    .visit-detail-items {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-    }
-    
-    .visit-item-tag {
+    /* Marital Status Badge */
+    .marital-badge {
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        background: var(--bg-card);
-        padding: 3px 10px;
-        border-radius: 6px;
-        border: 1px solid var(--border-color);
-        font-size: 0.75rem;
-        color: var(--text-primary);
+        padding: 2px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
     }
-    
-    .visit-item-tag .badge {
-        font-size: 0.6rem;
-        padding: 1px 6px;
-    }
+    .marital-single { background: #E8F0FE; color: #0B5ED7; }
+    .marital-married { background: #D1FAE5; color: #059669; }
+    .marital-divorced { background: #FEF3C7; color: #D97706; }
+    .marital-widowed { background: #EDE9FE; color: #7C3AED; }
+    .marital-separated { background: #FEE2E2; color: #DC2626; }
     
     /* Dark Mode */
     [data-theme="dark"] .badge-pending { background: #3D2E0A; color: #FBBF24; border-color: #78350F; }
     [data-theme="dark"] .badge-warning { background: #3D2E0A; color: #FBBF24; border-color: #78350F; }
-    [data-theme="dark"] .badge-success { background: transparent !important; color: #34D399; border: none !important; }
+    [data-theme="dark"] .badge-success { background: #1A3A2A; color: #34D399; border-color: #065F46; }
     [data-theme="dark"] .badge-danger { background: #3A1A1A; color: #F87171; border-color: #7F1D1D; }
     [data-theme="dark"] .badge-info { background: #1E3A5F; color: #6EA8FE; border-color: #1E3A5F; }
     [data-theme="dark"] .badge-primary { background: #1E3A5F; color: #6EA8FE; border-color: #1E3A5F; }
     [data-theme="dark"] .badge-purple { background: #2D1A3A; color: #A78BFA; border-color: #2D1A3A; }
-    [data-theme="dark"] .visit-detail-card { background: #1E293B; border-color: #334155; }
-    [data-theme="dark"] .visit-item-tag { background: #1E293B; border-color: #334155; }
+    [data-theme="dark"] .badge-completed { background: #1A3A2A; color: #34D399; border-color: #065F46; }
+    [data-theme="dark"] .marital-single { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .marital-married { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .marital-divorced { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .marital-widowed { background: #2D1A3A; color: #A78BFA; }
+    [data-theme="dark"] .marital-separated { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .bill-items-subtable { background: #0F172A; }
+    [data-theme="dark"] .bill-items-subtable th { background: #1E293B; }
     
     /* Empty State */
     .empty-state {
         text-align: center;
-        padding: 20px 10px;
+        padding: 30px 10px;
         color: var(--text-secondary);
     }
     .empty-state i {
-        font-size: 2rem;
+        font-size: 2.5rem;
         color: var(--border-color);
         display: block;
-        margin-bottom: 6px;
+        margin-bottom: 10px;
     }
-    .empty-state p { font-size: 0.85rem; margin: 0; }
+    .empty-state p { font-size: 0.9rem; margin: 0; }
+    .empty-state .sub-text { font-size: 0.75rem; opacity: 0.6; margin-top: 4px; }
     
     /* Toast */
     .toast-custom {
@@ -953,9 +994,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .patient-tags { justify-content: center; }
         .data-table { font-size: 0.7rem; }
         .data-table th, .data-table td { padding: 4px 8px; }
-        .visit-detail-row { flex-direction: column; gap: 2px; }
-        .visit-detail-label { min-width: auto; }
-        .visit-detail-header { flex-direction: column; align-items: flex-start; }
+        .history-card { padding: 14px 16px; }
+        .bill-items-subtable { font-size: 0.65rem; }
+        .bill-items-subtable th, .bill-items-subtable td { padding: 2px 6px; }
     }
     
     @media (max-width: 480px) {
@@ -965,9 +1006,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     @media print {
-        .top-nav, .sidebar, .btn, .footer { display: none !important; }
+        .top-nav, .sidebar, .btn, .footer, .no-print { display: none !important; }
         .main-content { margin: 0 !important; padding: 20px !important; }
-        .consultation-card { border: 1px solid #ddd !important; page-break-inside: avoid; }
+        .history-card { border: 1px solid #ddd !important; page-break-inside: avoid; }
     }
 </style>
 
@@ -982,6 +1023,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <h1 class="page-title">
                 <i class="fas fa-user-circle"></i> Patient History
                 <span class="page-badge"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+                <?php if (count($visits) > 0): ?>
+                    <span class="page-badge" style="background:#D1FAE5;color:#059669;">
+                        <i class="fas fa-clock"></i> Last Visit: <?= date('M d, Y', strtotime($visits[0]['created_at'] ?? 'now')) ?>
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Complete medical history and patient records
@@ -993,16 +1039,20 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="status-badge badge-success">
                     <i class="fas fa-calendar-alt"></i> Registered: <?= date('M d, Y', strtotime($patient['created_at'] ?? 'now')) ?>
                 </span>
+                <span class="separator">|</span>
+                <span class="status-badge badge-purple">
+                    <i class="fas fa-clinic-medical"></i> <?= count($visits) ?> Total Visits
+                </span>
             </p>
         </div>
-        <div class="page-header-right">
+        <div class="page-header-right no-print">
             <button onclick="exportPDF(<?= $patient_id ?>)" class="btn btn-pdf">
                 <i class="fas fa-file-pdf"></i> Export PDF
             </button>
             <a href="my_patients.php" class="btn btn-outline">
                 <i class="fas fa-arrow-left"></i> My Patients
             </a>
-            <button onclick="window.print()" class="btn btn-outline">
+            <button onclick="window.print()" class="btn btn-print">
                 <i class="fas fa-print"></i> Print
             </button>
         </div>
@@ -1020,10 +1070,18 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <div class="patient-meta">
                 <span><i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
                 <span><i class="fas fa-venus-mars"></i> <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
+                <span><i class="fas fa-ring"></i> <span class="marital-badge <?= 
+                    strtolower($patient['marital_status'] ?? '') === 'single' ? 'marital-single' : 
+                    (strtolower($patient['marital_status'] ?? '') === 'married' ? 'marital-married' : 
+                    (strtolower($patient['marital_status'] ?? '') === 'divorced' ? 'marital-divorced' : 
+                    (strtolower($patient['marital_status'] ?? '') === 'widowed' ? 'marital-widowed' : 
+                    (strtolower($patient['marital_status'] ?? '') === 'separated' ? 'marital-separated' : '')))) 
+                ?>"><?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span></span>
                 <span><i class="fas fa-birthday-cake"></i> <?= calculateAge($patient['date_of_birth'] ?? '') ?> years</span>
                 <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
                 <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
                 <span><i class="fas fa-tint"></i> <?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span>
+                <span><i class="fas fa-clinic-medical"></i> <?= count($visits) ?> Visits</span>
             </div>
             <div class="patient-tags">
                 <?php if (!empty($patient['allergies']) && $patient['allergies'] !== 'None' && $patient['allergies'] !== 'N/A'): ?>
@@ -1034,6 +1092,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <span class="tag tag-warning"><i class="fas fa-phone-alt"></i> Emergency: <?= htmlspecialchars($patient['emergency_contact']) ?></span>
                 <?php endif; ?>
                 <span class="tag tag-success"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?></span>
+                <?php if (!empty($patient['doctor_name'])): ?>
+                    <span class="tag tag-primary"><i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($patient['doctor_name']) ?></span>
+                <?php endif; ?>
+                <span class="tag tag-purple"><i class="fas fa-stethoscope"></i> <?= count($diagnoses) ?> Diagnoses</span>
             </div>
         </div>
     </div>
@@ -1045,28 +1107,28 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div class="stat-card stat-card-blue">
             <div class="stat-card-inner">
                 <div class="stat-card-icon"><i class="fas fa-clinic-medical"></i></div>
-                <span class="stat-card-number"><?= $patient['total_visits'] ?? 0 ?></span>
+                <span class="stat-card-number"><?= count($visits) ?></span>
                 <span class="stat-card-label">Visits</span>
             </div>
         </div>
         <div class="stat-card stat-card-green">
             <div class="stat-card-inner">
                 <div class="stat-card-icon"><i class="fas fa-prescription"></i></div>
-                <span class="stat-card-number"><?= $patient['total_prescriptions'] ?? 0 ?></span>
+                <span class="stat-card-number"><?= count($prescriptions) ?></span>
                 <span class="stat-card-label">Prescriptions</span>
             </div>
         </div>
         <div class="stat-card stat-card-purple">
             <div class="stat-card-inner">
                 <div class="stat-card-icon"><i class="fas fa-flask"></i></div>
-                <span class="stat-card-number"><?= $patient['total_lab_tests'] ?? 0 ?></span>
+                <span class="stat-card-number"><?= count($lab_tests) ?></span>
                 <span class="stat-card-label">Lab Tests</span>
             </div>
         </div>
         <div class="stat-card stat-card-orange">
             <div class="stat-card-inner">
                 <div class="stat-card-icon"><i class="fas fa-calendar-check"></i></div>
-                <span class="stat-card-number"><?= $patient['total_appointments'] ?? 0 ?></span>
+                <span class="stat-card-number"><?= count($appointments) ?></span>
                 <span class="stat-card-label">Appointments</span>
             </div>
         </div>
@@ -1087,9 +1149,73 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 
     <!-- ================================================================ -->
+    <!-- LAST VISIT SUMMARY -->
+    <!-- ================================================================ -->
+    <?php if ($last_visit): 
+        $last_visit_id = $last_visit['id'];
+        $last_items = $visit_items[$last_visit_id] ?? [];
+    ?>
+    <div class="history-card" style="border-color: var(--primary); background: var(--primary-bg);">
+        <h3 class="card-title" style="border-bottom-color: var(--primary);">
+            <i class="fas fa-star title-blue"></i> Last Visit Summary
+            <span class="text-sm font-normal text-gray-400">(<?= date('M d, Y h:i A', strtotime($last_visit['created_at'])) ?>)</span>
+            <span class="status-badge badge-success" style="margin-left:auto;">
+                <i class="fas fa-check-circle"></i> Most Recent
+            </span>
+        </h3>
+        
+        <div class="info-grid" style="margin-bottom: 12px;">
+            <div class="info-item"><span class="info-label">Visit Number</span><span class="info-value font-mono"><?= htmlspecialchars($last_visit['visit_number'] ?? 'N/A') ?></span></div>
+            <div class="info-item"><span class="info-label">Doctor</span><span class="info-value">Dr. <?= htmlspecialchars($last_visit['doctor_name'] ?? 'Not assigned') ?></span></div>
+            <div class="info-item"><span class="info-label">Status</span><span class="info-value"><span class="status-badge <?= getStatusBadgeClass($last_visit['status'] ?? 'pending') ?>"><?= ucfirst($last_visit['status'] ?? 'Pending') ?></span></span></div>
+        </div>
+        
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; background: var(--bg-card); padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border-color);">
+            <?php if (!empty($last_visit['symptoms'])): ?>
+                <div><span class="info-label">Symptoms</span><div class="info-value"><?= htmlspecialchars($last_visit['symptoms']) ?></div></div>
+            <?php endif; ?>
+            <?php if (!empty($last_visit['complaint'])): ?>
+                <div><span class="info-label">Complaint</span><div class="info-value"><?= htmlspecialchars($last_visit['complaint']) ?></div></div>
+            <?php endif; ?>
+            <?php if (!empty($last_visit['diagnosis'])): ?>
+                <div><span class="info-label">Diagnosis</span><div class="info-value"><?= htmlspecialchars($last_visit['diagnosis']) ?></div></div>
+            <?php endif; ?>
+            <?php if (!empty($last_visit['treatment'])): ?>
+                <div><span class="info-label">Treatment</span><div class="info-value"><?= htmlspecialchars($last_visit['treatment']) ?></div></div>
+            <?php endif; ?>
+            <?php if (!empty($last_visit['follow_up_date'])): ?>
+                <div><span class="info-label">Follow-up</span><div class="info-value"><?= date('M d, Y', strtotime($last_visit['follow_up_date'])) ?></div></div>
+            <?php endif; ?>
+            <?php if (!empty($last_visit['notes'])): ?>
+                <div><span class="info-label">Notes</span><div class="info-value"><?= htmlspecialchars($last_visit['notes']) ?></div></div>
+            <?php endif; ?>
+        </div>
+        
+        <?php if (count($last_items['prescriptions'] ?? []) > 0 || count($last_items['lab_tests'] ?? []) > 0 || count($last_items['procedures'] ?? []) > 0): ?>
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+                <div style="display:flex; flex-wrap:wrap; gap: 12px;">
+                    <?php if (count($last_items['prescriptions'] ?? []) > 0): ?>
+                        <span class="badge badge-info"><i class="fas fa-prescription"></i> <?= count($last_items['prescriptions']) ?> Prescriptions</span>
+                    <?php endif; ?>
+                    <?php if (count($last_items['lab_tests'] ?? []) > 0): ?>
+                        <span class="badge badge-purple"><i class="fas fa-flask"></i> <?= count($last_items['lab_tests']) ?> Lab Tests</span>
+                    <?php endif; ?>
+                    <?php if (count($last_items['procedures'] ?? []) > 0): ?>
+                        <span class="badge badge-danger"><i class="fas fa-syringe"></i> <?= count($last_items['procedures']) ?> Procedures</span>
+                    <?php endif; ?>
+                    <?php if (count($last_items['medications'] ?? []) > 0): ?>
+                        <span class="badge badge-success"><i class="fas fa-pills"></i> <?= count($last_items['medications']) ?> Medications</span>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
     <!-- PATIENT DETAILS -->
     <!-- ================================================================ -->
-    <div class="consultation-card">
+    <div class="history-card">
         <h3 class="card-title">
             <i class="fas fa-info-circle title-blue"></i> Patient Details
         </h3>
@@ -1099,284 +1225,114 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <div class="info-item"><span class="info-label">Date of Birth</span><span class="info-value"><?= !empty($patient['date_of_birth']) ? date('M d, Y', strtotime($patient['date_of_birth'])) : 'N/A' ?></span></div>
             <div class="info-item"><span class="info-label">Age</span><span class="info-value"><?= calculateAge($patient['date_of_birth'] ?? '') ?> years</span></div>
             <div class="info-item"><span class="info-label">Gender</span><span class="info-value"><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span></div>
+            <div class="info-item"><span class="info-label">Marital Status</span><span class="info-value"><span class="marital-badge <?= 
+                strtolower($patient['marital_status'] ?? '') === 'single' ? 'marital-single' : 
+                (strtolower($patient['marital_status'] ?? '') === 'married' ? 'marital-married' : 
+                (strtolower($patient['marital_status'] ?? '') === 'divorced' ? 'marital-divorced' : 
+                (strtolower($patient['marital_status'] ?? '') === 'widowed' ? 'marital-widowed' : 
+                (strtolower($patient['marital_status'] ?? '') === 'separated' ? 'marital-separated' : '')))) 
+            ?>"><?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span></span></div>
             <div class="info-item"><span class="info-label">Blood Group</span><span class="info-value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span></div>
             <div class="info-item"><span class="info-label">Phone</span><span class="info-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span></div>
             <div class="info-item"><span class="info-label">Email</span><span class="info-value"><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span></div>
             <div class="info-item"><span class="info-label">Emergency Contact</span><span class="info-value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'N/A') ?></span></div>
-            <div class="info-item"><span class="info-label">Branch</span><span class="info-value"><?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?></span></div>
-            <div class="info-item"><span class="info-label">Allergies</span><span class="info-value"><?= htmlspecialchars($patient['allergies'] ?? 'None') ?></span></div>
             <div class="info-item"><span class="info-label">Address</span><span class="info-value"><?= htmlspecialchars($patient['address'] ?? 'N/A') ?></span></div>
+            <div class="info-item"><span class="info-label">Allergies</span><span class="info-value"><?= htmlspecialchars($patient['allergies'] ?? 'None') ?></span></div>
+            <div class="info-item"><span class="info-label">Branch</span><span class="info-value"><?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?></span></div>
             <div class="info-item"><span class="info-label">Assigned Doctor</span><span class="info-value"><?= htmlspecialchars($patient['doctor_name'] ?? 'Not Assigned') ?></span></div>
             <div class="info-item"><span class="info-label">Registered</span><span class="info-value"><?= date('M d, Y h:i A', strtotime($patient['created_at'] ?? 'now')) ?></span></div>
+            <div class="info-item"><span class="info-label">Total Visits</span><span class="info-value"><?= count($visits) ?></span></div>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- MEDICATIONS HISTORY -->
+    <!-- 1. DIAGNOSIS HISTORY -->
     <!-- ================================================================ -->
-    <div class="consultation-card">
+    <div class="history-card">
         <h3 class="card-title">
-            <i class="fas fa-pills title-blue"></i> Medications History
-            <span class="text-sm font-normal text-gray-400">(<?= count($medications_history) ?> unique medications)</span>
+            <i class="fas fa-stethoscope title-blue"></i> Diagnosis History
+            <span class="text-sm font-normal text-gray-400">(<?= count($diagnoses) ?> diagnoses)</span>
         </h3>
         
-        <?php if (count($medications_history) > 0): ?>
+        <?php if (count($diagnoses) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>#</th><th>Medication Name</th><th>Times Prescribed</th><th>Last Prescribed</th></tr></thead>
+                    <thead><tr><th>#</th><th>Visit #</th><th>Date</th><th>Diagnosis</th><th>Doctor</th><th>Treatment</th><th>Follow-up</th></tr></thead>
                     <tbody>
-                        <?php $i = 1; foreach ($medications_history as $med): ?>
-                            <tr><td><?= $i++ ?></td><td><strong><?= htmlspecialchars($med['medication_name'] ?? 'N/A') ?></strong></td><td><span class="badge badge-info"><?= $med['times_prescribed'] ?? 0 ?></span></td><td><?= time_ago($med['last_prescribed'] ?? '') ?></td></tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        <?php else: ?>
-            <div class="empty-state"><i class="fas fa-pills"></i><p>No medication history found</p></div>
-        <?php endif; ?>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PROCEDURES & TOOLS -->
-    <!-- ================================================================ -->
-    <div class="consultation-card">
-        <h3 class="card-title">
-            <i class="fas fa-syringe title-red"></i> Procedures & Tools History
-            <span class="text-sm font-normal text-gray-400">(<?= count($procedures) ?> items)</span>
-        </h3>
-        
-        <?php if (count($procedures) > 0): ?>
-            <div class="table-wrap">
-                <table class="data-table">
-                    <thead><tr><th>#</th><th>Item Name</th><th>Type</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th><th>Date</th></tr></thead>
-                    <tbody>
-                        <?php $i = 1; foreach ($procedures as $proc): 
-                            $is_paid = ($proc['payment_status'] ?? 'pending') === 'paid';
-                        ?>
-                            <tr class="<?= $is_paid ? 'paid-row' : '' ?>">
+                        <?php $i = 1; foreach ($diagnoses as $diag): ?>
+                            <tr>
                                 <td><?= $i++ ?></td>
-                                <td><strong><?= htmlspecialchars($proc['item_name'] ?? 'N/A') ?></strong></td>
-                                <td><span class="item-type-badge"><?= (!empty($proc['item_type']) && $proc['item_type'] == 'procedure') ? 'Procedure' : (!empty($proc['item_type']) ? htmlspecialchars($proc['item_type']) : 'Tool') ?></span></td>
-                                <td><?= $proc['quantity'] ?? 1 ?></td>
-                                <td><?= number_format($proc['unit_price'] ?? 0, 2) ?></td>
-                                <td class="font-mono">TSh <?= number_format($proc['total_price'] ?? 0, 2) ?></td>
-                                <td><span class="status-badge <?= $is_paid ? 'badge-success' : 'badge-pending' ?>"><?= ucfirst($proc['payment_status'] ?? 'Pending') ?></span></td>
-                                <td><?= date('M d, Y', strtotime($proc['created_at'])) ?></td>
+                                <td class="font-mono"><?= htmlspecialchars($diag['visit_number'] ?? 'N/A') ?></td>
+                                <td><?= date('M d, Y', strtotime($diag['created_at'])) ?></td>
+                                <td><strong><?= htmlspecialchars($diag['diagnosis'] ?? 'N/A') ?></strong></td>
+                                <td><?= htmlspecialchars($diag['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars(substr($diag['treatment'] ?? '', 0, 30)) . (strlen($diag['treatment'] ?? '') > 30 ? '...' : '') ?></td>
+                                <td><?= !empty($diag['follow_up_date']) ? date('M d, Y', strtotime($diag['follow_up_date'])) : 'N/A' ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             </div>
         <?php else: ?>
-            <div class="empty-state"><i class="fas fa-syringe"></i><p>No procedures recorded for this patient</p></div>
+            <div class="empty-state">
+                <i class="fas fa-stethoscope"></i>
+                <p>No diagnoses recorded</p>
+                <p class="sub-text">Diagnoses will appear here once recorded</p>
+            </div>
         <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
-    <!-- VISITS WITH FULL DETAILS -->
+    <!-- 2. LAB TEST HISTORY - FIXED: Join with visits to get patient_id -->
     <!-- ================================================================ -->
-    <div class="consultation-card">
+    <div class="history-card">
         <h3 class="card-title">
-            <i class="fas fa-history title-blue"></i> Visit History
-            <span class="text-sm font-normal text-gray-400">(<?= count($visits) ?> visits)</span>
+            <i class="fas fa-flask title-purple"></i> Lab Test History
+            <span class="text-sm font-normal text-gray-400">(<?= count($lab_tests) ?> tests)</span>
         </h3>
         
-        <?php if (count($visits) > 0): ?>
-            <?php foreach ($visits as $visit): 
-                $visit_id = $visit['id'];
-                $items = $visit_items[$visit_id] ?? [];
-                $visit_prescriptions = $items['prescriptions'] ?? [];
-                $visit_lab_tests = $items['lab_tests'] ?? [];
-                $visit_procedures = $items['procedures'] ?? [];
-                $visit_medications = $items['medications'] ?? [];
-            ?>
-            <div class="visit-detail-card">
-                <div class="visit-detail-header">
-                    <div class="visit-detail-info">
-                        <span class="visit-number"><?= htmlspecialchars($visit['visit_number']) ?></span>
-                        <span class="visit-date"><?= date('M d, Y h:i A', strtotime($visit['created_at'])) ?></span>
-                        <span class="visit-doctor">Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'Not assigned') ?></span>
-                        <span class="status-badge <?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>">
-                            <?= ucfirst($visit['status'] ?? 'Pending') ?>
-                        </span>
-                    </div>
-                    <?php if ($visit['is_completed'] ?? 0): ?>
-                        <span class="badge badge-success">✅ Completed</span>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="visit-detail-body">
-                    <!-- Symptoms -->
-                    <?php if (!empty($visit['symptoms'])): ?>
-                    <div class="visit-detail-row">
-                        <span class="visit-detail-label">Symptoms:</span>
-                        <span class="visit-detail-value"><?= htmlspecialchars($visit['symptoms']) ?></span>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Complaint -->
-                    <?php if (!empty($visit['complaint'])): ?>
-                    <div class="visit-detail-row">
-                        <span class="visit-detail-label">Complaint:</span>
-                        <span class="visit-detail-value"><?= htmlspecialchars($visit['complaint']) ?></span>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Diagnosis -->
-                    <?php if (!empty($visit['diagnosis'])): ?>
-                    <div class="visit-detail-row">
-                        <span class="visit-detail-label">Diagnosis:</span>
-                        <span class="visit-detail-value"><?= htmlspecialchars($visit['diagnosis']) ?></span>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Treatment -->
-                    <?php if (!empty($visit['treatment'])): ?>
-                    <div class="visit-detail-row">
-                        <span class="visit-detail-label">Treatment:</span>
-                        <span class="visit-detail-value"><?= htmlspecialchars($visit['treatment']) ?></span>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Notes -->
-                    <?php if (!empty($visit['notes'])): ?>
-                    <div class="visit-detail-row">
-                        <span class="visit-detail-label">Notes:</span>
-                        <span class="visit-detail-value"><?= htmlspecialchars($visit['notes']) ?></span>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Follow-up Date -->
-                    <?php if (!empty($visit['follow_up_date'])): ?>
-                    <div class="visit-detail-row">
-                        <span class="visit-detail-label">Follow-up:</span>
-                        <span class="visit-detail-value"><?= date('M d, Y', strtotime($visit['follow_up_date'])) ?></span>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Prescriptions -->
-                    <?php if (count($visit_prescriptions) > 0): ?>
-                    <div class="visit-detail-subsection">
-                        <span class="visit-detail-label">💊 Prescriptions:</span>
-                        <div class="visit-detail-items">
-                            <?php foreach ($visit_prescriptions as $pres): ?>
-                                <div class="visit-item-tag">
-                                    #<?= htmlspecialchars($pres['prescription_number']) ?>
-                                    <?php if (!empty($pres['medications_list'])): ?>
-                                        (<?= htmlspecialchars(substr($pres['medications_list'], 0, 30)) . (strlen($pres['medications_list'] ?? '') > 30 ? '...' : '') ?>)
+        <?php if (count($lab_tests) > 0): ?>
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>#</th><th>Test Name</th><th>Type</th><th>Date</th><th>Doctor</th><th>Sample Type</th><th>Results</th><th>Reference Range</th><th>Status</th></tr></thead>
+                    <tbody>
+                        <?php $i = 1; foreach ($lab_tests as $test): ?>
+                            <tr>
+                                <td><?= $i++ ?></td>
+                                <td><strong><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></strong></td>
+                                <td><span class="item-type-badge"><?= htmlspecialchars($test['test_type'] ?? 'General') ?></span></td>
+                                <td><?= date('M d, Y', strtotime($test['created_at'])) ?></td>
+                                <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($test['sample_type'] ?? 'N/A') ?></td>
+                                <td>
+                                    <?php if ($test['status'] === 'completed' && !empty($test['results'])): ?>
+                                        <span class="font-mono" style="color:var(--success);"><?= htmlspecialchars($test['results']) ?></span>
+                                    <?php elseif ($test['status'] === 'completed'): ?>
+                                        <span class="text-green-600">Results available</span>
+                                    <?php else: ?>
+                                        <span class="text-gray-400">Pending</span>
                                     <?php endif; ?>
-                                    <span class="badge <?= $pres['status'] === 'dispensed' ? 'badge-success' : 'badge-warning' ?>">
-                                        <?= ucfirst($pres['status'] ?? 'Pending') ?>
-                                    </span>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Lab Tests -->
-                    <?php if (count($visit_lab_tests) > 0): ?>
-                    <div class="visit-detail-subsection">
-                        <span class="visit-detail-label">🧪 Lab Tests:</span>
-                        <div class="visit-detail-items">
-                            <?php foreach ($visit_lab_tests as $test): ?>
-                                <div class="visit-item-tag">
-                                    <?= htmlspecialchars($test['test_name']) ?>
-                                    <span class="badge <?= $test['status'] === 'completed' ? 'badge-success' : 'badge-warning' ?>">
-                                        <?= ucfirst($test['status'] ?? 'Pending') ?>
-                                    </span>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Procedures -->
-                    <?php if (count($visit_procedures) > 0): ?>
-                    <div class="visit-detail-subsection">
-                        <span class="visit-detail-label">💉 Procedures:</span>
-                        <div class="visit-detail-items">
-                            <?php foreach ($visit_procedures as $proc): ?>
-                                <div class="visit-item-tag">
-                                    <?= htmlspecialchars($proc['item_name']) ?>
-                                    <span class="badge <?= ($proc['payment_status'] ?? 'pending') === 'paid' ? 'badge-success' : 'badge-warning' ?>">
-                                        <?= ucfirst($proc['payment_status'] ?? 'Pending') ?>
-                                    </span>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <!-- Medications -->
-                    <?php if (count($visit_medications) > 0): ?>
-                    <div class="visit-detail-subsection">
-                        <span class="visit-detail-label">💊 Medications:</span>
-                        <div class="visit-detail-items">
-                            <?php foreach ($visit_medications as $med): ?>
-                                <div class="visit-item-tag">
-                                    <?= htmlspecialchars($med['item_name']) ?>
-                                    x<?= $med['quantity'] ?>
-                                    <span class="badge <?= ($med['payment_status'] ?? 'pending') === 'paid' ? 'badge-success' : 'badge-warning' ?>">
-                                        <?= ucfirst($med['payment_status'] ?? 'Pending') ?>
-                                    </span>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-                </div>
+                                </td>
+                                <td><span class="text-xs text-gray-500"><?= htmlspecialchars($test['reference_range'] ?? 'N/A') ?></span></td>
+                                <td><span class="status-badge <?= $test['status'] === 'completed' ? 'badge-success' : 'badge-pending' ?>"><?= ucfirst($test['status'] ?? 'Pending') ?></span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
-            <?php endforeach; ?>
         <?php else: ?>
-            <div class="empty-state"><i class="fas fa-clinic-medical"></i><p>No visits recorded for this patient</p></div>
+            <div class="empty-state">
+                <i class="fas fa-flask"></i>
+                <p>No lab tests recorded</p>
+                <p class="sub-text">Lab tests will appear here once requested</p>
+            </div>
         <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
-    <!-- CONSULTATIONS -->
+    <!-- 3. PRESCRIPTION HISTORY -->
     <!-- ================================================================ -->
-    <div class="consultation-card">
-        <h3 class="card-title">
-            <i class="fas fa-stethoscope title-blue"></i> Consultation History
-            <span class="text-sm font-normal text-gray-400">(<?= count($consultations) ?> consultations)</span>
-        </h3>
-        
-        <?php if (count($consultations) > 0): ?>
-            <div class="consultation-list">
-                <?php foreach ($consultations as $consult): ?>
-                    <div class="consultation-item">
-                        <div class="consultation-header">
-                            <span class="consultation-date"><i class="fas fa-calendar-alt"></i> <?= date('M d, Y', strtotime($consult['created_at'])) ?></span>
-                            <span class="consultation-doctor"><i class="fas fa-user-md"></i> <?= htmlspecialchars($consult['doctor_name'] ?? 'N/A') ?></span>
-                            <span class="consultation-number"><?= htmlspecialchars($consult['visit_number'] ?? 'N/A') ?></span>
-                        </div>
-                        <div class="consultation-body">
-                            <div class="consultation-row"><span class="consultation-label">Diagnosis:</span><span class="consultation-value"><?= htmlspecialchars($consult['diagnosis'] ?? 'N/A') ?></span></div>
-                            <div class="consultation-row"><span class="consultation-label">Treatment:</span><span class="consultation-value"><?= htmlspecialchars($consult['treatment'] ?? 'N/A') ?></span></div>
-                            <?php if (!empty($consult['symptoms'])): ?>
-                                <div class="consultation-row"><span class="consultation-label">Symptoms:</span><span class="consultation-value"><?= htmlspecialchars($consult['symptoms']) ?></span></div>
-                            <?php endif; ?>
-                            <?php if (!empty($consult['notes'])): ?>
-                                <div class="consultation-row"><span class="consultation-label">Notes:</span><span class="consultation-value"><?= htmlspecialchars($consult['notes']) ?></span></div>
-                            <?php endif; ?>
-                            <div class="consultation-stats">
-                                <span class="badge badge-info"><?= $consult['prescriptions_count'] ?? 0 ?> Prescriptions</span>
-                                <span class="badge badge-purple"><?= $consult['lab_tests_count'] ?? 0 ?> Lab Tests</span>
-                            </div>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-        <?php else: ?>
-            <div class="empty-state"><i class="fas fa-stethoscope"></i><p>No consultations recorded</p></div>
-        <?php endif; ?>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PRESCRIPTIONS -->
-    <!-- ================================================================ -->
-    <div class="consultation-card">
+    <div class="history-card">
         <h3 class="card-title">
             <i class="fas fa-prescription title-green"></i> Prescription History
             <span class="text-sm font-normal text-gray-400">(<?= count($prescriptions) ?> prescriptions)</span>
@@ -1402,45 +1358,182 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </table>
             </div>
         <?php else: ?>
-            <div class="empty-state"><i class="fas fa-prescription"></i><p>No prescriptions found</p></div>
+            <div class="empty-state">
+                <i class="fas fa-prescription"></i>
+                <p>No prescriptions recorded</p>
+                <p class="sub-text">Prescriptions will appear here once prescribed</p>
+            </div>
         <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
-    <!-- LAB TESTS -->
+    <!-- 4. PROCEDURE HISTORY -->
     <!-- ================================================================ -->
-    <div class="consultation-card">
+    <div class="history-card">
         <h3 class="card-title">
-            <i class="fas fa-flask title-purple"></i> Lab Tests History
-            <span class="text-sm font-normal text-gray-400">(<?= count($lab_tests) ?> tests)</span>
+            <i class="fas fa-syringe title-red"></i> Procedure History
+            <span class="text-sm font-normal text-gray-400">(<?= count($procedures) ?> procedures)</span>
         </h3>
         
-        <?php if (count($lab_tests) > 0): ?>
+        <?php if (count($procedures) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>Test Name</th><th>Date</th><th>Doctor</th><th>Results</th><th>Status</th></tr></thead>
+                    <thead><tr><th>#</th><th>Procedure Name</th><th>Date</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th></tr></thead>
                     <tbody>
-                        <?php foreach ($lab_tests as $test): ?>
+                        <?php $i = 1; foreach ($procedures as $proc): 
+                            $is_paid = ($proc['payment_status'] ?? 'pending') === 'paid';
+                        ?>
                             <tr>
-                                <td><strong><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></strong></td>
-                                <td><?= date('M d, Y', strtotime($test['created_at'])) ?></td>
-                                <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
-                                <td><?php if ($test['status'] === 'completed' && !empty($test['results'])): ?><span class="text-green-600"><?= htmlspecialchars(substr($test['results'], 0, 30)) . (strlen($test['results'] ?? '') > 30 ? '...' : '') ?></span><?php elseif ($test['status'] === 'completed'): ?><span class="text-green-600">Results available</span><?php else: ?><span class="text-gray-400">Pending</span><?php endif; ?></td>
-                                <td><span class="status-badge <?= getStatusBadgeClass($test['status'] ?? 'pending') ?>"><?= ucfirst($test['status'] ?? 'Pending') ?></span></td>
+                                <td><?= $i++ ?></td>
+                                <td><strong><?= htmlspecialchars($proc['item_name'] ?? 'N/A') ?></strong></td>
+                                <td><?= date('M d, Y', strtotime($proc['created_at'])) ?></td>
+                                <td><?= $proc['quantity'] ?? 1 ?></td>
+                                <td>TSh <?= number_format($proc['unit_price'] ?? 0, 0) ?></td>
+                                <td class="font-mono">TSh <?= number_format($proc['total_price'] ?? 0, 0) ?></td>
+                                <td><span class="status-badge <?= $is_paid ? 'badge-success' : 'badge-pending' ?>"><?= ucfirst($proc['payment_status'] ?? 'Pending') ?></span></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             </div>
         <?php else: ?>
-            <div class="empty-state"><i class="fas fa-flask"></i><p>No lab tests found</p></div>
+            <div class="empty-state">
+                <i class="fas fa-syringe"></i>
+                <p>No procedures recorded</p>
+                <p class="sub-text">Procedures will appear here once performed</p>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- 5. TOOLS HISTORY -->
+    <!-- ================================================================ -->
+    <div class="history-card">
+        <h3 class="card-title">
+            <i class="fas fa-tools title-orange"></i> Tools History
+            <span class="text-sm font-normal text-gray-400">(<?= count($tools) ?> tools)</span>
+        </h3>
+        
+        <?php if (count($tools) > 0): ?>
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>#</th><th>Tool Name</th><th>Type</th><th>Date</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th></tr></thead>
+                    <tbody>
+                        <?php $i = 1; foreach ($tools as $tool): 
+                            $is_paid = ($tool['payment_status'] ?? 'pending') === 'paid';
+                        ?>
+                            <tr>
+                                <td><?= $i++ ?></td>
+                                <td><strong><?= htmlspecialchars($tool['item_name'] ?? 'N/A') ?></strong></td>
+                                <td><span class="item-type-badge"><?= htmlspecialchars($tool['item_type'] ?? 'Tool') ?></span></td>
+                                <td><?= date('M d, Y', strtotime($tool['created_at'])) ?></td>
+                                <td><?= $tool['quantity'] ?? 1 ?></td>
+                                <td>TSh <?= number_format($tool['unit_price'] ?? 0, 0) ?></td>
+                                <td class="font-mono">TSh <?= number_format($tool['total_price'] ?? 0, 0) ?></td>
+                                <td><span class="status-badge <?= $is_paid ? 'badge-success' : 'badge-pending' ?>"><?= ucfirst($tool['payment_status'] ?? 'Pending') ?></span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-tools"></i>
+                <p>No tools recorded</p>
+                <p class="sub-text">Tools will appear here once used</p>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- 6. BILL HISTORY -->
+    <!-- ================================================================ -->
+    <div class="history-card">
+        <h3 class="card-title">
+            <i class="fas fa-receipt title-teal"></i> Bill History
+            <span class="text-sm font-normal text-gray-400">(<?= count($bills) ?> bills)</span>
+        </h3>
+        
+        <?php if (count($bills) > 0): ?>
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>#</th><th>Bill Number</th><th>Date</th><th>Items</th><th>Total Amount</th><th>Paid</th><th>Balance</th><th>Status</th><th>Created By</th></tr></thead>
+                    <tbody>
+                        <?php $i = 1; foreach ($bills as $bill): 
+                            $items = $bill_items[$bill['id']] ?? [];
+                            $total_items = count($items);
+                        ?>
+                            <tr>
+                                <td><?= $i++ ?></td>
+                                <td class="font-mono"><strong><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></strong></td>
+                                <td><?= date('M d, Y', strtotime($bill['created_at'])) ?></td>
+                                <td>
+                                    <span class="badge badge-info"><?= $total_items ?> items</span>
+                                    <?php if ($total_items > 0): ?>
+                                        <button class="btn btn-sm btn-outline" onclick="toggleItems(<?= $bill['id'] ?>)" style="font-size:0.6rem; padding:1px 8px; margin-left:4px;">
+                                            <i class="fas fa-chevron-down" id="arrow_<?= $bill['id'] ?>"></i> View
+                                        </button>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="font-mono">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
+                                <td class="font-mono text-green-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                                <td class="font-mono <?= ($bill['balance'] ?? 0) > 0 ? 'text-red-600' : 'text-green-600' ?>">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></td>
+                                <td><span class="status-badge <?= getStatusBadgeClass($bill['status'] ?? 'pending') ?>"><?= ucfirst($bill['status'] ?? 'Pending') ?></span></td>
+                                <td><?= htmlspecialchars($bill['created_by_name'] ?? 'N/A') ?></td>
+                            </tr>
+                            <?php if ($total_items > 0): ?>
+                                <tr id="items_<?= $bill['id'] ?>" style="display:none; background: var(--bg-body);">
+                                    <td colspan="9" style="padding: 4px 12px;">
+                                        <table class="bill-items-subtable">
+                                            <thead>
+                                                <tr>
+                                                    <th>#</th>
+                                                    <th>Item Name</th>
+                                                    <th>Type</th>
+                                                    <th>Qty</th>
+                                                    <th>Unit Price</th>
+                                                    <th>Total</th>
+                                                    <th>Status</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php $j = 1; foreach ($items as $item): ?>
+                                                    <tr>
+                                                        <td><?= $j++ ?></td>
+                                                        <td><strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong></td>
+                                                        <td><span class="item-type-badge"><?= htmlspecialchars($item['item_type'] ?? 'Other') ?></span></td>
+                                                        <td><?= $item['quantity'] ?? 1 ?></td>
+                                                        <td>TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
+                                                        <td class="item-total">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
+                                                        <td>
+                                                            <span class="<?= ($item['payment_status'] ?? 'pending') === 'paid' ? 'badge-item-paid' : 'badge-item-pending' ?>">
+                                                                <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </td>
+                                </tr>
+                            <?php endif; ?>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-receipt"></i>
+                <p>No bills recorded</p>
+                <p class="sub-text">Bills will appear here once generated</p>
+            </div>
         <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
     <!-- APPOINTMENTS -->
     <!-- ================================================================ -->
-    <div class="consultation-card">
+    <div class="history-card">
         <h3 class="card-title">
             <i class="fas fa-calendar-check title-purple"></i> Appointments History
             <span class="text-sm font-normal text-gray-400">(<?= count($appointments) ?> appointments)</span>
@@ -1464,40 +1557,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </table>
             </div>
         <?php else: ?>
-            <div class="empty-state"><i class="fas fa-calendar-check"></i><p>No appointments found</p></div>
-        <?php endif; ?>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- BILLS -->
-    <!-- ================================================================ -->
-    <div class="consultation-card">
-        <h3 class="card-title">
-            <i class="fas fa-receipt title-orange"></i> Bills History
-            <span class="text-sm font-normal text-gray-400">(<?= count($bills) ?> bills)</span>
-        </h3>
-        
-        <?php if (count($bills) > 0): ?>
-            <div class="table-wrap">
-                <table class="data-table">
-                    <thead><tr><th>#</th><th>Bill Number</th><th>Date</th><th>Total Amount</th><th>Paid</th><th>Balance</th><th>Status</th></tr></thead>
-                    <tbody>
-                        <?php $i = 1; foreach ($bills as $bill): ?>
-                            <tr>
-                                <td><?= $i++ ?></td>
-                                <td class="font-mono"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
-                                <td><?= date('M d, Y', strtotime($bill['created_at'])) ?></td>
-                                <td class="font-mono">TSh <?= number_format($bill['total_amount'] ?? 0, 2) ?></td>
-                                <td class="font-mono text-green-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 2) ?></td>
-                                <td class="font-mono <?= ($bill['balance'] ?? 0) > 0 ? 'text-red-600' : 'text-green-600' ?>">TSh <?= number_format($bill['balance'] ?? 0, 2) ?></td>
-                                <td><span class="status-badge <?= getStatusBadgeClass($bill['status'] ?? 'pending') ?>"><?= ucfirst($bill['status'] ?? 'Pending') ?></span></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+            <div class="empty-state">
+                <i class="fas fa-calendar-check"></i>
+                <p>No appointments found</p>
+                <p class="sub-text">Appointments will appear here once scheduled</p>
             </div>
-        <?php else: ?>
-            <div class="empty-state"><i class="fas fa-receipt"></i><p>No bills found</p></div>
         <?php endif; ?>
     </div>
 
@@ -1507,6 +1571,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="separator">|</span>
             Patient History - <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>
+            <span class="separator">|</span>
+            <?= count($visits) ?> Visits | <?= count($diagnoses) ?> Diagnoses | <?= count($prescriptions) ?> Prescriptions | <?= count($lab_tests) ?> Lab Tests | <?= count($procedures) ?> Procedures | <?= count($tools) ?> Tools | <?= count($bills) ?> Bills
             <span class="separator">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1529,6 +1595,27 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // TOGGLE BILL ITEMS
+    // ================================================================
+    function toggleItems(billId) {
+        var itemsRow = document.getElementById('items_' + billId);
+        var arrow = document.getElementById('arrow_' + billId);
+        if (itemsRow) {
+            if (itemsRow.style.display === 'none') {
+                itemsRow.style.display = 'table-row';
+                if (arrow) {
+                    arrow.className = 'fas fa-chevron-up';
+                }
+            } else {
+                itemsRow.style.display = 'none';
+                if (arrow) {
+                    arrow.className = 'fas fa-chevron-down';
+                }
+            }
+        }
+    }
+
     // ================================================================
     // PDF EXPORT
     // ================================================================
@@ -1564,15 +1651,23 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 5000);
     }
 
+    // ================================================================
+    // DARK MODE - Controlled by header
+    // ================================================================
+    
     console.log('%c👤 Patient History - <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Patient ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Visits: <?= $patient['total_visits'] ?? 0 ?>', 'font-size:12px; color:#64748B;');
-    console.log('%c💊 Prescriptions: <?= $patient['total_prescriptions'] ?? 0 ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c🧪 Lab Tests: <?= $patient['total_lab_tests'] ?? 0 ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c📅 Appointments: <?= $patient['total_appointments'] ?? 0 ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c💍 Marital Status: <?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c📊 Total Visits: <?= count($visits) ?>', 'font-size:12px; color:#64748B;');
+    console.log('%c🔄 Last Visit: <?= $last_visit ? date('M d, Y', strtotime($last_visit['created_at'])) : 'N/A' ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c🩺 Diagnoses: <?= count($diagnoses) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c💊 Prescriptions: <?= count($prescriptions) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c🧪 Lab Tests: <?= count($lab_tests) ?> (FIXED - JOIN with visits)', 'font-size:12px; color:#D97706;');
     console.log('%c💉 Procedures: <?= count($procedures) ?>', 'font-size:12px; color:#DC2626;');
-    console.log('%c💰 Bills: <?= count($bills) ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c📋 Visit details now show: Symptoms, Diagnosis, Treatment, Prescriptions, Lab Tests, Procedures, Medications', 'font-size:11px; color:#34D399;');
+    console.log('%c🔧 Tools: <?= count($tools) ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c💰 Bills: <?= count($bills) ?> (Showing all items per bill)', 'font-size:12px; color:#0D9488;');
+    console.log('%c✅ Lab Tests fixed - JOIN visits ON visit_id to get patient_id', 'font-size:11px; color:#34D399;');
+    console.log('%c✅ Blue Theme applied', 'font-size:11px; color:#0B5ED7;');
 </script>
 
 </body>
