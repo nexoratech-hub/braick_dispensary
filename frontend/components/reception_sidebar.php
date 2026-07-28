@@ -2,52 +2,56 @@
 // ================================================================
 // FILE: frontend/components/reception_sidebar.php
 // RECEPTION - SHARED SIDEBAR (BLUE BACKGROUND)
-// HAKUNA JINA LA RECEPTIONIST, HAKUNA BRANCH
-// WITH REAL DATA FOR BADGES + AJAX AUTO-UPDATE (SELF-CONTAINED)
+// WITH SERVICES SECTION - SHOWS ALL SERVICES FROM services TABLE
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// GET REAL DATA FOR BADGES (Only if database is available)
+// GET REAL DATA FOR BADGES
 // ================================================================
 $patient_count = 0;
 $appointment_count = 0;
 $pending_appointments = 0;
 $today_visits = 0;
 $pending_patients = 0;
+$services_count = 0;
 
 if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
     $user_id = $_SESSION['user_id'];
     $user_branch_id = $_SESSION['branch_id'] ?? 1;
     
     try {
-        // 1. Total Patients (for this branch)
+        // 1. Total Patients
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
         $stmt->execute([$user_branch_id]);
         $patient_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 2. Today's Appointments (for this branch)
+        // 2. Today's Appointments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 3. Pending Appointments (for this branch)
+        // 3. Pending Appointments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
         $stmt->execute([$user_branch_id]);
         $pending_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 4. Today's Visits (for this branch)
+        // 4. Today's Visits
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 5. Pending Patients (waiting for doctor)
+        // 5. Pending Patients
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
         $stmt->execute([$user_branch_id]);
         $pending_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // 6. Services Count
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
+        $stmt->execute([$user_branch_id]);
+        $services_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
     } catch (Exception $e) {
-        // If error, keep counts as 0
         error_log("Reception sidebar stats error: " . $e->getMessage());
     }
 }
@@ -72,7 +76,7 @@ function isActive($page) {
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// HANDLE AJAX REQUEST FOR SIDEBAR DATA (SELF-CONTAINED)
+// HANDLE AJAX REQUEST FOR SIDEBAR DATA
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_reception_sidebar_data') {
     header('Content-Type: application/json');
@@ -86,45 +90,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'pending_appointments' => 0,
         'today_visits' => 0,
         'pending_patients' => 0,
+        'services_count' => 0,
         'hash' => ''
     ];
     
     if (isset($db) && $db !== null) {
         try {
-            // 1. Total Patients
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
             $stmt->execute([$branch_id]);
             $response['patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 2. Today's Appointments
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
             $stmt->execute([$branch_id]);
             $response['appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 3. Pending Appointments
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
             $stmt->execute([$branch_id]);
             $response['pending_appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 4. Today's Visits
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
             $stmt->execute([$branch_id]);
             $response['today_visits'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 5. Pending Patients
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
             $stmt->execute([$branch_id]);
             $response['pending_patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            $response['success'] = true;
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
+            $stmt->execute([$branch_id]);
+            $response['services_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // Create hash to detect changes
+            $response['success'] = true;
             $response['hash'] = md5(
                 $response['patients'] . 
                 $response['appointments'] . 
                 $response['pending_appointments'] . 
                 $response['today_visits'] . 
-                $response['pending_patients']
+                $response['pending_patients'] .
+                $response['services_count']
             );
             
         } catch (Exception $e) {
@@ -139,9 +142,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 ?>
 
 <style>
-    /* ================================================================
-       SIDEBAR STYLES - BLUE BACKGROUND
-       ================================================================ */
     .sidebar {
         position: fixed; 
         top: 0; 
@@ -272,6 +272,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         background: #D97706;
     }
     
+    .sidebar-link .badge.purple {
+        background: #7C3AED;
+    }
+    
     @keyframes pulse-badge {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.1); }
@@ -355,7 +359,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 </style>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR - HAKUNA JINA LA RECEPTIONIST, HAKUNA BRANCH -->
+<!-- SIDEBAR - RECEPTION PANEL -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     
@@ -408,7 +412,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ===== VISITS ===== -->
         <div class="nav-label mt-2">Visits</div>
         
-        <!-- 5. Visit (Today's Visits) -->
+        <!-- 5. Visit -->
         <a href="../reception/visits.php?filter=today" class="sidebar-link <?= isActive('visits.php') ?>">
             <i class="fas fa-clinic-medical"></i> Visit
             <span class="badge" id="receptionTodayVisits"><?= $today_visits ?></span>
@@ -424,10 +428,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
+        <!-- ================================================================ -->
+        <!-- 7. SERVICES - NEW SECTION -->
+        <!-- ================================================================ -->
+        <div class="nav-label mt-2">Services</div>
+        
+        <a href="../reception/services.php" class="sidebar-link <?= isActive('services.php') ?>">
+            <i class="fas fa-cog"></i> Services
+            <?php if ($services_count > 0): ?>
+                <span class="badge purple" id="receptionServicesCount"><?= $services_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="receptionServicesCount">0</span>
+            <?php endif; ?>
+        </a>
+        
         <!-- ===== CASHIER ===== -->
         <div class="nav-label mt-2">Finance</div>
         
-        <!-- 7. Cashier -->
+        <!-- 8. Cashier -->
         <a href="../cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') && strpos($_SERVER['REQUEST_URI'], 'cashier') !== false ? 'active' : '' ?>">
             <i class="fas fa-cash-register"></i> Cashier
         </a>
@@ -447,7 +465,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
     </nav>
     
-    <!-- Online Status with Live Update Indicator -->
+    <!-- Online Status -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
@@ -459,12 +477,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH AJAX AUTO-UPDATE (EVERY 3 SECONDS) - SELF-CONTAINED -->
+<!-- JAVASCRIPT - AUTO-UPDATE -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // SIDEBAR TOGGLE (Mobile)
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var sidebar = document.getElementById('sidebar');
         var sidebarToggle = document.getElementById('sidebarToggle');
@@ -486,55 +501,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         });
     });
 
-    // ================================================================
-    // UPDATE SIDEBAR BADGES
-    // ================================================================
-    function updateSidebarBadges(patientCount, appointmentCount, pendingAppointments, todayVisits, pendingPatients) {
-        // Update Patients Badge
-        if (patientCount !== undefined) {
-            var el = document.getElementById('receptionPatientCount');
-            if (el) {
-                el.textContent = patientCount;
-                el.style.opacity = patientCount === 0 ? '0.6' : '1';
-            }
+    function updateSidebarBadges(patientCount, appointmentCount, pendingAppointments, todayVisits, pendingPatients, servicesCount) {
+        var el = document.getElementById('receptionPatientCount');
+        if (el && patientCount !== undefined) {
+            el.textContent = patientCount;
+            el.style.opacity = patientCount === 0 ? '0.6' : '1';
         }
         
-        // Update Appointments Badge
-        if (appointmentCount !== undefined) {
-            var el = document.getElementById('receptionAppointmentCount');
-            if (el) {
-                el.textContent = appointmentCount;
-                if (pendingAppointments > 0) {
-                    el.className = 'badge danger';
-                } else {
-                    el.className = 'badge';
-                }
-            }
+        el = document.getElementById('receptionAppointmentCount');
+        if (el && appointmentCount !== undefined) {
+            el.textContent = appointmentCount;
+            el.className = pendingAppointments > 0 ? 'badge danger' : 'badge';
         }
         
-        // Update Today Visits Badge
-        if (todayVisits !== undefined) {
-            var el = document.getElementById('receptionTodayVisits');
-            if (el) {
-                el.textContent = todayVisits;
-                el.className = todayVisits > 0 ? 'badge green' : 'badge';
-            }
+        el = document.getElementById('receptionTodayVisits');
+        if (el && todayVisits !== undefined) {
+            el.textContent = todayVisits;
+            el.className = todayVisits > 0 ? 'badge green' : 'badge';
         }
         
-        // Update Pending Patients Badge
-        if (pendingPatients !== undefined) {
-            var el = document.getElementById('receptionPendingPatients');
-            if (el) {
-                el.textContent = pendingPatients;
-                if (pendingPatients > 0) {
-                    el.className = 'badge danger';
-                } else {
-                    el.className = 'badge';
-                }
-            }
+        el = document.getElementById('receptionPendingPatients');
+        if (el && pendingPatients !== undefined) {
+            el.textContent = pendingPatients;
+            el.className = pendingPatients > 0 ? 'badge danger' : 'badge';
         }
         
-        // Update status time
+        el = document.getElementById('receptionServicesCount');
+        if (el && servicesCount !== undefined) {
+            el.textContent = servicesCount;
+            el.className = servicesCount > 0 ? 'badge purple' : 'badge';
+        }
+        
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
@@ -548,9 +545,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
 
-    // ================================================================
-    // AJAX AUTO-UPDATE (Self-contained - uses same file)
-    // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
     var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
@@ -564,7 +558,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         formData.append('action', 'get_reception_sidebar_data');
         formData.append('branch_id', branchId);
         
-        // Send request to the SAME FILE (self-contained)
         fetch(window.location.href, {
             method: 'POST',
             body: formData
@@ -577,7 +570,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         })
         .then(function(data) {
             if (data.success) {
-                // Only update if data has changed
                 if (lastDataHash !== data.hash) {
                     lastDataHash = data.hash;
                     updateSidebarBadges(
@@ -585,47 +577,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         data.appointments || 0,
                         data.pending_appointments || 0,
                         data.today_visits || 0,
-                        data.pending_patients || 0
+                        data.pending_patients || 0,
+                        data.services_count || 0
                     );
                 }
             }
             sidebarIsUpdating = false;
         })
         .catch(function(error) {
-            // Silent fail - don't spam console
-            // console.warn('Sidebar update error:', error.message);
             sidebarIsUpdating = false;
         });
     }
 
-    // ================================================================
-    // START SIDEBAR AUTO-UPDATE
-    // ================================================================
     function startSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        // Initial update
         fetchSidebarData();
-        // Then every 3 seconds
         sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
-        console.log('%c🔄 Reception Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
 
-    // ================================================================
-    // STOP SIDEBAR AUTO-UPDATE
-    // ================================================================
     function stopSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
             sidebarUpdateInterval = null;
-            console.log('%c⏹️ Reception Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
-    // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -634,29 +612,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     });
 
-    // ================================================================
-    // INITIALIZE SIDEBAR AUTO-UPDATE
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Start after 2 seconds
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 2000);
     });
 
-    // ================================================================
-    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
-    // ================================================================
     window.updateSidebarBadges = updateSidebarBadges;
     window.fetchSidebarData = fetchSidebarData;
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
-    console.log('%c🏥 Reception Sidebar (SELF-CONTAINED - Auto-update every 3s)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Menu: Dashboard, Register Patient, Patients, Appointments, Visit, Assign Doctor, Cashier', 'font-size:12px; color:#9EC5FE;');
-    console.log('%c👥 Patients: <?= $patient_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📅 Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c⏳ Pending Patients: <?= $pending_patients ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
+    console.log('%c🏥 Reception Sidebar - Auto-update enabled', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Services section added', 'font-size:12px; color:#7C3AED;');
+    console.log('%c📋 Services Count: <?= $services_count ?>', 'font-size:12px; color:#7C3AED;');
 </script>

@@ -5,9 +5,6 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-// Include database config
-require_once __DIR__ . '/../../backend/config/config.php';
-
 // ================================================================
 // SESSION - Default to reception.rose (Rose Mwangi)
 // ================================================================
@@ -38,17 +35,26 @@ $user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
-// If not admin, force to their branch
 if (!$is_admin) {
     $selected_branch_id = $user_branch_id;
 }
 
-// Get branch name for display
 $branch_name = 'All Branches';
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $branch = getBranch($selected_branch_id);
-    if ($branch) {
-        $branch_name = $branch['name'];
+    // Get branch name from database if available
+    if (isset($db) && $db !== null) {
+        try {
+            $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+            $stmt->execute([$selected_branch_id]);
+            $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($branch) {
+                $branch_name = $branch['name'];
+            }
+        } catch (Exception $e) {
+            $branch_name = 'Branch ' . $selected_branch_id;
+        }
+    } else {
+        $branch_name = 'Branch ' . $selected_branch_id;
     }
 } else {
     $selected_branch_id = 'all';
@@ -72,16 +78,20 @@ if (empty($page_title) || $page_title == '') {
     $page_title = 'Dashboard';
 }
 
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// Get unread notifications count
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
 $unread_notifications = 0;
-if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0 && isset($db) && $db !== null) {
     try {
-        $db = getDB();
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+        // Check if notifications table exists
+        $stmt = $db->prepare("SHOW TABLES LIKE 'notifications'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+            $stmt->execute([$_SESSION['user_id']]);
+            $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+        }
     } catch (Exception $e) {
         $unread_notifications = 0;
     }

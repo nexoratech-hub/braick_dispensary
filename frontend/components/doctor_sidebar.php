@@ -3,7 +3,7 @@
 // FILE: frontend/components/doctor_sidebar.php
 // DOCTOR - SHARED SIDEBAR (BLUE BACKGROUND)
 // WITH AUTO-UPDATE EVERY 3 SECONDS - SELF-CONTAINED
-// CONSULTATIONS AS SINGLE MENU ITEM
+// SERVICES - SINGLE LINK (NO DROPDOWN)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -19,6 +19,11 @@ $completed_consultations = 0;
 $cancelled_consultations = 0;
 $pending_prescriptions = 0;
 $total_consultations = 0;
+
+// Services counts
+$procedures_count = 0;
+$tools_count = 0;
+$lab_tests_count = 0;
 
 if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
     $doctor_id = $_SESSION['user_id'];
@@ -85,6 +90,24 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$doctor_id]);
         $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // ================================================================
+        // 10. SERVICES COUNTS
+        // ================================================================
+        // Procedures count
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM procedures WHERE branch_id = ? AND is_active = 1");
+        $stmt->execute([$doctor_branch_id]);
+        $procedures_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Tools count
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM procedure_tools WHERE branch_id = ? AND is_active = 1");
+        $stmt->execute([$doctor_branch_id]);
+        $tools_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Lab Tests count
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests_catalog WHERE branch_id = ? AND is_active = 1");
+        $stmt->execute([$doctor_branch_id]);
+        $lab_tests_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
     } catch (Exception $e) {
         // If error, keep counts as 0
     }
@@ -125,7 +148,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'referralCount' => 0,
         'appointmentCount' => 0,
         'pendingConsultations' => 0,
-        'pendingPrescriptions' => 0
+        'pendingPrescriptions' => 0,
+        'proceduresCount' => 0,
+        'toolsCount' => 0,
+        'labTestsCount' => 0
     ];
     
     if ($doctor_id > 0 && isset($db) && $db !== null) {
@@ -165,6 +191,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'");
             $stmt->execute([$doctor_id]);
             $response['pendingPrescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // ================================================================
+            // 7. SERVICES COUNTS
+            // ================================================================
+            // Procedures count
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM procedures WHERE branch_id = ? AND is_active = 1");
+            $stmt->execute([$branch_id]);
+            $response['proceduresCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Tools count
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM procedure_tools WHERE branch_id = ? AND is_active = 1");
+            $stmt->execute([$branch_id]);
+            $response['toolsCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // Lab Tests count
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests_catalog WHERE branch_id = ? AND is_active = 1");
+            $stmt->execute([$branch_id]);
+            $response['labTestsCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             $response['success'] = true;
             
@@ -321,6 +365,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         background: #7C3AED;
     }
     
+    .sidebar-link .badge.orange {
+        background: #EA580C;
+    }
+    
+    .sidebar-link .badge.teal {
+        background: #0D9488;
+    }
+    
     @keyframes pulse-badge {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.1); }
@@ -453,12 +505,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ================================================================ -->
         <div class="nav-label mt-2">Clinical</div>
         
-        <!-- 3. Prescribe -->
-        <a href="../doctor/prescribe.php" class="sidebar-link <?= isActive('prescribe.php') ?>">
-            <i class="fas fa-prescription"></i> Prescribe
-        </a>
-        
-        <!-- 4. Prescriptions -->
+        <!-- 3. Prescriptions (Prescribe removed) -->
         <a href="../doctor/view_prescriptions.php" class="sidebar-link <?= isActive('view_prescriptions.php') ?>">
             <i class="fas fa-file-prescription"></i> Prescriptions
             <?php if ($pending_prescriptions > 0): ?>
@@ -468,7 +515,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- 5. Lab Results -->
+        <!-- 4. Lab Results -->
         <a href="../doctor/lab_results.php" class="sidebar-link <?= isActive('lab_results.php') ?>">
             <i class="fas fa-flask"></i> Lab Results
             <?php if ($lab_count > 0): ?>
@@ -479,7 +526,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </a>
         
         <!-- ================================================================ -->
-        <!-- 6. CONSULTATIONS - Single Menu Item -->
+        <!-- 5. CONSULTATIONS - Single Menu Item -->
         <!-- ================================================================ -->
         <div class="nav-label mt-2">Consultations</div>
         
@@ -489,6 +536,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <span class="badge danger" id="pendingConsultBadge"><?= $pending_consultations ?></span>
             <?php else: ?>
                 <span class="badge" id="pendingConsultBadge">0</span>
+            <?php endif; ?>
+        </a>
+        
+        <!-- ================================================================ -->
+        <!-- 6. SERVICES - SINGLE LINK -->
+        <!-- ================================================================ -->
+        <div class="nav-label mt-2">Settings</div>
+        
+        <a href="../doctor/services.php" class="sidebar-link <?= isActive('services.php') ?>">
+            <i class="fas fa-cog"></i> Services
+            <?php 
+                $total_services = $procedures_count + $tools_count + $lab_tests_count;
+                if ($total_services > 0): 
+            ?>
+                <span class="badge purple" id="servicesTotalBadge"><?= $total_services ?></span>
+            <?php else: ?>
+                <span class="badge" id="servicesTotalBadge">0</span>
             <?php endif; ?>
         </a>
         
@@ -597,7 +661,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
-        // Lab Count
+        // Lab Count (pending)
         if (data.labCount !== undefined) {
             var el = document.getElementById('labCount');
             if (el) {
@@ -642,6 +706,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
+        // ================================================================
+        // SERVICES TOTAL BADGE
+        // ================================================================
+        if (data.proceduresCount !== undefined && data.toolsCount !== undefined && data.labTestsCount !== undefined) {
+            var total = data.proceduresCount + data.toolsCount + data.labTestsCount;
+            var el = document.getElementById('servicesTotalBadge');
+            if (el) {
+                el.textContent = total;
+                el.className = total > 0 ? 'badge purple' : 'badge';
+            }
+        }
+        
         // Update timestamp
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
@@ -670,7 +746,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         formData.append('doctor_id', doctorId);
         formData.append('branch_id', branchId);
         
-        // Send request to the SAME FILE (self-contained)
         fetch(window.location.href, {
             method: 'POST',
             body: formData
@@ -684,14 +759,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         .then(function(data) {
             if (data.success) {
                 updateSidebarBadges(data);
-            } else {
-                // Silent fail - keep existing data
-                // console.warn('Sidebar update returned error:', data.error);
             }
         })
         .catch(function(error) {
-            // Silent fail - don't spam console with errors
-            // console.warn('Sidebar update failed:', error.message);
+            // Silent fail
         });
     }
 
@@ -705,9 +776,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        // Initial update
         fetchSidebarData();
-        // Then every 3 seconds
         sidebarUpdateInterval = setInterval(function() {
             if (!isSidebarUpdating) {
                 isSidebarUpdating = true;
@@ -717,21 +786,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }, 100);
             }
         }, 3000);
-        
-        console.log('%c🔄 Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
 
     function stopSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
             sidebarUpdateInterval = null;
-            console.log('%c⏹️ Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
-    // ================================================================
-    // HANDLE PAGE VISIBILITY - PAUSE WHEN HIDDEN
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -740,38 +803,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     });
 
-    // ================================================================
-    // INITIALIZE
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Start auto-update after a small delay
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 1000);
     });
 
-    // ================================================================
-    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
-    // ================================================================
     window.updateSidebarBadges = updateSidebarBadges;
     window.fetchSidebarData = fetchSidebarData;
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
-    console.log('%c👨‍⚕️ Doctor Sidebar - Auto-update enabled (SELF-CONTAINED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🔄 Updates every 3 seconds - NO EXTERNAL API NEEDED', 'font-size:12px; color:#34D399;');
-    console.log('%c📊 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c📋 Menu Order:', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c👨‍⚕️ Doctor Sidebar - Auto-update enabled', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔄 Updates every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c📋 Menu:', 'font-size:12px; color:#9EC5FE;');
     console.log('%c   1. Dashboard', 'font-size:12px; color:#9EC5FE;');
     console.log('%c   2. My Patients (%s)', 'font-size:12px; color:#059669;', '<?= $patient_count ?>');
-    console.log('%c   3. Prescribe', 'font-size:12px; color:#9EC5FE;');
-    console.log('%c   4. Prescriptions (%s)', 'font-size:12px; color:#D97706;', '<?= $pending_prescriptions ?>');
-    console.log('%c   5. Lab Results (%s)', 'font-size:12px; color:#D97706;', '<?= $lab_count ?>');
-    console.log('%c   6. Consultations (%s pending)', 'font-size:12px; color:#EF4444;', '<?= $pending_consultations ?>');
+    console.log('%c   3. Prescriptions (%s)', 'font-size:12px; color:#D97706;', '<?= $pending_prescriptions ?>');
+    console.log('%c   4. Lab Results (%s)', 'font-size:12px; color:#D97706;', '<?= $lab_count ?>');
+    console.log('%c   5. Consultations (%s pending)', 'font-size:12px; color:#EF4444;', '<?= $pending_consultations ?>');
+    console.log('%c   6. Services (Total: %s)', 'font-size:12px; color:#7C3AED;', '<?= $procedures_count + $tools_count + $lab_tests_count ?>');
     console.log('%c   7. Referrals (%s)', 'font-size:12px; color:#D97706;', '<?= $referral_count ?>');
     console.log('%c   8. Appointments (%s)', 'font-size:12px; color:#0B5ED7;', '<?= $appointment_count ?>');
     console.log('%c   9. Documents', 'font-size:12px; color:#9EC5FE;');
     console.log('%c   10. Profile', 'font-size:12px; color:#9EC5FE;');
     console.log('%c   11. Logout', 'font-size:12px; color:#FCA5A5;');
-    console.log('%c✅ Consultations: Single menu item (no sub-menu)', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Services - Single link (no dropdown)', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Prescribe removed from sidebar', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Services page: http://localhost/dispensary_system/frontend/pages/doctor/services.php', 'font-size:12px; color:#0B5ED7;');
 </script>

@@ -5,6 +5,8 @@
 // SUPPORTS BOTH lab_test_id AND request_id
 // SHOWS: Ultrasound Forms OR Regular Textarea with sample results
 // WITH SHARED HEADER (DARK MODE & TIME)
+// FLOW: After saving results -> visit status becomes 'lab_test' 
+//       so doctor can continue consultation
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -90,6 +92,8 @@ try {
                 v.visit_type,
                 v.diagnosis,
                 v.symptoms,
+                v.status as visit_status,
+                v.is_completed,
                 (SELECT GROUP_CONCAT(test_name SEPARATOR ', ') FROM lab_tests WHERE visit_id = lr.visit_id) as test_names,
                 (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id) as total_tests,
                 (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id AND status = 'completed') as completed_tests,
@@ -170,6 +174,8 @@ try {
                 v.visit_type,
                 v.diagnosis,
                 v.symptoms,
+                v.status as visit_status,
+                v.is_completed,
                 lr.id as request_id,
                 lr.request_number,
                 lr.status as request_status,
@@ -248,7 +254,7 @@ if ($is_ultrasound) {
 }
 
 // ================================================================
-// ✅ FIX: HANDLE FORM SUBMISSION - IMPROVED
+// ✅ HANDLE FORM SUBMISSION - UPDATES visit status to 'lab_test'
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -270,6 +276,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($is_request) {
                     // ✅ For lab_requests: Add results to all pending/in_progress tests
                     $visit_id = $lab_test['visit_id'];
+                    $patient_id = $lab_test['patient_id'];
                     
                     // Get all pending/in_progress tests for this visit
                     $stmt = $db->prepare("
@@ -308,8 +315,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             INSERT INTO lab_tests (
                                 visit_id, doctor_id, test_name, test_price, 
                                 results, reference_range, interpretation, notes,
-                                status, performed_by, branch_id, created_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, NOW(), NOW())
+                                status, performed_by, branch_id, created_at, updated_at, completed_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, NOW(), NOW(), NOW())
                         ");
                         $stmt->execute([
                             $visit_id,
@@ -325,7 +332,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ]);
                     }
                     
-                    // Update lab_requests status to completed
+                    // ✅ Update lab_requests status to completed
                     $stmt = $db->prepare("
                         UPDATE lab_requests 
                         SET status = 'completed', 
@@ -335,22 +342,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ");
                     $stmt->execute([$lab_test['request_id']]);
                     
-                    // Update visit status
+                    // ✅ UPDATE visit status to 'lab_test' so doctor can continue
                     $stmt = $db->prepare("
                         UPDATE visits 
-                        SET status = 'completed', 
-                            completed_at = NOW(), 
+                        SET status = 'lab_test', 
                             updated_at = NOW()
                         WHERE id = ?
                     ");
                     $stmt->execute([$visit_id]);
                     
-                    $message = "✅ Results added successfully for all tests in this request!";
+                    $message = "✅ Results added successfully! Visit is now in 'Lab Test' status. Doctor can continue consultation.";
                     $message_type = 'success';
                     $save_success = true;
                     
                 } else {
                     // ✅ For lab_tests: Update single test
+                    $visit_id = $lab_test['visit_id'];
+                    
                     $stmt = $db->prepare("
                         UPDATE lab_tests 
                         SET results = ?,
@@ -373,44 +381,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ]);
                     
                     // Check if all tests for this visit are completed
-                    $stmt = $db->prepare("SELECT visit_id FROM lab_tests WHERE id = ?");
-                    $stmt->execute([$lab_test_id]);
-                    $test = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $stmt = $db->prepare("
+                        SELECT COUNT(*) as total,
+                               SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+                        FROM lab_tests 
+                        WHERE visit_id = ?
+                    ");
+                    $stmt->execute([$visit_id]);
+                    $counts = $stmt->fetch(PDO::FETCH_ASSOC);
                     
-                    if ($test && $test['visit_id']) {
+                    if ($counts['total'] > 0 && $counts['total'] == $counts['completed']) {
+                        // ✅ Update lab_requests
                         $stmt = $db->prepare("
-                            SELECT COUNT(*) as total,
-                                   SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
-                            FROM lab_tests 
+                            UPDATE lab_requests 
+                            SET status = 'completed', 
+                                completed_at = NOW(), 
+                                updated_at = NOW()
                             WHERE visit_id = ?
                         ");
-                        $stmt->execute([$test['visit_id']]);
-                        $counts = $stmt->fetch(PDO::FETCH_ASSOC);
+                        $stmt->execute([$visit_id]);
                         
-                        if ($counts['total'] > 0 && $counts['total'] == $counts['completed']) {
-                            // Update lab_requests
-                            $stmt = $db->prepare("
-                                UPDATE lab_requests 
-                                SET status = 'completed', 
-                                    completed_at = NOW(), 
-                                    updated_at = NOW()
-                                WHERE visit_id = ?
-                            ");
-                            $stmt->execute([$test['visit_id']]);
-                            
-                            // Update visit
-                            $stmt = $db->prepare("
-                                UPDATE visits 
-                                SET status = 'completed', 
-                                    completed_at = NOW(), 
-                                    updated_at = NOW()
-                                WHERE id = ?
-                            ");
-                            $stmt->execute([$test['visit_id']]);
-                        }
+                        // ✅ UPDATE visit status to 'lab_test' so doctor can continue
+                        $stmt = $db->prepare("
+                            UPDATE visits 
+                            SET status = 'lab_test', 
+                                updated_at = NOW()
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([$visit_id]);
                     }
                     
-                    $message = "✅ Result added successfully!";
+                    $message = "✅ Result added successfully! Visit is now in 'Lab Test' status. Doctor can continue consultation.";
                     $message_type = 'success';
                     $save_success = true;
                 }
@@ -428,7 +429,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
-// ✅ FIX: If save was successful, redirect with JavaScript
+// ✅ If save was successful, redirect with JavaScript
 // ================================================================
 if ($save_success && $message_type === 'success') {
     echo '<!DOCTYPE html>
@@ -437,7 +438,7 @@ if ($save_success && $message_type === 'success') {
         <script>
             window.onload = function() {
                 alert("' . $message . '");
-                window.location.href = "in_progress.php?success=1";
+                window.location.href = "completed_requests.php?success=1";
             };
         </script>
     </head>
@@ -1895,9 +1896,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c🧪 Add Result - Laboratory (FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🧪 Add Result - Laboratory (COMPLETE FLOW)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c✅ Supports both lab_test_id AND request_id', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Fixed: Redirect after successful save', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ After saving -> visit status becomes "lab_test"', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Doctor can continue consultation from lab_test', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Test: <?= htmlspecialchars($test_name ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
 </script>

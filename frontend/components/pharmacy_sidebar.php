@@ -6,8 +6,9 @@
 // CHANGES:
 // 1. Removed "Dispensing" menu item
 // 2. Added "Expired Stock" menu item
-// 3. Auto-update every 3 seconds from database
-// 4. Self-contained AJAX
+// 3. Changed "Pending Prescriptions" to "Prescriptions"
+// 4. Auto-update every 3 seconds from database
+// 5. Self-contained AJAX
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -423,9 +424,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ===== PRESCRIPTION SALES ===== -->
         <div class="nav-label mt-2">Prescription Sales</div>
         
-        <!-- Pending Prescriptions -->
+        <!-- Prescriptions (was: Pending Prescriptions) -->
         <a href="../pharmacy/pending_prescriptions.php" class="sidebar-link <?= isActive('pending_prescriptions.php') ?>">
-            <i class="fas fa-clock"></i> Pending Prescriptions
+            <i class="fas fa-prescription"></i> Prescriptions
             <?php if ($pending_prescriptions > 0): ?>
                 <span class="badge danger" id="sidebarPendingBadge"><?= $pending_prescriptions ?></span>
             <?php else: ?>
@@ -543,7 +544,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // UPDATE SIDEBAR BADGES (AJAX every 3 seconds)
     // ================================================================
     function updateSidebarBadges(pending, lowStock, expired, todayPrescriptions, todayOtc) {
-        // Update Pending Prescriptions Badge
+        // Update Prescriptions Badge (was: Pending Prescriptions)
         var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge) {
             pendingBadge.textContent = pending;
@@ -684,10 +685,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
     console.log('%c💊 Pharmacy Sidebar (SELF-CONTAINED - Auto-update every 3s)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Pending: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Expired: <?= $expired_count ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c📋 Prescriptions: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Expired: <?= $expired_count ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c📊 Today Rx: <?= $today_sales ?> | Today OTC: <?= $today_otc ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
     console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
     console.log('%c✅ "Dispensing" REMOVED from menu', 'font-size:12px; color:#DC2626;');
     console.log('%c✅ "Expired Stock" ADDED to menu', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ "Pending Prescriptions" changed to "Prescriptions"', 'font-size:12px; color:#34D399;');
 </script>

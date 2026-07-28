@@ -1,12 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/pending_prescriptions.php
-// PHARMACY - PENDING PRESCRIPTIONS WITH DISPENSE BUTTON
+// PHARMACY - PENDING PRESCRIPTIONS
 // ================================================================
-// FIXED: Added Dispensed Card (Green) - was missing
-// SHOWS ONLY: pending AND confirmed (NOT dispensed)
-// DISPENSE BUTTON → Redirects to dispense.php
-// CONFIRM BUTTON → Creates bill and sends to Cashier
+// FIXED: Ambiguous column 'id' error
+// FEATURES:
+// 1. Shows ONLY prescription-related bills (medication bills)
+// 2. Confirm button → Creates bill and sends to Cashier
+// 3. View button → View prescription details
+// 4. Auto-dispense when bill is paid
+// 5. Stock updated automatically
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -31,18 +34,17 @@ $user_full_name = $_SESSION['full_name'] ?? 'Pharmacy';
 $user_id = $_SESSION['user_id'] ?? 9;
 
 // ================================================================
-// PATH SAHIHI
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
+$db = Database::getInstance()->getConnection();
 $message = '';
 $message_type = '';
 $currency = 'TSh';
 
 try {
-    $db = getDB();
-    
     // ================================================================
     // GET SYSTEM SETTINGS
     // ================================================================
@@ -54,155 +56,246 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
     
     // ================================================================
-    // HANDLE ACTIONS
+    // AUTO-DISPENSE: Check for confirmed prescriptions with paid bills
     // ================================================================
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $action = $_POST['action'] ?? '';
+    $auto_dispensed_count = 0;
+    try {
+        // Find confirmed prescriptions with paid bills - FIXED: Added aliases
+        $stmt = $db->prepare("
+            SELECT 
+                p.id as prescription_id,
+                p.patient_id,
+                p.medication,
+                p.quantity,
+                p.visit_id,
+                p.prescription_number,
+                b.id as bill_id,
+                b.bill_number
+            FROM prescriptions p
+            JOIN patient_bills b ON b.visit_id = p.visit_id
+            JOIN bill_items bi ON bi.bill_id = b.id
+            WHERE p.branch_id = ? 
+            AND p.status = 'confirmed'
+            AND b.status = 'paid'
+            AND bi.item_type = 'medication'
+            AND p.id NOT IN (SELECT prescription_id FROM prescription_sales WHERE prescription_id = p.id)
+        ");
+        $stmt->execute([$user_branch_id]);
+        $to_dispense = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($to_dispense as $item) {
+            try {
+                $db->beginTransaction();
+                
+                // Update prescription to dispensed
+                $stmt = $db->prepare("
+                    UPDATE prescriptions 
+                    SET status = 'dispensed', 
+                        dispensed_at = NOW(), 
+                        updated_at = NOW(),
+                        pharmacy_id = ?
+                    WHERE id = ? AND branch_id = ?
+                ");
+                $stmt->execute([$user_id, $item['prescription_id'], $user_branch_id]);
+                
+                // Record in prescription_sales
+                $sale_number = 'SALE-' . date('Ymd') . '-' . str_pad($item['prescription_id'], 6, '0', STR_PAD_LEFT);
+                $stmt = $db->prepare("
+                    INSERT INTO prescription_sales (
+                        sale_number, prescription_id, patient_id, visit_id,
+                        total_amount, dispensed_by, status, payment_method,
+                        payment_status, branch_id, created_at, dispensed_at
+                    ) VALUES (?, ?, ?, ?, 0, ?, 'dispensed', 'cash', 'paid', ?, NOW(), NOW())
+                ");
+                $stmt->execute([
+                    $sale_number,
+                    $item['prescription_id'],
+                    $item['patient_id'],
+                    $item['visit_id'],
+                    $user_id,
+                    $user_branch_id
+                ]);
+                
+                // Update inventory - reduce stock
+                $stmt = $db->prepare("
+                    UPDATE medications_inventory 
+                    SET quantity = quantity - ? 
+                    WHERE medication_name = ? AND branch_id = ? AND status = 'active'
+                ");
+                $stmt->execute([$item['quantity'], $item['medication_name'], $user_branch_id]);
+                
+                // Log activity
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, action, details, created_at)
+                    VALUES (?, 'prescription_auto_dispensed', ?, NOW())
+                ");
+                $stmt->execute([
+                    $user_id,
+                    "Prescription #" . $item['prescription_number'] . " auto-dispensed after payment (Bill: " . $item['bill_number'] . ")"
+                ]);
+                
+                $db->commit();
+                $auto_dispensed_count++;
+                
+            } catch (Exception $e) {
+                $db->rollBack();
+                error_log("Auto-dispense error: " . $e->getMessage());
+            }
+        }
+        
+        if ($auto_dispensed_count > 0) {
+            $message = "✅ " . $auto_dispensed_count . " prescription(s) auto-dispensed after payment! Stock updated.";
+            $message_type = 'success';
+        }
+        
+    } catch (Exception $e) {
+        error_log("Auto-dispense check error: " . $e->getMessage());
+    }
+    
+    // ================================================================
+    // HANDLE CONFIRM ACTION
+    // ================================================================
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'confirm_prescription') {
         $prescription_id = isset($_POST['prescription_id']) ? (int)$_POST['prescription_id'] : 0;
         
-        // ================================================================
-        // CONFIRM PRESCRIPTION - Send Bill to Cashier
-        // ================================================================
-        if ($action === 'confirm_prescription') {
-            if ($prescription_id > 0) {
-                try {
-                    $db->beginTransaction();
-                    
-                    // Get prescription details
+        if ($prescription_id > 0) {
+            try {
+                $db->beginTransaction();
+                
+                // Get prescription details
+                $stmt = $db->prepare("
+                    SELECT p.*, pat.id as patient_id, pat.full_name as patient_name, 
+                           pat.patient_id as patient_code, v.id as visit_id
+                    FROM prescriptions p
+                    JOIN patients pat ON p.patient_id = pat.id
+                    LEFT JOIN visits v ON p.visit_id = v.id
+                    WHERE p.id = ? AND p.branch_id = ? AND p.status = 'pending'
+                ");
+                $stmt->execute([$prescription_id, $user_branch_id]);
+                $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($prescription) {
+                    // Get medication price from inventory
                     $stmt = $db->prepare("
-                        SELECT p.*, pat.id as patient_id, pat.full_name as patient_name, 
-                               pat.patient_id as patient_code, v.id as visit_id
-                        FROM prescriptions p
-                        JOIN patients pat ON p.patient_id = pat.id
-                        LEFT JOIN visits v ON p.visit_id = v.id
-                        WHERE p.id = ? AND p.branch_id = ? AND p.status = 'pending'
+                        SELECT selling_price FROM medications_inventory 
+                        WHERE medication_name = ? AND branch_id = ? AND status = 'active'
+                        LIMIT 1
                     ");
-                    $stmt->execute([$prescription_id, $user_branch_id]);
-                    $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $stmt->execute([$prescription['medication'], $user_branch_id]);
+                    $price_result = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $unit_price = $price_result['selling_price'] ?? 0;
                     
-                    if ($prescription) {
-                        // Get medication price from inventory
+                    // Calculate total
+                    $quantity = (int)$prescription['quantity'];
+                    $total_amount = $unit_price * $quantity;
+                    
+                    // Generate bill number
+                    $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($prescription['patient_id'], 6, '0', STR_PAD_LEFT);
+                    
+                    // Check if bill number exists
+                    $stmt = $db->prepare("SELECT id FROM patient_bills WHERE bill_number = ?");
+                    $stmt->execute([$bill_number]);
+                    if ($stmt->fetch()) {
+                        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($prescription['patient_id'], 6, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                    }
+                    
+                    // Check if bill already exists for this visit
+                    $stmt = $db->prepare("
+                        SELECT id FROM patient_bills 
+                        WHERE visit_id = ? AND branch_id = ?
+                    ");
+                    $stmt->execute([$prescription['visit_id'], $user_branch_id]);
+                    $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if (!$existing_bill) {
+                        // Insert bill
                         $stmt = $db->prepare("
-                            SELECT selling_price FROM medications_inventory 
-                            WHERE medication_name = ? AND branch_id = ? AND status = 'active'
-                            LIMIT 1
+                            INSERT INTO patient_bills (
+                                bill_number, patient_id, visit_id, 
+                                total_amount, balance, status, 
+                                created_by, branch_id,
+                                created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NOW(), NOW())
                         ");
-                        $stmt->execute([$prescription['medication'], $user_branch_id]);
-                        $price_result = $stmt->fetch(PDO::FETCH_ASSOC);
-                        $unit_price = $price_result['selling_price'] ?? 0;
+                        $stmt->execute([
+                            $bill_number,
+                            $prescription['patient_id'],
+                            $prescription['visit_id'],
+                            $total_amount,
+                            $total_amount,
+                            $user_id,
+                            $user_branch_id
+                        ]);
+                        $bill_id = $db->lastInsertId();
                         
-                        // Calculate total
-                        $quantity = (int)$prescription['quantity'];
-                        $total_amount = $unit_price * $quantity;
-                        
-                        // Generate bill number with unique check
-                        $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($prescription['patient_id'], 6, '0', STR_PAD_LEFT);
-                        
-                        // Check if bill number exists
-                        $stmt = $db->prepare("SELECT id FROM patient_bills WHERE bill_number = ?");
-                        $stmt->execute([$bill_number]);
-                        if ($stmt->fetch()) {
-                            $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($prescription['patient_id'], 6, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
-                        }
-                        
-                        // Check if bill already exists for this visit
+                        // Insert bill item - ONLY for medication
                         $stmt = $db->prepare("
-                            SELECT id FROM patient_bills 
-                            WHERE visit_id = ? AND branch_id = ?
+                            INSERT INTO bill_items (
+                                bill_id, item_type, item_name, 
+                                quantity, unit_price, total_price,
+                                payment_status, is_paid, status, created_at
+                            ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
                         ");
-                        $stmt->execute([$prescription['visit_id'], $user_branch_id]);
-                        $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                        $stmt->execute([
+                            $bill_id,
+                            $prescription['medication'],
+                            $quantity,
+                            $unit_price,
+                            $total_amount
+                        ]);
                         
-                        if (!$existing_bill) {
-                            // Insert bill
-                            $stmt = $db->prepare("
-                                INSERT INTO patient_bills (
-                                    bill_number, patient_id, visit_id, 
-                                    total_amount, balance, status, 
-                                    created_by, branch_id,
-                                    created_at, updated_at
-                                ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NOW(), NOW())
-                            ");
-                            $stmt->execute([
-                                $bill_number,
-                                $prescription['patient_id'],
-                                $prescription['visit_id'],
-                                $total_amount,
-                                $total_amount,
-                                $user_id,
-                                $user_branch_id
-                            ]);
-                            $bill_id = $db->lastInsertId();
-                            
-                            // Insert bill item
-                            $stmt = $db->prepare("
-                                INSERT INTO bill_items (
-                                    bill_id, item_type, item_name, 
-                                    quantity, unit_price, total_price,
-                                    payment_status, is_paid, status, created_at
-                                ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
-                            ");
-                            $stmt->execute([
-                                $bill_id,
-                                $prescription['medication'],
-                                $quantity,
-                                $unit_price,
-                                $total_amount
-                            ]);
-                            
-                            // Update prescription status to 'confirmed'
-                            $stmt = $db->prepare("
-                                UPDATE prescriptions 
-                                SET status = 'confirmed', 
-                                    pharmacy_id = ?,
-                                    updated_at = NOW()
-                                WHERE id = ? AND branch_id = ?
-                            ");
-                            $stmt->execute([$user_id, $prescription_id, $user_branch_id]);
-                            
-                            // Log activity
-                            $stmt = $db->prepare("
-                                INSERT INTO activity_logs (user_id, action, details, created_at)
-                                VALUES (?, 'prescription_confirmed', ?, NOW())
-                            ");
-                            $stmt->execute([
-                                $user_id,
-                                "Prescription #" . $prescription['prescription_number'] . " confirmed - Bill #" . $bill_number . " sent to Cashier"
-                            ]);
-                            
-                            $db->commit();
-                            $_SESSION['flash_message'] = "✅ Prescription confirmed! Bill sent to Cashier.";
-                            $_SESSION['flash_type'] = 'success';
-                        } else {
-                            $db->rollBack();
-                            $_SESSION['flash_message'] = "⚠️ Bill already exists for this visit.";
-                            $_SESSION['flash_type'] = 'warning';
-                        }
+                        // Update prescription status to 'confirmed'
+                        $stmt = $db->prepare("
+                            UPDATE prescriptions 
+                            SET status = 'confirmed', 
+                                pharmacy_id = ?,
+                                updated_at = NOW()
+                            WHERE id = ? AND branch_id = ?
+                        ");
+                        $stmt->execute([$user_id, $prescription_id, $user_branch_id]);
+                        
+                        // Log activity
+                        $stmt = $db->prepare("
+                            INSERT INTO activity_logs (user_id, action, details, created_at)
+                            VALUES (?, 'prescription_confirmed', ?, NOW())
+                        ");
+                        $stmt->execute([
+                            $user_id,
+                            "Prescription #" . $prescription['prescription_number'] . " confirmed - Bill #" . $bill_number . " sent to Cashier"
+                        ]);
+                        
+                        $db->commit();
+                        $_SESSION['flash_message'] = "✅ Prescription confirmed! Bill sent to Cashier.";
+                        $_SESSION['flash_type'] = 'success';
                     } else {
                         $db->rollBack();
-                        $_SESSION['flash_message'] = "❌ Prescription not found or already processed.";
-                        $_SESSION['flash_type'] = 'error';
+                        $_SESSION['flash_message'] = "⚠️ Bill already exists for this visit.";
+                        $_SESSION['flash_type'] = 'warning';
                     }
-                } catch (Exception $e) {
+                } else {
                     $db->rollBack();
-                    $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
+                    $_SESSION['flash_message'] = "❌ Prescription not found or already processed.";
                     $_SESSION['flash_type'] = 'error';
                 }
+            } catch (Exception $e) {
+                $db->rollBack();
+                $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
+                $_SESSION['flash_type'] = 'error';
             }
-            
-            // Redirect after POST to prevent resubmission
-            $redirect_url = 'pending_prescriptions.php';
-            if (!empty($_GET)) {
-                $params = [];
-                if (!empty($_GET['status'])) $params['status'] = $_GET['status'];
-                if (!empty($_GET['search'])) $params['search'] = $_GET['search'];
-                if (!empty($params)) {
-                    $redirect_url .= '?' . http_build_query($params);
-                }
-            }
-            header('Location: ' . $redirect_url);
-            exit;
         }
+        
+        // Redirect after POST
+        $redirect_url = 'pending_prescriptions.php';
+        if (!empty($_GET)) {
+            $params = [];
+            if (!empty($_GET['status'])) $params['status'] = $_GET['status'];
+            if (!empty($_GET['search'])) $params['search'] = $_GET['search'];
+            if (!empty($params)) {
+                $redirect_url .= '?' . http_build_query($params);
+            }
+        }
+        header('Location: ' . $redirect_url);
+        exit;
     }
     
     // ================================================================
@@ -220,16 +313,13 @@ try {
     // ================================================================
     $filter_status = isset($_GET['status']) ? $_GET['status'] : 'all';
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-    $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
-    $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
     
     // ================================================================
-    // BUILD QUERY - SHOW ONLY PENDING AND CONFIRMED
+    // BUILD QUERY - SHOW PENDING AND CONFIRMED - FIXED: Alias columns
     // ================================================================
     $conditions = ["p.branch_id = ?", "p.status IN ('pending', 'confirmed')"];
     $params = [$user_branch_id];
     
-    // Filter by status (only pending or confirmed)
     if ($filter_status !== 'all') {
         $conditions[] = "p.status = ?";
         $params[] = $filter_status;
@@ -243,20 +333,10 @@ try {
         $params[] = "%$search%";
     }
     
-    if (!empty($date_from)) {
-        $conditions[] = "DATE(p.created_at) >= ?";
-        $params[] = $date_from;
-    }
-    
-    if (!empty($date_to)) {
-        $conditions[] = "DATE(p.created_at) <= ?";
-        $params[] = $date_to;
-    }
-    
     $where_clause = implode(" AND ", $conditions);
     
     // ================================================================
-    // GET PRESCRIPTIONS
+    // GET PRESCRIPTIONS WITH ONLY MEDICATION BILLS - FIXED: Removed ambiguous 'id'
     // ================================================================
     $sql = "
         SELECT 
@@ -264,13 +344,27 @@ try {
             pat.full_name as patient_name,
             pat.patient_id as patient_code,
             pat.phone,
+            pat.gender,
+            pat.date_of_birth,
             u.full_name as doctor_name,
             u.specialty,
             v.visit_number,
-            (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = p.id) as item_count,
-            (SELECT id FROM patient_bills WHERE visit_id = p.visit_id ORDER BY id DESC LIMIT 1) as bill_id,
-            (SELECT status FROM patient_bills WHERE visit_id = p.visit_id ORDER BY id DESC LIMIT 1) as bill_status,
-            (SELECT total_amount FROM patient_bills WHERE visit_id = p.visit_id ORDER BY id DESC LIMIT 1) as bill_total
+            -- Get ONLY medication bills (prescription bills) - FIXED: Added aliases
+            (SELECT b.id FROM patient_bills b 
+             JOIN bill_items bi ON bi.bill_id = b.id
+             WHERE b.visit_id = p.visit_id 
+             AND bi.item_type = 'medication'
+             ORDER BY b.id DESC LIMIT 1) as bill_id,
+            (SELECT b.status FROM patient_bills b 
+             JOIN bill_items bi ON bi.bill_id = b.id
+             WHERE b.visit_id = p.visit_id 
+             AND bi.item_type = 'medication'
+             ORDER BY b.id DESC LIMIT 1) as bill_status,
+            (SELECT b.total_amount FROM patient_bills b 
+             JOIN bill_items bi ON bi.bill_id = b.id
+             WHERE b.visit_id = p.visit_id 
+             AND bi.item_type = 'medication'
+             ORDER BY b.id DESC LIMIT 1) as bill_total
         FROM prescriptions p
         LEFT JOIN patients pat ON p.patient_id = pat.id
         LEFT JOIN users u ON p.doctor_id = u.id
@@ -290,28 +384,16 @@ try {
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET STATUS COUNTS - All statuses including dispensed
+    // GET STATUS COUNTS - Only prescription bills
     // ================================================================
-    $statuses = ['pending', 'confirmed', 'dispensed'];
     $status_counts = [];
-    foreach ($statuses as $status) {
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM prescriptions 
-            WHERE branch_id = ? AND status = ?
-        ");
+    foreach (['pending', 'confirmed', 'dispensed'] as $status) {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = ?");
         $stmt->execute([$user_branch_id, $status]);
         $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     }
     
-    // Total pending (pending + confirmed)
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM prescriptions 
-        WHERE branch_id = ? AND status IN ('pending', 'confirmed')
-    ");
-    $stmt->execute([$user_branch_id]);
-    $total_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $total_count = $status_counts['pending'] + $status_counts['confirmed'];
     
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
@@ -369,6 +451,13 @@ function getBillStatusBadgeClass($status) {
     return $map[$status] ?? 'badge-warning';
 }
 
+function calculateAge($dob) {
+    if (empty($dob)) return 'N/A';
+    $birthDate = new DateTime($dob);
+    $today = new DateTime('today');
+    return $birthDate->diff($today)->y;
+}
+
 // ================================================================
 // INCLUDE PHARMACY HEADER & SIDEBAR
 // ================================================================
@@ -381,15 +470,14 @@ include_once '../../components/pharmacy_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pending Prescriptions - Braick Dispensary</title>
+    <title>Prescriptions - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* ================================================================
+           PAGE STYLES
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -412,28 +500,22 @@ include_once '../../components/pharmacy_sidebar.php';
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
-            --radius: 10px;
-            --radius-lg: 14px;
-            --transition: all 0.3s ease;
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
+            --radius: 10px;
+            --radius-lg: 14px;
+            --transition: all 0.3s ease;
         }
         
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
-            --bg-nav: #1E293B;
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -445,152 +527,6 @@ include_once '../../components/pharmacy_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -598,6 +534,7 @@ include_once '../../components/pharmacy_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        /* Page Header */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
@@ -613,21 +550,9 @@ include_once '../../components/pharmacy_sidebar.php';
             overflow: hidden;
         }
         
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
-            font-size: 1.8rem;
+            font-size: 1.6rem;
             font-weight: 700;
             display: flex;
             align-items: center;
@@ -653,12 +578,7 @@ include_once '../../components/pharmacy_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
+        .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 4px 14px;
@@ -666,11 +586,9 @@ include_once '../../components/pharmacy_sidebar.php';
             font-size: 0.65rem;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
         }
         
-        .page-header .header-badge {
+        .header-badge {
             background: rgba(255,255,255,0.15);
             color: white;
             padding: 4px 14px;
@@ -684,7 +602,7 @@ include_once '../../components/pharmacy_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        .page-header .btn-outline-light {
+        .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
             border: 1px solid rgba(255,255,255,0.2);
@@ -702,15 +620,26 @@ include_once '../../components/pharmacy_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .btn-outline-light:hover {
+        .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           STATS ROW - 4 CARDS (including Dispensed - Green)
-           ================================================================ */
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(52, 211, 153, 0.2);
+            color: #34D399;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            border: 1px solid rgba(52, 211, 153, 0.3);
+        }
+        .live-badge i { font-size: 0.4rem; }
+        
+        /* Stats Row */
         .stats-row {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -758,12 +687,9 @@ include_once '../../components/pharmacy_sidebar.php';
         .stat-card.total { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
         .stat-card.pending { background: linear-gradient(135deg, #D97706, #B45309); }
         .stat-card.confirmed { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+        .stat-card.dispensed { background: linear-gradient(135deg, #059669, #047857); }
         
-        /* ✅ FIXED: Dispensed Card - GREEN */
-        .stat-card.dispensed { 
-            background: linear-gradient(135deg, #059669, #047857); 
-        }
-        
+        /* Filter Section */
         .filter-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -836,6 +762,7 @@ include_once '../../components/pharmacy_sidebar.php';
             transform: translateY(-2px);
         }
         
+        /* Table */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -926,37 +853,14 @@ include_once '../../components/pharmacy_sidebar.php';
             text-decoration: none;
         }
         
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
         .btn-primary {
             background: var(--primary);
             color: white;
         }
-        
         .btn-primary:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-danger {
-            background: var(--danger);
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: #B91C1C;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
         }
         
         .btn-outline {
@@ -964,7 +868,6 @@ include_once '../../components/pharmacy_sidebar.php';
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
         }
-        
         .btn-outline:hover {
             background: var(--bg-body);
             border-color: var(--primary);
@@ -975,34 +878,6 @@ include_once '../../components/pharmacy_sidebar.php';
             padding: 3px 8px;
             font-size: 0.6rem;
             border-radius: 4px;
-        }
-        
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none !important;
-        }
-        
-        .btn-dispense {
-            background: var(--success);
-            color: white;
-            padding: 6px 16px;
-            border-radius: 6px;
-            font-weight: 600;
-            font-size: 0.7rem;
-            transition: var(--transition);
-            border: none;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .btn-dispense:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
         .btn-confirm {
@@ -1027,35 +902,60 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
         }
         
-        .role-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
+        .btn-view {
+            background: var(--gray-500);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 6px;
             font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge-display {
-            display: inline-block;
             font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
+            transition: var(--transition);
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
         
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
+        .btn-view:hover {
+            background: var(--gray-600);
+            transform: translateY(-2px);
+        }
+        
+        .btn-auto-dispensed {
+            background: #8B5CF6;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.6rem;
+            border: none;
+            cursor: default;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .btn-dispensed {
+            background: var(--success);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.6rem;
+            border: none;
+            cursor: default;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .action-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            align-items: center;
         }
         
         .table-footer {
@@ -1123,24 +1023,46 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        .font-mono { font-family: monospace; }
         
-        .action-buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            align-items: center;
+        .workflow-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            background: var(--primary-bg);
+            color: var(--primary);
+            border: 1px solid var(--primary-light);
         }
         
+        .workflow-badge.step1 { background: #FEF3C7; color: #D97706; border-color: #D97706; }
+        .workflow-badge.step2 { background: #E8F0FE; color: #0B5ED7; border-color: #0B5ED7; }
+        .workflow-badge.step3 { background: #D1FAE5; color: #059669; border-color: #059669; }
+        
+        .bill-only-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid #D97706;
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
+        
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
             .stats-row { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .filter-row { flex-direction: column; align-items: stretch; }
@@ -1149,61 +1071,17 @@ include_once '../../components/pharmacy_sidebar.php';
             .data-table { font-size: 0.7rem; }
             .data-table thead th, .data-table tbody td { padding: 5px 8px; }
             .action-buttons { flex-direction: column; gap: 3px; }
-            .btn-dispense, .btn-confirm { padding: 3px 10px; font-size: 0.6rem; }
+            .btn-confirm { padding: 3px 10px; font-size: 0.6rem; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
             .stats-row { grid-template-columns: 1fr; }
             .page-title { font-size: 1.1rem; }
-            .btn { padding: 3px 8px; font-size: 0.55rem; }
         }
     </style>
 </head>
 <body>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search prescriptions..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1217,25 +1095,27 @@ include_once '../../components/pharmacy_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-prescription"></i>
-                Pending Prescriptions
+                Prescriptions
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">PHARMACY</span>
-                <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                <span class="header-badge">
                     <i class="fas fa-list"></i> <?= $total_count ?> Pending
                 </span>
-                <?php if ($filter_status !== 'all'): ?>
-                    <span class="header-badge" style="background:rgba(255,255,255,0.15);">
-                        <i class="fas fa-filter"></i> <?= ucfirst($filter_status) ?>
-                    </span>
-                <?php endif; ?>
+                <span class="bill-only-badge">
+                    <i class="fas fa-receipt"></i> Prescription Bills Only
+                </span>
+                <span class="live-badge" id="liveBadge">
+                    <i class="fas fa-circle" style="color:#34D399;"></i>
+                    Auto-Dispense
+                    <span id="liveTime" style="font-weight:400;font-size:0.55rem;"><?= date('H:i:s') ?></span>
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-prescription"></i>
-                Manage pending prescriptions in <strong><?= htmlspecialchars($branch_name) ?></strong>
-                <span class="text-xs text-gray-400 ml-2">
-                    <i class="fas fa-info-circle"></i> 
-                    <strong>Dispense</strong> = Go to dispense page | 
-                    <strong>Confirm</strong> = Send bill to Cashier
-                </span>
+                <strong>Workflow:</strong> 
+                <span class="workflow-badge step1">1️⃣ Confirm → Bill to Cashier</span>
+                <span class="workflow-badge step2">2️⃣ Cashier Pays → Auto-Dispense</span>
+                <span class="workflow-badge step3">3️⃣ Dispensed → History & Stock Updated</span>
+                <span class="bill-only-badge ml-2">📋 Only medication bills shown</span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1257,7 +1137,7 @@ include_once '../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - 4 CARDS (Added Dispensed - Green) -->
+    <!-- STATS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-row">
         <a href="?status=all" class="stat-card total <?= $filter_status === 'all' ? 'ring-2 ring-white ring-opacity-50' : '' ?>">
@@ -1275,7 +1155,6 @@ include_once '../../components/pharmacy_sidebar.php';
             <div class="stat-number"><?= $status_counts['confirmed'] ?? 0 ?></div>
             <div class="stat-label">✅ Confirmed</div>
         </a>
-        <!-- ✅ FIXED: Dispensed Card - GREEN -->
         <a href="prescription_history.php?status=dispensed" class="stat-card dispensed">
             <div class="stat-icon"><i class="fas fa-prescription-bottle"></i></div>
             <div class="stat-number"><?= $status_counts['dispensed'] ?? 0 ?></div>
@@ -1310,9 +1189,9 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TABLE - Only Pending and Confirmed -->
+    <!-- TABLE -->
     <!-- ================================================================ -->
-    <div class="table-container">
+    <div class="table-container" id="prescriptionsContainer">
         <div class="table-scroll">
             <table class="data-table">
                 <thead>
@@ -1330,56 +1209,63 @@ include_once '../../components/pharmacy_sidebar.php';
                 </thead>
                 <tbody>
                     <?php if (count($prescriptions) > 0): ?>
-                        <?php $i = 1; foreach ($prescriptions as $pres): ?>
-                            <tr>
+                        <?php $i = 1; foreach ($prescriptions as $pres): 
+                            $age = calculateAge($pres['date_of_birth'] ?? '');
+                        ?>
+                            <tr class="animate-fade-in-up" data-prescription-id="<?= $pres['id'] ?>" data-status="<?= $pres['status'] ?>">
                                 <td><?= $i++ ?></td>
                                 <td>
                                     <span class="font-mono text-xs font-semibold" style="color:var(--primary);">
                                         <?= htmlspecialchars($pres['prescription_number'] ?? 'N/A') ?>
                                     </span>
-                                    <?php if (($pres['item_count'] ?? 0) > 0): ?>
-                                        <span class="text-xs text-gray-400 block">(<?= $pres['item_count'] ?> items)</span>
-                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <div class="font-medium text-sm"><?= htmlspecialchars($pres['patient_name'] ?? 'Unknown') ?></div>
                                     <div class="text-xs text-gray-400"><?= htmlspecialchars($pres['patient_code'] ?? 'N/A') ?></div>
+                                    <div class="text-xs text-gray-400">
+                                        <?= htmlspecialchars($pres['gender'] ?? 'N/A') ?> • <?= $age ?> yrs
+                                    </div>
                                     <?php if (!empty($pres['phone'])): ?>
                                         <div class="text-xs text-gray-400">📱 <?= htmlspecialchars($pres['phone']) ?></div>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="text-sm"><?= htmlspecialchars($pres['medication'] ?? 'N/A') ?></span>
+                                    <span class="text-sm font-semibold"><?= htmlspecialchars($pres['medication'] ?? 'N/A') ?></span>
                                     <?php if (!empty($pres['dosage'])): ?>
-                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['dosage']) ?></span>
+                                        <span class="text-xs text-gray-400 block">💊 <?= htmlspecialchars($pres['dosage']) ?></span>
                                     <?php endif; ?>
                                     <?php if (!empty($pres['frequency'])): ?>
-                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['frequency']) ?></span>
+                                        <span class="text-xs text-gray-400 block">🕐 <?= htmlspecialchars($pres['frequency']) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($pres['duration'])): ?>
+                                        <span class="text-xs text-gray-400 block">📅 <?= $pres['duration'] ?> days</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
                                     <span class="text-sm font-semibold"><?= $pres['quantity'] ?? 0 ?></span>
-                                    <?php if (!empty($pres['duration'])): ?>
-                                        <span class="text-xs text-gray-400 block"><?= $pres['duration'] ?> days</span>
+                                    <?php if (!empty($pres['route'])): ?>
+                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['route']) ?></span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
                                     <span class="badge-status <?= getStatusBadgeClass($pres['status'] ?? 'pending') ?>">
                                         <?= getStatusLabel($pres['status'] ?? 'pending') ?>
                                     </span>
+                                    <?php if (($pres['status'] ?? '') === 'confirmed'): ?>
+                                        <span class="text-xs text-blue-600 block">⏳ Waiting for payment</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <?php if (!empty($pres['bill_id'])): ?>
-                                        <span class="badge-status <?= getBillStatusBadgeClass($pres['bill_status'] ?? 'pending') ?>">
-                                            <?= getBillStatusLabel($pres['bill_status'] ?? 'pending') ?>
-                                        </span>
                                         <?php if (($pres['bill_status'] ?? '') === 'paid'): ?>
-                                            <span class="text-xs text-green-600 block">✅ Paid</span>
+                                            <span class="badge-status badge-success">✅ Paid</span>
+                                            <span class="text-xs text-green-600 block">Auto-Dispensed!</span>
                                         <?php else: ?>
-                                            <span class="text-xs text-yellow-600 block">⏳ TSh <?= number_format($pres['bill_total'] ?? 0, 2) ?></span>
+                                            <span class="badge-status badge-warning">⏳ Pending Payment</span>
+                                            <span class="text-xs text-yellow-600 block">TSh <?= number_format($pres['bill_total'] ?? 0) ?></span>
                                         <?php endif; ?>
                                     <?php else: ?>
-                                        <span class="text-xs text-gray-400">No bill yet</span>
+                                        <span class="text-xs text-gray-400">No bill</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -1390,21 +1276,29 @@ include_once '../../components/pharmacy_sidebar.php';
                                 </td>
                                 <td>
                                     <div class="action-buttons">
-                                        <!-- View Button -->
-                                        <a href="view_prescription.php?id=<?= $pres['id'] ?>" class="btn btn-primary btn-sm" title="View Details">
-                                            <i class="fas fa-eye"></i>
+                                        <!-- VIEW Button -->
+                                        <a href="view_prescription.php?id=<?= $pres['id'] ?>" class="btn-view" title="View Prescription Details">
+                                            <i class="fas fa-eye"></i> View
                                         </a>
                                         
-                                        <!-- DISPENSE BUTTON - Goes to dispense.php -->
-                                        <?php if (($pres['status'] ?? '') === 'pending' || ($pres['status'] ?? '') === 'confirmed'): ?>
-                                            <a href="dispense.php?id=<?= $pres['id'] ?>" class="btn-dispense" title="Dispense Prescription">
-                                                <i class="fas fa-prescription-bottle"></i> Dispense
-                                            </a>
-                                        <?php endif; ?>
-                                        
-                                        <!-- Confirm Button - Only for pending with no bill -->
-                                        <?php if (($pres['status'] ?? '') === 'pending' && empty($pres['bill_id'])): ?>
-                                            <form method="POST" action="" style="display:inline;" onsubmit="return confirm('Confirm this prescription?\n\n✅ Bill will be created and sent to Cashier.\n\nMedication: <?= addslashes($pres['medication'] ?? 'N/A') ?>\nQuantity: <?= $pres['quantity'] ?? 0 ?>\nPatient: <?= addslashes($pres['patient_name'] ?? 'Unknown') ?>');">
+                                        <!-- Check status -->
+                                        <?php if (($pres['status'] ?? '') === 'dispensed'): ?>
+                                            <span class="btn-dispensed">
+                                                <i class="fas fa-check-circle"></i> Dispensed
+                                            </span>
+                                        <?php elseif (($pres['status'] ?? '') === 'confirmed'): ?>
+                                            <span class="btn-auto-dispensed">
+                                                <i class="fas fa-clock"></i> Awaiting Payment
+                                            </span>
+                                            <?php if (!empty($pres['bill_id']) && ($pres['bill_status'] ?? '') === 'paid'): ?>
+                                                <span class="btn-dispensed" style="background:#8B5CF6;">
+                                                    <i class="fas fa-check-circle"></i> Auto-Dispensed
+                                                </span>
+                                            <?php endif; ?>
+                                        <?php elseif (($pres['status'] ?? '') === 'pending'): ?>
+                                            <!-- CONFIRM BUTTON - Creates bill and sends to Cashier -->
+                                            <form method="POST" action="" style="display:inline;" 
+                                                  onsubmit="return confirm('Confirm this prescription?\n\n✅ Bill will be created and sent to Cashier.\n\n💊 Medication: <?= addslashes($pres['medication'] ?? 'N/A') ?>\n📦 Quantity: <?= $pres['quantity'] ?? 0 ?>\n👤 Patient: <?= addslashes($pres['patient_name'] ?? 'Unknown') ?>\n\n⚠️ After confirmation, patient will be auto-dispensed when bill is paid.');">
                                                 <input type="hidden" name="action" value="confirm_prescription">
                                                 <input type="hidden" name="prescription_id" value="<?= $pres['id'] ?>">
                                                 <button type="submit" class="btn-confirm" title="Confirm - Send Bill to Cashier">
@@ -1445,7 +1339,9 @@ include_once '../../components/pharmacy_sidebar.php';
         <!-- Table Footer -->
         <div class="table-footer">
             <span>
-                <i class="fas fa-list"></i> Showing <strong><?= count($prescriptions) ?></strong> pending prescriptions
+                <i class="fas fa-list"></i> Showing <strong><?= count($prescriptions) ?></strong> prescriptions
+                <span class="text-xs text-gray-400 ml-2">(Pending + Confirmed)</span>
+                <span class="bill-only-badge ml-2" style="font-size:0.55rem;">📋 Prescription Bills Only</span>
             </span>
             <span>
                 <span class="count-badge"><?= $total_count ?></span> Total pending
@@ -1463,7 +1359,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Pending Prescriptions
+            Prescriptions
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1488,6 +1384,9 @@ include_once '../../components/pharmacy_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // DARK MODE
+    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1515,35 +1414,49 @@ include_once '../../components/pharmacy_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
+    if (sidebarToggle && sidebar) {
+        sidebarToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+        });
+    }
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
     });
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
+        var liveTime = document.getElementById('liveTime');
+        if (liveTime) {
+            liveTime.textContent = timeStr;
+        }
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
+    // ================================================================
+    // SEARCH
+    // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
@@ -1557,11 +1470,19 @@ include_once '../../components/pharmacy_sidebar.php';
         }
     }
     
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
+    if (searchBtn) {
+        searchBtn.addEventListener('click', performSearch);
+    }
+    
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+    }
 
+    // ================================================================
+    // TOAST
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1582,6 +1503,23 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            if (searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
+        }
+        if (e.key === 'F5') {
+            e.preventDefault();
+            window.location.reload();
+        }
+    });
+
     <?php if ($message && $message_type): ?>
         setTimeout(function() {
             showToast('<?= $message_type === 'success' ? '✅ Success' : ($message_type === 'warning' ? '⚠️ Warning' : '❌ Error') ?>', 
@@ -1591,15 +1529,13 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 500);
     <?php endif; ?>
 
-    console.log('%c💊 Braick - Pending Prescriptions (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - Prescriptions (Prescription Bills Only - FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Total Pending: <?= $total_count ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c⏳ Pending: <?= $status_counts['pending'] ?? 0 ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Confirmed: <?= $status_counts['confirmed'] ?? 0 ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💊 Dispensed: <?= $status_counts['dispensed'] ?? 0 ?> (GREEN CARD)', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Filter: <?= ucfirst($filter_status) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔄 DISPENSE button → Goes to dispense.php', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Confirm button → Creates bill and sends to Cashier', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Dispensed Card ADDED - Green color', 'font-size:13px; color:#059669;');
+    console.log('%c💊 Dispensed: <?= $status_counts['dispensed'] ?? 0 ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📋 ONLY Prescription Bills (medication bills) are shown', 'font-size:13px; color:#D97706;');
+    console.log('%c🔄 Workflow: Confirm → Bill → Auto-Dispense → Stock Updated → History', 'font-size:13px; color:#8B5CF6;');
 </script>
 
 </body>
