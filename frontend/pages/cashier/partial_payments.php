@@ -1,46 +1,30 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/partial_payments.php
-// CASHIER - PARTIAL PAYMENTS LIST
-// FIXED: Uses shared header with clock
-// FIXED: Dark mode fully working with header
-// FIXED: Table format with expandable rows
-// FIXED: Green header background
-// FIXED: Pay button redirects to process_payment.php
+// CASHIER - PARTIAL PAYMENTS LIST (GREEN THEME)
+// VIEW ALL BILLS WITH PARTIAL PAYMENTS
+// WITH FILTERS: Today, Week, Month, 3 Months, 6 Months, Year, All, Date Picker
+// USES SHARED HEADER WITH DARK MODE
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Default to cashier (ID: 7)
+// FORCE SESSION - Cashier (User ID 11)
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 7;
-    $_SESSION['full_name'] = 'Cashier User';
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
+    $_SESSION['user_id'] = 11;
+    $_SESSION['full_name'] = 'Rose Mwangi';
     $_SESSION['role'] = 'cashier';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier';
-    $_SESSION['email'] = 'cashier@braick.com';
-    $_SESSION['phone'] = '+255 700 000 007';
+    $_SESSION['username'] = 'cashier.rose';
     $_SESSION['is_admin'] = false;
     $_SESSION['profile_pic'] = '';
+    $_SESSION['email'] = 'rose@braick.com';
+    $_SESSION['phone'] = '+255 700 000 005';
 }
-
-// ================================================================
-// ALLOW RECEPTION TO ACCESS CASHIER PAGES
-// ================================================================
-$allowed_roles = ['cashier', 'reception', 'admin'];
-if (!in_array($_SESSION['role'], $allowed_roles)) {
-    header('Location: ../' . $_SESSION['role'] . '/dashboard.php');
-    exit;
-}
-
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
-$is_admin = ($_SESSION['role'] === 'admin' || $_SESSION['is_admin'] === true);
 
 // ================================================================
 // PATH SAHIHI
@@ -53,129 +37,125 @@ $selected_branch_id = $user_branch_id;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 // ================================================================
-// GET FILTERS
+// GET FILTER PARAMETERS
 // ================================================================
+$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
+$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : '';
+$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$date_filter = isset($_GET['date']) ? $_GET['date'] : '';
-$status_filter = isset($_GET['status']) ? $_GET['status'] : 'partial';
 
-// ================================================================
-// GET PARTIAL PAYMENTS
-// ================================================================
+$message = '';
+$message_type = '';
+
+// Initialize variables
+$partial_bills = [];
+$total_partial = 0;
+$total_amount = 0;
+$currency = 'TSh';
+
 try {
     $db = getDB();
     
-    $query = "
-        SELECT 
-            pb.id,
-            pb.bill_number,
-            pb.patient_id,
-            pb.visit_id,
-            pb.total_amount,
-            pb.paid_amount,
-            pb.balance,
-            pb.status,
-            pb.created_at,
-            p.full_name as patient_name,
-            p.patient_id as patient_code,
-            p.phone as patient_phone,
-            v.visit_number,
-            u.full_name as created_by_name,
-            (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id AND status != 'cancelled') as item_count
+    // ================================================================
+    // BUILD DATE FILTER
+    // ================================================================
+    $date_condition = "";
+    $params = [$selected_branch_id];
+    
+    switch ($filter) {
+        case 'today':
+            $date_condition = "AND DATE(pb.updated_at) = CURDATE()";
+            break;
+        case 'week':
+            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+            break;
+        case 'month':
+            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+            break;
+        case '3months':
+            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+            break;
+        case '6months':
+            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+            break;
+        case 'year':
+            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+            break;
+        case 'custom':
+            if (!empty($start_date) && !empty($end_date)) {
+                $date_condition = "AND DATE(pb.updated_at) BETWEEN ? AND ?";
+                $params[] = $start_date;
+                $params[] = $end_date;
+            } else {
+                $date_condition = "";
+            }
+            break;
+        case 'all':
+        default:
+            $date_condition = "";
+            break;
+    }
+    
+    // ================================================================
+    // BUILD SEARCH CONDITION
+    // ================================================================
+    $search_condition = "";
+    if (!empty($search)) {
+        $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pb.bill_number LIKE ? OR p.phone LIKE ?)";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+    }
+    
+    // ================================================================
+    // GET PARTIAL PAYMENT BILLS
+    // ================================================================
+    $sql = "
+        SELECT pb.*, 
+               p.full_name as patient_name, 
+               p.patient_id,
+               p.phone,
+               u.full_name as created_by_name
         FROM patient_bills pb
         JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
         LEFT JOIN users u ON pb.created_by = u.id
         WHERE pb.branch_id = ? 
+        AND pb.status = 'partial'
+        $date_condition
+        $search_condition
+        ORDER BY pb.updated_at DESC
     ";
-
-    $params = [$selected_branch_id];
-
-    // Status filter
-    if ($status_filter === 'partial') {
-        $query .= " AND pb.status = 'partial'";
-    } elseif ($status_filter === 'pending') {
-        $query .= " AND pb.status = 'pending'";
-    } else {
-        $query .= " AND pb.status IN ('pending', 'partial')";
-    }
-
-    if (!empty($search)) {
-        $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pb.bill_number LIKE ?)";
-        $search_term = "%$search%";
-        $params[] = $search_term;
-        $params[] = $search_term;
-        $params[] = $search_term;
-    }
-
-    if (!empty($date_filter)) {
-        $query .= " AND DATE(pb.created_at) = ?";
-        $params[] = $date_filter;
-    }
-
-    $query .= " ORDER BY pb.created_at DESC";
-
-    $stmt = $db->prepare($query);
+    
+    $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $payments = $stmt->fetchAll();
-
+    $partial_bills = $stmt->fetchAll();
+    
     // ================================================================
-    // GET BILL ITEMS FOR EACH BILL
+    // CALCULATE TOTALS
     // ================================================================
-    $bill_items = [];
-    foreach ($payments as $payment) {
-        $stmt = $db->prepare("
-            SELECT id, item_name, item_type, quantity, unit_price, total_price, payment_status, status, created_at
-            FROM bill_items 
-            WHERE bill_id = ? AND status != 'cancelled'
-            ORDER BY created_at DESC
-        ");
-        $stmt->execute([$payment['id']]);
-        $items = $stmt->fetchAll();
-        $bill_items[$payment['id']] = $items;
+    $total_partial = count($partial_bills);
+    $total_amount = 0;
+    foreach ($partial_bills as $bill) {
+        $total_amount += $bill['total_amount'] ?? 0;
     }
-
-    // ================================================================
-    // GET COUNTS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as total FROM patient_bills 
-        WHERE branch_id = ? AND status IN ('pending', 'partial')
-    ");
-    $stmt->execute([$selected_branch_id]);
-    $total_partial = $stmt->fetch()['total'] ?? 0;
-
-    $today = date('Y-m-d');
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as total, COALESCE(SUM(balance), 0) as total_balance 
-        FROM patient_bills 
-        WHERE branch_id = ? AND status IN ('pending', 'partial') AND DATE(created_at) = ?
-    ");
-    $stmt->execute([$selected_branch_id, $today]);
-    $today_stats = $stmt->fetch();
-    $today_total = $today_stats['total'] ?? 0;
-    $today_balance = $today_stats['total_balance'] ?? 0;
-
+    
     // ================================================================
     // GET SYSTEM SETTINGS
     // ================================================================
     $settings = [];
     $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
-    while ($row = $stmt->fetch()) {
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $settings[$row['setting_key']] = $row['setting_value'];
     }
     $currency = $settings['currency'] ?? 'TSh';
-
+    
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
-    $payments = [];
-    $bill_items = [];
+    $partial_bills = [];
     $total_partial = 0;
-    $today_total = 0;
-    $today_balance = 0;
-    $currency = 'TSh';
-    error_log("Partial payments error: " . $e->getMessage());
+    $total_amount = 0;
 }
 
 // ================================================================
@@ -198,9 +178,6 @@ include_once '../../components/cashier_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - LIGHT MODE (DEFAULT)
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -216,8 +193,6 @@ include_once '../../components/cashier_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -242,26 +217,9 @@ include_once '../../components/cashier_sidebar.php';
             --border-color: #E2E8F0;
             --table-stripe: #E8F0FE;
             --table-hover: #D1FAE5;
-            --toast-bg: #FFFFFF;
-            --toast-text: #1E293B;
-            --input-bg: #FFFFFF;
-            --input-border: #E2E8F0;
-            --input-text: #1E293B;
-            --empty-state-color: #64748B;
-            --footer-border: #E2E8F0;
-            --badge-pending-bg: #FEF3C7;
-            --badge-pending-text: #D97706;
-            --badge-partial-bg: #E8F0FE;
-            --badge-partial-text: #0B5ED7;
-            --badge-paid-bg: #D1FAE5;
-            --badge-paid-text: #059669;
-            --detail-bg: #F8FAFC;
-            --detail-border: #E2E8F0;
         }
         
-        /* ================================================================
-           ROOT VARIABLES - DARK MODE
-           ================================================================ */
+        /* DARK MODE - MATCH HEADER */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -274,31 +232,252 @@ include_once '../../components/cashier_sidebar.php';
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
-            --toast-bg: #1E293B;
-            --toast-text: #F1F5F9;
-            --input-bg: #1E293B;
-            --input-border: #334155;
-            --input-text: #F1F5F9;
-            --empty-state-color: #94A3B8;
-            --footer-border: #334155;
-            --badge-pending-bg: #3D2E0A;
-            --badge-pending-text: #FBBF24;
-            --badge-partial-bg: #1E3A5F;
-            --badge-partial-text: #6EA8FE;
-            --badge-paid-bg: #1A3A2A;
-            --badge-paid-text: #34D399;
-            --detail-bg: #1E293B;
-            --detail-border: #334155;
-            --primary-bg: #1E3A5F;
-            --success-bg: #1A3A2A;
-            --danger-bg: #3A1A1A;
-            --warning-bg: #3D2E0A;
-            --purple-bg: #2D1B5F;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+        }
+
+        /* Dark mode specific fixes */
+        [data-theme="dark"] .bg-white {
+            background-color: #1E293B !important;
+        }
+
+        [data-theme="dark"] .text-gray-700 {
+            color: #CBD5E1 !important;
+        }
+
+        [data-theme="dark"] .text-gray-800 {
+            color: #E2E8F0 !important;
+        }
+
+        [data-theme="dark"] .text-gray-900 {
+            color: #F1F5F9 !important;
+        }
+
+        [data-theme="dark"] .border-gray-200 {
+            border-color: #334155 !important;
+        }
+
+        [data-theme="dark"] .bg-gray-50 {
+            background-color: #1E293B !important;
+        }
+
+        [data-theme="dark"] .bg-gray-100 {
+            background-color: #2D3748 !important;
+        }
+
+        [data-theme="dark"] .shadow {
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
+        }
+
+        [data-theme="dark"] .shadow-md {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+        }
+
+        [data-theme="dark"] .shadow-lg {
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important;
+        }
+
+        /* Dark mode for filter buttons */
+        [data-theme="dark"] .filter-btn {
+            border-color: #334155;
+            color: #94A3B8;
+        }
+
+        [data-theme="dark"] .filter-btn:hover {
+            border-color: #34D399;
+            color: #34D399;
+            background: rgba(5, 150, 105, 0.15);
+        }
+
+        [data-theme="dark"] .filter-btn.active {
+            background: #059669;
+            color: white;
+            border-color: #059669;
+        }
+
+        [data-theme="dark"] .filter-btn.active:hover {
+            background: #047857;
+            border-color: #047857;
+        }
+
+        /* Dark mode for date picker */
+        [data-theme="dark"] .date-picker-group .form-control {
+            background: #1E293B;
+            color: #F1F5F9;
+            border-color: #334155;
+        }
+
+        [data-theme="dark"] .date-picker-group .form-control:focus {
+            border-color: #34D399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1);
+        }
+
+        /* Dark mode for table */
+        [data-theme="dark"] .data-table tbody tr:hover td {
+            background: #1A3A2A;
+        }
+
+        [data-theme="dark"] .data-table td {
+            border-bottom-color: #334155;
+        }
+
+        /* Dark mode for stat cards */
+        [data-theme="dark"] .stat-card {
+            background: #1E293B;
+            border-color: #334155;
+        }
+
+        [data-theme="dark"] .stat-card:hover {
+            border-color: #059669;
+        }
+
+        /* Dark mode for card */
+        [data-theme="dark"] .card {
+            background: #1E293B;
+            border-color: #334155;
+        }
+
+        [data-theme="dark"] .card:hover {
+            border-color: #059669;
+        }
+
+        /* Dark mode for page header */
+        [data-theme="dark"] .page-header {
+            background: linear-gradient(135deg, #059669, #047857) !important;
+        }
+
+        /* Dark mode for footer */
+        [data-theme="dark"] .footer {
+            border-top-color: #334155;
+        }
+
+        /* Dark mode for toast */
+        [data-theme="dark"] .toast-custom.success {
+            background: #059669;
+        }
+
+        [data-theme="dark"] .toast-custom.error {
+            background: #DC2626;
+        }
+
+        /* Dark mode for header badges */
+        [data-theme="dark"] .header-badge {
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(255,255,255,0.1);
+        }
+
+        /* Dark mode for role badge */
+        [data-theme="dark"] .role-badge-display {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+
+        [data-theme="dark"] .role-badge-display[style*="background:rgba(255,255,255,0.2)"] {
+            background: rgba(255,255,255,0.2) !important;
+            color: white !important;
+        }
+
+        /* Dark mode for branch badge */
+        [data-theme="dark"] .branch-badge-display {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+
+        /* Dark mode for text colors */
+        [data-theme="dark"] .text-gray-400 {
+            color: #94A3B8 !important;
+        }
+
+        [data-theme="dark"] .text-gray-500 {
+            color: #94A3B8 !important;
+        }
+
+        [data-theme="dark"] .text-gray-600 {
+            color: #94A3B8 !important;
+        }
+
+        /* Dark mode for table header text */
+        [data-theme="dark"] .data-table thead th {
+            color: white;
+        }
+
+        /* Dark mode for bill number */
+        [data-theme="dark"] .font-mono.text-gray-700 {
+            color: #CBD5E1 !important;
+        }
+
+        /* Dark mode for table cell text */
+        [data-theme="dark"] .font-semibold.text-gray-800 {
+            color: #E2E8F0 !important;
+        }
+
+        /* Dark mode for card title */
+        [data-theme="dark"] .card-title {
+            color: #F1F5F9 !important;
+        }
+
+        /* Dark mode for footer text */
+        [data-theme="dark"] .footer .footer-brand {
+            color: #34D399;
+        }
+
+        [data-theme="dark"] .footer .text-gray-300 {
+            color: #475569 !important;
+        }
+
+        /* Dark mode for message alerts */
+        [data-theme="dark"] .bg-green-100 {
+            background-color: rgba(5, 150, 105, 0.15) !important;
+        }
+
+        [data-theme="dark"] .text-green-700 {
+            color: #34D399 !important;
+        }
+
+        [data-theme="dark"] .border-green-200 {
+            border-color: rgba(5, 150, 105, 0.3) !important;
+        }
+
+        [data-theme="dark"] .bg-red-100 {
+            background-color: rgba(220, 38, 38, 0.15) !important;
+        }
+
+        [data-theme="dark"] .text-red-700 {
+            color: #F87171 !important;
+        }
+
+        [data-theme="dark"] .border-red-200 {
+            border-color: rgba(220, 38, 38, 0.3) !important;
+        }
+
+        /* Dark mode for status badge partial */
+        [data-theme="dark"] .status-badge.partial {
+            background: #3D2E0A;
+            color: #FBBF24;
+        }
+
+        /* Dark mode for dark toggle button */
+        [data-theme="dark"] .dark-toggle-btn {
+            background: #0F172A;
+            border-color: #334155;
+            color: #F1F5F9;
+        }
+
+        [data-theme="dark"] .dark-toggle-btn:hover {
+            border-color: #34D399;
+            background: #1E293B;
+        }
+
+        /* Dark mode for icon buttons */
+        [data-theme="dark"] .icon-btn:hover {
+            background: #0F172A;
+            color: #34D399;
+        }
+
+        /* Dark mode for toast */
+        [data-theme="dark"] .toast-custom {
+            box-shadow: 0 20px 25px rgba(0,0,0,0.4);
         }
         
-        /* ================================================================
-           GLOBAL STYLES
-           ================================================================ */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -313,21 +492,20 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
         /* ================================================================
-           MAIN CONTENT OVERRIDE
+           MAIN CONTENT
            ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
-            transition: background 0.3s ease;
         }
         
         /* ================================================================
-           PAGE HEADER
+           PAGE HEADER - GREEN THEME
            ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            background: linear-gradient(135deg, var(--success), var(--success-dark));
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -336,7 +514,7 @@ include_once '../../components/cashier_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
             position: relative;
             overflow: hidden;
         }
@@ -437,45 +615,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS
-           ================================================================ */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 14px;
-            margin-bottom: 20px;
-        }
-        
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: 12px;
-            padding: 14px 18px;
-            border: 2px solid var(--border-color);
-            text-align: center;
-            transition: all 0.3s ease;
-        }
-        .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-        }
-        .stat-card .number {
-            font-size: 1.6rem;
-            font-weight: 700;
-            line-height: 1.2;
-        }
-        .stat-card .number.pending { color: var(--warning); }
-        .stat-card .number.partial { color: var(--primary); }
-        .stat-card .number.total { color: var(--purple); }
-        .stat-card .number.balance { color: var(--danger); }
-        .stat-card .label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        /* ================================================================
-           FILTERS
+           FILTER SECTION
            ================================================================ */
         .filter-section {
             background: var(--bg-card);
@@ -483,8 +623,10 @@ include_once '../../components/cashier_sidebar.php';
             padding: 16px 20px;
             border: 1px solid var(--border-color);
             margin-bottom: 20px;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
             box-shadow: var(--shadow-sm);
-            transition: all 0.3s ease;
         }
         
         .filter-section:hover {
@@ -492,11 +634,46 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: var(--shadow-md);
         }
         
+        .filter-btn {
+            padding: 5px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            border: 2px solid var(--border-color);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .filter-btn:hover {
+            border-color: var(--success);
+            color: var(--success);
+            background: var(--success-bg);
+        }
+        
+        .filter-btn.active {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
+        }
+        
+        .filter-btn.active:hover {
+            background: var(--success-dark);
+            border-color: var(--success-dark);
+        }
+        
+        .filter-btn i {
+            margin-right: 4px;
+        }
+        
         .filter-group {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
         
         .filter-group .filter-label {
@@ -506,7 +683,17 @@ include_once '../../components/cashier_sidebar.php';
             margin-right: 4px;
         }
         
-        .form-control {
+        /* ================================================================
+           DATE PICKER
+           ================================================================ */
+        .date-picker-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .date-picker-group .form-control {
             padding: 4px 10px;
             border: 2px solid var(--border-color);
             border-radius: 8px;
@@ -515,13 +702,131 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
             outline: none;
             transition: all 0.3s;
+            width: auto;
         }
         
-        .form-control:focus {
+        .date-picker-group .form-control:focus {
             border-color: var(--success);
             box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
         }
         
+        .date-picker-group .btn-apply {
+            padding: 4px 14px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: var(--success);
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .date-picker-group .btn-apply:hover {
+            background: var(--success-dark);
+            transform: translateY(-1px);
+        }
+        
+        /* ================================================================
+           CARD
+           ================================================================ */
+        .card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 20px 24px;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s;
+            box-shadow: var(--shadow-sm);
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .card:hover {
+            border-color: var(--success);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .card-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        /* ================================================================
+           TABLE
+           ================================================================ */
+        .table-wrap {
+            overflow-x: auto;
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            min-width: 700px;
+        }
+        
+        .data-table thead th {
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 700;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: white;
+            background: var(--success);
+            border-bottom: 3px solid var(--success-dark);
+            white-space: nowrap;
+        }
+        
+        .data-table thead th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+        
+        .data-table thead th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+        
+        .data-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        
+        .data-table tbody tr:hover td {
+            background: var(--table-hover);
+        }
+        
+        /* ================================================================
+           STATUS BADGE
+           ================================================================ */
+        .status-badge {
+            display: inline-block;
+            padding: 3px 14px;
+            border-radius: 12px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-badge.partial {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -536,266 +841,125 @@ include_once '../../components/cashier_sidebar.php';
             text-decoration: none;
         }
         
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
         }
+        
         .btn-outline:hover {
             background: var(--bg-body);
             border-color: var(--success);
             color: var(--success);
         }
         
-        .btn-sm {
-            padding: 4px 10px;
-            font-size: 0.65rem;
-            border-radius: 6px;
-        }
-        
-        .btn-pay {
-            background: var(--success);
-            color: white;
-        }
-        .btn-pay:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
-        .btn-primary:hover {
-            background: var(--primary-dark);
+        .btn-sm { 
+            padding: 4px 10px; 
+            font-size: 0.65rem; 
+            border-radius: 6px; 
         }
         
         /* ================================================================
-           TABLE STYLES - GREEN HEADERS
+           STATS CARD
            ================================================================ */
-        .table-wrapper {
+        .stat-card {
             background: var(--bg-card);
             border-radius: 14px;
+            padding: 16px 20px;
             border: 1px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow);
+            text-align: center;
             transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
         }
         
-        .table-wrapper .table-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 14px 20px;
-            background: var(--gray-50);
-            border-bottom: 2px solid var(--border-color);
-            flex-wrap: wrap;
-            gap: 8px;
-            transition: background 0.3s ease;
-        }
-        [data-theme="dark"] .table-wrapper .table-header {
-            background: var(--gray-700);
+        .stat-card:hover {
+            border-color: var(--success);
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
         }
         
-        .table-wrapper .table-header .table-title {
-            font-weight: 600;
-            font-size: 0.95rem;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 8px;
+        .stat-card .stat-number {
+            font-size: 1.8rem;
+            font-weight: 700;
         }
-        .table-wrapper .table-header .table-title i {
+        
+        .stat-card .stat-number.green {
             color: var(--success);
         }
         
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.82rem;
-        }
-        
-        /* GREEN HEADER BACKGROUND */
-        .data-table thead th {
-            text-align: left;
-            padding: 10px 14px;
-            font-weight: 700;
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #ffffff;
-            background: var(--success);
-            border-bottom: 3px solid var(--success-dark);
-            white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 5;
-        }
-        
-        .data-table td {
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        
-        .data-table tbody tr {
-            transition: background 0.2s ease;
-            cursor: pointer;
-        }
-        .data-table tbody tr:hover {
-            background: var(--table-hover);
-        }
-        
-        .data-table tbody tr.expanded {
-            background: var(--primary-bg);
-        }
-        
-        .data-table tbody tr.detail-row td {
-            padding: 0;
-            border-bottom: none;
-        }
-        
-        .data-table tbody tr.detail-row .detail-container {
-            padding: 12px 20px;
-            background: var(--detail-bg);
-            border-top: 1px solid var(--border-color);
-            border-bottom: 1px solid var(--border-color);
-            transition: background 0.3s ease;
-        }
-        
-        .detail-container .items-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.78rem;
-        }
-        .detail-container .items-table thead th {
-            text-align: left;
-            padding: 6px 12px;
-            font-weight: 600;
-            font-size: 0.6rem;
-            text-transform: uppercase;
+        .stat-card .stat-label {
+            font-size: 0.7rem;
             color: var(--text-secondary);
-            background: var(--gray-100);
-            border-bottom: 1px solid var(--border-color);
-        }
-        [data-theme="dark"] .detail-container .items-table thead th {
-            background: var(--gray-600);
-        }
-        .detail-container .items-table tbody td {
-            padding: 5px 12px;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 0.75rem;
-            color: var(--text-primary);
-        }
-        .detail-container .items-table tbody tr:last-child td {
-            border-bottom: none;
+            font-weight: 500;
         }
         
-        .detail-container .detail-footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-top: 10px;
-            margin-top: 8px;
+        .stat-card .stat-icon {
+            font-size: 1.4rem;
+            margin-bottom: 4px;
+        }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
             border-top: 1px solid var(--border-color);
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        /* ================================================================
-           STATUS BADGES
-           ================================================================ */
-        .status-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 12px;
-            border-radius: 12px;
-        }
-        .status-badge.pending {
-            background: var(--badge-pending-bg);
-            color: var(--badge-pending-text);
-        }
-        .status-badge.partial {
-            background: var(--badge-partial-bg);
-            color: var(--badge-partial-text);
-        }
-        .status-badge.paid {
-            background: var(--badge-paid-bg);
-            color: var(--badge-paid-text);
-        }
-        
-        .item-type-badge {
-            font-size: 0.5rem;
-            font-weight: 600;
-            padding: 1px 8px;
-            border-radius: 8px;
-        }
-        .item-type-badge.consultation { background: #E8F0FE; color: #0B5ED7; }
-        .item-type-badge.lab_test { background: var(--purple-bg); color: var(--purple); }
-        .item-type-badge.medication { background: var(--success-bg); color: var(--success); }
-        .item-type-badge.procedure { background: var(--warning-bg); color: var(--warning); }
-        .item-type-badge.tool { background: var(--danger-bg); color: var(--danger); }
-        .item-type-badge.registration { background: #E0E7FF; color: #4F46E5; }
-        
-        [data-theme="dark"] .item-type-badge.consultation { background: #1E3A5F; color: #6EA8FE; }
-        [data-theme="dark"] .item-type-badge.registration { background: #1E3A5F; color: #818CF8; }
-        
-        /* ================================================================
-           TOGGLE ICON
-           ================================================================ */
-        .toggle-icon {
-            transition: transform 0.3s ease;
-            display: inline-block;
-            color: var(--text-secondary);
-        }
-        .toggle-icon.open {
-            transform: rotate(180deg);
-        }
-        
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
-        .empty-state {
+            margin-top: 24px;
             text-align: center;
-            padding: 40px 20px;
-            color: var(--empty-state-color);
-        }
-        .empty-state i {
-            font-size: 3rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 10px;
-        }
-        .empty-state .sub {
+            font-size: 0.7rem;
             color: var(--text-secondary);
-            font-size: 0.85rem;
+        }
+        
+        .footer .footer-brand { 
+            color: var(--success); 
+            font-weight: 600; 
         }
         
         /* ================================================================
-           MESSAGE BOX
+           BADGES
            ================================================================ */
-        .message-box {
-            max-width: 1400px;
-            margin: 0 auto 16px;
-            padding: 12px 16px;
-            border-radius: 12px;
-            border: 2px solid transparent;
-            transition: all 0.3s ease;
+        .role-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--primary-bg);
+            color: var(--primary);
+            text-transform: uppercase;
         }
-        .message-box.success {
+        
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
             background: var(--success-bg);
             color: var(--success);
-            border-color: var(--success);
         }
-        .message-box.error {
-            background: var(--danger-bg);
-            color: var(--danger);
-            border-color: var(--danger);
-        }
-        .message-box i { margin-right: 8px; }
         
         /* ================================================================
            TOAST
@@ -817,62 +981,16 @@ include_once '../../components/cashier_sidebar.php';
             color: white;
             box-shadow: var(--shadow-lg);
         }
+        
         .toast-custom.show {
             transform: translateY(0);
             opacity: 1;
         }
+        
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--footer-border);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            transition: border-color 0.3s ease;
-        }
-        .footer .footer-brand { 
-            color: var(--success); 
-            font-weight: 600; 
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        .fade-in {
-            animation: fadeIn 0.3s ease forwards;
-        }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
         
         /* ================================================================
            RESPONSIVE
@@ -884,31 +1002,36 @@ include_once '../../components/cashier_sidebar.php';
         @media (max-width: 768px) {
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .data-table { font-size: 0.7rem; }
-            .data-table thead th, .data-table td { padding: 6px 10px; }
-            .detail-container .items-table { font-size: 0.65rem; }
-            .detail-container .items-table thead th, 
-            .detail-container .items-table tbody td { padding: 4px 8px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .filter-group { flex-direction: column; align-items: stretch; }
-            .filter-group .filter-label { margin-bottom: 4px; }
+            .filter-section { padding: 12px 14px; }
+            .filter-btn { font-size: 0.6rem; padding: 3px 10px; }
+            .card { padding: 14px 16px; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .stats-grid { grid-template-columns: 1fr 1fr; }
+            .filter-btn { font-size: 0.55rem; padding: 2px 8px; }
+            .date-picker-group { flex-direction: column; align-items: stretch; }
+            .date-picker-group .form-control { width: 100%; }
+            .date-picker-group .btn-apply { width: 100%; justify-content: center; }
+            .card { padding: 10px 12px; }
+            .btn { padding: 4px 8px; font-size: 0.6rem; }
             .data-table { font-size: 0.65rem; min-width: 600px; }
-            .data-table thead th, .data-table td { padding: 4px 6px; }
-            .page-header .btn-outline-light { padding: 4px 10px; font-size: 0.7rem; }
-            .detail-container .detail-footer { flex-direction: column; align-items: stretch; }
         }
     </style>
+    
+    <!-- Preload dark mode from localStorage -->
+    <script>
+        (function() {
+            var darkMode = localStorage.getItem('darkMode');
+            if (darkMode === 'true') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - FROM HEADER (Already included) -->
-<!-- ================================================================ -->
+<!-- TOP NAV is loaded from header -->
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -921,36 +1044,30 @@ include_once '../../components/cashier_sidebar.php';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-receipt"></i>
-                Partial / Pending Payments
+                <i class="fas fa-money-bill-wave"></i>
+                Partial Payments
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-sync-alt fa-spin"></i> Live
-                </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-credit-card"></i>
-                View and process partial payments in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                <i class="fas fa-percent"></i>
+                View bills with partial payments in <strong><?= htmlspecialchars($branch_name) ?></strong>
                 
-                <span class="header-badge" id="totalBadge">
+                <span class="header-badge">
                     <i class="fas fa-file-invoice"></i>
-                    Total: <strong id="totalCount"><?= $total_partial ?></strong>
+                    <?= $total_partial ?> Partial Bills
                 </span>
                 
-                <span class="header-badge" style="background:rgba(217,119,6,0.2);border-color:rgba(217,119,6,0.3);">
-                    <i class="fas fa-clock"></i>
-                    Today: <strong><?= $today_total ?></strong>
+                <?php if ($filter !== 'all' && $filter !== 'custom'): ?>
+                <span class="header-badge">
+                    <i class="fas fa-filter"></i>
+                    <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
                 </span>
-                
-                <span class="header-badge" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);">
-                    <i class="fas fa-money-bill-wave"></i>
-                    Balance: <strong><?= $currency ?> <?= number_format($today_balance, 0) ?></strong>
-                </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="dashboard.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Dashboard
+                <i class="fas fa-arrow-left"></i> Back to Dashboard
             </a>
             <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
@@ -959,273 +1076,209 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- Message -->
-    <?php if (isset($message) && $message): ?>
-        <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+    <?php if ($message): ?>
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>" style="max-width:1200px;margin:0 auto 16px;">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
-    <!-- ================================================================ -->
-    <div class="stats-grid">
-        <div class="stat-card">
-            <p class="number total"><?= $total_partial ?></p>
-            <p class="label">📋 Total Pending</p>
-        </div>
-        <div class="stat-card">
-            <p class="number partial"><?= $today_total ?></p>
-            <p class="label">📅 Today's Bills</p>
-        </div>
-        <div class="stat-card">
-            <p class="number balance"><?= $currency ?> <?= number_format($today_balance, 0) ?></p>
-            <p class="label">💰 Today's Balance</p>
-        </div>
-        <div class="stat-card">
-            <p class="number" style="color: var(--success);"><?= count($payments) ?></p>
-            <p class="label">👤 Patients</p>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
     <!-- FILTERS -->
     <!-- ================================================================ -->
     <div class="filter-section">
-        <div class="filter-group">
-            <span class="filter-label"><i class="fas fa-calendar-alt"></i> Date:</span>
-            <input type="date" id="dateFilter" value="<?= $date_filter ?>"
-                   onchange="window.location.href='partial_payments.php?date='+this.value+'&search=<?= urlencode($search) ?>&status=<?= $status_filter ?>'"
-                   class="form-control">
+        <div class="filter-group" style="margin-bottom:8px;">
+            <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
             
-            <span class="filter-label"><i class="fas fa-filter"></i> Status:</span>
-            <select id="statusFilter" class="form-control"
-                    onchange="window.location.href='partial_payments.php?status='+this.value+'&date=<?= urlencode($date_filter) ?>&search=<?= urlencode($search) ?>'">
-                <option value="partial" <?= $status_filter === 'partial' ? 'selected' : '' ?>>Partial</option>
-                <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Pending</option>
-                <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All</option>
-            </select>
+            <a href="?filter=all&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'all' ? 'active' : '' ?>">
+                <i class="fas fa-globe"></i> All
+            </a>
+            <a href="?filter=today&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'today' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-day"></i> Today
+            </a>
+            <a href="?filter=week&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'week' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-week"></i> 1 Week
+            </a>
+            <a href="?filter=month&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'month' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Month
+            </a>
+            <a href="?filter=3months&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === '3months' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 3 Months
+            </a>
+            <a href="?filter=6months&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === '6months' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 6 Months
+            </a>
+            <a href="?filter=year&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'year' ? 'active' : '' ?>">
+                <i class="fas fa-calendar-alt"></i> 1 Year
+            </a>
+        </div>
+        
+        <!-- ============================================================ -->
+        <!-- DATE PICKER (Custom Range) -->
+        <!-- ============================================================ -->
+        <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
+            <input type="hidden" name="filter" value="custom">
+            <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
             
-            <?php if (!empty($search)): ?>
-                <a href="partial_payments.php" class="btn btn-outline btn-sm">
-                    <i class="fas fa-times"></i> Clear Search
-                </a>
-            <?php endif; ?>
+            <span class="filter-label"><i class="fas fa-calendar-plus"></i> Custom:</span>
             
-            <div class="ml-auto flex gap-2" style="margin-left:auto;">
-                <button onclick="expandAll()" class="btn btn-outline btn-sm">
-                    <i class="fas fa-expand"></i> Expand All
+            <div class="date-picker-group">
+                <input type="date" name="start_date" class="form-control" 
+                       value="<?= $start_date ?>" placeholder="Start Date">
+                <span style="color:var(--text-secondary);font-size:0.7rem;">to</span>
+                <input type="date" name="end_date" class="form-control" 
+                       value="<?= $end_date ?>" placeholder="End Date">
+                <button type="submit" class="btn-apply">
+                    <i class="fas fa-check"></i> Apply
                 </button>
-                <button onclick="collapseAll()" class="btn btn-outline btn-sm">
-                    <i class="fas fa-compress"></i> Collapse All
-                </button>
+                <?php if ($filter === 'custom' && !empty($start_date) && !empty($end_date)): ?>
+                    <a href="?filter=all&search=<?= urlencode($search) ?>" class="btn-apply" style="background:#DC2626;">
+                        <i class="fas fa-times"></i> Clear
+                    </a>
+                <?php endif; ?>
             </div>
+        </form>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- QUICK STATS -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
+        <div class="stat-card">
+            <div class="stat-icon">📋</div>
+            <p class="stat-number green"><?= $total_partial ?></p>
+            <p class="stat-label">Total Partial Bills</p>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">📅</div>
+            <p class="stat-number green">
+                <?php 
+                    if ($filter === 'today') echo 'Today';
+                    elseif ($filter === 'week') echo '7 Days';
+                    elseif ($filter === 'month') echo '30 Days';
+                    elseif ($filter === '3months') echo '90 Days';
+                    elseif ($filter === '6months') echo '180 Days';
+                    elseif ($filter === 'year') echo '365 Days';
+                    elseif ($filter === 'custom') echo 'Custom';
+                    else echo 'All Time';
+                ?>
+            </p>
+            <p class="stat-label">Date Range</p>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">💰</div>
+            <p class="stat-number green"><?= $currency ?> <?= number_format($total_amount, 0) ?></p>
+            <p class="stat-label">Total Amount</p>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- TABLE WITH GREEN HEADERS -->
+    <!-- PARTIAL BILLS TABLE -->
     <!-- ================================================================ -->
-    <div class="table-wrapper animate-fade-in-up">
-        <div class="table-header">
-            <div class="table-title">
-                <i class="fas fa-list"></i>
-                Pending Payments
-                <span class="text-xs font-normal" style="color:var(--text-secondary);">(<?= count($payments) ?> bills)</span>
-            </div>
-            <div class="text-xs" style="color:var(--text-secondary);" id="tableUpdateTime">
-                <i class="fas fa-clock"></i> Updated: <?= date('h:i:s A') ?>
+    <div class="card" style="max-width:1200px;margin:0 auto;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-list" style="color:#D97706;"></i> Partial Payment Bills
+                <span class="text-sm font-normal text-gray-400">(<?= $total_partial ?> bills)</span>
+            </h3>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <span class="text-xs text-gray-400">
+                    <i class="fas fa-clock"></i> Updated: <?= date('h:i:s A') ?>
+                </span>
             </div>
         </div>
         
-        <div style="overflow-x:auto;">
-            <table class="data-table" id="paymentsTable">
+        <div class="table-wrap">
+            <table class="data-table">
                 <thead>
                     <tr>
-                        <th style="width:30px;text-align:center;">#</th>
+                        <th>#</th>
                         <th>Bill #</th>
                         <th>Patient</th>
-                        <th>Visit</th>
-                        <th style="text-align:right;">Total</th>
-                        <th style="text-align:right;">Paid</th>
-                        <th style="text-align:right;">Balance</th>
-                        <th style="text-align:center;">Status</th>
-                        <th style="text-align:center;">Items</th>
-                        <th style="text-align:center;">Date</th>
-                        <th style="text-align:center;">Action</th>
+                        <th>Patient ID</th>
+                        <th>Total Amount</th>
+                        <th>Paid Amount</th>
+                        <th>Balance</th>
+                        <th>Status</th>
+                        <th>Updated</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
-                <tbody id="paymentsTableBody">
-                    <?php if (count($payments) > 0): ?>
-                        <?php $i = 1; foreach ($payments as $payment): 
-                            $items = $bill_items[$payment['id']] ?? [];
-                            $has_items = count($items) > 0;
-                            $balance = $payment['balance'] ?? 0;
-                            $total = $payment['total_amount'] ?? 0;
-                            $paid = $payment['paid_amount'] ?? 0;
-                            $status = $payment['status'] ?? 'pending';
-                            $row_id = 'row-' . $payment['id'];
-                        ?>
-                            <!-- Main Row -->
-                            <tr class="main-row" id="<?= $row_id ?>" onclick="toggleRow(this, '<?= $payment['id'] ?>')">
-                                <td style="text-align:center;"><?= $i++ ?></td>
+                <tbody>
+                    <?php if (is_array($partial_bills) && count($partial_bills) > 0): ?>
+                        <?php $i = 1; foreach ($partial_bills as $bill): ?>
+                            <tr>
+                                <td><?= $i++ ?></td>
                                 <td>
-                                    <span class="font-mono font-semibold" style="color: var(--success);"><?= htmlspecialchars($payment['bill_number']) ?></span>
-                                </td>
-                                <td>
-                                    <div class="font-medium text-sm"><?= htmlspecialchars($payment['patient_name'] ?? 'Unknown') ?></div>
-                                    <div class="text-xs" style="color:var(--text-secondary);"><?= htmlspecialchars($payment['patient_code'] ?? 'N/A') ?></div>
-                                </td>
-                                <td>
-                                    <span class="font-mono text-xs"><?= htmlspecialchars($payment['visit_number'] ?? 'N/A') ?></span>
-                                </td>
-                                <td style="text-align:right;font-weight:600;"><?= $currency ?> <?= number_format($total, 0) ?></td>
-                                <td style="text-align:right;color:var(--success);"><?= $currency ?> <?= number_format($paid, 0) ?></td>
-                                <td style="text-align:right;font-weight:700;color:var(--danger);"><?= $currency ?> <?= number_format($balance, 0) ?></td>
-                                <td style="text-align:center;">
-                                    <span class="status-badge <?= $status ?>"><?= ucfirst($status) ?></span>
-                                </td>
-                                <td style="text-align:center;">
-                                    <span class="text-sm font-medium"><?= count($items) ?></span>
-                                    <span class="toggle-icon" id="toggle-<?= $payment['id'] ?>">
-                                        <i class="fas fa-chevron-down"></i>
+                                    <span class="font-mono text-xs font-bold text-gray-700">
+                                        <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
-                                <td style="text-align:center;font-size:0.7rem;color:var(--text-secondary);">
-                                    <?= date('d/m/Y', strtotime($payment['created_at'])) ?>
+                                <td>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['phone'] ?? 'No phone') ?></div>
                                 </td>
-                                <td style="text-align:center;">
-                                    <div class="flex justify-center gap-1 flex-wrap">
-                                        <a href="view_bill.php?id=<?= $payment['id'] ?>" class="btn btn-outline btn-sm" title="View Bill">
+                                <td>
+                                    <span class="text-xs font-mono"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></span>
+                                </td>
+                                <td>
+                                    <span class="font-semibold text-gray-800">
+                                        <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="font-semibold text-green-600">
+                                        <?= $currency ?> <?= number_format($bill['amount_paid'] ?? 0, 0) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="font-semibold text-red-600">
+                                        <?= $currency ?> <?= number_format($bill['balance'] ?? 0, 0) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="status-badge partial">
+                                        Partial
+                                    </span>
+                                </td>
+                                <td class="text-xs">
+                                    <?= isset($bill['updated_at']) ? date('d/m/Y', strtotime($bill['updated_at'])) : 'N/A' ?>
+                                    <br>
+                                    <span class="text-gray-400 text-[0.6rem]">
+                                        <?= isset($bill['updated_at']) ? date('h:i A', strtotime($bill['updated_at'])) : '' ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="flex flex-wrap gap-1">
+                                        <!-- View Bill -->
+                                        <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <?php if ($balance > 0): ?>
-                                            <a href="process_payment.php?bill_id=<?= $payment['id'] ?>" class="btn btn-pay btn-sm" title="Pay <?= $currency ?> <?= number_format($balance, 0) ?>">
-                                                <i class="fas fa-money-bill-wave"></i> Pay
-                                            </a>
-                                        <?php else: ?>
-                                            <span class="text-xs" style="color:var(--success);">✅ Paid</span>
-                                        <?php endif; ?>
-                                    </div>
-                                </td>
-                            </tr>
-                            <!-- Detail Row (Hidden - Shows items) -->
-                            <tr class="detail-row" id="detail-<?= $payment['id'] ?>" style="display:none;">
-                                <td colspan="11">
-                                    <div class="detail-container">
-                                        <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
-                                            <span class="font-semibold text-sm">
-                                                <i class="fas fa-list-ul"></i> Bill Items
-                                                <span class="text-xs" style="color:var(--text-secondary);">(<?= count($items) ?> items)</span>
-                                            </span>
-                                            <span class="text-sm" style="color:var(--text-secondary);">
-                                                Total: <strong style="color:var(--success);"><?= $currency ?> <?= number_format($total, 0) ?></strong>
-                                                | Balance: <strong style="color:var(--danger);"><?= $currency ?> <?= number_format($balance, 0) ?></strong>
-                                            </span>
-                                        </div>
-                                        
-                                        <?php if ($has_items): ?>
-                                            <table class="items-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Item Name</th>
-                                                        <th>Type</th>
-                                                        <th style="text-align:center;">Qty</th>
-                                                        <th style="text-align:right;">Unit Price</th>
-                                                        <th style="text-align:right;">Total</th>
-                                                        <th style="text-align:center;">Status</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php foreach ($items as $item): 
-                                                        $item_type = $item['item_type'] ?? 'other';
-                                                        $item_status = $item['payment_status'] ?? 'pending';
-                                                        $item_total = $item['total_price'] ?? 0;
-                                                        $item_unit = $item['unit_price'] ?? 0;
-                                                        $item_qty = $item['quantity'] ?? 1;
-                                                    ?>
-                                                        <tr>
-                                                            <td><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></td>
-                                                            <td>
-                                                                <span class="item-type-badge <?= $item_type ?>">
-                                                                    <?= ucfirst(str_replace('_', ' ', $item_type)) ?>
-                                                                </span>
-                                                            </td>
-                                                            <td style="text-align:center;"><?= $item_qty ?></td>
-                                                            <td style="text-align:right;"><?= $currency ?> <?= number_format($item_unit, 0) ?></td>
-                                                            <td style="text-align:right;font-weight:600;"><?= $currency ?> <?= number_format($item_total, 0) ?></td>
-                                                            <td style="text-align:center;">
-                                                                <span class="status-badge <?= $item_status === 'paid' ? 'paid' : ($item_status === 'partial' ? 'partial' : 'pending') ?>">
-                                                                    <?= ucfirst($item_status ?? 'Pending') ?>
-                                                                </span>
-                                                            </td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-                                            </table>
-                                        <?php else: ?>
-                                            <div class="empty-state" style="padding:12px;">
-                                                <i class="fas fa-receipt" style="font-size:1.2rem;"></i>
-                                                <p style="font-size:0.8rem;">No items found</p>
-                                            </div>
-                                        <?php endif; ?>
-                                        
-                                        <div class="detail-footer">
-                                            <span class="text-xs" style="color:var(--text-secondary);">
-                                                <i class="fas fa-clock"></i> 
-                                                Created: <?= date('d/m/Y h:i A', strtotime($payment['created_at'])) ?>
-                                                <?php if (!empty($payment['created_by_name'])): ?>
-                                                    <span class="mx-2">|</span>
-                                                    <i class="fas fa-user"></i>
-                                                    By: <?= htmlspecialchars($payment['created_by_name']) ?>
-                                                <?php endif; ?>
-                                            </span>
-                                            <div class="flex gap-2 flex-wrap">
-                                                <a href="view_bill.php?id=<?= $payment['id'] ?>" class="btn btn-outline btn-sm">
-                                                    <i class="fas fa-eye"></i> View Full Bill
-                                                </a>
-                                                <?php if ($balance > 0): ?>
-                                                    <a href="process_payment.php?bill_id=<?= $payment['id'] ?>" class="btn btn-pay btn-sm">
-                                                        <i class="fas fa-money-bill-wave"></i> Pay <?= $currency ?> <?= number_format($balance, 0) ?>
-                                                    </a>
-                                                <?php endif; ?>
-                                            </div>
-                                        </div>
+                                        <!-- Make Payment -->
+                                        <a href="make_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-success btn-sm" title="Make Payment">
+                                            <i class="fas fa-money-bill-wave"></i>
+                                        </a>
                                     </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="11">
-                                <div class="empty-state" style="padding:40px 20px;">
-                                    <i class="fas fa-check-circle" style="color: var(--success); font-size: 3rem;"></i>
-                                    <h3 style="font-size:1.2rem;margin-top:12px;color:var(--text-primary);">No Partial Payments</h3>
-                                    <p class="sub">All bills are fully paid or no pending payments found</p>
-                                    <a href="dashboard.php" class="btn btn-primary mt-3">
-                                        <i class="fas fa-arrow-left"></i> Back to Dashboard
-                                    </a>
-                                </div>
+                            <td colspan="10" class="text-center py-8 text-gray-400">
+                                <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
+                                <p class="text-lg">No partial payment bills</p>
+                                <p class="text-sm">
+                                    <?php if ($filter !== 'all'): ?>
+                                        No partial bills found for the selected date range
+                                    <?php else: ?>
+                                        All bills are fully paid or pending
+                                    <?php endif; ?>
+                                </p>
                             </td>
                         </tr>
                     <?php endif; ?>
                 </tbody>
             </table>
-        </div>
-        
-        <div style="padding:10px 20px;border-top:2px solid var(--border-color);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:0.75rem;color:var(--text-secondary);transition:border-color 0.3s ease;">
-            <span>
-                <i class="fas fa-file-invoice mr-1"></i>
-                Showing <strong><?= count($payments) ?></strong> bill(s)
-            </span>
-            <span>
-                <i class="fas fa-store-alt mr-1"></i>
-                Branch: <strong><?= htmlspecialchars($branch_name) ?></strong>
-            </span>
-            <span id="footerTimestamp">
-                <i class="fas fa-clock mr-1"></i>
-                Last updated: <?= date('h:i:s A') ?>
-            </span>
         </div>
     </div>
 
@@ -1237,6 +1290,8 @@ include_once '../../components/cashier_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Partial Payments
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1262,66 +1317,7 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     // DARK MODE - SYNC WITH HEADER
     // ================================================================
-    (function() {
-        var htmlElement = document.documentElement;
-        
-        function syncDarkMode() {
-            var isDark = localStorage.getItem('darkMode') === 'true';
-            if (isDark) {
-                htmlElement.setAttribute('data-theme', 'dark');
-            } else {
-                htmlElement.removeAttribute('data-theme');
-            }
-        }
-        
-        syncDarkMode();
-        
-        window.addEventListener('storage', function(e) {
-            if (e.key === 'darkMode') {
-                syncDarkMode();
-            }
-        });
-        
-        document.addEventListener('darkModeChanged', function(e) {
-            var isDark = e.detail && e.detail.isDark;
-            if (isDark) {
-                htmlElement.setAttribute('data-theme', 'dark');
-            } else {
-                htmlElement.removeAttribute('data-theme');
-            }
-        });
-    })();
-
-    // ================================================================
-    // DATE & TIME - LIVE UPDATE
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        
-        var clockDisplay = document.getElementById('clockDisplay');
-        if (clockDisplay) {
-            clockDisplay.textContent = dateStr + ' • ' + timeStr;
-        }
-        
-        var footerTimestamp = document.getElementById('footerTimestamp');
-        if (footerTimestamp) {
-            footerTimestamp.textContent = 'Last updated: ' + timeStr;
-        }
-        
-        var tableUpdateTime = document.getElementById('tableUpdateTime');
-        if (tableUpdateTime) {
-            tableUpdateTime.textContent = 'Updated: ' + timeStr;
-        }
-    }
-    
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    // Note: Dark mode is controlled by header.
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1329,19 +1325,35 @@ include_once '../../components/cashier_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    if (sidebarToggle) {
+    if (sidebarToggle && sidebar) {
         sidebarToggle.addEventListener('click', function() {
-            if (sidebar) sidebar.classList.toggle('open');
+            sidebar.classList.toggle('open');
+        });
+        
+        document.addEventListener('click', function(e) {
+            if (window.innerWidth <= 1024) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
         });
     }
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
+
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
+    function updateDateTime() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
         }
-    });
+    }
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // SEARCH
@@ -1349,12 +1361,18 @@ include_once '../../components/cashier_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
+    if (!searchBtn && !searchInput) {
+        searchBtn = document.querySelector('.top-nav .search-btn');
+        searchInput = document.querySelector('.top-nav #searchInput');
+    }
+    
     function performSearch() {
-        var query = searchInput.value.trim();
-        var date = '<?= $date_filter ?>';
-        var status = '<?= $status_filter ?>';
+        var query = searchInput?.value?.trim() || '';
+        var filter = '<?= $filter ?>';
+        var start_date = '<?= $start_date ?>';
+        var end_date = '<?= $end_date ?>';
         if (query.length > 0) {
-            window.location.href = 'partial_payments.php?search=' + encodeURIComponent(query) + '&date=' + date + '&status=' + status;
+            window.location.href = 'partial_payments.php?search=' + encodeURIComponent(query) + '&filter=' + filter + '&start_date=' + start_date + '&end_date=' + end_date;
         }
     }
     
@@ -1365,55 +1383,7 @@ include_once '../../components/cashier_sidebar.php';
         searchInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') performSearch();
         });
-    }
-
-    // ================================================================
-    // TOGGLE ROW (Expand/Collapse)
-    // ================================================================
-    function toggleRow(rowElement, billId) {
-        var detailRow = document.getElementById('detail-' + billId);
-        var toggleIcon = document.getElementById('toggle-' + billId);
-        
-        if (detailRow) {
-            if (detailRow.style.display === 'none') {
-                detailRow.style.display = 'table-row';
-                rowElement.classList.add('expanded');
-                if (toggleIcon) toggleIcon.classList.add('open');
-            } else {
-                detailRow.style.display = 'none';
-                rowElement.classList.remove('expanded');
-                if (toggleIcon) toggleIcon.classList.remove('open');
-            }
-        }
-    }
-
-    // ================================================================
-    // EXPAND ALL / COLLAPSE ALL
-    // ================================================================
-    function expandAll() {
-        document.querySelectorAll('.detail-row').forEach(function(row) {
-            row.style.display = 'table-row';
-        });
-        document.querySelectorAll('.main-row').forEach(function(row) {
-            row.classList.add('expanded');
-        });
-        document.querySelectorAll('.toggle-icon').forEach(function(icon) {
-            icon.classList.add('open');
-        });
-        showToast('📂 Expand All', 'All bill items expanded', 'info');
-    }
-
-    function collapseAll() {
-        document.querySelectorAll('.detail-row').forEach(function(row) {
-            row.style.display = 'none';
-        });
-        document.querySelectorAll('.main-row').forEach(function(row) {
-            row.classList.remove('expanded');
-        });
-        document.querySelectorAll('.toggle-icon').forEach(function(icon) {
-            icon.classList.remove('open');
-        });
-        showToast('📁 Collapse All', 'All bill items collapsed', 'info');
+        searchInput.value = '<?= htmlspecialchars($search) ?>';
     }
 
     // ================================================================
@@ -1424,11 +1394,9 @@ include_once '../../components/cashier_sidebar.php';
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
         
-        if (!toast) return;
-        
-        toast.className = 'toast-custom ' + (type || 'info');
-        toastTitle.textContent = title || 'Notification';
-        toastMessage.textContent = message || '';
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
         toast.style.display = 'flex';
         
         toast.classList.add('show');
@@ -1446,27 +1414,31 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     function manualRefresh() {
         var btn = document.getElementById('refreshBtn');
-        btn.innerHTML = '<span class="spinner"></span> Loading...';
-        btn.disabled = true;
+        if (btn) {
+            btn.innerHTML = '<span class="spinner"></span> Loading...';
+            btn.disabled = true;
+        }
         
         setTimeout(function() {
             window.location.reload();
         }, 1000);
         
         setTimeout(function() {
-            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
-            btn.disabled = false;
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+                btn.disabled = false;
+            }
             showToast('✅ Refreshed', 'Page data updated manually', 'success');
         }, 2000);
     }
 
-    console.log('%c💰 Braick - Partial Payments (Shared Header + Dark Mode)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c📋 Total Bills: <?= $total_partial ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📅 Today: <?= $today_total ?> | Balance: <?= $currency ?> <?= number_format($today_balance, 0) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Click row to expand and see all items', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Pay button redirects to process_payment.php', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🟢 Table headers have GREEN background', 'font-size:13px; color:#059669;');
-    console.log('%c🌓 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c🟡 Braick - Partial Payments (Green Theme)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c👤 User ID: 11 - Rose Mwangi', 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Total Partial Bills: <?= $total_partial ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📅 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c🟢 Green theme applied', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
