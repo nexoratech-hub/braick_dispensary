@@ -83,11 +83,12 @@ if (empty($page_title) || $page_title == '') {
 }
 
 // ================================================================
-// DARK MODE - Check from localStorage via JS
+// DARK MODE - Check from cookie/localStorage via JS
 // ================================================================
+$dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="<?= $dark_mode ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -723,6 +724,16 @@ if (empty($page_title) || $page_title == '') {
             opacity: 0;
         }
     </style>
+    
+    <!-- Preload dark mode to prevent flash -->
+    <script>
+        (function() {
+            var darkMode = localStorage.getItem('darkMode');
+            if (darkMode === 'true') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
 </head>
 <body>
 
@@ -796,11 +807,13 @@ if (empty($page_title) || $page_title == '') {
                 if (darkIcon) darkIcon.className = 'fas fa-sun';
                 if (darkText) darkText.textContent = 'Light';
                 localStorage.setItem('darkMode', 'true');
+                document.cookie = "dark_mode=true; path=/";
             } else {
                 htmlElement.removeAttribute('data-theme');
                 if (darkIcon) darkIcon.className = 'fas fa-moon';
                 if (darkText) darkText.textContent = 'Dark';
                 localStorage.setItem('darkMode', 'false');
+                document.cookie = "dark_mode=false; path=/";
             }
         }
         

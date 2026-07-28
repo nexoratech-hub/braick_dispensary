@@ -4,6 +4,7 @@
 // CASHIER - PAID BILLS LIST WITH FILTERS (GREEN THEME)
 // FILTERS: Today, 1 Week, 1 Month, 3 Months, 6 Months, 1 Year, All, Date Picker
 // NO TOTAL AMOUNT CARD
+// USES HEADER DARK MODE - NO DUPLICATE
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -20,6 +21,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
     $_SESSION['branch_name'] = 'Dodoma';
     $_SESSION['username'] = 'cashier.dodoma';
     $_SESSION['is_admin'] = false;
+    $_SESSION['profile_pic'] = '';
 }
 
 // ================================================================
@@ -215,6 +217,7 @@ include_once '../../components/cashier_sidebar.php';
             --table-hover: #D1FAE5;
         }
         
+        /* DARK MODE - MATCH HEADER */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -227,7 +230,104 @@ include_once '../../components/cashier_sidebar.php';
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
         }
+
+        [data-theme="dark"] .bg-white { background-color: #1E293B !important; }
+        [data-theme="dark"] .text-gray-700 { color: #CBD5E1 !important; }
+        [data-theme="dark"] .text-gray-800 { color: #E2E8F0 !important; }
+        [data-theme="dark"] .text-gray-900 { color: #F1F5F9 !important; }
+        [data-theme="dark"] .border-gray-200 { border-color: #334155 !important; }
+        [data-theme="dark"] .bg-gray-50 { background-color: #1E293B !important; }
+        [data-theme="dark"] .bg-gray-100 { background-color: #2D3748 !important; }
+        [data-theme="dark"] .shadow { box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important; }
+        [data-theme="dark"] .shadow-md { box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
+        [data-theme="dark"] .shadow-lg { box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important; }
+        
+        [data-theme="dark"] .filter-btn {
+            border-color: #334155;
+            color: #94A3B8;
+        }
+        [data-theme="dark"] .filter-btn:hover {
+            border-color: #34D399;
+            color: #34D399;
+            background: rgba(5, 150, 105, 0.15);
+        }
+        [data-theme="dark"] .filter-btn.active {
+            background: #059669;
+            color: white;
+            border-color: #059669;
+        }
+        [data-theme="dark"] .filter-btn.active:hover {
+            background: #047857;
+            border-color: #047857;
+        }
+        
+        [data-theme="dark"] .date-picker-group .form-control {
+            background: #1E293B;
+            color: #F1F5F9;
+            border-color: #334155;
+        }
+        [data-theme="dark"] .date-picker-group .form-control:focus {
+            border-color: #34D399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1);
+        }
+        
+        [data-theme="dark"] .data-table tbody tr:hover td {
+            background: #1A3A2A;
+        }
+        [data-theme="dark"] .data-table td {
+            border-bottom-color: #334155;
+        }
+        
+        [data-theme="dark"] .stat-card {
+            background: #1E293B;
+            border-color: #334155;
+        }
+        [data-theme="dark"] .stat-card:hover {
+            border-color: #059669;
+        }
+        
+        [data-theme="dark"] .card {
+            background: #1E293B;
+            border-color: #334155;
+        }
+        [data-theme="dark"] .card:hover {
+            border-color: #059669;
+        }
+        
+        [data-theme="dark"] .page-header {
+            background: linear-gradient(135deg, #059669, #047857) !important;
+        }
+        
+        [data-theme="dark"] .footer {
+            border-top-color: #334155;
+        }
+        
+        [data-theme="dark"] .toast-custom.success { background: #059669; }
+        [data-theme="dark"] .toast-custom.error { background: #DC2626; }
+        
+        [data-theme="dark"] .header-badge {
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(255,255,255,0.1);
+        }
+        
+        [data-theme="dark"] .status-badge.paid {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        [data-theme="dark"] .text-gray-400 { color: #94A3B8 !important; }
+        [data-theme="dark"] .text-gray-500 { color: #94A3B8 !important; }
+        [data-theme="dark"] .text-gray-600 { color: #94A3B8 !important; }
+        [data-theme="dark"] .font-mono.text-gray-700 { color: #CBD5E1 !important; }
+        [data-theme="dark"] .font-semibold.text-gray-800 { color: #E2E8F0 !important; }
+        [data-theme="dark"] .card-title { color: #F1F5F9 !important; }
+        [data-theme="dark"] .footer .footer-brand { color: #34D399; }
+        [data-theme="dark"] .footer .text-gray-300 { color: #475569 !important; }
+        [data-theme="dark"] .toast-custom { box-shadow: 0 20px 25px rgba(0,0,0,0.4); }
+        [data-theme="dark"] .role-badge-display { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .branch-badge-display { background: #1A3A2A; color: #34D399; }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -242,155 +342,7 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--success);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--success);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--success-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--success);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--success);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--success);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
+        /* TOP NAV - already in header */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -398,9 +350,6 @@ include_once '../../components/cashier_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - GREEN THEME
-           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--success), var(--success-dark));
             border-radius: 16px;
@@ -440,10 +389,7 @@ include_once '../../components/cashier_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -456,10 +402,7 @@ include_once '../../components/cashier_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
+        .page-header .page-subtitle strong { color: white; font-weight: 600; }
         
         .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
@@ -511,9 +454,6 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           FILTER SECTION
-           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: 14px;
@@ -562,9 +502,7 @@ include_once '../../components/cashier_sidebar.php';
             border-color: var(--success-dark);
         }
         
-        .filter-btn i {
-            margin-right: 4px;
-        }
+        .filter-btn i { margin-right: 4px; }
         
         .filter-group {
             display: flex;
@@ -580,9 +518,6 @@ include_once '../../components/cashier_sidebar.php';
             margin-right: 4px;
         }
         
-        /* ================================================================
-           DATE PICKER
-           ================================================================ */
         .date-picker-group {
             display: flex;
             align-items: center;
@@ -624,9 +559,6 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-1px);
         }
         
-        /* ================================================================
-           CARD
-           ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -658,9 +590,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
         .table-wrap {
             overflow-x: auto;
         }
@@ -685,13 +614,8 @@ include_once '../../components/cashier_sidebar.php';
             white-space: nowrap;
         }
         
-        .data-table thead th:first-child {
-            border-radius: 8px 0 0 0;
-        }
-        
-        .data-table thead th:last-child {
-            border-radius: 0 8px 0 0;
-        }
+        .data-table thead th:first-child { border-radius: 8px 0 0 0; }
+        .data-table thead th:last-child { border-radius: 0 8px 0 0; }
         
         .data-table td {
             padding: 10px 14px;
@@ -704,9 +628,6 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--table-hover);
         }
         
-        /* ================================================================
-           STATUS BADGE
-           ================================================================ */
         .status-badge {
             display: inline-block;
             padding: 3px 14px;
@@ -721,14 +642,6 @@ include_once '../../components/cashier_sidebar.php';
             color: #059669;
         }
         
-        [data-theme="dark"] .status-badge.paid {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -765,27 +678,12 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--success);
-            color: var(--success);
-        }
-        
         .btn-sm { 
             padding: 4px 10px; 
             font-size: 0.65rem; 
             border-radius: 6px; 
         }
         
-        /* ================================================================
-           STATS CARD
-           ================================================================ */
         .stat-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -822,9 +720,6 @@ include_once '../../components/cashier_sidebar.php';
             margin-bottom: 4px;
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -839,9 +734,6 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600; 
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .role-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -851,11 +743,6 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--primary-bg);
             color: var(--primary);
             text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
         }
         
         .branch-badge-display {
@@ -868,14 +755,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--success);
         }
         
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -904,31 +783,20 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .filter-section { padding: 12px 14px; }
-            .filter-group { gap: 4px; }
             .filter-btn { font-size: 0.6rem; padding: 3px 10px; }
             .card { padding: 14px 16px; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .filter-section { padding: 10px 12px; }
             .filter-btn { font-size: 0.55rem; padding: 2px 8px; }
             .date-picker-group { flex-direction: column; align-items: stretch; }
             .date-picker-group .form-control { width: 100%; }
@@ -938,50 +806,20 @@ include_once '../../components/cashier_sidebar.php';
             .data-table { font-size: 0.65rem; min-width: 600px; }
         }
     </style>
+    
+    <!-- Preload dark mode from localStorage -->
+    <script>
+        (function() {
+            var darkMode = localStorage.getItem('darkMode');
+            if (darkMode === 'true') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search paid bills..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+<!-- TOP NAV is loaded from header -->
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1013,13 +851,18 @@ include_once '../../components/cashier_sidebar.php';
                     <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
                 </span>
                 <?php endif; ?>
+                
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-sync-alt fa-fw"></i>
+                    <span id="updateCount">0</span> updates
+                </span>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Dashboard
             </a>
-            <button onclick="window.location.reload()" class="btn-outline-light">
+            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
@@ -1027,7 +870,7 @@ include_once '../../components/cashier_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>" style="max-width:1200px;margin:0 auto 16px;">
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>" style="max-width:1200px;margin:0 auto 16px;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
@@ -1155,7 +998,7 @@ include_once '../../components/cashier_sidebar.php';
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td>
-                                    <span class="font-mono text-xs font-bold text-gray-700 dark:text-gray-300">
+                                    <span class="font-mono text-xs font-bold text-gray-700">
                                         <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
@@ -1167,12 +1010,12 @@ include_once '../../components/cashier_sidebar.php';
                                     <span class="text-xs font-mono"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></span>
                                 </td>
                                 <td>
-                                    <span class="font-semibold text-gray-800 dark:text-gray-200">
+                                    <span class="font-semibold text-gray-800">
                                         <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="font-semibold text-green-600 dark:text-green-400">
+                                    <span class="font-semibold text-green-600">
                                         <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
                                     </span>
                                 </td>
@@ -1180,9 +1023,7 @@ include_once '../../components/cashier_sidebar.php';
                                     <span class="text-sm"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></span>
                                 </td>
                                 <td>
-                                    <span class="status-badge paid">
-                                        Paid
-                                    </span>
+                                    <span class="status-badge paid">Paid</span>
                                 </td>
                                 <td class="text-xs">
                                     <?= isset($bill['updated_at']) ? date('d/m/Y', strtotime($bill['updated_at'])) : 'N/A' ?>
@@ -1193,11 +1034,9 @@ include_once '../../components/cashier_sidebar.php';
                                 </td>
                                 <td>
                                     <div class="flex flex-wrap gap-1">
-                                        <!-- View Bill -->
                                         <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <!-- Print Receipt -->
                                         <a href="print_receipt.php?bill_id=<?= $bill['id'] ?>&print=1" class="btn btn-success btn-sm" title="Print Receipt" target="_blank">
                                             <i class="fas fa-print"></i>
                                         </a>
@@ -1254,75 +1093,80 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- GLOBAL STATS AUTO-UPDATE -->
-<!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/global_stats.js"></script>
-
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
+    // ================================================================
+    // DARK MODE - SYNC WITH HEADER
+    // ================================================================
+    // Note: Dark mode is controlled by header.
+    // This page listens for changes and applies them.
 
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    function updateDateTime() {
+    // ================================================================
+    // CLOCK - UPDATE EVERY SECOND (if header clock exists)
+    // ================================================================
+    function updateClock() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        var el = document.querySelector('.top-nav .time-part');
+        if (el) {
+            el.textContent = timeStr;
+        }
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    setInterval(updateClock, 1000);
+    updateClock();
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
+    var sidebar = document.getElementById('sidebar');
+    var sidebarToggle = document.getElementById('sidebarToggle');
+    
+    if (sidebarToggle && sidebar) {
+        sidebarToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+        });
+        
+        document.addEventListener('click', function(e) {
+            if (window.innerWidth <= 1024) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
+        });
+    }
+
+    // ================================================================
+    // DATE & TIME (for footer)
+    // ================================================================
+    function updateFooterTime() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
+    }
+    updateFooterTime();
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
+    if (!searchBtn && !searchInput) {
+        // Search from header
+        searchBtn = document.querySelector('.top-nav .search-btn');
+        searchInput = document.querySelector('.top-nav #searchInput');
+    }
+    
     function performSearch() {
-        var query = searchInput.value.trim();
+        var query = searchInput?.value?.trim() || '';
         var filter = '<?= $filter ?>';
         var start_date = '<?= $start_date ?>';
         var end_date = '<?= $end_date ?>';
@@ -1331,11 +1175,20 @@ include_once '../../components/cashier_sidebar.php';
         }
     }
     
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
+    if (searchBtn) {
+        searchBtn.addEventListener('click', performSearch);
+    }
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+        // Set value from PHP
+        searchInput.value = '<?= htmlspecialchars($search) ?>';
+    }
 
+    // ================================================================
+    // TOAST
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1356,12 +1209,131 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c✅ Braick - Paid Bills (No Total Amount Card)', 'font-size:18px; font-weight:bold; color:#059669;');
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    var updateCount = 0;
+    
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        if (btn) {
+            btn.innerHTML = '<span class="spinner"></span> Loading...';
+            btn.disabled = true;
+        }
+        
+        setTimeout(function() {
+            window.location.reload();
+        }, 1000);
+        
+        setTimeout(function() {
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+                btn.disabled = false;
+            }
+            showToast('✅ Refreshed', 'Page data updated manually', 'success');
+        }, 2000);
+    }
+
+    // ================================================================
+    // AUTO-UPDATE - EVERY 3 SECONDS (VIA AJAX)
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    var lastHash = null;
+
+    function fetchPaidBills() {
+        if (isUpdating) return;
+        isUpdating = true;
+        
+        var filter = '<?= $filter ?>';
+        var search = '<?= addslashes($search) ?>';
+        var start_date = '<?= $start_date ?>';
+        var end_date = '<?= $end_date ?>';
+        
+        var url = 'get_paid_bills.php?filter=' + encodeURIComponent(filter) + 
+                  '&search=' + encodeURIComponent(search) + 
+                  '&start_date=' + encodeURIComponent(start_date) + 
+                  '&end_date=' + encodeURIComponent(end_date) + 
+                  '&t=' + Date.now();
+        
+        fetch(url)
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    if (lastHash !== data.hash) {
+                        lastHash = data.hash;
+                        updateCount++;
+                        updateUI(data);
+                        updateFooterTime();
+                        
+                        var updateCountEl = document.getElementById('updateCount');
+                        if (updateCountEl) {
+                            updateCountEl.textContent = updateCount;
+                        }
+                    }
+                }
+                isUpdating = false;
+            })
+            .catch(function(error) {
+                console.error('Update error:', error);
+                isUpdating = false;
+            });
+    }
+
+    function updateUI(data) {
+        var stats = document.querySelectorAll('.stat-card .stat-number');
+        if (stats.length >= 2) {
+            stats[0].textContent = data.total_bills;
+        }
+        
+        var headerBadges = document.querySelectorAll('.page-header .header-badge');
+        if (headerBadges.length >= 1) {
+            var billBadge = headerBadges[0];
+            if (billBadge) {
+                billBadge.innerHTML = '<i class="fas fa-file-invoice"></i> ' + data.total_bills + ' Bills';
+            }
+        }
+    }
+
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        fetchPaidBills();
+        updateInterval = setInterval(fetchPaidBills, 3000);
+        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
+    }
+    
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
+        }
+    }
+
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
+
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 2000);
+    });
+
+    console.log('%c✅ Braick - Paid Bills (Uses Header Dark Mode)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Paid Bills: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📅 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔄 Auto-update every 3 seconds via global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c❌ Removed Total Amount card', 'font-size:13px; color:#DC2626;');
+    console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
 </script>
 
 </body>

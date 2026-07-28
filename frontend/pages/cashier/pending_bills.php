@@ -3,23 +3,25 @@
 // FILE: frontend/pages/cashier/pending_bills.php
 // CASHIER - PENDING BILLS LIST (GREEN THEME)
 // FIXED: Supports both string and integer status values
+// FIXED: Uses shared header with clock
+// FIXED: Dark mode fully working with header
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Default to reception.rose (ID: 11)
+// FORCE SESSION - Default to cashier (ID: 7)
 // ================================================================
 if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
+    $_SESSION['user_id'] = 7;
+    $_SESSION['full_name'] = 'Cashier User';
+    $_SESSION['role'] = 'cashier';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 005';
+    $_SESSION['username'] = 'cashier';
+    $_SESSION['email'] = 'cashier@braick.com';
+    $_SESSION['phone'] = '+255 700 000 007';
     $_SESSION['is_admin'] = false;
     $_SESSION['profile_pic'] = '';
 }
@@ -156,15 +158,6 @@ try {
     $pending_bills = $stmt->fetchAll();
     
     // ================================================================
-    // DEBUG - Log results
-    // ================================================================
-    error_log("Pending bills found: " . count($pending_bills));
-    if (count($pending_bills) > 0) {
-        error_log("First bill status: " . $pending_bills[0]['status']);
-        error_log("First bill number: " . $pending_bills[0]['bill_number']);
-    }
-    
-    // ================================================================
     // GROUP BILLS BY PATIENT
     // ================================================================
     $patient_bills = [];
@@ -239,6 +232,9 @@ include_once '../../components/cashier_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* ================================================================
+           ROOT VARIABLES - LIGHT MODE (DEFAULT)
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -279,8 +275,25 @@ include_once '../../components/cashier_sidebar.php';
             --table-stripe: #E8F0FE;
             --table-hover: #D1FAE5;
             --patient-card-border: #059669;
+            --toast-bg: #FFFFFF;
+            --toast-text: #1E293B;
+            --input-bg: #FFFFFF;
+            --input-border: #E2E8F0;
+            --input-text: #1E293B;
+            --empty-state-color: #64748B;
+            --footer-border: #E2E8F0;
+            --badge-pending-bg: #FEF3C7;
+            --badge-pending-text: #D97706;
+            --badge-partial-bg: #E8F0FE;
+            --badge-partial-text: #0B5ED7;
+            --total-row-bg: #E8F0FE;
+            --patient-header-bg: #E8F0FE;
+            --patient-header-hover: #D1FAE5;
         }
         
+        /* ================================================================
+           ROOT VARIABLES - DARK MODE
+           ================================================================ */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -294,8 +307,29 @@ include_once '../../components/cashier_sidebar.php';
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
             --patient-card-border: #34D399;
+            --toast-bg: #1E293B;
+            --toast-text: #F1F5F9;
+            --input-bg: #1E293B;
+            --input-border: #334155;
+            --input-text: #F1F5F9;
+            --empty-state-color: #94A3B8;
+            --footer-border: #334155;
+            --badge-pending-bg: #3D2E0A;
+            --badge-pending-text: #FBBF24;
+            --badge-partial-bg: #1E3A5F;
+            --badge-partial-text: #6EA8FE;
+            --total-row-bg: #1E3A5F;
+            --patient-header-bg: #1E3A5F;
+            --patient-header-hover: #1A3A2A;
+            --primary-bg: #1E3A5F;
+            --success-bg: #1A3A2A;
+            --danger-bg: #3A1A1A;
+            --warning-bg: #3D2E0A;
         }
         
+        /* ================================================================
+           GLOBAL STYLES
+           ================================================================ */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -309,159 +343,20 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* TOP NAV */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--success);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--success);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--success-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--success);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--success);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--success);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        /* MAIN CONTENT */
+        /* ================================================================
+           MAIN CONTENT OVERRIDE
+           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
+            transition: background 0.3s ease;
         }
         
-        /* PAGE HEADER */
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--warning), #B45309);
             border-radius: 16px;
@@ -572,7 +467,9 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* FILTER SECTION */
+        /* ================================================================
+           FILTER SECTION
+           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: 14px;
@@ -583,6 +480,7 @@ include_once '../../components/cashier_sidebar.php';
             margin-left: auto;
             margin-right: auto;
             box-shadow: var(--shadow-sm);
+            transition: all 0.3s ease;
         }
         
         .filter-section:hover {
@@ -680,7 +578,9 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-1px);
         }
         
-        /* STATS */
+        /* ================================================================
+           STATS
+           ================================================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -738,7 +638,9 @@ include_once '../../components/cashier_sidebar.php';
             margin-bottom: 4px;
         }
         
-        /* PATIENT CARD */
+        /* ================================================================
+           PATIENT CARD
+           ================================================================ */
         .patient-card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -756,7 +658,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .patient-card-header {
-            background: var(--primary-bg);
+            background: var(--patient-header-bg);
             padding: 14px 20px;
             display: flex;
             flex-wrap: wrap;
@@ -765,20 +667,12 @@ include_once '../../components/cashier_sidebar.php';
             gap: 12px;
             border-bottom: 2px solid var(--border-color);
             cursor: pointer;
-            transition: background 0.3s ease;
+            transition: background 0.3s ease, border-color 0.3s ease;
             user-select: none;
         }
         
         .patient-card-header:hover {
-            background: var(--success-bg);
-        }
-        
-        [data-theme="dark"] .patient-card-header {
-            background: #1E3A5F;
-        }
-        
-        [data-theme="dark"] .patient-card-header:hover {
-            background: #1A3A2A;
+            background: var(--patient-header-hover);
         }
         
         .patient-card-header .patient-info {
@@ -829,18 +723,18 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .patient-card-header .total-badge.orange {
-            background: #FEF3C7;
-            color: #D97706;
+            background: var(--warning-bg);
+            color: var(--warning);
         }
         
         .patient-card-header .total-badge.green {
-            background: #D1FAE5;
-            color: #059669;
+            background: var(--success-bg);
+            color: var(--success);
         }
         
         .patient-card-header .total-badge.red {
-            background: #FEE2E2;
-            color: #DC2626;
+            background: var(--danger-bg);
+            color: var(--danger);
         }
         
         .patient-card-header .total-amount {
@@ -860,21 +754,6 @@ include_once '../../components/cashier_sidebar.php';
             transform: rotate(180deg);
         }
         
-        [data-theme="dark"] .patient-card-header .total-badge.orange {
-            background: #3D2E0A;
-            color: #FBBF24;
-        }
-        
-        [data-theme="dark"] .patient-card-header .total-badge.green {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        [data-theme="dark"] .patient-card-header .total-badge.red {
-            background: #3A1A1A;
-            color: #F87171;
-        }
-        
         .patient-card-body {
             overflow: hidden;
             transition: max-height 0.4s ease-in-out, padding 0.3s ease;
@@ -888,7 +767,9 @@ include_once '../../components/cashier_sidebar.php';
             padding: 16px 20px;
         }
         
-        /* TABLE */
+        /* ================================================================
+           TABLE
+           ================================================================ */
         .table-wrap {
             overflow-x: auto;
         }
@@ -939,7 +820,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .data-table .bill-number.pending {
-            color: #D97706;
+            color: var(--warning);
         }
         
         .data-table .bill-number.partial {
@@ -955,7 +836,9 @@ include_once '../../components/cashier_sidebar.php';
         }
         <?php endif; ?>
         
-        /* STATUS BADGE */
+        /* ================================================================
+           STATUS BADGE
+           ================================================================ */
         .status-badge {
             display: inline-block;
             padding: 3px 14px;
@@ -966,26 +849,18 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .status-badge.pending {
-            background: #FEF3C7;
-            color: #D97706;
+            background: var(--badge-pending-bg);
+            color: var(--badge-pending-text);
         }
         
         .status-badge.partial {
-            background: #E8F0FE;
-            color: #0B5ED7;
+            background: var(--badge-partial-bg);
+            color: var(--badge-partial-text);
         }
         
-        [data-theme="dark"] .status-badge.pending {
-            background: #3D2E0A;
-            color: #FBBF24;
-        }
-        
-        [data-theme="dark"] .status-badge.partial {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        /* BUTTONS */
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1039,11 +914,6 @@ include_once '../../components/cashier_sidebar.php';
             text-transform: uppercase;
         }
         
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
         .branch-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -1052,11 +922,6 @@ include_once '../../components/cashier_sidebar.php';
             border-radius: 20px;
             background: var(--success-bg);
             color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
         }
         
         .admin-badge {
@@ -1069,54 +934,54 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600;
         }
         
-        /* TOAST */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
+        /* ================================================================
+           MESSAGE BOX
+           ================================================================ */
+        .message-box {
+            max-width: 1400px;
+            margin: 0 auto 16px;
+            padding: 12px 16px;
             border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
         }
         
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
+        .message-box.success {
+            background: var(--success-bg);
+            color: var(--success);
+            border-color: var(--success);
         }
         
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        /* FOOTER */
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
+        .message-box.error {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border-color: var(--danger);
         }
         
-        .footer .footer-brand { 
-            color: var(--success); 
-            font-weight: 600; 
+        .message-box i {
+            margin-right: 8px;
         }
         
+        /* ================================================================
+           PATIENT TOTAL ROW
+           ================================================================ */
+        .patient-total-row {
+            background: var(--total-row-bg);
+            font-weight: 700;
+            transition: background 0.3s ease;
+        }
+        
+        .patient-total-row td {
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        /* ================================================================
+           EMPTY STATE
+           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 40px 20px;
-            color: var(--text-secondary);
+            color: var(--empty-state-color);
         }
         
         .empty-state i {
@@ -1131,6 +996,27 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-secondary);
         }
         
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--footer-border);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            transition: border-color 0.3s ease;
+        }
+        
+        .footer .footer-brand { 
+            color: var(--success); 
+            font-weight: 600; 
+        }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1153,15 +1039,14 @@ include_once '../../components/cashier_sidebar.php';
         
         @keyframes spin { to { transform: rotate(360deg); } }
         
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .filter-section { padding: 12px 14px; }
@@ -1174,8 +1059,6 @@ include_once '../../components/cashier_sidebar.php';
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
             .filter-section { padding: 10px 12px; }
             .filter-btn { font-size: 0.55rem; padding: 2px 8px; }
             .date-picker-group { flex-direction: column; align-items: stretch; }
@@ -1193,50 +1076,18 @@ include_once '../../components/cashier_sidebar.php';
 </head>
 <body>
 
-<!-- TOP NAVIGATION -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patients or bills..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+<!-- ================================================================ -->
+<!-- TOP NAVIGATION - FROM HEADER (Already included) -->
+<!-- ================================================================ -->
 
+<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
+<!-- ================================================================ -->
 <main class="main-content">
 
+    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1267,13 +1118,18 @@ include_once '../../components/cashier_sidebar.php';
                     <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
                 </span>
                 <?php endif; ?>
+                
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-sync-alt fa-fw"></i>
+                    <span id="updateCount">0</span> updates
+                </span>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Dashboard
             </a>
-            <button onclick="window.location.reload()" class="btn-outline-light">
+            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
@@ -1281,13 +1137,15 @@ include_once '../../components/cashier_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>" style="max-width:1400px;margin:0 auto 16px;">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
+        <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <?= $message ?>
         </div>
     <?php endif; ?>
 
+    <!-- ================================================================ -->
     <!-- FILTERS -->
+    <!-- ================================================================ -->
     <div class="filter-section">
         <div class="filter-group" style="margin-bottom:8px;">
             <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
@@ -1315,7 +1173,7 @@ include_once '../../components/cashier_sidebar.php';
             </a>
         </div>
         
-        <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
+        <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;transition:border-color 0.3s ease;">
             <input type="hidden" name="filter" value="custom">
             <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
             
@@ -1339,7 +1197,9 @@ include_once '../../components/cashier_sidebar.php';
         </form>
     </div>
 
+    <!-- ================================================================ -->
     <!-- STATS -->
+    <!-- ================================================================ -->
     <div class="stats-grid">
         <div class="stat-card-box">
             <div class="stat-icon">📋</div>
@@ -1376,7 +1236,9 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- PATIENT BILLS LIST -->
+    <!-- ================================================================ -->
     <?php if (count($patient_bills) > 0): ?>
         <?php foreach ($patient_bills as $patient): ?>
             <div class="patient-card animate-fade-in-up">
@@ -1457,13 +1319,13 @@ include_once '../../components/cashier_sidebar.php';
                                             </span>
                                         </td>
                                         <td>
-                                            <span class="text-green-600 dark:text-green-400">
+                                            <span style="color:var(--success);">
                                                 <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
                                             </span>
                                         </td>
                                         <?php if ($is_admin): ?>
                                             <td class="balance-col">
-                                                <span class="font-semibold text-red-600 dark:text-red-400">
+                                                <span class="font-semibold" style="color:var(--danger);">
                                                     <?= $currency ?> <?= number_format($bill['balance'], 0) ?>
                                                 </span>
                                             </td>
@@ -1481,7 +1343,7 @@ include_once '../../components/cashier_sidebar.php';
                                         <td class="text-xs">
                                             <?= isset($bill['created_at']) ? date('d/m/Y', strtotime($bill['created_at'])) : 'N/A' ?>
                                             <br>
-                                            <span class="text-gray-400 text-[0.6rem]">
+                                            <span style="color:var(--text-secondary);font-size:0.6rem;">
                                                 <?= isset($bill['created_at']) ? date('h:i A', strtotime($bill['created_at'])) : '' ?>
                                             </span>
                                         </td>
@@ -1498,13 +1360,13 @@ include_once '../../components/cashier_sidebar.php';
                                                     <i class="fas fa-money-bill-wave"></i> Pay
                                                 </a>
                                             <?php else: ?>
-                                                <span class="text-xs text-gray-400">(Read Only)</span>
+                                                <span class="text-xs" style="color:var(--text-secondary);">(Read Only)</span>
                                             <?php endif; ?>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
                                 <!-- Patient Total Row -->
-                                <tr style="background: var(--primary-bg); font-weight: 700;">
+                                <tr class="patient-total-row">
                                     <td colspan="2" style="text-align:right;font-size:0.8rem;">
                                         <i class="fas fa-calculator mr-1"></i> Patient Total:
                                     </td>
@@ -1526,7 +1388,7 @@ include_once '../../components/cashier_sidebar.php';
                     </div>
                     
                     <!-- Patient Action Buttons -->
-                    <div style="padding: 12px 0 0; display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--border-color); margin-top: 8px;">
+                    <div style="padding: 12px 0 0; display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--border-color); margin-top: 8px; transition: border-color 0.3s ease;">
                         <a href="patient_bills.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-view">
                             <i class="fas fa-file-invoice"></i> View All Bills
                         </a>
@@ -1541,18 +1403,20 @@ include_once '../../components/cashier_sidebar.php';
         <?php endforeach; ?>
     <?php else: ?>
         <div class="empty-state" style="max-width:1400px;margin:0 auto;">
-            <i class="fas fa-exclamation-circle text-yellow-500 text-3xl block mb-3"></i>
-            <p class="text-lg font-semibold text-gray-500">No Pending Bills Found</p>
+            <i class="fas fa-exclamation-circle" style="color:var(--warning);"></i>
+            <p class="text-lg font-semibold">No Pending Bills Found</p>
             <p class="sub">Check if there are any bills with status 'pending' or 'partial'</p>
-            <p class="text-xs text-gray-400 mt-2">Debug: Total bills in query: <?= $total_bills_count ?></p>
-            <p class="text-xs text-gray-400">Branch ID: <?= $selected_branch_id ?></p>
+            <p class="text-xs" style="color:var(--text-secondary);margin-top:4px;">Debug: Total bills in query: <?= $total_bills_count ?></p>
+            <p class="text-xs" style="color:var(--text-secondary);">Branch ID: <?= $selected_branch_id ?></p>
             <?php if ($filter !== 'all'): ?>
-                <p class="text-xs text-gray-400">Filter: <?= $filter ?></p>
+                <p class="text-xs" style="color:var(--text-secondary);">Filter: <?= $filter ?></p>
             <?php endif; ?>
         </div>
     <?php endif; ?>
 
+    <!-- ================================================================ -->
     <!-- FOOTER -->
+    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1567,7 +1431,9 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
+<!-- ================================================================ -->
 <!-- TOAST -->
+<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1576,11 +1442,69 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- GLOBAL STATS AUTO-UPDATE -->
-<script src="/dispensary_system/frontend/assets/js/cashier_global_stats.js"></script>
-
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
+    // ================================================================
+    // DARK MODE - SYNC WITH HEADER
+    // ================================================================
+    (function() {
+        var htmlElement = document.documentElement;
+        
+        // Function to apply dark mode based on localStorage
+        function syncDarkMode() {
+            var isDark = localStorage.getItem('darkMode') === 'true';
+            if (isDark) {
+                htmlElement.setAttribute('data-theme', 'dark');
+            } else {
+                htmlElement.removeAttribute('data-theme');
+            }
+        }
+        
+        // Apply on load
+        syncDarkMode();
+        
+        // Listen for storage changes (from header or other pages)
+        window.addEventListener('storage', function(e) {
+            if (e.key === 'darkMode') {
+                syncDarkMode();
+            }
+        });
+        
+        // Also listen for custom event from header
+        document.addEventListener('darkModeChanged', function(e) {
+            var isDark = e.detail && e.detail.isDark;
+            if (isDark) {
+                htmlElement.setAttribute('data-theme', 'dark');
+            } else {
+                htmlElement.removeAttribute('data-theme');
+            }
+        });
+    })();
+
+    // ================================================================
+    // CLOCK - UPDATE EVERY SECOND
+    // ================================================================
+    function updateClock() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        
+        var clockDisplay = document.getElementById('clockDisplay');
+        if (clockDisplay) {
+            clockDisplay.textContent = dateStr + ' • ' + timeStr;
+        }
+    }
+    
+    // Call every second
+    setInterval(updateClock, 1000);
+    updateClock();
+
     // ================================================================
     // TOGGLE PATIENT BILLS
     // ================================================================
@@ -1597,69 +1521,39 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
-    // ================================================================
     // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', function() {
+            if (sidebar) sidebar.classList.toggle('open');
+        });
+    }
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
     });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME (for footer)
     // ================================================================
-    function updateDateTime() {
+    function updateFooterTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    updateFooterTime();
 
     // ================================================================
     // SEARCH
@@ -1677,10 +1571,14 @@ include_once '../../components/cashier_sidebar.php';
         }
     }
     
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
+    if (searchBtn) {
+        searchBtn.addEventListener('click', performSearch);
+    }
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+    }
 
     // ================================================================
     // TOAST
@@ -1690,9 +1588,11 @@ include_once '../../components/cashier_sidebar.php';
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
         
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
+        if (!toast) return;
+        
+        toast.className = 'toast-custom ' + (type || 'info');
+        toastTitle.textContent = title || 'Notification';
+        toastMessage.textContent = message || '';
         toast.style.display = 'flex';
         
         toast.classList.add('show');
@@ -1705,19 +1605,152 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c⏳ Braick - Pending Bills (Fixed - Supports Integer Status)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    var updateCount = 0;
+    
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        btn.innerHTML = '<span class="spinner"></span> Loading...';
+        btn.disabled = true;
+        
+        setTimeout(function() {
+            window.location.reload();
+        }, 1000);
+        
+        setTimeout(function() {
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+            btn.disabled = false;
+            showToast('✅ Refreshed', 'Page data updated manually', 'success');
+        }, 2000);
+    }
+
+    // ================================================================
+    // AUTO-UPDATE - EVERY 30 SECONDS
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    var lastHash = null;
+
+    function fetchPendingBills() {
+        if (isUpdating) return;
+        isUpdating = true;
+        
+        var filter = '<?= $filter ?>';
+        var search = '<?= addslashes($search) ?>';
+        var start_date = '<?= $start_date ?>';
+        var end_date = '<?= $end_date ?>';
+        
+        var url = 'get_pending_bills.php?filter=' + encodeURIComponent(filter) + 
+                  '&search=' + encodeURIComponent(search) + 
+                  '&start_date=' + encodeURIComponent(start_date) + 
+                  '&end_date=' + encodeURIComponent(end_date) + 
+                  '&t=' + Date.now();
+        
+        fetch(url)
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    if (lastHash !== data.hash) {
+                        lastHash = data.hash;
+                        updateCount++;
+                        updateUI(data);
+                        updateFooterTime();
+                        
+                        var updateCountEl = document.getElementById('updateCount');
+                        if (updateCountEl) {
+                            updateCountEl.textContent = updateCount;
+                        }
+                    }
+                }
+                isUpdating = false;
+            })
+            .catch(function(error) {
+                console.error('Update error:', error);
+                isUpdating = false;
+            });
+    }
+
+    function updateUI(data) {
+        // Update stats
+        var stats = document.querySelectorAll('.stat-card-box .stat-number');
+        if (stats.length >= 4) {
+            stats[0].textContent = data.total_bills;
+            stats[1].textContent = data.total_patients;
+            if (stats[2]) {
+                stats[2].textContent = data.currency + ' ' + Number(data.total_amount).toLocaleString();
+            }
+        }
+        
+        // Update header badges
+        var headerBadges = document.querySelectorAll('.page-header .header-badge');
+        if (headerBadges.length >= 2) {
+            var billBadge = headerBadges[0];
+            if (billBadge) {
+                billBadge.innerHTML = '<i class="fas fa-file-invoice"></i> ' + data.total_bills + ' Bills';
+            }
+            var patientBadge = headerBadges[1];
+            if (patientBadge) {
+                patientBadge.innerHTML = '<i class="fas fa-users"></i> ' + data.total_patients + ' Patients';
+            }
+        }
+    }
+
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        fetchPendingBills();
+        updateInterval = setInterval(fetchPendingBills, 30000);
+        console.log('%c🔄 Auto-update started (every 30s)', 'font-size:12px; color:#34D399;');
+    }
+    
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
+        }
+    }
+
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
+
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        // Start auto-update after 5 seconds
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 5000);
+        
+        // Open first patient card by default
+        var firstPatient = document.querySelector('.patient-card-body');
+        if (firstPatient) {
+            setTimeout(function() {
+                firstPatient.classList.add('open');
+                var chevron = document.querySelector('.chevron-icon');
+                if (chevron) {
+                    chevron.classList.add('rotated');
+                }
+            }, 300);
+        }
+    });
+
+    console.log('%c⏳ Braick - Pending Bills (Dark Mode Sync with Header)', 'font-size:18px; font-weight:bold; color:#D97706;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Bills Found: <?= $total_bills_count ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patients: <?= count($patient_bills) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total Balance: <?= $currency ?> <?= number_format($total_pending_amount, 0) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c✅ Status check includes: pending, partial, 0, 1', 'font-size:13px; color:#34D399;');
-    <?php if ($total_bills_count > 0): ?>
-    console.log('%c✅ Bills found!', 'font-size:13px; color:#34D399;');
-    <?php else: ?>
-    console.log('%c❌ No bills found. Check database.', 'font-size:13px; color:#DC2626;');
-    console.log('%c🔍 Check if bill status is "pending", "partial", 0, or 1', 'font-size:13px; color:#D97706;');
-    <?php endif; ?>
-    console.log('%c🔄 Auto-update every 3 seconds via cashier_global_stats.js', 'font-size:13px; color:#34D399;');
+    console.log('%c🌓 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
 </script>
 
 </body>

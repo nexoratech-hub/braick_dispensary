@@ -4,6 +4,8 @@
 // CASHIER DASHBOARD - WITH SHARED HEADER & SHARED SIDEBAR
 // REMOVED: Today's Collection Card
 // ADDED: Green Background on Header
+// WITH AUTO-UPDATE (3 SECONDS) - NO PAGE REFRESH
+// BRAICK DISPENSARY
 // ================================================================
 
 session_start();
@@ -11,16 +13,18 @@ session_start();
 // ================================================================
 // FORCE SESSION - Rose Mwangi (Reception = Cashier)
 // ================================================================
-$_SESSION['user_id'] = 11;
-$_SESSION['full_name'] = 'Rose Mwangi';
-$_SESSION['username'] = 'reception.rose';
-$_SESSION['role'] = 'reception';
-$_SESSION['branch_id'] = 1;
-$_SESSION['branch_name'] = 'Dodoma';
-$_SESSION['email'] = 'rose@braick.com';
-$_SESSION['phone'] = '+255 700 000 005';
-$_SESSION['is_admin'] = false;
-$_SESSION['profile_pic'] = '';
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
+    $_SESSION['user_id'] = 11;
+    $_SESSION['full_name'] = 'Rose Mwangi';
+    $_SESSION['username'] = 'reception.rose';
+    $_SESSION['role'] = 'reception';
+    $_SESSION['branch_id'] = 1;
+    $_SESSION['branch_name'] = 'Dodoma';
+    $_SESSION['email'] = 'rose@braick.com';
+    $_SESSION['phone'] = '+255 700 000 005';
+    $_SESSION['is_admin'] = false;
+    $_SESSION['profile_pic'] = '';
+}
 
 // ================================================================
 // GET SESSION DATA
@@ -194,6 +198,11 @@ include_once '../../components/cashier_sidebar.php';
                 <span style="color:rgba(255,255,255,0.8);"><i class="far fa-calendar-alt"></i> <?= date('F d, Y') ?></span>
                 <span style="color:rgba(255,255,255,0.3);margin:0 4px;">|</span>
                 <span style="color:#FCD34D;font-weight:600;"><i class="fas fa-clock"></i> <span id="pendingCount"><?= $pending_bills ?></span> Pending Bills</span>
+                <span style="color:rgba(255,255,255,0.3);margin:0 4px;">|</span>
+                <span style="color:#34D399;font-size:0.8rem;" id="liveIndicator">
+                    <i class="fas fa-circle" style="color:#34D399;font-size:0.5rem;display:inline-block;animation:pulse-dot 1.5s infinite;"></i>
+                    Live
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -217,7 +226,7 @@ include_once '../../components/cashier_sidebar.php';
             <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $pending_bills ?></div>
+                    <div class="stat-number" id="statPending" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $pending_bills ?></div>
                     <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Pending Bills</div>
                 </div>
                 <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
@@ -237,7 +246,7 @@ include_once '../../components/cashier_sidebar.php';
             <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $today_payments ?></div>
+                    <div class="stat-number" id="statPayments" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $today_payments ?></div>
                     <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Today's Payments</div>
                 </div>
                 <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
@@ -257,7 +266,7 @@ include_once '../../components/cashier_sidebar.php';
             <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($total_bills) ?></div>
+                    <div class="stat-number" id="statTotal" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($total_bills) ?></div>
                     <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Total Bills</div>
                 </div>
                 <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
@@ -277,7 +286,7 @@ include_once '../../components/cashier_sidebar.php';
             <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($paid_bills) ?></div>
+                    <div class="stat-number" id="statPaid" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($paid_bills) ?></div>
                     <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Paid Bills</div>
                 </div>
                 <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
@@ -297,7 +306,7 @@ include_once '../../components/cashier_sidebar.php';
             <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $today_receipts ?></div>
+                    <div class="stat-number" id="statReceipts" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $today_receipts ?></div>
                     <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Today's Receipts</div>
                 </div>
                 <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
@@ -540,7 +549,7 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - AUTO UPDATE EVERY 3 SECONDS -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -577,30 +586,205 @@ include_once '../../components/cashier_sidebar.php';
         btn.innerHTML = '<span class="spinner" style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;animation:spin 0.6s linear infinite;"></span> Loading...';
         btn.disabled = true;
         
+        fetchDashboardData();
+        
         setTimeout(function() {
-            window.location.reload();
-        }, 1000);
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+            btn.disabled = false;
+            showToast('✅ Refreshed', 'Dashboard data updated', 'success');
+        }, 1500);
     }
 
-    // Add spin animation and hover effects
-    var style = document.createElement('style');
-    style.textContent = `
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.8); } }
-        .stat-card-modern:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(0,0,0,0.15) !important; }
-        .patient-item-modern:hover { border-color: var(--success); transform: translateY(-2px); box-shadow: 0 4px 15px rgba(5,150,105,0.08); }
-        .patient-item-modern:hover .fa-chevron-right { opacity: 0.8 !important; transform: translateX(2px); }
-        .quick-action-btn:hover { border-color: var(--success); transform: translateY(-3px); box-shadow: 0 4px 15px rgba(5,150,105,0.08); }
-        .btn-primary-custom:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(0,0,0,0.2) !important; }
-        .btn-refresh:hover { background: rgba(255,255,255,0.25) !important; }
-        .payment-item:hover { background: var(--bg-body); border-radius: 8px; }
-        .method-item:hover { background: var(--bg-body); border-radius: 8px; }
-        .scroll-container::-webkit-scrollbar { width: 4px; }
-        .scroll-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
-        .scroll-container::-webkit-scrollbar-thumb { background: var(--success); border-radius: 4px; }
-        @media (max-width: 768px) { .two-col-grid { grid-template-columns: 1fr !important; } }
-    `;
-    document.head.appendChild(style);
+    // ================================================================
+    // FETCH DASHBOARD DATA (AJAX)
+    // ================================================================
+    function fetchDashboardData() {
+        var url = 'get_dashboard_data.php?t=' + Date.now();
+        
+        fetch(url)
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    updateDashboard(data);
+                } else {
+                    console.error('Failed to fetch dashboard data:', data.message);
+                }
+            })
+            .catch(function(error) {
+                console.error('Fetch error:', error);
+            });
+    }
+
+    // ================================================================
+    // UPDATE DASHBOARD UI
+    // ================================================================
+    function updateDashboard(data) {
+        // Update stats
+        var pendingEl = document.getElementById('statPending');
+        var paymentsEl = document.getElementById('statPayments');
+        var totalEl = document.getElementById('statTotal');
+        var paidEl = document.getElementById('statPaid');
+        var receiptsEl = document.getElementById('statReceipts');
+        var pendingCountEl = document.getElementById('pendingCount');
+        
+        if (pendingEl) pendingEl.textContent = data.pending_bills || 0;
+        if (paymentsEl) paymentsEl.textContent = data.today_payments || 0;
+        if (totalEl) totalEl.textContent = (data.total_bills || 0).toLocaleString();
+        if (paidEl) paidEl.textContent = (data.paid_bills || 0).toLocaleString();
+        if (receiptsEl) receiptsEl.textContent = data.today_receipts || 0;
+        if (pendingCountEl) pendingCountEl.textContent = data.pending_bills || 0;
+        
+        // Update recent payments
+        var paymentsList = document.getElementById('recentPaymentsList');
+        if (paymentsList && data.recent_payments) {
+            var html = '';
+            if (data.recent_payments.length > 0) {
+                data.recent_payments.forEach(function(payment) {
+                    var methodIcon = payment.payment_method === 'cash' ? '💵' : 
+                                    (payment.payment_method === 'm-pesa' ? '📱' : '💳');
+                    html += `
+                        <div class="payment-item" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-color);transition:all 0.3s;border-radius:8px;margin-bottom:2px;">
+                            <div style="display:flex;align-items:center;gap:12px;">
+                                <div style="width:36px;height:36px;border-radius:50%;background:var(--success-bg);display:flex;align-items:center;justify-content:center;font-size:0.8rem;color:var(--success);flex-shrink:0;">
+                                    <i class="fas fa-user"></i>
+                                </div>
+                                <div>
+                                    <p style="font-weight:500;font-size:0.85rem;color:var(--text-primary);">${payment.patient_name}</p>
+                                    <p style="font-size:0.65rem;color:var(--text-secondary);">${payment.bill_number}</p>
+                                </div>
+                            </div>
+                            <div style="text-align:right;">
+                                <p style="font-weight:700;font-size:0.95rem;color:var(--success);">TSh ${Number(payment.amount).toLocaleString()}</p>
+                                <p style="font-size:0.6rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px;justify-content:flex-end;">
+                                    ${methodIcon} ${payment.payment_method.toUpperCase()}
+                                    <span style="opacity:0.3;">•</span>
+                                    ${payment.time_ago}
+                                </p>
+                            </div>
+                        </div>
+                    `;
+                });
+            } else {
+                html = `
+                    <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
+                        <i class="fas fa-clock" style="font-size:2rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
+                        <p style="font-size:0.95rem;font-weight:500;">No recent payments</p>
+                        <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Payments will appear here</p>
+                    </div>
+                `;
+            }
+            paymentsList.innerHTML = html;
+        }
+        
+        // Update payment methods
+        var methodsEl = document.getElementById('paymentMethods');
+        if (methodsEl && data.payment_methods) {
+            var methodIcons = {
+                'cash': '💵',
+                'm-pesa': '📱',
+                'airtel_money': '📱',
+                'tigo_pesa': '📱',
+                'halopesa': '📱',
+                'card': '💳',
+                'bank': '🏦',
+                'insurance': '🏥',
+                'other': '📦'
+            };
+            var methodColors = {
+                'cash': '#059669',
+                'm-pesa': '#0B5ED7',
+                'airtel_money': '#DC2626',
+                'tigo_pesa': '#D97706',
+                'halopesa': '#7C3AED',
+                'card': '#0D9488',
+                'bank': '#4B5563',
+                'insurance': '#0891B2',
+                'other': '#6B7280'
+            };
+            
+            var html = '';
+            if (data.payment_methods.length > 0) {
+                data.payment_methods.forEach(function(method) {
+                    var icon = methodIcons[method.payment_method] || '💵';
+                    var color = methodColors[method.payment_method] || '#6B7280';
+                    html += `
+                        <div class="method-item" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-color);">
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <div style="width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.9rem;background:${color}20;color:${color};">
+                                    ${icon}
+                                </div>
+                                <span style="font-size:0.85rem;font-weight:500;color:var(--text-primary);">${method.payment_method.toUpperCase()}</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <span style="font-size:0.7rem;color:var(--text-secondary);">${method.count} payments</span>
+                                <span style="font-weight:700;font-size:0.85rem;color:var(--success);">TSh ${Number(method.total).toLocaleString()}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+            } else {
+                html = `
+                    <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
+                        <i class="fas fa-chart-pie" style="font-size:2rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
+                        <p style="font-size:0.95rem;font-weight:500;">No payments today</p>
+                        <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Payment methods will appear here</p>
+                    </div>
+                `;
+            }
+            methodsEl.innerHTML = html;
+        }
+        
+        // Update footer timestamp
+        var footerEl = document.getElementById('footerTimestamp');
+        if (footerEl) {
+            var now = new Date();
+            var timeStr = now.toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+            });
+            footerEl.textContent = '● ' + timeStr;
+        }
+    }
+
+    // ================================================================
+    // AUTO UPDATE - EVERY 3 SECONDS
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        // Initial fetch
+        fetchDashboardData();
+        // Set interval
+        updateInterval = setInterval(function() {
+            if (!isUpdating) {
+                isUpdating = true;
+                fetchDashboardData();
+                setTimeout(function() {
+                    isUpdating = false;
+                }, 1000);
+            }
+        }, 3000);
+        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
+    }
+    
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
+        }
+    }
+
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
 
     // ================================================================
     // SEARCH
@@ -608,8 +792,13 @@ include_once '../../components/cashier_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
+    if (!searchBtn && !searchInput) {
+        searchBtn = document.querySelector('.top-nav .search-btn');
+        searchInput = document.querySelector('.top-nav #searchInput');
+    }
+    
     function performSearch() {
-        var query = searchInput.value.trim();
+        var query = searchInput?.value?.trim() || '';
         if (query.length > 0) {
             window.location.href = 'search.php?q=' + encodeURIComponent(query);
         }
@@ -645,9 +834,45 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
+    // ADD CSS ANIMATIONS
+    // ================================================================
+    var style = document.createElement('style');
+    style.textContent = `
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pulse-dot { 
+            0%, 100% { opacity: 1; transform: scale(1); } 
+            50% { opacity: 0.5; transform: scale(0.8); } 
+        }
+        .stat-card-modern:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(0,0,0,0.15) !important; }
+        .patient-item-modern:hover { border-color: var(--success); transform: translateY(-2px); box-shadow: 0 4px 15px rgba(5,150,105,0.08); }
+        .patient-item-modern:hover .fa-chevron-right { opacity: 0.8 !important; transform: translateX(2px); }
+        .quick-action-btn:hover { border-color: var(--success); transform: translateY(-3px); box-shadow: 0 4px 15px rgba(5,150,105,0.08); }
+        .btn-primary-custom:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(0,0,0,0.2) !important; }
+        .btn-refresh:hover { background: rgba(255,255,255,0.25) !important; }
+        .payment-item:hover { background: var(--bg-body); border-radius: 8px; }
+        .method-item:hover { background: var(--bg-body); border-radius: 8px; }
+        .scroll-container::-webkit-scrollbar { width: 4px; }
+        .scroll-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+        .scroll-container::-webkit-scrollbar-thumb { background: var(--success); border-radius: 4px; }
+        @media (max-width: 768px) { .two-col-grid { grid-template-columns: 1fr !important; } }
+        .stat-number { transition: all 0.3s ease; }
+        .stat-number.updated { transform: scale(1.1); color: #FCD34D; }
+    `;
+    document.head.appendChild(style);
+
+    // ================================================================
+    // INIT
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 1000);
+    });
+
+    // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c🟢 Braick - Cashier Dashboard', 'font-size:20px; font-weight:bold; color:#059669;');
+    console.log('%c🟢 Braick - Cashier Dashboard (Auto-Update 3s)', 'font-size:20px; font-weight:bold; color:#059669;');
     console.log('%c👤 Cashier: <?= htmlspecialchars($cashier_name) ?>', 'font-size:16px; font-weight:bold; color:#FFD700;');
     console.log('%c👤 Role: <?= strtoupper($cashier_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier_branch_name) ?>', 'font-size:13px; color:#64748B;');
@@ -655,7 +880,8 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c💳 Today\'s Payments: <?= $today_payments ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ Removed: Today\'s Collection Card', 'font-size:13px; color:#DC2626;');
     console.log('%c🟢 Green Header Applied', 'font-size:13px; color:#059669;');
-    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Auto-update every 3 seconds (NO PAGE REFRESH)', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
 </script>
 
 </body>

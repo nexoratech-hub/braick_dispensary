@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/cashier/edit_profile.php
 // CASHIER - EDIT PROFILE
+// USES SHARED HEADER WITH DARK MODE
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -14,29 +15,29 @@ require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 // ================================================================
-// SESSION - Default to reception.rose (Cashier)
+// SESSION - Default to Cashier
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
+    $_SESSION['user_id'] = 10;
+    $_SESSION['full_name'] = 'Cashier Dodoma';
+    $_SESSION['role'] = 'cashier';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 006';
+    $_SESSION['username'] = 'cashier.dodoma';
+    $_SESSION['email'] = 'cashier@braick.com';
+    $_SESSION['phone'] = '+255 700 000 010';
     $_SESSION['is_admin'] = false;
     $_SESSION['profile_pic'] = '';
 }
 
-$user_id = $_SESSION['user_id'] ?? 6;
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
-$user_role = $_SESSION['role'] ?? 'reception';
+$user_id = $_SESSION['user_id'] ?? 10;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier Dodoma';
+$user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_username = $_SESSION['username'] ?? 'reception.rose';
-$user_email = $_SESSION['email'] ?? 'rose@braick.com';
-$user_phone = $_SESSION['phone'] ?? '+255 700 000 006';
+$user_username = $_SESSION['username'] ?? 'cashier.dodoma';
+$user_email = $_SESSION['email'] ?? 'cashier@braick.com';
+$user_phone = $_SESSION['phone'] ?? '+255 700 000 010';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $db = getDB();
@@ -224,19 +225,19 @@ $paid_today = 0;
 $patients_waiting = 0;
 
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'pending'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$user_branch_id]);
     $pending_bills = $stmt->fetch()['count'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'partial'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'partial'");
     $stmt->execute([$user_branch_id]);
     $partial_payments = $stmt->fetch()['count'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()");
     $stmt->execute([$user_branch_id]);
     $paid_today = $stmt->fetch()['count'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
+    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM patient_bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
     $stmt->execute([$user_branch_id]);
     $patients_waiting = $stmt->fetch()['count'] ?? 0;
 } catch (Exception $e) {
@@ -261,320 +262,499 @@ try {
 include_once __DIR__ . '/../../components/cashier_header.php';
 include_once __DIR__ . '/../../components/cashier_sidebar.php';
 ?>
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Profile - Braick Dispensary</title>
+    
+    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-dark: #047857;
+            --success-light: #34D399;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-dark: #B91C1C;
+            --danger-light: #F87171;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --white: #FFFFFF;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow: 0 1px 3px rgba(0,0,0,0.08);
+            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --bg-nav: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+            --table-stripe: #E8F0FE;
+            --table-hover: #D1FAE5;
+        }
 
-<style>
-    .form-card {
-        background: var(--bg-card);
-        border-radius: 16px;
-        padding: 24px 28px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-    }
-    
-    .form-card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
-    }
-    
-    .form-card .form-title {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        border-bottom: 2px solid var(--border-color);
-        padding-bottom: 12px;
-        margin-bottom: 20px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .form-card .form-title i {
-        color: var(--primary);
-    }
-    
-    .form-label {
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 4px;
-        display: block;
-    }
-    
-    .form-label .required {
-        color: var(--danger);
-        margin-left: 2px;
-    }
-    
-    .form-control {
-        width: 100%;
-        padding: 8px 14px;
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        font-size: 0.85rem;
-        transition: all 0.3s ease;
-        outline: none;
-        background: var(--bg-card);
-        color: var(--text-primary);
-    }
-    
-    .form-control:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-    }
-    
-    .form-control::placeholder {
-        color: var(--text-secondary);
-        opacity: 0.5;
-    }
-    
-    .form-row {
-        margin-bottom: 14px;
-    }
-    
-    .form-row:last-child {
-        margin-bottom: 0;
-    }
-    
-    .form-actions {
-        display: flex;
-        gap: 12px;
-        padding-top: 16px;
-        margin-top: 16px;
-        border-top: 2px solid var(--border-color);
-        flex-wrap: wrap;
-    }
-    
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 24px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-    }
-    
-    .btn-primary {
-        background: var(--primary);
-        color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-primary:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(11, 94, 215, 0.4);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: var(--primary);
-        color: var(--primary);
-        transform: translateY(-2px);
-    }
-    
-    .btn-success {
-        background: #059669;
-        color: white;
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
-    
-    .btn-success:hover {
-        background: #047857;
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4);
-    }
-    
-    .avatar-upload {
-        display: flex;
-        align-items: center;
-        gap: 20px;
-        flex-wrap: wrap;
-        padding: 16px;
-        background: var(--bg-body);
-        border-radius: 10px;
-        border: 2px dashed var(--border-color);
-        margin-bottom: 20px;
-    }
-    
-    .avatar-upload .current-avatar {
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 3px solid var(--primary);
-        flex-shrink: 0;
-    }
-    
-    .avatar-upload .avatar-placeholder {
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 2rem;
-        font-weight: 700;
-        color: white;
-        background: var(--primary);
-        flex-shrink: 0;
-        border: 3px solid var(--primary);
-    }
-    
-    .avatar-upload .upload-info .upload-label {
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-    
-    .avatar-upload .upload-info .upload-desc {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-    }
-    
-    .avatar-upload .upload-info .file-input-wrapper {
-        margin-top: 8px;
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        align-items: center;
-    }
-    
-    .avatar-upload .upload-info .file-input-wrapper input[type="file"] {
-        padding: 6px 10px;
-        border: 2px solid var(--border-color);
-        border-radius: 8px;
-        font-size: 0.8rem;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        cursor: pointer;
-    }
-    
-    .avatar-upload .upload-info .file-input-wrapper input[type="file"]::-webkit-file-upload-button {
-        padding: 4px 12px;
-        border: none;
-        border-radius: 4px;
-        background: var(--primary);
-        color: white;
-        cursor: pointer;
-        font-weight: 600;
-        font-size: 0.75rem;
-    }
-    
-    .avatar-upload .upload-info .file-input-wrapper input[type="file"]::-webkit-file-upload-button:hover {
-        background: var(--primary-dark);
-    }
-    
-    .message-box {
-        padding: 12px 16px;
-        border-radius: 10px;
-        margin-bottom: 16px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .message-box.success {
-        background: #D1FAE5;
-        color: #059669;
-        border: 1px solid #059669;
-    }
-    
-    .message-box.error {
-        background: #FEE2E2;
-        color: #DC2626;
-        border: 1px solid #DC2626;
-    }
-    
-    [data-theme="dark"] .message-box.success {
-        background: #1A3A2A;
-        color: #34D399;
-        border-color: #34D399;
-    }
-    
-    [data-theme="dark"] .message-box.error {
-        background: #3A1A1A;
-        color: #F87171;
-        border-color: #F87171;
-    }
-    
-    .help-text {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-        margin-top: 4px;
-    }
-    
-    @media (max-width: 768px) {
+        /* DARK MODE - MATCH HEADER */
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --bg-nav: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+            --shadow: 0 1px 3px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+            --table-stripe: #1E293B;
+            --table-hover: #1A3A2A;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+        }
+
+        [data-theme="dark"] .bg-white {
+            background-color: #1E293B !important;
+        }
+
+        [data-theme="dark"] .text-gray-700 {
+            color: #CBD5E1 !important;
+        }
+
+        [data-theme="dark"] .text-gray-800 {
+            color: #E2E8F0 !important;
+        }
+
+        [data-theme="dark"] .text-gray-900 {
+            color: #F1F5F9 !important;
+        }
+
+        [data-theme="dark"] .border-gray-200 {
+            border-color: #334155 !important;
+        }
+
+        [data-theme="dark"] .bg-gray-50 {
+            background-color: #1E293B !important;
+        }
+
+        [data-theme="dark"] .bg-gray-100 {
+            background-color: #2D3748 !important;
+        }
+
+        [data-theme="dark"] .shadow {
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
+        }
+
+        [data-theme="dark"] .shadow-md {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+        }
+
+        [data-theme="dark"] .shadow-lg {
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important;
+        }
+
+        [data-theme="dark"] .border-t {
+            border-top-color: #334155 !important;
+        }
+
+        [data-theme="dark"] .border-t-gray-200 {
+            border-top-color: #334155 !important;
+        }
+
+        [data-theme="dark"] .text-blue-600 {
+            color: #6EA8FE !important;
+        }
+
+        [data-theme="dark"] .text-gray-500 {
+            color: #94A3B8 !important;
+        }
+
+        [data-theme="dark"] .message-box.success {
+            background: #1A3A2A;
+            color: #34D399;
+            border-color: #34D399;
+        }
+
+        [data-theme="dark"] .message-box.error {
+            background: #3A1A1A;
+            color: #F87171;
+            border-color: #F87171;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+        
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
+
         .form-card {
-            padding: 16px 18px;
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px 28px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
         }
-        .avatar-upload {
-            flex-direction: column;
-            text-align: center;
+        
+        .form-card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
         }
-        .avatar-upload .upload-info .file-input-wrapper {
-            justify-content: center;
+        
+        .form-card .form-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 12px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
-        .form-actions {
-            flex-direction: column;
+        
+        .form-card .form-title i {
+            color: var(--primary);
         }
-        .form-actions .btn {
+        
+        .form-label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+            display: block;
+        }
+        
+        .form-label .required {
+            color: var(--danger);
+            margin-left: 2px;
+        }
+        
+        .form-control {
             width: 100%;
-            justify-content: center;
+            padding: 8px 14px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            outline: none;
+            background: var(--bg-card);
+            color: var(--text-primary);
         }
-    }
-</style>
+        
+        .form-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+        }
+        
+        .form-control:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .form-control::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.5;
+        }
+        
+        .form-row {
+            margin-bottom: 14px;
+        }
+        
+        .form-row:last-child {
+            margin-bottom: 0;
+        }
+        
+        .form-actions {
+            display: flex;
+            gap: 12px;
+            padding-top: 16px;
+            margin-top: 16px;
+            border-top: 2px solid var(--border-color);
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 24px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(11, 94, 215, 0.4);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+            transform: translateY(-2px);
+        }
+        
+        .btn-success {
+            background: #059669;
+            color: white;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-success:hover {
+            background: #047857;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4);
+        }
+        
+        .avatar-upload {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            padding: 16px;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px dashed var(--border-color);
+            margin-bottom: 20px;
+        }
+        
+        .avatar-upload .current-avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 3px solid var(--primary);
+            flex-shrink: 0;
+        }
+        
+        .avatar-upload .avatar-placeholder {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            font-weight: 700;
+            color: white;
+            background: var(--primary);
+            flex-shrink: 0;
+            border: 3px solid var(--primary);
+        }
+        
+        .avatar-upload .upload-info .upload-label {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .avatar-upload .upload-info .upload-desc {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        
+        .avatar-upload .upload-info .file-input-wrapper {
+            margin-top: 8px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .avatar-upload .upload-info .file-input-wrapper input[type="file"] {
+            padding: 6px 10px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            cursor: pointer;
+        }
+        
+        .avatar-upload .upload-info .file-input-wrapper input[type="file"]::-webkit-file-upload-button {
+            padding: 4px 12px;
+            border: none;
+            border-radius: 4px;
+            background: var(--primary);
+            color: white;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.75rem;
+        }
+        
+        .avatar-upload .upload-info .file-input-wrapper input[type="file"]::-webkit-file-upload-button:hover {
+            background: var(--primary-dark);
+        }
+        
+        .message-box {
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .message-box.success {
+            background: #D1FAE5;
+            color: #059669;
+            border: 1px solid #059669;
+        }
+        
+        .message-box.error {
+            background: #FEE2E2;
+            color: #DC2626;
+            border: 1px solid #DC2626;
+        }
+        
+        .help-text {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
+        .page-header-custom {
+            border-bottom: 3px solid var(--success);
+            padding-bottom: 12px;
+            margin-bottom: 20px;
+        }
         
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
+        .page-header-custom .page-title {
+            color: var(--success-dark);
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+        
+        [data-theme="dark"] .page-header-custom .page-title {
+            color: var(--success-light);
+        }
+        
+        .page-header-custom .page-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .page-header-custom .branch-tag {
+            background: var(--success);
+            color: white;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { 
+            color: var(--success); 
+            font-weight: 600; 
+        }
+
+        @media (max-width: 1024px) {
+            .main-content { margin-left: 0; padding: 16px; }
+        }
+
+        @media (max-width: 768px) {
+            .form-card {
+                padding: 16px 18px;
+            }
+            .avatar-upload {
+                flex-direction: column;
+                text-align: center;
+            }
+            .avatar-upload .upload-info .file-input-wrapper {
+                justify-content: center;
+            }
+            .form-actions {
+                flex-direction: column;
+            }
+            .form-actions .btn {
+                width: 100%;
+                justify-content: center;
+            }
+            .page-header-custom .page-title { font-size: 1.3rem; }
+        }
+
+        @media (max-width: 640px) {
+            .main-content { padding: 10px; }
+            .form-card { padding: 12px 14px; }
+        }
+    </style>
     
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    <!-- Preload dark mode from localStorage -->
+    <script>
+        (function() {
+            var darkMode = localStorage.getItem('darkMode');
+            if (darkMode === 'true') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+</head>
+<body>
+
+<!-- TOP NAV is loaded from header -->
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -582,7 +762,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header-custom flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-user-edit mr-2" style="color: var(--primary);"></i> Edit Profile
@@ -767,7 +947,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
@@ -795,34 +975,10 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - SYNC WITH HEADER
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
+    // Note: Dark mode is controlled by header.
+    // This page listens for changes and applies them.
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -830,9 +986,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    if (sidebarToggle) {
+    if (sidebarToggle && sidebar) {
         sidebarToggle.addEventListener('click', function() {
             sidebar.classList.toggle('open');
+        });
+        
+        document.addEventListener('click', function(e) {
+            if (window.innerWidth <= 1024) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
         });
     }
 
@@ -842,8 +1006,13 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
+    if (!searchBtn && !searchInput) {
+        searchBtn = document.querySelector('.top-nav .search-btn');
+        searchInput = document.querySelector('.top-nav #searchInput');
+    }
+    
     function performSearch() {
-        var query = searchInput.value.trim();
+        var query = searchInput?.value?.trim() || '';
         if (query.length > 0) {
             window.location.href = 'search.php?q=' + encodeURIComponent(query);
         }
@@ -859,31 +1028,26 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
+        
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            toast.className = 'toast-custom';
+            toast.innerHTML = `
+                <i class="fas fa-info-circle"></i>
+                <div>
+                    <p id="toastTitle">Notification</p>
+                    <p id="toastMessage"></p>
+                </div>
+            `;
+            document.body.appendChild(toast);
+        }
         
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
@@ -903,45 +1067,47 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     // ================================================================
     // FILE INPUT PREVIEW
     // ================================================================
-    document.getElementById('profilePicInput')?.addEventListener('change', function(e) {
-        var file = this.files[0];
-        if (file) {
-            var maxSize = 5 * 1024 * 1024; // 5MB
-            if (file.size > maxSize) {
-                showToast('Error', 'File size exceeds 5MB limit!', 'error');
-                this.value = '';
-                return;
-            }
-            
-            var allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-            if (!allowedTypes.includes(file.type)) {
-                showToast('Error', 'Only JPG, PNG, GIF and WEBP files are allowed!', 'error');
-                this.value = '';
-                return;
-            }
-            
-            // Preview image
-            var reader = new FileReader();
-            var preview = document.querySelector('.current-avatar') || document.querySelector('.avatar-placeholder');
-            reader.onload = function(e) {
-                if (preview) {
-                    if (preview.tagName === 'IMG') {
-                        preview.src = e.target.result;
-                    } else {
-                        preview.outerHTML = '<img src="' + e.target.result + '" alt="Profile" class="current-avatar" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid #0B5ED7;">';
-                    }
+    var profilePicInput = document.getElementById('profilePicInput');
+    if (profilePicInput) {
+        profilePicInput.addEventListener('change', function(e) {
+            var file = this.files[0];
+            if (file) {
+                var maxSize = 5 * 1024 * 1024;
+                if (file.size > maxSize) {
+                    showToast('Error', 'File size exceeds 5MB limit!', 'error');
+                    this.value = '';
+                    return;
                 }
-            };
-            reader.readAsDataURL(file);
-            
-            showToast('Success', 'Image preview loaded. Click Upload to save.', 'info');
-        }
-    });
+                
+                var allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+                if (!allowedTypes.includes(file.type)) {
+                    showToast('Error', 'Only JPG, PNG, GIF and WEBP files are allowed!', 'error');
+                    this.value = '';
+                    return;
+                }
+                
+                var reader = new FileReader();
+                var preview = document.querySelector('.current-avatar') || document.querySelector('.avatar-placeholder');
+                reader.onload = function(e) {
+                    if (preview) {
+                        if (preview.tagName === 'IMG') {
+                            preview.src = e.target.result;
+                        } else {
+                            preview.outerHTML = '<img src="' + e.target.result + '" alt="Profile" class="current-avatar" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid #0B5ED7;">';
+                        }
+                    }
+                };
+                reader.readAsDataURL(file);
+                
+                showToast('Success', 'Image preview loaded. Click Upload to save.', 'info');
+            }
+        });
+    }
 
     console.log('%c💰 Braick - Cashier Edit Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📁 Upload Dir: <?= $upload_dir ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Upload working with proper directory path', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
 </script>
 
 </body>
