@@ -4,7 +4,7 @@
 // CASHIER - SHARED HEADER (GREEN THEME)
 // WITH PROFILE PICTURE - SHOWS ON ALL PAGES
 // WITH DATE AND TIME - LIVE UPDATE
-// WITH DARK MODE - PERSISTENT
+// WITH DARK MODE - FULLY WORKING
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -14,24 +14,24 @@
 require_once __DIR__ . '/../../backend/config/config.php';
 
 // ================================================================
-// SESSION - Default to Cashier
+// SESSION - Default to Cashier (Rose Mwangi)
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 10;
-    $_SESSION['full_name'] = 'Cashier Dodoma';
-    $_SESSION['role'] = 'cashier';
+    $_SESSION['user_id'] = 11;
+    $_SESSION['full_name'] = 'Rose Mwangi';
+    $_SESSION['role'] = 'reception';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.dodoma';
-    $_SESSION['email'] = 'cashier.dodoma@braick.com';
-    $_SESSION['phone'] = '+255 700 000 016';
+    $_SESSION['username'] = 'reception.rose';
+    $_SESSION['email'] = 'rose@braick.com';
+    $_SESSION['phone'] = '+255 700 000 005';
     $_SESSION['is_admin'] = false;
     $_SESSION['profile_pic'] = '';
 }
 
-$user_id = $_SESSION['user_id'] ?? 10;
-$user_full_name = $_SESSION['full_name'] ?? 'Cashier Dodoma';
-$user_role = $_SESSION['role'] ?? 'cashier';
+$user_id = $_SESSION['user_id'] ?? 11;
+$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+$user_role = $_SESSION['role'] ?? 'reception';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
@@ -61,13 +61,11 @@ if (!empty($profile_pic)) {
         $profile_pic_exists = true;
         $profile_pic_url = '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
     } else {
-        // If file doesn't exist, clear session
         $_SESSION['profile_pic'] = '';
         $profile_pic = '';
     }
 }
 
-// If profile pic doesn't exist, use default avatar with user initials
 $default_letter = strtoupper(substr($user_full_name, 0, 1));
 
 // ================================================================
@@ -85,18 +83,11 @@ if (empty($page_title) || $page_title == '') {
 }
 
 // ================================================================
-// DARK MODE - Check cookie first, then localStorage via JS
+// DARK MODE - Check from localStorage via JS
 // ================================================================
-$dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
-
-// ================================================================
-// CURRENT DATE & TIME
-// ================================================================
-$current_date = date('F d, Y');
-$current_time = date('h:i:s A');
 ?>
 <!DOCTYPE html>
-<html lang="en" data-theme="<?= $dark_mode ?>">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -110,6 +101,9 @@ $current_time = date('h:i:s A');
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     
     <style>
+        /* ================================================================
+           ROOT VARIABLES - LIGHT MODE (DEFAULT)
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -157,6 +151,9 @@ $current_time = date('h:i:s A');
             --table-hover: #D1FAE5;
         }
         
+        /* ================================================================
+           ROOT VARIABLES - DARK MODE
+           ================================================================ */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -169,6 +166,16 @@ $current_time = date('h:i:s A');
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
+            --gray-50: #1E293B;
+            --gray-100: #334155;
+            --gray-200: #475569;
+            --gray-300: #64748B;
+            --gray-400: #94A3B8;
+            --gray-500: #CBD5E1;
+            --gray-600: #E2E8F0;
+            --gray-700: #F1F5F9;
+            --gray-800: #F8FAFC;
+            --gray-900: #FFFFFF;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -178,6 +185,7 @@ $current_time = date('h:i:s A');
             background: var(--bg-body);
             color: var(--text-primary);
             transition: background 0.3s ease, color 0.3s ease;
+            min-height: 100vh;
         }
         
         ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -682,6 +690,9 @@ $current_time = date('h:i:s A');
         
         .footer .footer-brand { color: var(--success); font-weight: 600; }
         
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -691,13 +702,15 @@ $current_time = date('h:i:s A');
         @media (max-width: 768px) {
             .top-nav .search-wrapper { max-width: 180px; }
             .top-nav .datetime .date-part { display: none; }
+            .top-nav .datetime .time-part { font-size: 0.7rem; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .stat-card .stat-number { font-size: 1.4rem; }
             .top-nav .datetime .date-part { display: none; }
-            .top-nav .datetime .time-part { font-size: 0.7rem; }
+            .top-nav .datetime .time-part { font-size: 0.65rem; }
+            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
         }
         
         @keyframes fadeInUp {
@@ -737,8 +750,8 @@ $current_time = date('h:i:s A');
         </span>
         
         <span class="datetime" id="currentDateTime">
-            <span class="date-part" id="datePart"><?= $current_date ?></span>
-            <span class="time-part" id="timePart"><?= $current_time ?></span>
+            <span class="date-part" id="datePart"><?= date('D, M d, Y') ?></span>
+            <span class="time-part" id="timePart"><?= date('h:i:s A') ?></span>
         </span>
         
         <button id="darkModeToggle" class="dark-toggle-btn">
@@ -764,11 +777,11 @@ $current_time = date('h:i:s A');
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - DATE/TIME + DARK MODE -->
+<!-- JAVASCRIPT - DARK MODE + DATE/TIME -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE - PERSISTENT
+    // DARK MODE - PERSISTENT & FULLY WORKING
     // ================================================================
     (function() {
         var darkModeToggle = document.getElementById('darkModeToggle');
@@ -776,35 +789,48 @@ $current_time = date('h:i:s A');
         var darkText = document.getElementById('darkText');
         var htmlElement = document.documentElement;
         
+        // Function to apply dark mode
+        function applyDarkMode(isDark) {
+            if (isDark) {
+                htmlElement.setAttribute('data-theme', 'dark');
+                if (darkIcon) darkIcon.className = 'fas fa-sun';
+                if (darkText) darkText.textContent = 'Light';
+                localStorage.setItem('darkMode', 'true');
+            } else {
+                htmlElement.removeAttribute('data-theme');
+                if (darkIcon) darkIcon.className = 'fas fa-moon';
+                if (darkText) darkText.textContent = 'Dark';
+                localStorage.setItem('darkMode', 'false');
+            }
+        }
+        
         // Check saved preference
         var savedDarkMode = localStorage.getItem('darkMode');
         if (savedDarkMode === 'true') {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
+            applyDarkMode(true);
         } else {
-            htmlElement.removeAttribute('data-theme');
-            if (darkIcon) darkIcon.className = 'fas fa-moon';
-            if (darkText) darkText.textContent = 'Dark';
+            applyDarkMode(false);
         }
         
-        // Toggle dark mode
+        // Toggle dark mode on button click
         if (darkModeToggle) {
-            darkModeToggle.addEventListener('click', function() {
+            darkModeToggle.addEventListener('click', function(e) {
+                e.preventDefault();
                 var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-                if (isDark) {
-                    htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) darkIcon.className = 'fas fa-moon';
-                    if (darkText) darkText.textContent = 'Dark';
-                    localStorage.setItem('darkMode', 'false');
-                } else {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) darkIcon.className = 'fas fa-sun';
-                    if (darkText) darkText.textContent = 'Light';
-                    localStorage.setItem('darkMode', 'true');
-                }
+                applyDarkMode(!isDark);
+                
+                // Show toast notification
+                showToast('Dark Mode', isDark ? 'Switched to Light Mode ☀️' : 'Switched to Dark Mode 🌙', 'info');
             });
         }
+        
+        // Listen for dark mode changes from other pages
+        window.addEventListener('storage', function(e) {
+            if (e.key === 'darkMode') {
+                var isDark = e.newValue === 'true';
+                applyDarkMode(isDark);
+            }
+        });
     })();
 
     // ================================================================
@@ -839,11 +865,91 @@ $current_time = date('h:i:s A');
     // Update immediately and every second
     updateDateTime();
     setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // TOAST FUNCTION
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        if (!toast) {
+            // Create toast if not exists
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            toast.className = 'toast-custom';
+            toast.innerHTML = `
+                <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+                <div>
+                    <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+                    <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+                </div>
+            `;
+            document.body.appendChild(toast);
+        }
+        
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        toast.className = 'toast-custom ' + (type || 'info');
+        toastTitle.textContent = title || 'Notification';
+        toastMessage.textContent = message || '';
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3000);
+    }
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
     
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            window.location.href = 'search.php?q=' + encodeURIComponent(query);
+        }
+    }
+    
+    if (searchBtn) {
+        searchBtn.addEventListener('click', performSearch);
+    }
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+    }
+
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
+    var sidebarToggle = document.getElementById('sidebarToggle');
+    var sidebar = document.getElementById('sidebar');
+    
+    if (sidebarToggle && sidebar) {
+        sidebarToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+        });
+        
+        document.addEventListener('click', function(e) {
+            if (window.innerWidth <= 1024) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
+        });
+    }
+
     console.log('%c🟢 Cashier Header - Green Theme', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📸 Profile Pic: <?= $profile_pic_exists ? '✅ Uploaded' : '❌ Default' ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? '🌙 Dark' : '☀️ Light'), 'font-size:13px; color:#D97706;');
     console.log('%c📅 Date/Time: ' + new Date().toLocaleString(), 'font-size:13px; color:#0B5ED7;');
 </script>
-
-

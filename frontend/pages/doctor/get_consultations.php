@@ -1,8 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/get_consultations.php
-// AJAX ENDPOINT - Returns JSON data for consultations auto-update
-// Auto-updates every 3 seconds without page refresh
+// AJAX ENDPOINT - Get consultations data for auto-update
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -20,13 +19,13 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
     $_SESSION['phone'] = '+255 700 000 011';
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
+    $_SESSION['branch_name'] = 'Dodoma';
     $_SESSION['specialty'] = 'General Medicine';
     $_SESSION['profile_pic'] = '';
     $_SESSION['is_online'] = 1;
 }
 
 $doctor_id = $_SESSION['user_id'] ?? 5;
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
@@ -35,7 +34,6 @@ $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $filter = isset($_GET['filter']) ? $_GET['filter'] : 'pending';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-// Allowed filters
 $allowed_filters = ['pending', 'lab_test', 'prescribed', 'completed', 'cancelled'];
 if (!in_array($filter, $allowed_filters)) {
     $filter = 'pending';
@@ -44,14 +42,64 @@ if (!in_array($filter, $allowed_filters)) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+require_once __DIR__ . '/../../../backend/config/config.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
+
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// AUTO-COMPLETE LOGIC - Check all prescribed visits
+// ✅ AUTO-COMPLETE LOGIC - RUN BEFORE FETCHING DATA
 // ================================================================
 try {
-    // Get all prescribed visits for this doctor (waiting for payment)
+    // 1. Check lab_test visits that have all tests completed
+    $stmt = $db->prepare("
+        SELECT v.id, v.visit_number, v.patient_id
+        FROM visits v
+        WHERE v.doctor_id = ? 
+        AND v.status = 'lab_test'
+        AND v.is_completed = 0
+    ");
+    $stmt->execute([$doctor_id]);
+    $lab_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($lab_visits as $visit) {
+        // Check if all lab tests for this visit are completed
+        $stmt = $db->prepare("
+            SELECT 
+                COUNT(*) as total_tests,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_tests
+            FROM lab_tests 
+            WHERE visit_id = ?
+        ");
+        $stmt->execute([$visit['id']]);
+        $lab_status = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $total_tests = (int)($lab_status['total_tests'] ?? 0);
+        $completed_tests = (int)($lab_status['completed_tests'] ?? 0);
+        
+        // If all tests are completed, move to prescribed status
+        if ($total_tests > 0 && $completed_tests == $total_tests) {
+            $db->beginTransaction();
+            
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET status = 'prescribed', 
+                    updated_at = NOW()
+                WHERE id = ? AND status = 'lab_test'
+            ");
+            $stmt->execute([$visit['id']]);
+            
+            $db->commit();
+            
+            error_log("Visit #{$visit['visit_number']} auto-moved from lab_test to prescribed");
+        }
+    }
+} catch (Exception $e) {
+    error_log("Auto-complete lab error: " . $e->getMessage());
+}
+
+// 2. Check prescribed visits that have all bills paid
+try {
     $stmt = $db->prepare("
         SELECT v.id, v.visit_number, v.patient_id
         FROM visits v
@@ -63,7 +111,6 @@ try {
     $prescribed_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($prescribed_visits as $visit) {
-        // Check bill status for this visit
         $stmt = $db->prepare("
             SELECT 
                 COUNT(*) as total_bills,
@@ -83,7 +130,6 @@ try {
         $total_amount = (float)($result['total_amount'] ?? 0);
         $total_paid = (float)($result['total_paid'] ?? 0);
         
-        // If there are bills AND no pending bills AND at least one paid bill
         if ($total_bills > 0 && $pending_count == 0 && $paid_count > 0) {
             $db->beginTransaction();
             
@@ -97,7 +143,6 @@ try {
             ");
             $stmt->execute([$visit['id']]);
             
-            // Update bills to paid
             $stmt = $db->prepare("
                 UPDATE patient_bills 
                 SET status = 'paid', updated_at = NOW()
@@ -105,56 +150,47 @@ try {
             ");
             $stmt->execute([$visit['id']]);
             
-            // Update bill_items to paid
-            $stmt = $db->prepare("
-                UPDATE bill_items 
-                SET payment_status = 'paid', 
-                    is_paid = 1, 
-                    status = 'paid',
-                    paid_at = NOW(),
-                    updated_at = NOW()
-                WHERE bill_id IN (SELECT id FROM patient_bills WHERE visit_id = ?)
-            ");
-            $stmt->execute([$visit['id']]);
-            
-            // Update prescriptions to dispensed
-            $stmt = $db->prepare("
-                UPDATE prescriptions 
-                SET status = 'dispensed', 
-                    dispensed_at = NOW(),
-                    updated_at = NOW()
-                WHERE visit_id = ? AND status = 'pending'
-            ");
-            $stmt->execute([$visit['id']]);
-            
-            // Log activity
-            try {
-                $stmt = $db->prepare("
-                    INSERT INTO activity_logs (user_id, action, details, created_at) 
-                    VALUES (?, 'consultation_auto_completed', ?, NOW())
-                ");
-                $stmt->execute([
-                    $doctor_id,
-                    "Consultation #" . $visit['visit_number'] . " auto-completed - Bills: $total_bills (TSh " . number_format($total_amount) . " all paid)"
-                ]);
-            } catch (Exception $e) {}
-            
             $db->commit();
+            error_log("Visit #{$visit['visit_number']} auto-completed (all bills paid)");
         }
     }
 } catch (Exception $e) {
-    // Silent fail for auto-complete
-    error_log("Auto-complete error: " . $e->getMessage());
+    error_log("Auto-complete prescribed error: " . $e->getMessage());
 }
 
 // ================================================================
-// GET CONSULTATIONS BASED ON FILTER
+// GET COUNTS FOR BADGES
+// ================================================================
+$counts = [
+    'pending' => 0,
+    'lab_test' => 0,
+    'prescribed' => 0,
+    'completed' => 0,
+    'cancelled' => 0
+];
+
+$status_map = [
+    'pending' => "status IN ('pending', 'assigned', 'with_doctor') AND is_completed = 0",
+    'lab_test' => "status = 'lab_test' AND is_completed = 0",
+    'prescribed' => "status = 'prescribed' AND is_completed = 0",
+    'completed' => "status = 'completed' AND is_completed = 1",
+    'cancelled' => "status = 'cancelled'"
+];
+
+foreach ($counts as $key => $value) {
+    $condition = $status_map[$key] ?? "status = '$key'";
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND $condition");
+    $stmt->execute([$doctor_id]);
+    $counts[$key] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+}
+
+// ================================================================
+// BUILD SEARCH AND STATUS CONDITIONS
 // ================================================================
 $params = [$doctor_id];
 $search_condition = "";
 $status_condition = "";
 
-// Build search condition
 if (!empty($search)) {
     $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR v.visit_number LIKE ?)";
     $params[] = "%$search%";
@@ -162,18 +198,14 @@ if (!empty($search)) {
     $params[] = "%$search%";
 }
 
-// Build status condition based on filter
 switch ($filter) {
     case 'pending':
-        // Active consultations (with_doctor, assigned, pending)
         $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
         break;
     case 'lab_test':
-        // Waiting for lab results
         $status_condition = "AND v.status = 'lab_test' AND v.is_completed = 0";
         break;
     case 'prescribed':
-        // Doctor saved, waiting for payment
         $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
         break;
     case 'completed':
@@ -187,7 +219,9 @@ switch ($filter) {
         break;
 }
 
-// Get consultations with all related data
+// ================================================================
+// GET CONSULTATIONS
+// ================================================================
 $sql = "
     SELECT 
         v.*,
@@ -224,279 +258,167 @@ $sql = "
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $consultations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-$total_consultations = count($consultations);
 
 // ================================================================
-// GET COUNTS FOR BADGES
+// BUILD HTML
 // ================================================================
-$pending_count = 0;
-$lab_test_count = 0;
-$prescribed_count = 0;
-$completed_count = 0;
-$cancelled_count = 0;
-
-// Pending (active consultations)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status IN ('pending', 'assigned', 'with_doctor') 
-    AND is_completed = 0
-");
-$stmt->execute([$doctor_id]);
-$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Lab Test (waiting for lab results)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status = 'lab_test' 
-    AND is_completed = 0
-");
-$stmt->execute([$doctor_id]);
-$lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Prescribed (waiting for payment)
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status = 'prescribed' 
-    AND is_completed = 0
-");
-$stmt->execute([$doctor_id]);
-$prescribed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Completed
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status = 'completed' 
-    AND is_completed = 1
-");
-$stmt->execute([$doctor_id]);
-$completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Cancelled
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM visits 
-    WHERE doctor_id = ? 
-    AND status = 'cancelled'
-");
-$stmt->execute([$doctor_id]);
-$cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// ================================================================
-// GENERATE HTML FOR CONSULTATIONS
-// ================================================================
-function getUserColor($name) {
-    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
-    $index = abs(crc32($name)) % count($colors);
-    return $colors[$index];
-}
-
-function formatCurrency($amount) {
-    return 'TSh ' . number_format($amount, 0);
-}
-
-$html_output = '';
+$html = '';
+$total = count($consultations);
 
 if (count($consultations) > 0) {
     foreach ($consultations as $consultation) {
         $initial = strtoupper(substr($consultation['patient_name'] ?? 'U', 0, 1));
-        $color = getUserColor($consultation['patient_name'] ?? 'U');
-        $status = $consultation['status'] ?? 'pending';
+        $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
+        $color = $colors[abs(crc32($consultation['patient_name'] ?? 'U')) % count($colors)];
         
-        $html_output .= '
-            <div class="consultation-card animate-fade-in-up" data-visit-id="' . $consultation['id'] . '" data-status="' . $status . '">
-                <div class="card-header">
-                    <div class="patient-info">
-                        <div class="patient-avatar" style="background:' . $color . ';">
-                            ' . $initial . '
+        $status_label = ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending'));
+        $status_class = $consultation['status'] ?? 'pending';
+        
+        $pending_lab = (int)($consultation['pending_lab_count'] ?? 0);
+        $completed_lab = (int)($consultation['completed_lab_count'] ?? 0);
+        $pending_rx = (int)($consultation['pending_prescriptions'] ?? 0);
+        $dispensed_rx = (int)($consultation['dispensed_prescriptions'] ?? 0);
+        $pending_bills = (int)($consultation['pending_bills_count'] ?? 0);
+        $paid_bills = (int)($consultation['paid_bills_count'] ?? 0);
+        $total_bills = (int)($consultation['total_bills_count'] ?? 0);
+        $total_amount = (float)($consultation['total_bill_amount'] ?? 0);
+        $total_paid = (float)($consultation['total_paid_amount'] ?? 0);
+        
+        $can_complete = ($pending_bills == 0 && $paid_bills > 0 && $consultation['status'] === 'prescribed');
+        
+        $html .= '
+        <div class="consultation-card animate-fade-in-up" data-visit-id="' . $consultation['id'] . '" data-status="' . $consultation['status'] . '">
+            <div class="card-header">
+                <div class="patient-info">
+                    <div class="patient-avatar" style="background:' . $color . ';">
+                        ' . $initial . '
+                    </div>
+                    <div>
+                        <div class="patient-name">' . htmlspecialchars($consultation['patient_name'] ?? 'N/A') . '</div>
+                        <div class="patient-id">ID: ' . htmlspecialchars($consultation['patient_code'] ?? 'N/A') . '</div>
+                        <div class="patient-details">
+                            ' . htmlspecialchars($consultation['gender'] ?? 'N/A') . ' • 
+                            ' . htmlspecialchars($consultation['phone'] ?? 'N/A') . '
+                            ' . (!empty($consultation['blood_group']) ? '• Blood: ' . htmlspecialchars($consultation['blood_group']) : '') . '
                         </div>
-                        <div>
-                            <div class="patient-name">' . htmlspecialchars($consultation['patient_name'] ?? 'N/A') . '</div>
-                            <div class="patient-id">ID: ' . htmlspecialchars($consultation['patient_code'] ?? 'N/A') . '</div>
-                            <div class="patient-details">
-                                ' . htmlspecialchars($consultation['gender'] ?? 'N/A') . ' • 
-                                ' . htmlspecialchars($consultation['phone'] ?? 'N/A') . '
-                                ' . (!empty($consultation['blood_group']) ? '• Blood: ' . htmlspecialchars($consultation['blood_group']) : '') . '
-                            </div>
-                        </div>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span class="visit-number">' . htmlspecialchars($consultation['visit_number'] ?? 'N/A') . '</span>
-                        <span class="status-badge ' . $status . '">
-                            ' . ucfirst(str_replace('_', ' ', $status)) . '
-                        </span>
-                    </div>
-                </div>';
-        
-        // Lab, Prescription & Bill Indicators
-        $html_output .= '
-                <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">';
-        
-        if (($consultation['pending_lab_count'] ?? 0) > 0) {
-            $html_output .= '
-                    <span class="lab-indicator">
-                        <i class="fas fa-flask pending"></i>
-                        ' . $consultation['pending_lab_count'] . ' lab(s) pending
-                    </span>';
-        }
-        if (($consultation['completed_lab_count'] ?? 0) > 0) {
-            $html_output .= '
-                    <span class="lab-indicator">
-                        <i class="fas fa-check-circle completed"></i>
-                        ' . $consultation['completed_lab_count'] . ' lab(s) completed
-                    </span>';
-        }
-        if (($consultation['pending_prescriptions'] ?? 0) > 0) {
-            $html_output .= '
-                    <span class="lab-indicator">
-                        <i class="fas fa-prescription pending"></i>
-                        ' . $consultation['pending_prescriptions'] . ' prescription(s) pending
-                    </span>';
-        }
-        if (($consultation['dispensed_prescriptions'] ?? 0) > 0) {
-            $html_output .= '
-                    <span class="lab-indicator">
-                        <i class="fas fa-check-circle completed"></i>
-                        ' . $consultation['dispensed_prescriptions'] . ' prescription(s) dispensed
-                    </span>';
-        }
-        if (($consultation['pending_bills_count'] ?? 0) > 0) {
-            $html_output .= '
-                    <span class="bill-indicator">
-                        <i class="fas fa-receipt pending"></i>
-                        ' . $consultation['pending_bills_count'] . ' bill(s) pending
-                        <span class="bill-amount">
-                            (TSh ' . number_format($consultation['total_bill_amount'] ?? 0) . ')
-                        </span>
-                    </span>';
-        }
-        if (($consultation['paid_bills_count'] ?? 0) > 0) {
-            $html_output .= '
-                    <span class="bill-indicator">
-                        <i class="fas fa-check-circle paid"></i>
-                        ' . $consultation['paid_bills_count'] . ' bill(s) paid
-                        <span class="bill-amount">
-                            (TSh ' . number_format($consultation['total_paid_amount'] ?? 0) . ')
-                        </span>
-                    </span>';
-        }
-        
-        $html_output .= '
-                </div>';
-        
-        // Footer
-        $html_output .= '
-                <div class="card-footer">
-                    <div class="meta">
-                        <i class="far fa-calendar-alt"></i> ' . date('M d, Y', strtotime($consultation['created_at'])) . '
-                        <span class="mx-1">•</span>
-                        <i class="far fa-clock"></i> ' . date('h:i A', strtotime($consultation['created_at'])) . '
-                        ' . (!empty($consultation['doctor_name']) ? '
-                        <span class="mx-1">•</span>
-                        <i class="fas fa-user-md"></i> Dr. ' . htmlspecialchars($consultation['doctor_name']) : '') . '
-                        ' . (($consultation['total_bills_count'] ?? 0) > 0 ? '
-                        <span class="mx-1">•</span>
-                        <i class="fas fa-receipt"></i> Bills: ' . ($consultation['paid_bills_count'] ?? 0) . '/' . ($consultation['total_bills_count'] ?? 0) : '') . '
-                    </div>
-                    <div style="display:flex;gap:6px;flex-wrap:wrap;">';
-        
-        $filter = $GLOBALS['filter'];
-        if ($filter === 'pending' || $filter === 'lab_test' || $filter === 'prescribed') {
-            $html_output .= '
-                        <a href="consultation.php?visit_id=' . $consultation['id'] . '" class="btn btn-primary btn-sm">
-                            <i class="fas fa-stethoscope"></i> Continue
-                        </a>';
-        }
-        if ($filter === 'completed' || $filter === 'cancelled') {
-            $html_output .= '
-                        <a href="consultation.php?visit_id=' . $consultation['id'] . '&view=1" class="btn btn-outline btn-sm">
-                            <i class="fas fa-eye"></i> View
-                        </a>';
-        }
-        if ($filter === 'prescribed' && ($consultation['pending_bills_count'] ?? 0) > 0) {
-            $html_output .= '
-                        <span class="text-xs text-gray-400 self-center">
-                            <i class="fas fa-clock"></i> Waiting for payment...
-                        </span>';
-        }
-        if ($filter === 'prescribed' && ($consultation['pending_bills_count'] ?? 0) == 0 && ($consultation['total_bills_count'] ?? 0) > 0) {
-            $html_output .= '
-                        <span class="text-xs text-green-600 self-center animate-fade-in-up">
-                            <i class="fas fa-check-circle"></i> Auto-completing...
-                        </span>';
-        }
-        
-        $html_output .= '
                     </div>
                 </div>
-            </div>';
-    }
-} else {
-    $empty_icon = 'clock';
-    if ($filter === 'lab_test') $empty_icon = 'flask';
-    elseif ($filter === 'prescribed') $empty_icon = 'hourglass-half';
-    elseif ($filter === 'completed') $empty_icon = 'check-circle';
-    elseif ($filter === 'cancelled') $empty_icon = 'times-circle';
-    
-    $empty_message = 'No ' . $filter . ' consultations';
-    if ($filter === 'pending') $empty_message = 'All consultations have been processed or no pending consultations';
-    elseif ($filter === 'lab_test') $empty_message = 'No consultations waiting for lab results';
-    elseif ($filter === 'prescribed') $empty_message = 'All consultations have been completed or no prescribed consultations waiting for payment';
-    elseif ($filter === 'completed') $empty_message = 'No completed consultations yet';
-    else $empty_message = 'No cancelled consultations';
-    
-    $html_output .= '
-        <div class="empty-state" style="max-width:1200px;margin:0 auto;">
-            <i class="fas fa-' . $empty_icon . '"></i>
-            <div class="empty-title">' . $empty_message . '</div>
-            <div class="empty-sub">
-                ' . $empty_message . '
-                ' . (!empty($search) ? '<br>Try adjusting your search criteria' : '') . '
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span class="visit-number">' . htmlspecialchars($consultation['visit_number'] ?? 'N/A') . '</span>
+                    <span class="status-badge ' . $status_class . '">
+                        ' . $status_label . '
+                    </span>
+                    ' . ($can_complete ? '<span class="status-badge completed" style="background:#D1FAE5;color:#059669;"><i class="fas fa-check"></i> Auto-complete</span>' : '') . '
+                </div>
+            </div>
+            
+            <!-- Indicators -->
+            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">';
+        
+        if ($pending_lab > 0) {
+            $html .= '<span class="lab-indicator"><i class="fas fa-flask pending"></i> ' . $pending_lab . ' lab(s) pending</span>';
+        }
+        if ($completed_lab > 0) {
+            $html .= '<span class="lab-indicator"><i class="fas fa-check-circle completed"></i> ' . $completed_lab . ' lab(s) completed</span>';
+        }
+        if ($pending_rx > 0) {
+            $html .= '<span class="lab-indicator"><i class="fas fa-prescription pending"></i> ' . $pending_rx . ' prescription(s) pending</span>';
+        }
+        if ($dispensed_rx > 0) {
+            $html .= '<span class="lab-indicator"><i class="fas fa-check-circle completed"></i> ' . $dispensed_rx . ' prescription(s) dispensed</span>';
+        }
+        if ($pending_bills > 0) {
+            $html .= '<span class="bill-indicator"><i class="fas fa-receipt pending"></i> ' . $pending_bills . ' bill(s) pending <span class="bill-amount">(TSh ' . number_format($total_amount) . ')</span></span>';
+        }
+        if ($paid_bills > 0) {
+            $html .= '<span class="bill-indicator"><i class="fas fa-check-circle paid"></i> ' . $paid_bills . ' bill(s) paid <span class="bill-amount">(TSh ' . number_format($total_paid) . ')</span></span>';
+        }
+        
+        $html .= '
+            </div>
+            
+            <!-- Footer -->
+            <div class="card-footer">
+                <div class="meta">
+                    <i class="far fa-calendar-alt"></i> ' . date('M d, Y', strtotime($consultation['created_at'])) . '
+                    <span class="mx-1">•</span>
+                    <i class="far fa-clock"></i> ' . date('h:i A', strtotime($consultation['created_at'])) . '
+                    ' . (!empty($consultation['doctor_name']) ? '<span class="mx-1">•</span><i class="fas fa-user-md"></i> Dr. ' . htmlspecialchars($consultation['doctor_name']) : '') . '
+                    ' . ($total_bills > 0 ? '<span class="mx-1">•</span><i class="fas fa-receipt"></i> Bills: ' . $paid_bills . '/' . $total_bills : '') . '
+                </div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">';
+        
+        if (in_array($filter, ['pending', 'lab_test', 'prescribed'])) {
+            $html .= '<a href="consultation.php?visit_id=' . $consultation['id'] . '" class="btn btn-primary btn-sm"><i class="fas fa-stethoscope"></i> Continue</a>';
+        }
+        if (in_array($filter, ['completed', 'cancelled'])) {
+            $html .= '<a href="consultation.php?visit_id=' . $consultation['id'] . '&view=1" class="btn btn-outline btn-sm"><i class="fas fa-eye"></i> View</a>';
+        }
+        if ($filter === 'prescribed' && $pending_bills > 0) {
+            $html .= '<span class="text-xs text-gray-400 self-center"><i class="fas fa-clock"></i> Waiting for payment...</span>';
+        }
+        if ($filter === 'prescribed' && $pending_bills == 0 && $total_bills > 0) {
+            $html .= '<span class="text-xs text-green-600 self-center animate-fade-in-up"><i class="fas fa-check-circle"></i> Auto-completing...</span>';
+        }
+        
+        $html .= '
+                </div>
             </div>
         </div>';
+    }
+} else {
+    $icon_map = [
+        'pending' => 'clock',
+        'lab_test' => 'flask',
+        'prescribed' => 'hourglass-half',
+        'completed' => 'check-circle',
+        'cancelled' => 'times-circle'
+    ];
+    $icon = $icon_map[$filter] ?? 'clock';
+    $messages = [
+        'pending' => 'All consultations have been processed or no pending consultations',
+        'lab_test' => 'No consultations waiting for lab results',
+        'prescribed' => 'All consultations have been completed or no prescribed consultations waiting for payment',
+        'completed' => 'No completed consultations yet',
+        'cancelled' => 'No cancelled consultations'
+    ];
+    $msg = $messages[$filter] ?? 'No consultations found';
+    if (!empty($search)) {
+        $msg .= '<br>Try adjusting your search criteria';
+    }
+    
+    $html .= '
+    <div class="empty-state" style="max-width:1200px;margin:0 auto;">
+        <i class="fas fa-' . $icon . '"></i>
+        <div class="empty-title">No ' . $filter . ' consultations</div>
+        <div class="empty-sub">' . $msg . '</div>
+    </div>';
 }
 
 // ================================================================
-// CREATE DATA HASH FOR CHANGE DETECTION
+// GENERATE HASH FOR CHANGE DETECTION
 // ================================================================
-$data_array = [
-    'total' => $total_consultations,
-    'pending' => $pending_count,
-    'lab_test' => $lab_test_count,
-    'prescribed' => $prescribed_count,
-    'completed' => $completed_count,
-    'cancelled' => $cancelled_count,
-    'filter' => $filter,
-    'search' => $search
-];
-$data_hash = md5(json_encode($data_array));
+$hash_data = $total . $filter . $search;
+foreach ($consultations as $c) {
+    $hash_data .= $c['id'] . $c['status'] . $c['pending_lab_count'] . $c['completed_lab_count'] . $c['pending_bills_count'] . $c['paid_bills_count'];
+}
+$hash = md5($hash_data);
+
+$timestamp = date('H:i:s');
 
 // ================================================================
 // RETURN JSON
 // ================================================================
 header('Content-Type: application/json');
-header('Cache-Control: no-cache, must-revalidate');
-header('Expires: Mon, 26 Jul 1997 05:00:00 GMT');
-
 echo json_encode([
     'success' => true,
-    'hash' => $data_hash,
-    'total' => $total_consultations,
-    'counts' => [
-        'pending' => $pending_count,
-        'lab_test' => $lab_test_count,
-        'prescribed' => $prescribed_count,
-        'completed' => $completed_count,
-        'cancelled' => $cancelled_count
-    ],
-    'timestamp' => date('Y-m-d H:i:s'),
-    'html' => $html_output
+    'data' => $consultations,
+    'html' => $html,
+    'total' => $total,
+    'counts' => $counts,
+    'hash' => $hash,
+    'timestamp' => $timestamp,
+    'filter' => $filter,
+    'search' => $search
 ]);
-?>
+exit;

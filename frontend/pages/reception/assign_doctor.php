@@ -11,6 +11,8 @@
 // 5. Auto-update every 3 seconds - ALL FIELDS VIA AJAX
 // 6. Visit Type options from services table (category_id = 2)
 // 7. Select Patient shows ALL patients
+// 8. Bill sent to Cashier with notification
+// 9. Shared header with clock
 // ================================================================
 
 session_start();
@@ -99,16 +101,12 @@ try {
         $display_name = $service_name;
         
         $icon = '🆕';
-        $badge_color = 'primary';
         if (strpos(strtolower($service_name), 'follow') !== false) {
             $icon = '🔄';
-            $badge_color = 'warning';
         } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
             $icon = '🚨';
-            $badge_color = 'danger';
         } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
             $icon = '👨‍⚕️';
-            $badge_color = 'purple';
         }
         
         $visit_type_options[$key] = [
@@ -119,11 +117,10 @@ try {
             'unit' => $service['unit'] ?? 'each',
             'description' => $service['description'] ?? '',
             'is_active' => $service['is_active'],
-            'icon' => $icon,
-            'badge_color' => $badge_color
+            'icon' => $icon
         ];
         
-        // Set default to General Consultation or New Patient
+        // Set default to General Consultation
         if (strpos(strtolower($service_name), 'general') !== false || 
             strpos(strtolower($service_name), 'new') !== false) {
             $default_key = $key;
@@ -141,8 +138,7 @@ try {
                 'unit' => 'each',
                 'description' => 'Standard doctor consultation',
                 'is_active' => 1,
-                'icon' => '🆕',
-                'badge_color' => 'primary'
+                'icon' => '🆕'
             ],
             'follow_up_consultation' => [
                 'id' => null,
@@ -152,8 +148,7 @@ try {
                 'unit' => 'each',
                 'description' => 'Follow-up visit',
                 'is_active' => 1,
-                'icon' => '🔄',
-                'badge_color' => 'warning'
+                'icon' => '🔄'
             ],
             'emergency_consultation' => [
                 'id' => null,
@@ -163,8 +158,7 @@ try {
                 'unit' => 'each',
                 'description' => 'Emergency visit',
                 'is_active' => 1,
-                'icon' => '🚨',
-                'badge_color' => 'danger'
+                'icon' => '🚨'
             ],
             'specialist_consultation' => [
                 'id' => null,
@@ -174,8 +168,7 @@ try {
                 'unit' => 'each',
                 'description' => 'Specialist doctor visit',
                 'is_active' => 1,
-                'icon' => '👨‍⚕️',
-                'badge_color' => 'purple'
+                'icon' => '👨‍⚕️'
             ]
         ];
     }
@@ -349,7 +342,7 @@ try {
     }
     
     // ================================================================
-    // FUNCTION: CREATE VISIT BILL (Consultation fee)
+    // FUNCTION: CREATE VISIT BILL (Consultation fee) - SENT TO CASHIER
     // ================================================================
     function createVisitBill($db, $patient_id, $visit_id, $visit_type, $consultation_fee, $user_id, $branch_id) {
         // Check if patient has valid paid visit within 7 days
@@ -419,7 +412,7 @@ try {
             ];
         }
         
-        // Create new bill
+        // ✅ CREATE NEW BILL
         $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
         
         $stmt = $db->prepare("
@@ -443,20 +436,55 @@ try {
         ]);
         $bill_id = $db->lastInsertId();
         
-        // Add bill item
+        // ✅ ADD BILL ITEM
         $item_name = 'Consultation (' . ucfirst(str_replace('_', ' ', $visit_type)) . ')';
         
         $stmt = $db->prepare("
             INSERT INTO bill_items (
                 bill_id, item_type, item_name, 
-                quantity, unit_price, total_price, created_at
-            ) VALUES (?, 'consultation', ?, 1, ?, ?, NOW())
+                quantity, unit_price, total_price, 
+                payment_status, is_paid, status, created_at
+            ) VALUES (?, 'consultation', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
         ");
         $stmt->execute([$bill_id, $item_name, $consultation_fee, $consultation_fee]);
         
+        // ✅ NOTIFY CASHIER - Bill created
+        try {
+            // Get cashier user(s)
+            $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
+            $stmt->execute([$branch_id]);
+            $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            foreach ($cashiers as $cashier) {
+                $stmt = $db->prepare("
+                    INSERT INTO notifications (user_id, title, message, type, link, is_read, created_at)
+                    VALUES (?, '💰 New Bill Created', ?, 'bill', ?, 0, NOW())
+                ");
+                $stmt->execute([
+                    $cashier['id'],
+                    "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient ID #$patient_id",
+                    "cashier_dashboard.php"
+                ]);
+            }
+            
+            // Also insert into bill_activities
+            $stmt = $db->prepare("
+                INSERT INTO bill_activities (bill_id, action, performed_by, details, created_at)
+                VALUES (?, 'created', ?, ?, NOW())
+            ");
+            $stmt->execute([
+                $bill_id,
+                $user_id,
+                "Bill #$bill_number created for visit #$visit_id | Fee: TSh " . number_format($consultation_fee)
+            ]);
+            
+        } catch (Exception $e) {
+            error_log("Cashier notification error: " . $e->getMessage());
+        }
+        
         return [
             'status' => 'created',
-            'message' => 'New bill created',
+            'message' => 'New bill created and sent to Cashier!',
             'bill_id' => $bill_id,
             'bill_number' => $bill_number
         ];
@@ -996,7 +1024,7 @@ try {
                     }
                 }
                 
-                // ✅ CREATE VISIT BILL (Consultation fee) - ONLY IF FEE > 0
+                // ✅ CREATE VISIT BILL (Consultation fee) - SENT TO CASHIER
                 $bill_result = null;
                 if ($consultation_fee > 0) {
                     $bill_result = createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consultation_fee, $user_id, $selected_branch_id);
@@ -1057,7 +1085,7 @@ try {
                     } else {
                         $fee_text = ' - Fee: TSh ' . number_format($consultation_fee);
                         if ($bill_result && $bill_result['status'] === 'created') {
-                            $fee_text .= ' - Bill #' . $bill_result['bill_number'] . ' sent to Cashier';
+                            $fee_text .= ' - ✅ Bill #' . $bill_result['bill_number'] . ' sent to Cashier!';
                         } else if ($bill_result && $bill_result['status'] === 'updated') {
                             $fee_text .= ' - Bill #' . $bill_result['bill_number'] . ' updated';
                         }
@@ -1076,6 +1104,7 @@ try {
                 $response['bill'] = $bill_result;
                 $response['visit_type'] = $visit_type_key;
                 $response['doctor_online'] = $doctor_online;
+                $response['bill_sent_to_cashier'] = ($bill_result && $bill_result['status'] === 'created') ? true : false;
                 
             } catch (Exception $e) {
                 $db->rollBack();
@@ -1264,7 +1293,7 @@ try {
                         }
                     }
                     
-                    // ✅ CREATE VISIT BILL (Consultation fee)
+                    // ✅ CREATE VISIT BILL (Consultation fee) - SENT TO CASHIER
                     if ($consultation_fee > 0) {
                         $bill_result = createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consultation_fee, $user_id, $selected_branch_id);
                         if ($bill_result && $bill_result['status'] === 'created') {
@@ -1319,7 +1348,7 @@ try {
                         } else {
                             $fee_text = ' - Fee: TSh ' . number_format($consultation_fee);
                             if ($bill_created) {
-                                $fee_text .= ' ✅ Bill created for Cashier!';
+                                $fee_text .= ' ✅ Bill #' . $bill_result['bill_number'] . ' sent to Cashier!';
                             }
                         }
                     } else {
@@ -1644,7 +1673,7 @@ include_once '../../components/reception_sidebar.php';
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAV
+           TOP NAV - WITH CLOCK
            ================================================================ */
         .top-nav {
             position: fixed;
@@ -1714,6 +1743,13 @@ include_once '../../components/reception_sidebar.php';
             font-size: 0.78rem;
             color: var(--text-secondary);
             font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .top-nav .datetime i {
+            color: var(--primary-light);
         }
         
         .top-nav .avatar {
@@ -2152,6 +2188,7 @@ include_once '../../components/reception_sidebar.php';
             min-height: 60px;
         }
         
+        /* ✅ GRID 2 - KILA ROW INA FIELD MBILI */
         .grid-2-modern {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -2865,7 +2902,7 @@ include_once '../../components/reception_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION - WITH CLOCK -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -2887,7 +2924,11 @@ include_once '../../components/reception_sidebar.php';
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
-        <span class="datetime" id="currentDateTime"></span>
+        <!-- ✅ CLOCK DISPLAY -->
+        <span class="datetime" id="currentDateTime">
+            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
+            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
+        </span>
         
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
@@ -2946,6 +2987,11 @@ include_once '../../components/reception_sidebar.php';
                 <span class="header-badge" id="assignedBadge">
                     <i class="fas fa-user-check"></i>
                     <span id="assignedCount"><?= $assigned_count ?></span> Assigned
+                </span>
+                
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-receipt"></i>
+                    <span id="billStatus">Bill: Pending</span>
                 </span>
             </p>
         </div>
@@ -3112,7 +3158,7 @@ include_once '../../components/reception_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ASSIGN FORM - MODERN -->
+    <!-- ASSIGN FORM - MODERN WITH 2 COLUMNS PER ROW -->
     <!-- ================================================================ -->
     <div class="form-card-modern animate-fade-in-up <?= $change_mode ? 'change-mode-active-modern' : '' ?>" id="mainFormCard" style="animation-delay:0.1s;">
         <div class="form-header">
@@ -3139,6 +3185,7 @@ include_once '../../components/reception_sidebar.php';
                         <span class="text-green-500">✅ Assigned Patients</span> (have doctor) below
                     <?php endif; ?>
                     <span class="text-xs text-gray-400 ml-2" id="liveStatus">🔄 Live updates every 3s</span>
+                    <span class="text-xs text-green-500 ml-2" id="billSentStatus">💰 Bill will be sent to Cashier</span>
                 </p>
             </div>
         </div>
@@ -3354,7 +3401,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 3: SYMPTOMS -->
+            <!-- ROW 3: SYMPTOMS (2 Columns - Common Symptoms + Symptoms Details) -->
             <!-- ============================================================ -->
             <div class="grid-2-modern" id="doctorSection">
                 <div class="form-row-modern">
@@ -3381,7 +3428,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 4: COMPLAINT & NOTES -->
+            <!-- ROW 4: COMPLAINT & NOTES (2 Columns) -->
             <!-- ============================================================ -->
             <div class="grid-2-modern" id="doctorSection">
                 <div class="form-row-modern">
@@ -3471,7 +3518,7 @@ include_once '../../components/reception_sidebar.php';
                     <textarea name="lab_notes" class="form-control-modern" placeholder="Any special instructions for lab tests..." rows="2" id="labNotes"></textarea>
                 </div>
                 
-                <!-- Lab Symptoms & Complaint -->
+                <!-- Lab Symptoms & Complaint (2 Columns) -->
                 <div class="grid-2-modern">
                     <div class="form-row-modern">
                         <label class="form-label">
@@ -3490,7 +3537,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <!-- ================================================================ -->
-            <!-- VITAL SIGNS - 6 SIGNS -->
+            <!-- VITAL SIGNS - 6 SIGNS (3x2 Grid) -->
             <!-- ================================================================ -->
             <div class="form-row-modern">
                 <label class="form-label">
@@ -3618,6 +3665,10 @@ include_once '../../components/reception_sidebar.php';
                     <span class="mx-2">|</span>
                     <span class="text-yellow-500 font-bold">🔄 Change Mode Active</span>
                 <?php endif; ?>
+                <span class="mx-2">|</span>
+                <span class="text-blue-400" id="cashierNotification">
+                    <i class="fas fa-cash-register"></i> Bill sent to Cashier
+                </span>
             </div>
         </form>
     </div>
@@ -3679,6 +3730,27 @@ include_once '../../components/reception_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
+    // CLOCK - UPDATE EVERY SECOND
+    // ================================================================
+    function updateClock() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var el = document.getElementById('clockDisplay');
+        if (el) {
+            el.textContent = dateStr + ' • ' + timeStr;
+        }
+    }
+    
+    // Call every second
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // ================================================================
     // DARK MODE
     // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
@@ -3727,20 +3799,23 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME (for footer)
     // ================================================================
-    function updateDateTime() {
+    function updateFooterTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
-        document.getElementById('formTimestamp').textContent = timeStr;
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
+        var formTimestamp = document.getElementById('formTimestamp');
+        if (formTimestamp) {
+            formTimestamp.textContent = timeStr;
+        }
     }
+    updateFooterTime();
 
     // ================================================================
     // SEARCH
@@ -4400,7 +4475,25 @@ include_once '../../components/reception_sidebar.php';
                 btn.innerHTML = '<i class="fas fa-user-md"></i> Assign / Change Doctor';
                 
                 if (data.success) {
-                    showToast('✅ Success', data.message, 'success');
+                    // ✅ Show bill sent to cashier message
+                    var billMessage = '';
+                    if (data.bill_sent_to_cashier) {
+                        billMessage = ' 💰 Bill #' + data.bill.bill_number + ' sent to Cashier!';
+                        // Update bill status badge
+                        var billStatus = document.getElementById('billStatus');
+                        if (billStatus) {
+                            billStatus.textContent = 'Bill: Sent to Cashier ✅';
+                            billStatus.style.color = '#34D399';
+                        }
+                        // Show notification in footer
+                        var cashierNotif = document.getElementById('cashierNotification');
+                        if (cashierNotif) {
+                            cashierNotif.innerHTML = '<i class="fas fa-cash-register"></i> Bill #' + data.bill.bill_number + ' sent to Cashier ✅';
+                            cashierNotif.style.color = '#34D399';
+                        }
+                    }
+                    
+                    showToast('✅ Success', data.message + billMessage, 'success');
                     
                     if (data.patient_id) {
                         var row = document.getElementById('assigned-row-' + data.patient_id);
@@ -4445,7 +4538,7 @@ include_once '../../components/reception_sidebar.php';
             });
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign / Change Doctor (MODERN)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Assign / Change Doctor (MODERN - 2 Columns per Row)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 All Patients: <?= count($all_patients) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🟡 Pending: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
@@ -4453,10 +4546,13 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline)', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Live updates every 3 seconds - Auto-update (No refresh needed!)', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Visit Type: From services table (category_id=2) - Default: New Patient', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💰 Fees: Included after assign doctor', 'font-size:13px; color:#059669;');
+    console.log('%c💰 Fees: Included after assign doctor - Bill sent to Cashier', 'font-size:13px; color:#059669;');
     console.log('%c📋 7 Days Rule: Valid paid visit waives consultation fee', 'font-size:13px; color:#F59E0B;');
     console.log('%c🧪 Lab Request - NO bill (Lab creates bill when confirming)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🟢⚪ Doctor online/offline status updates live without refresh!', 'font-size:13px; color:#34D399;');
+    console.log('%c📐 2 Columns per row - Clean modern layout!', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🕐 Clock updates every second - Shared header with time', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c💰 Bill sent to Cashier with notification', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>
