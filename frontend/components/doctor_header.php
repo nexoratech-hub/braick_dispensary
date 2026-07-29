@@ -7,7 +7,6 @@
 
 // ================================================================
 // SESSION DATA - ENSURE DOCTOR SESSION IS SET
-// DEFAULT: Dr. John Mushi (ID: 5)
 // ================================================================
 
 // Check if session exists, if not set default doctor
@@ -94,6 +93,9 @@ try {
 $_SESSION['user_id'] = $doctor_id;
 $_SESSION['doctor_id'] = $doctor_id;
 
+// ================================================================
+// AVATAR SETUP
+// ================================================================
 $avatar_url = '';
 $show_initial = true;
 $initial = strtoupper(substr($full_name, 0, 1));
@@ -122,6 +124,11 @@ if (empty($page_title) || $page_title == '') {
 
 $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
 $is_dark = $dark_mode === 'true';
+
+// ================================================================
+// GET CURRENT PAGE FOR ACTIVE NAV
+// ================================================================
+$current_page = basename($_SERVER['PHP_SELF']);
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $is_dark ? 'dark' : 'light' ?>">
@@ -827,8 +834,6 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Get doctor_id from PHP
     var doctorId = <?= json_encode($doctor_id) ?>;
-    console.log('Doctor ID for status toggle:', doctorId);
-    console.log('Current status:', <?= json_encode($is_online ? 'Online' : 'Offline') ?>);
     
     if (statusToggle) {
         statusToggle.addEventListener('click', function() {
@@ -836,9 +841,6 @@ document.addEventListener('DOMContentLoaded', function() {
             
             var currentIsOnline = statusDot.classList.contains('online');
             var newStatus = currentIsOnline ? 0 : 1;
-            
-            console.log('Changing status to:', newStatus ? 'ONLINE' : 'OFFLINE');
-            console.log('Doctor ID:', doctorId);
             
             // Update UI immediately (optimistic)
             if (newStatus === 1) {
@@ -870,14 +872,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     isUpdating = false;
                     statusToggle.classList.remove('updating');
                     
-                    console.log('Response status:', xhr.status);
-                    console.log('Response text:', xhr.responseText);
-                    
                     if (xhr.status === 200) {
                         try {
                             var response = JSON.parse(xhr.responseText);
-                            console.log('Parsed response:', response);
-                            
                             if (response.success) {
                                 showToast('✅ ' + (newStatus === 1 ? 'Online' : 'Offline'), 
                                     'You are now ' + (newStatus === 1 ? 'online' : 'offline') + '.', 
@@ -902,8 +899,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 }
                             }
                         } catch (e) {
-                            console.error('JSON parse error:', e);
-                            showToast('❌ Error', 'Server error: ' + e.message, 'error');
+                            showToast('❌ Error', 'Server error', 'error');
                             // Revert UI
                             if (newStatus === 1) {
                                 statusDot.classList.remove('online');
@@ -922,8 +918,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         }
                     } else {
-                        console.error('HTTP error:', xhr.status, xhr.responseText);
-                        showToast('❌ Error', 'Network error: ' + xhr.status, 'error');
+                        showToast('❌ Error', 'Network error', 'error');
                         // Revert UI
                         if (newStatus === 1) {
                             statusDot.classList.remove('online');
@@ -943,7 +938,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
             };
-            // Send doctor_id along with status
             xhr.send('status=' + newStatus + '&doctor_id=' + doctorId);
         });
     }
@@ -999,12 +993,10 @@ function showToast(title, message, type) {
     toast.appendChild(content);
     document.body.appendChild(toast);
     
-    // Show with animation
     setTimeout(function() {
         toast.classList.add('show');
     }, 50);
     
-    // Auto hide after 4 seconds
     setTimeout(function() {
         toast.classList.remove('show');
         setTimeout(function() {
@@ -1062,7 +1054,6 @@ console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '
 console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
 console.log('%c🔍 Search: Ctrl+K to focus search', 'font-size:12px; color:#64748B;');
 console.log('%c🔄 Status: Ctrl+Shift+S to toggle online/offline', 'font-size:12px; color:#64748B;');
-console.log('%c✅ Default Doctor: Dr. John Mushi (ID: 5)', 'font-size:12px; color:#059669;');
 </script>
 
 </body>
