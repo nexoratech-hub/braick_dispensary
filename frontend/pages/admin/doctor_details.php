@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/patient_details.php
-// PATIENT DETAILS - VIEW ALL PATIENT INFORMATION
+// FILE: frontend/pages/admin/doctor_details.php
+// DOCTOR DETAILS - VIEW ALL DOCTOR INFORMATION
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -26,104 +26,73 @@ $db = Database::getInstance()->getConnection();
 // ================================================================
 // VARIABLES
 // ================================================================
-$patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$doctor_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
-if ($patient_id <= 0) {
-    header('Location: patients.php?branch=' . $selected_branch_id);
+if ($doctor_id <= 0) {
+    header('Location: doctors_list.php?branch=' . $selected_branch_id);
     exit;
 }
 
 // ================================================================
-// GET PATIENT DATA
+// GET DOCTOR DATA
 // ================================================================
 $stmt = $db->prepare("
-    SELECT p.*, b.name as branch_name, u.full_name as assigned_doctor_name
+    SELECT u.*, b.name as branch_name,
+           (SELECT COUNT(*) FROM patients WHERE assigned_doctor_id = u.id) as total_patients,
+           (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id) as total_visits,
+           (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id) as total_prescriptions,
+           (SELECT COUNT(*) FROM lab_tests WHERE doctor_id = u.id) as total_lab_tests,
+           (SELECT COUNT(*) FROM appointments WHERE doctor_id = u.id AND status != 'cancelled') as total_appointments
+    FROM users u
+    LEFT JOIN branches b ON u.branch_id = b.id
+    WHERE u.id = ? AND u.role = 'doctor'
+");
+$stmt->execute([$doctor_id]);
+$doctor = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$doctor) {
+    header('Location: doctors_list.php?branch=' . $selected_branch_id);
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR STATUS HISTORY
+// ================================================================
+$status_history = [];
+try {
+    $stmt = $db->prepare("
+        SELECT * FROM doctor_status 
+        WHERE doctor_id = ? 
+        ORDER BY updated_at DESC 
+        LIMIT 10
+    ");
+    $stmt->execute([$doctor_id]);
+    $status_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $status_history = [];
+}
+
+// ================================================================
+// GET ASSIGNED PATIENTS
+// ================================================================
+$stmt = $db->prepare("
+    SELECT p.*, 
+           (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
+           (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status != 'cancelled') as total_bills
     FROM patients p
-    LEFT JOIN branches b ON p.branch_id = b.id
-    LEFT JOIN users u ON p.assigned_doctor_id = u.id
-    WHERE p.id = ?
+    WHERE p.assigned_doctor_id = ?
+    ORDER BY p.created_at DESC
+    LIMIT 10
 ");
-$stmt->execute([$patient_id]);
-$patient = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$patient) {
-    header('Location: patients.php?branch=' . $selected_branch_id);
-    exit;
-}
-
-// ================================================================
-// GET STATISTICS
-// ================================================================
-
-// Total Visits
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?");
-$stmt->execute([$patient_id]);
-$total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// Total Bills
-$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(total_amount), 0) as total_amount FROM patient_bills WHERE patient_id = ? AND status != 'cancelled'");
-$stmt->execute([$patient_id]);
-$bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_bills = $bills_data['total'] ?? 0;
-$total_bill_amount = $bills_data['total_amount'] ?? 0;
-
-// Total Prescriptions
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE patient_id = ?");
-$stmt->execute([$patient_id]);
-$total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// Total Lab Tests - FIXED: Use visit_id to get patient
-$stmt = $db->prepare("
-    SELECT COUNT(*) as total 
-    FROM lab_tests lt
-    INNER JOIN visits v ON lt.visit_id = v.id
-    WHERE v.patient_id = ?
-");
-$stmt->execute([$patient_id]);
-$total_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// Total Appointments
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE patient_id = ?");
-$stmt->execute([$patient_id]);
-$total_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// Total Payments
-$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(amount), 0) as total_amount FROM payments WHERE patient_id = ?");
-$stmt->execute([$patient_id]);
-$payments_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_payments = $payments_data['total'] ?? 0;
-$total_payments_amount = $payments_data['total_amount'] ?? 0;
-
-// ================================================================
-// GET VITAL SIGNS HISTORY
-// ================================================================
-$stmt = $db->prepare("
-    SELECT vs.*, 
-           u.full_name as recorded_by_name,
-           v.visit_number,
-           v.visit_date
-    FROM vital_signs vs
-    LEFT JOIN users u ON vs.recorded_by = u.id
-    LEFT JOIN visits v ON vs.visit_id = v.id
-    WHERE vs.patient_id = ?
-    ORDER BY vs.recorded_at DESC
-    LIMIT 20
-");
-$stmt->execute([$patient_id]);
-$vital_signs_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Total Vital Signs Records
-$total_vital_signs = count($vital_signs_history);
-
-// Get latest vital signs
-$latest_vital_signs = !empty($vital_signs_history) ? $vital_signs_history[0] : null;
+$stmt->execute([$doctor_id]);
+$assigned_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // GET RECENT VISITS
 // ================================================================
 $stmt = $db->prepare("
-    SELECT v.*, u.full_name as doctor_name, 
+    SELECT v.*, p.full_name as patient_name, p.patient_id as patient_number,
            CASE 
                WHEN v.status = 'pending' THEN 'warning'
                WHEN v.status = 'completed' THEN 'success'
@@ -131,76 +100,62 @@ $stmt = $db->prepare("
                ELSE 'info'
            END as status_color
     FROM visits v
-    LEFT JOIN users u ON v.doctor_id = u.id
-    WHERE v.patient_id = ?
+    INNER JOIN patients p ON v.patient_id = p.id
+    WHERE v.doctor_id = ?
     ORDER BY v.created_at DESC
     LIMIT 10
 ");
-$stmt->execute([$patient_id]);
+$stmt->execute([$doctor_id]);
 $recent_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// GET RECENT BILLS
-// ================================================================
-$stmt = $db->prepare("
-    SELECT pb.*, 
-           CASE 
-               WHEN pb.status = 'pending' THEN 'warning'
-               WHEN pb.status = 'paid' THEN 'success'
-               WHEN pb.status = 'partial' THEN 'info'
-               WHEN pb.status = 'cancelled' THEN 'danger'
-               ELSE 'secondary'
-           END as status_color
-    FROM patient_bills pb
-    WHERE pb.patient_id = ?
-    ORDER BY pb.created_at DESC
-    LIMIT 10
-");
-$stmt->execute([$patient_id]);
-$recent_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // GET RECENT PRESCRIPTIONS
 // ================================================================
 $stmt = $db->prepare("
-    SELECT p.*, u.full_name as doctor_name
+    SELECT p.*, pat.full_name as patient_name, pat.patient_id as patient_number,
+           CASE 
+               WHEN p.status = 'pending' THEN 'warning'
+               WHEN p.status = 'confirmed' THEN 'info'
+               WHEN p.status = 'dispensed' THEN 'success'
+               WHEN p.status = 'cancelled' THEN 'danger'
+               ELSE 'secondary'
+           END as status_color
     FROM prescriptions p
-    LEFT JOIN users u ON p.doctor_id = u.id
-    WHERE p.patient_id = ?
+    INNER JOIN patients pat ON p.patient_id = pat.id
+    WHERE p.doctor_id = ?
     ORDER BY p.created_at DESC
     LIMIT 10
 ");
-$stmt->execute([$patient_id]);
+$stmt->execute([$doctor_id]);
 $recent_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET RECENT LAB TESTS - FIXED: Use visit_id to get patient
+// GET RECENT LAB TESTS
 // ================================================================
 $stmt = $db->prepare("
-    SELECT lt.*, 
+    SELECT lt.*, p.full_name as patient_name, p.patient_id as patient_number,
            CASE 
                WHEN lt.status = 'pending' THEN 'warning'
                WHEN lt.status = 'in_progress' THEN 'info'
                WHEN lt.status = 'completed' THEN 'success'
                WHEN lt.status = 'cancelled' THEN 'danger'
                ELSE 'secondary'
-           END as status_color,
-           u.full_name as doctor_name
+           END as status_color
     FROM lab_tests lt
     INNER JOIN visits v ON lt.visit_id = v.id
-    LEFT JOIN users u ON lt.doctor_id = u.id
-    WHERE v.patient_id = ?
+    INNER JOIN patients p ON v.patient_id = p.id
+    WHERE lt.doctor_id = ?
     ORDER BY lt.created_at DESC
     LIMIT 10
 ");
-$stmt->execute([$patient_id]);
+$stmt->execute([$doctor_id]);
 $recent_lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // GET RECENT APPOINTMENTS
 // ================================================================
 $stmt = $db->prepare("
-    SELECT a.*, u.full_name as doctor_name,
+    SELECT a.*, p.full_name as patient_name, p.patient_id as patient_number,
            CASE 
                WHEN a.status = 'scheduled' THEN 'warning'
                WHEN a.status = 'confirmed' THEN 'info'
@@ -209,12 +164,12 @@ $stmt = $db->prepare("
                ELSE 'secondary'
            END as status_color
     FROM appointments a
-    LEFT JOIN users u ON a.doctor_id = u.id
-    WHERE a.patient_id = ?
+    INNER JOIN patients p ON a.patient_id = p.id
+    WHERE a.doctor_id = ?
     ORDER BY a.created_at DESC
     LIMIT 10
 ");
-$stmt->execute([$patient_id]);
+$stmt->execute([$doctor_id]);
 $recent_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
@@ -280,12 +235,6 @@ include_once '../../components/admin_sidebar.php';
         font-weight: 700;
     }
     
-    .profile-header .profile-id {
-        font-size: 0.85rem;
-        opacity: 0.8;
-        font-family: monospace;
-    }
-    
     .profile-header .profile-badge {
         background: rgba(255,255,255,0.15);
         padding: 4px 14px;
@@ -295,6 +244,49 @@ include_once '../../components/admin_sidebar.php';
         backdrop-filter: blur(4px);
         border: 1px solid rgba(255,255,255,0.1);
     }
+    
+    /* Status Badges */
+    .status-badge {
+        padding: 4px 16px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .status-badge.online {
+        background: #D1FAE5;
+        color: #059669;
+    }
+    
+    .status-badge.offline {
+        background: #FEE2E2;
+        color: #EF4444;
+    }
+    
+    [data-theme="dark"] .status-badge.online {
+        background: #1A3A2A;
+        color: #34D399;
+    }
+    
+    [data-theme="dark"] .status-badge.offline {
+        background: #3A1A1A;
+        color: #F87171;
+    }
+    
+    .status-badge.warning { background: #FEF3C7; color: #D97706; }
+    .status-badge.success { background: #D1FAE5; color: #059669; }
+    .status-badge.danger { background: #FEE2E2; color: #EF4444; }
+    .status-badge.info { background: #E8F0FE; color: #0B5ED7; }
+    .status-badge.secondary { background: #E2E8F0; color: #64748B; }
+    
+    [data-theme="dark"] .status-badge.warning { background: #3A2A1A; color: #FBBF24; }
+    [data-theme="dark"] .status-badge.success { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .status-badge.danger { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .status-badge.info { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .status-badge.secondary { background: #2D3748; color: #94A3B8; }
     
     /* Stat Cards */
     .stat-card-mini {
@@ -318,25 +310,10 @@ include_once '../../components/admin_sidebar.php';
         color: #0B5ED7;
     }
     
-    .stat-card-mini .stat-number.green {
-        color: #059669;
-    }
-    
-    .stat-card-mini .stat-number.orange {
-        color: #F59E0B;
-    }
-    
-    .stat-card-mini .stat-number.red {
-        color: #EF4444;
-    }
-    
-    .stat-card-mini .stat-number.purple {
-        color: #7B2FBE;
-    }
-    
-    .stat-card-mini .stat-number.pink {
-        color: #EC4899;
-    }
+    .stat-card-mini .stat-number.green { color: #059669; }
+    .stat-card-mini .stat-number.orange { color: #F59E0B; }
+    .stat-card-mini .stat-number.purple { color: #7B2FBE; }
+    .stat-card-mini .stat-number.red { color: #EF4444; }
     
     .stat-card-mini .stat-label {
         font-size: 0.7rem;
@@ -349,13 +326,6 @@ include_once '../../components/admin_sidebar.php';
     .stat-card-mini .stat-icon {
         font-size: 1.5rem;
         margin-bottom: 4px;
-    }
-    
-    .stat-card-mini .stat-amount {
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: #059669;
-        margin-top: 2px;
     }
     
     [data-theme="dark"] .stat-card-mini {
@@ -407,13 +377,33 @@ include_once '../../components/admin_sidebar.php';
         font-size: 0.82rem;
     }
     
-    .table-blue tbody tr:hover td {
-        background: #E8F0FE !important;
+    /* FIXED: Text color in table rows */
+    .table-blue tbody td,
+    .table-blue tbody td .font-mono,
+    .table-blue tbody td .font-semibold,
+    .table-blue tbody td .badge,
+    .table-blue tbody td .text-xs,
+    .table-blue tbody td .text-gray-500,
+    .table-blue tbody td .text-gray-400,
+    .table-blue tbody td span,
+    .table-blue tbody td a {
+        color: #1E293B !important;
     }
     
-    [data-theme="dark"] .table-blue tbody td {
+    [data-theme="dark"] .table-blue tbody td,
+    [data-theme="dark"] .table-blue tbody td .font-mono,
+    [data-theme="dark"] .table-blue tbody td .font-semibold,
+    [data-theme="dark"] .table-blue tbody td .badge,
+    [data-theme="dark"] .table-blue tbody td .text-xs,
+    [data-theme="dark"] .table-blue tbody td .text-gray-500,
+    [data-theme="dark"] .table-blue tbody td .text-gray-400,
+    [data-theme="dark"] .table-blue tbody td span,
+    [data-theme="dark"] .table-blue tbody td a {
         color: #F1F5F9 !important;
-        border-bottom-color: #334155 !important;
+    }
+    
+    .table-blue tbody tr:hover td {
+        background: #E8F0FE !important;
     }
     
     [data-theme="dark"] .table-blue tbody tr:hover td {
@@ -457,6 +447,16 @@ include_once '../../components/admin_sidebar.php';
         color: #64748B !important;
     }
     
+    .badge-blue {
+        background: #E8F0FE !important;
+        color: #0B5ED7 !important;
+    }
+    
+    .badge-green {
+        background: #D1FAE5 !important;
+        color: #059669 !important;
+    }
+    
     [data-theme="dark"] .badge-success {
         background: #1A3A2A !important;
         color: #34D399 !important;
@@ -482,48 +482,17 @@ include_once '../../components/admin_sidebar.php';
         color: #94A3B8 !important;
     }
     
-    /* Info rows */
-    .info-row {
-        display: flex;
-        padding: 8px 0;
-        border-bottom: 1px solid var(--border-color);
+    [data-theme="dark"] .badge-blue {
+        background: #1E3A5F !important;
+        color: #6EA8FE !important;
     }
     
-    .info-row .info-label {
-        width: 140px;
-        font-weight: 600;
-        color: var(--text-secondary);
-        font-size: 0.82rem;
-        flex-shrink: 0;
+    [data-theme="dark"] .badge-green {
+        background: #1A3A2A !important;
+        color: #34D399 !important;
     }
     
-    .info-row .info-value {
-        flex: 1;
-        color: var(--text-primary);
-        font-size: 0.85rem;
-    }
-    
-    /* Section title */
-    .section-title {
-        font-size: 1rem;
-        font-weight: 700;
-        color: #0B5ED7;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 12px;
-    }
-    
-    [data-theme="dark"] .section-title {
-        color: #6EA8FE;
-    }
-    
-    .section-title .badge-count {
-        font-size: 0.7rem;
-        font-weight: 400;
-        color: var(--text-secondary);
-    }
-    
+    /* Card */
     .card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -552,114 +521,117 @@ include_once '../../components/admin_sidebar.php';
         color: var(--text-primary);
     }
     
-    /* ================================================================
-       VITAL SIGNS CARDS - 6 CARDS (MODERN DESIGN)
-       ================================================================ */
-    .vital-card {
-        background: var(--bg-card);
-        border-radius: 14px;
-        padding: 16px 12px;
-        text-align: center;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        position: relative;
-        overflow: hidden;
-        min-height: 100px;
+    .title-blue { color: #0B5ED7; }
+    .title-green { color: #059669; }
+    
+    /* Info Row */
+    .info-row {
         display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--border-color);
     }
     
-    .vital-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 4px;
-        border-radius: 14px 14px 0 0;
-    }
-    
-    .vital-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 30px rgba(0,0,0,0.1);
-    }
-    
-    .vital-card .vital-icon {
-        font-size: 1.8rem;
-        margin-bottom: 6px;
-    }
-    
-    .vital-card .vital-value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        line-height: 1.2;
-    }
-    
-    .vital-card .vital-label {
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        text-transform: uppercase;
+    .info-row .info-label {
+        width: 140px;
         font-weight: 600;
-        letter-spacing: 0.04em;
-        margin-top: 2px;
-    }
-    
-    .vital-card .vital-unit {
-        font-size: 0.6rem;
         color: var(--text-secondary);
-        font-weight: 400;
-        margin-left: 2px;
+        font-size: 0.82rem;
+        flex-shrink: 0;
     }
     
-    /* Card Colors - 6 Colors */
-    .vital-card.blue::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
-    .vital-card.blue .vital-icon { color: #0B5ED7; }
-    .vital-card.blue .vital-value { color: #0B5ED7; }
-    
-    .vital-card.red::before { background: linear-gradient(90deg, #EF4444, #F87171); }
-    .vital-card.red .vital-icon { color: #EF4444; }
-    .vital-card.red .vital-value { color: #EF4444; }
-    
-    .vital-card.pink::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
-    .vital-card.pink .vital-icon { color: #EC4899; }
-    .vital-card.pink .vital-value { color: #EC4899; }
-    
-    .vital-card.purple::before { background: linear-gradient(90deg, #7B2FBE, #9B4DCA); }
-    .vital-card.purple .vital-icon { color: #7B2FBE; }
-    .vital-card.purple .vital-value { color: #7B2FBE; }
-    
-    .vital-card.green::before { background: linear-gradient(90deg, #059669, #0AA84F); }
-    .vital-card.green .vital-icon { color: #059669; }
-    .vital-card.green .vital-value { color: #059669; }
-    
-    .vital-card.indigo::before { background: linear-gradient(90deg, #4F46E5, #818CF8); }
-    .vital-card.indigo .vital-icon { color: #4F46E5; }
-    .vital-card.indigo .vital-value { color: #4F46E5; }
-    
-    /* Dark mode vital cards */
-    [data-theme="dark"] .vital-card {
-        background: #1E293B;
-        border-color: #334155;
+    .info-row .info-value {
+        flex: 1;
+        color: var(--text-primary);
+        font-size: 0.85rem;
     }
     
-    [data-theme="dark"] .vital-card:hover {
-        border-color: #0B5ED7;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+    /* ================================================================
+       ACTION BUTTONS FOR PATIENTS
+       ================================================================ */
+    .action-buttons {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
     }
     
-    [data-theme="dark"] .vital-card .vital-value {
-        color: #F1F5F9;
+    .btn-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        border: none;
+        cursor: pointer;
     }
     
-    [data-theme="dark"] .vital-card.blue .vital-value { color: #6EA8FE; }
-    [data-theme="dark"] .vital-card.red .vital-value { color: #F87171; }
-    [data-theme="dark"] .vital-card.pink .vital-value { color: #F472B6; }
-    [data-theme="dark"] .vital-card.purple .vital-value { color: #A78BFA; }
-    [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
-    [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
+    .btn-action i { font-size: 0.65rem; }
+    
+    .btn-view {
+        background: #E8F0FE;
+        color: #0B5ED7;
+    }
+    
+    .btn-view:hover {
+        background: #0B5ED7;
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-edit {
+        background: #FEF3C7;
+        color: #D97706;
+    }
+    
+    .btn-edit:hover {
+        background: #D97706;
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
+    }
+    
+    .btn-delete {
+        background: #FEE2E2;
+        color: #EF4444;
+    }
+    
+    .btn-delete:hover {
+        background: #EF4444;
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+    }
+    
+    [data-theme="dark"] .btn-view {
+        background: #1E3A5F;
+        color: #6EA8FE;
+    }
+    [data-theme="dark"] .btn-view:hover {
+        background: #0B5ED7;
+        color: white;
+    }
+    
+    [data-theme="dark"] .btn-edit {
+        background: #3A2A1A;
+        color: #FBBF24;
+    }
+    [data-theme="dark"] .btn-edit:hover {
+        background: #D97706;
+        color: white;
+    }
+    
+    [data-theme="dark"] .btn-delete {
+        background: #3A1A1A;
+        color: #F87171;
+    }
+    [data-theme="dark"] .btn-delete:hover {
+        background: #EF4444;
+        color: white;
+    }
     
     /* Responsive */
     @media (max-width: 640px) {
@@ -693,15 +665,9 @@ include_once '../../components/admin_sidebar.php';
             font-size: 0.7rem;
             padding: 4px 10px;
         }
-        .vital-card {
-            min-height: 80px;
-            padding: 12px 8px;
-        }
-        .vital-card .vital-value {
-            font-size: 1.2rem;
-        }
-        .vital-card .vital-icon {
-            font-size: 1.4rem;
+        .action-buttons .btn-action {
+            font-size: 0.55rem;
+            padding: 3px 8px;
         }
     }
 </style>
@@ -717,9 +683,9 @@ include_once '../../components/admin_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <form method="GET" action="patients.php" class="flex-1 flex">
+            <form method="GET" action="doctors_list.php" class="flex-1 flex">
                 <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-                <input type="text" name="search" placeholder="Search patients..." 
+                <input type="text" name="search" placeholder="Search doctors..." 
                        class="flex-1 px-3 py-2 bg-transparent border-none outline-none text-sm" 
                        style="color: var(--text-primary);">
                 <button type="submit" class="search-btn">
@@ -769,32 +735,38 @@ include_once '../../components/admin_sidebar.php';
     <div class="profile-header mb-5">
         <div class="flex items-center gap-4 flex-wrap" style="position:relative;z-index:1;">
             <div class="profile-avatar">
-                <i class="fas fa-user"></i>
+                <i class="fas fa-user-md"></i>
             </div>
             <div class="flex-1">
                 <div class="flex items-center gap-3 flex-wrap">
-                    <h1 class="profile-name"><?= htmlspecialchars($patient['full_name']) ?></h1>
+                    <h1 class="profile-name">Dr. <?= htmlspecialchars($doctor['full_name']) ?></h1>
                     <span class="profile-badge">
-                        <i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_id']) ?>
+                        <i class="fas fa-user-md"></i> Doctor
                     </span>
-                    <span class="profile-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.2);">
-                        <i class="fas fa-calendar-alt"></i> <?= date('M d, Y', strtotime($patient['created_at'])) ?>
+                    <span class="profile-badge <?= $doctor['is_online'] == 1 ? 'online' : 'offline' ?>">
+                        <i class="fas fa-circle"></i>
+                        <?= $doctor['is_online'] == 1 ? 'Online' : 'Offline' ?>
                     </span>
+                    <?php if ($doctor['specialty']): ?>
+                        <span class="profile-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.2);">
+                            <i class="fas fa-stethoscope"></i> <?= htmlspecialchars($doctor['specialty']) ?>
+                        </span>
+                    <?php endif; ?>
                 </div>
                 <div class="flex items-center gap-3 flex-wrap mt-1" style="opacity:0.85;">
-                    <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
-                    <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
-                    <span><i class="fas fa-store-alt"></i> <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?></span>
-                    <?php if ($patient['assigned_doctor_name']): ?>
-                        <span><i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($patient['assigned_doctor_name']) ?></span>
+                    <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($doctor['email']) ?></span>
+                    <span><i class="fas fa-phone"></i> <?= htmlspecialchars($doctor['phone'] ?? 'N/A') ?></span>
+                    <span><i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor['branch_name'] ?? 'N/A') ?></span>
+                    <?php if ($doctor['last_online']): ?>
+                        <span><i class="fas fa-clock"></i> Last online: <?= date('M d, Y h:i A', strtotime($doctor['last_online'])) ?></span>
                     <?php endif; ?>
                 </div>
             </div>
             <div class="flex gap-2 flex-wrap">
-                <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
+                <a href="edit_doctor.php?id=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm" style="background:rgba(255,255,255,0.2);color:white;border:1px solid rgba(255,255,255,0.2);">
                     <i class="fas fa-edit"></i> Edit
                 </a>
-                <a href="patients.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);">
+                <a href="doctors_list.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm" style="background:rgba(255,255,255,0.1);color:white;border:1px solid rgba(255,255,255,0.15);">
                     <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
@@ -804,319 +776,179 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-5">
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-5">
+        
+        <div class="stat-card-mini">
+            <div class="stat-icon">👤</div>
+            <p class="stat-number"><?= $doctor['total_patients'] ?? 0 ?></p>
+            <p class="stat-label">Total Patients</p>
+        </div>
         
         <div class="stat-card-mini">
             <div class="stat-icon">📋</div>
-            <p class="stat-number"><?= $total_visits ?></p>
+            <p class="stat-number green"><?= $doctor['total_visits'] ?? 0 ?></p>
             <p class="stat-label">Total Visits</p>
         </div>
         
         <div class="stat-card-mini">
-            <div class="stat-icon">💰</div>
-            <p class="stat-number green"><?= $total_bills ?></p>
-            <p class="stat-label">Total Bills</p>
-            <p class="stat-amount">TSh <?= number_format($total_bill_amount) ?></p>
-        </div>
-        
-        <div class="stat-card-mini">
             <div class="stat-icon">💊</div>
-            <p class="stat-number purple"><?= $total_prescriptions ?></p>
+            <p class="stat-number purple"><?= $doctor['total_prescriptions'] ?? 0 ?></p>
             <p class="stat-label">Prescriptions</p>
         </div>
         
         <div class="stat-card-mini">
             <div class="stat-icon">🔬</div>
-            <p class="stat-number orange"><?= $total_lab_tests ?></p>
+            <p class="stat-number orange"><?= $doctor['total_lab_tests'] ?? 0 ?></p>
             <p class="stat-label">Lab Tests</p>
         </div>
         
         <div class="stat-card-mini">
             <div class="stat-icon">📅</div>
-            <p class="stat-number"><?= $total_appointments ?></p>
+            <p class="stat-number"><?= $doctor['total_appointments'] ?? 0 ?></p>
             <p class="stat-label">Appointments</p>
         </div>
         
-        <div class="stat-card-mini">
-            <div class="stat-icon">💵</div>
-            <p class="stat-number green"><?= $total_payments ?></p>
-            <p class="stat-label">Payments</p>
-            <p class="stat-amount">TSh <?= number_format($total_payments_amount) ?></p>
-        </div>
-        
-        <div class="stat-card-mini">
-            <div class="stat-icon">❤️</div>
-            <p class="stat-number pink"><?= $total_vital_signs ?></p>
-            <p class="stat-label">Vital Signs</p>
-        </div>
-        
     </div>
 
     <!-- ================================================================ -->
-    <!-- LATEST VITAL SIGNS - 6 CARDS ONLY (FIXED BP DISPLAY) -->
-    <!-- ================================================================ -->
-    <?php if ($latest_vital_signs): ?>
-    <div class="card mb-5">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-heartbeat mr-2" style="color: #EC4899;"></i> Latest Vital Signs
-                <span class="badge-count">(<?= date('M d, Y h:i A', strtotime($latest_vital_signs['recorded_at'])) ?>)</span>
-            </h3>
-        </div>
-        
-        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-            
-            <!-- 1. Temperature -->
-            <div class="vital-card blue">
-                <div class="vital-icon"><i class="fas fa-thermometer-half"></i></div>
-                <div class="vital-value">
-                    <?php 
-                        $temp = $latest_vital_signs['temperature'] ?? null;
-                        echo $temp !== null ? $temp : '-';
-                    ?>
-                    <span class="vital-unit">°C</span>
-                </div>
-                <div class="vital-label">Temperature</div>
-            </div>
-            
-            <!-- 2. Blood Pressure - FIXED: Shows only systolic if diastolic is NULL -->
-            <div class="vital-card red">
-                <div class="vital-icon"><i class="fas fa-heart"></i></div>
-                <div class="vital-value">
-                    <?php 
-                        $systolic = $latest_vital_signs['blood_pressure_systolic'] ?? null;
-                        $diastolic = $latest_vital_signs['blood_pressure_diastolic'] ?? null;
-                        
-                        if ($systolic !== null && $diastolic !== null) {
-                            echo $systolic . '/' . $diastolic;
-                        } elseif ($systolic !== null) {
-                            echo $systolic;
-                        } else {
-                            echo '-';
-                        }
-                    ?>
-                    <span class="vital-unit">mmHg</span>
-                </div>
-                <div class="vital-label">Blood Pressure</div>
-            </div>
-            
-            <!-- 3. Pulse Rate -->
-            <div class="vital-card pink">
-                <div class="vital-icon"><i class="fas fa-heartbeat"></i></div>
-                <div class="vital-value">
-                    <?php 
-                        $pulse = $latest_vital_signs['pulse_rate'] ?? null;
-                        echo $pulse !== null ? $pulse : '-';
-                    ?>
-                    <span class="vital-unit">bpm</span>
-                </div>
-                <div class="vital-label">Pulse Rate</div>
-            </div>
-            
-            <!-- 4. Weight -->
-            <div class="vital-card purple">
-                <div class="vital-icon"><i class="fas fa-weight"></i></div>
-                <div class="vital-value">
-                    <?php 
-                        $weight = $latest_vital_signs['weight'] ?? null;
-                        echo $weight !== null ? $weight : '-';
-                    ?>
-                    <span class="vital-unit">kg</span>
-                </div>
-                <div class="vital-label">Weight</div>
-            </div>
-            
-            <!-- 5. Height -->
-            <div class="vital-card green">
-                <div class="vital-icon"><i class="fas fa-ruler-vertical"></i></div>
-                <div class="vital-value">
-                    <?php 
-                        $height = $latest_vital_signs['height'] ?? null;
-                        echo $height !== null ? $height : '-';
-                    ?>
-                    <span class="vital-unit">cm</span>
-                </div>
-                <div class="vital-label">Height</div>
-            </div>
-            
-            <!-- 6. BMI -->
-            <div class="vital-card indigo">
-                <div class="vital-icon"><i class="fas fa-calculator"></i></div>
-                <div class="vital-value">
-                    <?php 
-                        $bmi = $latest_vital_signs['bmi'] ?? null;
-                        echo $bmi !== null ? $bmi : '-';
-                    ?>
-                </div>
-                <div class="vital-label">BMI</div>
-            </div>
-            
-        </div>
-        
-        <?php if ($latest_vital_signs['notes']): ?>
-        <div class="mt-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-            <p class="text-xs text-gray-500">📝 Notes</p>
-            <p class="text-sm"><?= htmlspecialchars($latest_vital_signs['notes']) ?></p>
-        </div>
-        <?php endif; ?>
-        
-        <p class="text-xs text-gray-400 mt-2">
-            <i class="fas fa-user"></i> Recorded by: <?= htmlspecialchars($latest_vital_signs['recorded_by_name'] ?? 'N/A') ?>
-            <?php if ($latest_vital_signs['visit_number']): ?>
-                <span class="mx-2">|</span>
-                <i class="fas fa-stethoscope"></i> Visit: <?= htmlspecialchars($latest_vital_signs['visit_number']) ?>
-            <?php endif; ?>
-        </p>
-    </div>
-    <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- PATIENT INFORMATION -->
+    <!-- DOCTOR INFORMATION -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-info-circle title-blue mr-2"></i> Patient Information
+                <i class="fas fa-info-circle title-blue mr-2"></i> Doctor Information
             </h3>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
             <div class="info-row">
                 <span class="info-label"><i class="fas fa-user"></i> Full Name</span>
-                <span class="info-value"><?= htmlspecialchars($patient['full_name']) ?></span>
+                <span class="info-value">Dr. <?= htmlspecialchars($doctor['full_name']) ?></span>
             </div>
             <div class="info-row">
-                <span class="info-label"><i class="fas fa-id-card"></i> Patient ID</span>
-                <span class="info-value font-mono"><?= htmlspecialchars($patient['patient_id']) ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label"><i class="fas fa-calendar-alt"></i> Date of Birth</span>
-                <span class="info-value"><?= $patient['date_of_birth'] ? date('M d, Y', strtotime($patient['date_of_birth'])) : 'N/A' ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label"><i class="fas fa-venus-mars"></i> Gender</span>
-                <span class="info-value"><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label"><i class="fas fa-ring"></i> Marital Status</span>
-                <span class="info-value"><?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label"><i class="fas fa-tint"></i> Blood Group</span>
-                <span class="info-value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label"><i class="fas fa-phone"></i> Phone</span>
-                <span class="info-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
+                <span class="info-label"><i class="fas fa-user-md"></i> Role</span>
+                <span class="info-value">Doctor</span>
             </div>
             <div class="info-row">
                 <span class="info-label"><i class="fas fa-envelope"></i> Email</span>
-                <span class="info-value"><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
+                <span class="info-value"><?= htmlspecialchars($doctor['email']) ?></span>
             </div>
             <div class="info-row">
-                <span class="info-label"><i class="fas fa-map-marker-alt"></i> Address</span>
-                <span class="info-value"><?= htmlspecialchars($patient['address'] ?? 'N/A') ?></span>
+                <span class="info-label"><i class="fas fa-phone"></i> Phone</span>
+                <span class="info-value"><?= htmlspecialchars($doctor['phone'] ?? 'N/A') ?></span>
             </div>
             <div class="info-row">
-                <span class="info-label"><i class="fas fa-phone-alt"></i> Emergency Contact</span>
-                <span class="info-value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'N/A') ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label"><i class="fas fa-allergies"></i> Allergies</span>
-                <span class="info-value"><?= htmlspecialchars($patient['allergies'] ?? 'None') ?></span>
+                <span class="info-label"><i class="fas fa-stethoscope"></i> Specialty</span>
+                <span class="info-value"><?= htmlspecialchars($doctor['specialty'] ?? 'General') ?></span>
             </div>
             <div class="info-row">
                 <span class="info-label"><i class="fas fa-store-alt"></i> Branch</span>
-                <span class="info-value"><?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?></span>
+                <span class="info-value"><?= htmlspecialchars($doctor['branch_name'] ?? 'N/A') ?></span>
             </div>
+            <div class="info-row">
+                <span class="info-label"><i class="fas fa-circle"></i> Status</span>
+                <span class="info-value">
+                    <span class="status-badge <?= $doctor['is_online'] == 1 ? 'online' : 'offline' ?>">
+                        <i class="fas fa-circle"></i>
+                        <?= $doctor['is_online'] == 1 ? 'Online' : 'Offline' ?>
+                    </span>
+                </span>
+            </div>
+            <div class="info-row">
+                <span class="info-label"><i class="fas fa-calendar-alt"></i> Registered</span>
+                <span class="info-value"><?= date('M d, Y h:i A', strtotime($doctor['created_at'])) ?></span>
+            </div>
+            <?php if ($doctor['last_online']): ?>
+                <div class="info-row">
+                    <span class="info-label"><i class="fas fa-clock"></i> Last Online</span>
+                    <span class="info-value"><?= date('M d, Y h:i A', strtotime($doctor['last_online'])) ?></span>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- VITAL SIGNS HISTORY - 6 COLUMNS ONLY -->
+    <!-- ASSIGNED PATIENTS - WITH VIEW, EDIT, DELETE BUTTONS -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-heartbeat mr-2" style="color: #EC4899;"></i> Vital Signs History
-                <span class="badge-count">(<?= $total_vital_signs ?> records)</span>
+                <i class="fas fa-users title-blue mr-2"></i> Assigned Patients
+                <span class="badge-count">(<?= count($assigned_patients) ?> patients)</span>
             </h3>
+            <a href="patients.php?doctor=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+                View All <i class="fas fa-arrow-right"></i>
+            </a>
         </div>
-        
-        <?php if (count($vital_signs_history) > 0): ?>
         <div class="overflow-x-auto">
             <table class="data-table table-blue w-full">
                 <thead>
                     <tr>
-                        <th style="width: 50px;">#</th>
-                        <th style="min-width: 130px;">Date</th>
-                        <th style="min-width: 100px;">Visit</th>
-                        <th style="min-width: 90px;">Temp (°C)</th>
-                        <th style="min-width: 110px;">BP (mmHg)</th>
-                        <th style="min-width: 90px;">Pulse (bpm)</th>
-                        <th style="min-width: 90px;">Weight (kg)</th>
-                        <th style="min-width: 90px;">Height (cm)</th>
-                        <th style="min-width: 80px;">BMI</th>
-                        <th style="min-width: 120px;">Recorded By</th>
+                        <th>Patient ID</th>
+                        <th>Name</th>
+                        <th>Phone</th>
+                        <th>Visits</th>
+                        <th>Bills</th>
+                        <th>Registered</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php $i = 1; foreach ($vital_signs_history as $vs): ?>
-                        <tr>
-                            <td><?= $i++ ?></td>
-                            <td class="text-xs"><?= date('M d, Y h:i A', strtotime($vs['recorded_at'])) ?></td>
-                            <td>
-                                <?php if ($vs['visit_number']): ?>
-                                    <a href="visit_details.php?id=<?= $vs['visit_id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                       class="text-blue-600 hover:underline text-xs font-mono">
-                                        <?= htmlspecialchars($vs['visit_number']) ?>
-                                    </a>
-                                <?php else: ?>
-                                    <span class="text-gray-400">N/A</span>
-                                <?php endif; ?>
-                            </td>
-                            <td><?= $vs['temperature'] !== null ? $vs['temperature'] : '-' ?></td>
-                            <td>
-                                <?php 
-                                    $systolic = $vs['blood_pressure_systolic'] ?? null;
-                                    $diastolic = $vs['blood_pressure_diastolic'] ?? null;
-                                    
-                                    if ($systolic !== null && $diastolic !== null) {
-                                        echo $systolic . '/' . $diastolic;
-                                    } elseif ($systolic !== null) {
-                                        echo $systolic;
-                                    } else {
-                                        echo '-';
-                                    }
-                                ?>
-                            </td>
-                            <td><?= $vs['pulse_rate'] !== null ? $vs['pulse_rate'] : '-' ?></td>
-                            <td><?= $vs['weight'] !== null ? $vs['weight'] : '-' ?></td>
-                            <td><?= $vs['height'] !== null ? $vs['height'] : '-' ?></td>
-                            <td><?= $vs['bmi'] !== null ? $vs['bmi'] : '-' ?></td>
-                            <td class="text-xs"><?= htmlspecialchars($vs['recorded_by_name'] ?? 'N/A') ?></td>
-                        </tr>
-                    <?php endforeach; ?>
+                    <?php if (count($assigned_patients) > 0): ?>
+                        <?php foreach ($assigned_patients as $patient): ?>
+                            <tr>
+                                <td class="font-mono text-xs"><?= htmlspecialchars($patient['patient_id']) ?></td>
+                                <td class="font-semibold"><?= htmlspecialchars($patient['full_name']) ?></td>
+                                <td><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></td>
+                                <td class="text-center">
+                                    <span class="badge badge-info"><?= $patient['total_visits'] ?? 0 ?></span>
+                                </td>
+                                <td class="text-center">
+                                    <span class="badge badge-green"><?= $patient['total_bills'] ?? 0 ?></span>
+                                </td>
+                                <td class="text-xs"><?= date('M d, Y', strtotime($patient['created_at'])) ?></td>
+                                <td>
+                                    <div class="action-buttons">
+                                        <!-- View Button -->
+                                        <a href="patient_details.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                           class="btn-action btn-view" title="View Patient">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                        
+                                        <!-- Edit Button -->
+                                        <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                           class="btn-action btn-edit" title="Edit Patient">
+                                            <i class="fas fa-edit"></i> Edit
+                                        </a>
+                                        
+                                        <!-- Delete Button -->
+                                        <a href="patients.php?delete=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                           class="btn-action btn-delete" 
+                                           onclick="return confirm('Are you sure you want to delete this patient?\n\nPatient: <?= htmlspecialchars($patient['full_name']) ?>\nID: <?= htmlspecialchars($patient['patient_id']) ?>\n\nThis will delete ALL related data including visits, bills, prescriptions, lab tests, appointments, payments and more.')" 
+                                           title="Delete Patient">
+                                            <i class="fas fa-trash"></i> Delete
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr><td colspan="7" class="text-center py-4 text-gray-400">No patients assigned to this doctor</td></tr>
+                    <?php endif; ?>
                 </tbody>
             </table>
         </div>
-        <?php else: ?>
-        <div class="text-center py-6 text-gray-400">
-            <i class="fas fa-heartbeat text-3xl block mb-2" style="color: #EC4899;"></i>
-            <p>No vital signs recorded for this patient</p>
-        </div>
-        <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT VISITS -->
+    <!-- RECENT VISITS - FIXED TEXT COLOR -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-notes-medical title-blue mr-2"></i> Recent Visits
-                <span class="badge-count">(<?= $total_visits ?> total)</span>
+                <span class="badge-count">(<?= $doctor['total_visits'] ?? 0 ?> total)</span>
             </h3>
-            <a href="visits.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="visits.php?doctor=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1125,7 +957,7 @@ include_once '../../components/admin_sidebar.php';
                 <thead>
                     <tr>
                         <th>Visit #</th>
-                        <th>Doctor</th>
+                        <th>Patient</th>
                         <th>Date</th>
                         <th>Type</th>
                         <th>Status</th>
@@ -1137,7 +969,7 @@ include_once '../../components/admin_sidebar.php';
                         <?php foreach ($recent_visits as $visit): ?>
                             <tr>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($visit['visit_number']) ?></td>
-                                <td><?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></td>
+                                <td class="font-semibold"><?= htmlspecialchars($visit['patient_name']) ?></td>
                                 <td class="text-xs"><?= date('M d, Y', strtotime($visit['visit_date'])) ?></td>
                                 <td><span class="badge badge-info"><?= ucfirst($visit['visit_type'] ?? 'N/A') ?></span></td>
                                 <td>
@@ -1161,70 +993,15 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT BILLS -->
-    <!-- ================================================================ -->
-    <div class="card mb-5">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-file-invoice title-blue mr-2"></i> Recent Bills
-                <span class="badge-count">(<?= $total_bills ?> total)</span>
-            </h3>
-            <a href="bills.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                View All <i class="fas fa-arrow-right"></i>
-            </a>
-        </div>
-        <div class="overflow-x-auto">
-            <table class="data-table table-blue w-full">
-                <thead>
-                    <tr>
-                        <th>Bill #</th>
-                        <th>Total Amount</th>
-                        <th>Paid Amount</th>
-                        <th>Balance</th>
-                        <th>Status</th>
-                        <th>Date</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (count($recent_bills) > 0): ?>
-                        <?php foreach ($recent_bills as $bill): ?>
-                            <tr>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($bill['bill_number']) ?></td>
-                                <td class="font-bold">TSh <?= number_format($bill['total_amount'] ?? 0) ?></td>
-                                <td>TSh <?= number_format($bill['paid_amount'] ?? 0) ?></td>
-                                <td>TSh <?= number_format($bill['balance'] ?? 0) ?></td>
-                                <td>
-                                    <span class="badge badge-<?= $bill['status_color'] ?? 'secondary' ?>">
-                                        <?= ucfirst($bill['status'] ?? 'N/A') ?>
-                                    </span>
-                                </td>
-                                <td class="text-xs"><?= date('M d, Y', strtotime($bill['created_at'])) ?></td>
-                                <td>
-                                    <a href="bill_details.php?id=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
-                                        <i class="fas fa-eye"></i>
-                                    </a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <tr><td colspan="7" class="text-center py-4 text-gray-400">No bills found</td></tr>
-                    <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
     <!-- RECENT PRESCRIPTIONS -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-prescription title-blue mr-2"></i> Recent Prescriptions
-                <span class="badge-count">(<?= $total_prescriptions ?> total)</span>
+                <span class="badge-count">(<?= $doctor['total_prescriptions'] ?? 0 ?> total)</span>
             </h3>
-            <a href="prescriptions.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="prescriptions.php?doctor=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1233,7 +1010,7 @@ include_once '../../components/admin_sidebar.php';
                 <thead>
                     <tr>
                         <th>Prescription #</th>
-                        <th>Doctor</th>
+                        <th>Patient</th>
                         <th>Status</th>
                         <th>Date</th>
                         <th>Action</th>
@@ -1244,9 +1021,9 @@ include_once '../../components/admin_sidebar.php';
                         <?php foreach ($recent_prescriptions as $prescription): ?>
                             <tr>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($prescription['prescription_number']) ?></td>
-                                <td><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($prescription['patient_name']) ?></td>
                                 <td>
-                                    <span class="badge badge-<?= $prescription['status'] === 'dispensed' ? 'success' : ($prescription['status'] === 'pending' ? 'warning' : 'secondary') ?>">
+                                    <span class="badge badge-<?= $prescription['status_color'] ?? 'secondary' ?>">
                                         <?= ucfirst($prescription['status'] ?? 'N/A') ?>
                                     </span>
                                 </td>
@@ -1267,15 +1044,15 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT LAB TESTS - FIXED -->
+    <!-- RECENT LAB TESTS -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-flask title-blue mr-2"></i> Recent Lab Tests
-                <span class="badge-count">(<?= $total_lab_tests ?> total)</span>
+                <span class="badge-count">(<?= $doctor['total_lab_tests'] ?? 0 ?> total)</span>
             </h3>
-            <a href="lab_tests.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="lab_tests.php?doctor=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1284,7 +1061,7 @@ include_once '../../components/admin_sidebar.php';
                 <thead>
                     <tr>
                         <th>Test Name</th>
-                        <th>Doctor</th>
+                        <th>Patient</th>
                         <th>Status</th>
                         <th>Date</th>
                         <th>Action</th>
@@ -1295,7 +1072,7 @@ include_once '../../components/admin_sidebar.php';
                         <?php foreach ($recent_lab_tests as $test): ?>
                             <tr>
                                 <td><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($test['patient_name']) ?></td>
                                 <td>
                                     <span class="badge badge-<?= $test['status_color'] ?? 'secondary' ?>">
                                         <?= ucfirst(str_replace('_', ' ', $test['status'] ?? 'N/A')) ?>
@@ -1324,9 +1101,9 @@ include_once '../../components/admin_sidebar.php';
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-calendar-check title-blue mr-2"></i> Recent Appointments
-                <span class="badge-count">(<?= $total_appointments ?> total)</span>
+                <span class="badge-count">(<?= $doctor['total_appointments'] ?? 0 ?> total)</span>
             </h3>
-            <a href="appointments.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="appointments.php?doctor=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1334,7 +1111,7 @@ include_once '../../components/admin_sidebar.php';
             <table class="data-table table-blue w-full">
                 <thead>
                     <tr>
-                        <th>Doctor</th>
+                        <th>Patient</th>
                         <th>Appointment Date</th>
                         <th>Type</th>
                         <th>Status</th>
@@ -1345,7 +1122,7 @@ include_once '../../components/admin_sidebar.php';
                     <?php if (count($recent_appointments) > 0): ?>
                         <?php foreach ($recent_appointments as $appointment): ?>
                             <tr>
-                                <td><?= htmlspecialchars($appointment['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($appointment['patient_name']) ?></td>
                                 <td class="text-xs"><?= date('M d, Y h:i A', strtotime($appointment['appointment_date'])) ?></td>
                                 <td><span class="badge badge-info"><?= ucfirst($appointment['visit_type'] ?? 'N/A') ?></span></td>
                                 <td>
@@ -1375,7 +1152,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Patient Details
+            Doctor Details
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1500,14 +1277,11 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Patient Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c❤️ Vital Signs Records: <?= $total_vital_signs ?>', 'font-size:13px; color:#EC4899;');
-    console.log('%c📊 6 Vital Signs: Temp, BP, Pulse, Weight, Height, BMI', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🩸 BP Display: Shows only systolic if diastolic is NULL', 'font-size:13px; color:#EF4444;');
-    console.log('%c📊 Visits: <?= $total_visits ?> | Bills: <?= $total_bills ?> | Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔬 Lab Tests: <?= $total_lab_tests ?> (via visits table)', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c🏥 Braick Dispensary - Doctor Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor['full_name']) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📊 Patients: <?= $doctor['total_patients'] ?? 0 ?> | Visits: <?= $doctor['total_visits'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💊 Prescriptions: <?= $doctor['total_prescriptions'] ?? 0 ?> | 🔬 Lab Tests: <?= $doctor['total_lab_tests'] ?? 0 ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔘 Patient Actions: View | Edit | Delete', 'font-size:13px; color:#EF4444;');
 </script>
 
 </body>

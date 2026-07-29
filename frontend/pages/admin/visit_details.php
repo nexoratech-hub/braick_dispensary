@@ -385,6 +385,8 @@ include_once '../../components/admin_sidebar.php';
     .title-green { color: #059669; }
     .title-purple { color: #7B2FBE; }
     .title-orange { color: #F59E0B; }
+    .title-red { color: #EF4444; }
+    .title-pink { color: #EC4899; }
     
     /* Info Row */
     .info-row {
@@ -406,6 +408,115 @@ include_once '../../components/admin_sidebar.php';
         color: var(--text-primary);
         font-size: 0.85rem;
     }
+    
+    /* ================================================================
+       VITAL SIGNS CARDS - MODERN DESIGN (6 CARDS)
+       ================================================================ */
+    .vital-card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 16px 12px;
+        text-align: center;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+        min-height: 100px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .vital-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        border-radius: 14px 14px 0 0;
+    }
+    
+    .vital-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 30px rgba(0,0,0,0.1);
+    }
+    
+    .vital-card .vital-icon {
+        font-size: 1.8rem;
+        margin-bottom: 6px;
+    }
+    
+    .vital-card .vital-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        line-height: 1.2;
+    }
+    
+    .vital-card .vital-label {
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        margin-top: 2px;
+    }
+    
+    .vital-card .vital-unit {
+        font-size: 0.6rem;
+        color: var(--text-secondary);
+        font-weight: 400;
+        margin-left: 2px;
+    }
+    
+    /* Card Colors - 6 Colors */
+    .vital-card.blue::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
+    .vital-card.blue .vital-icon { color: #0B5ED7; }
+    .vital-card.blue .vital-value { color: #0B5ED7; }
+    
+    .vital-card.red::before { background: linear-gradient(90deg, #EF4444, #F87171); }
+    .vital-card.red .vital-icon { color: #EF4444; }
+    .vital-card.red .vital-value { color: #EF4444; }
+    
+    .vital-card.pink::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
+    .vital-card.pink .vital-icon { color: #EC4899; }
+    .vital-card.pink .vital-value { color: #EC4899; }
+    
+    .vital-card.purple::before { background: linear-gradient(90deg, #7B2FBE, #9B4DCA); }
+    .vital-card.purple .vital-icon { color: #7B2FBE; }
+    .vital-card.purple .vital-value { color: #7B2FBE; }
+    
+    .vital-card.green::before { background: linear-gradient(90deg, #059669, #0AA84F); }
+    .vital-card.green .vital-icon { color: #059669; }
+    .vital-card.green .vital-value { color: #059669; }
+    
+    .vital-card.indigo::before { background: linear-gradient(90deg, #4F46E5, #818CF8); }
+    .vital-card.indigo .vital-icon { color: #4F46E5; }
+    .vital-card.indigo .vital-value { color: #4F46E5; }
+    
+    /* Dark mode vital cards */
+    [data-theme="dark"] .vital-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    
+    [data-theme="dark"] .vital-card:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+    }
+    
+    [data-theme="dark"] .vital-card .vital-value {
+        color: #F1F5F9;
+    }
+    
+    [data-theme="dark"] .vital-card.blue .vital-value { color: #6EA8FE; }
+    [data-theme="dark"] .vital-card.red .vital-value { color: #F87171; }
+    [data-theme="dark"] .vital-card.pink .vital-value { color: #F472B6; }
+    [data-theme="dark"] .vital-card.purple .vital-value { color: #A78BFA; }
+    [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
+    [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
     
     /* Responsive */
     @media (max-width: 640px) {
@@ -433,6 +544,19 @@ include_once '../../components/admin_sidebar.php';
         .btn {
             font-size: 0.7rem;
             padding: 4px 10px;
+        }
+        .vital-card {
+            min-height: 80px;
+            padding: 12px 8px;
+        }
+        .vital-card .vital-value {
+            font-size: 1.2rem;
+        }
+        .vital-card .vital-icon {
+            font-size: 1.4rem;
+        }
+        .grid-cols-2.sm\:grid-cols-3.md\:grid-cols-6 {
+            grid-template-columns: repeat(2, 1fr);
         }
     }
 </style>
@@ -678,63 +802,133 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- VITAL SIGNS -->
+    <!-- VITAL SIGNS - MODERN DESIGN (6 CARDS) -->
     <!-- ================================================================ -->
     <?php if ($vital_signs): ?>
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-heartbeat title-red mr-2"></i> Vital Signs
+                <i class="fas fa-heartbeat title-pink mr-2"></i> Vital Signs
+                <span class="badge-count">(<?= date('M d, Y h:i A', strtotime($vital_signs['recorded_at'])) ?>)</span>
             </h3>
         </div>
-        <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
-            <?php if ($vital_signs['temperature']): ?>
-                <div class="text-center p-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                    <p class="text-xs text-gray-500">Temperature</p>
-                    <p class="font-bold text-lg"><?= $vital_signs['temperature'] ?>°C</p>
+        
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            
+            <!-- 1. Temperature -->
+            <div class="vital-card blue">
+                <div class="vital-icon"><i class="fas fa-thermometer-half"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $temp = $vital_signs['temperature'] ?? null;
+                        echo $temp !== null ? $temp : '-';
+                    ?>
+                    <span class="vital-unit">°C</span>
                 </div>
-            <?php endif; ?>
-            <?php if ($vital_signs['blood_pressure_systolic']): ?>
-                <div class="text-center p-2 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                    <p class="text-xs text-gray-500">Blood Pressure</p>
-                    <p class="font-bold text-lg"><?= $vital_signs['blood_pressure_systolic'] ?>/<?= $vital_signs['blood_pressure_diastolic'] ?></p>
-                </div>
-            <?php endif; ?>
-            <?php if ($vital_signs['pulse_rate']): ?>
-                <div class="text-center p-2 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                    <p class="text-xs text-gray-500">Pulse Rate</p>
-                    <p class="font-bold text-lg"><?= $vital_signs['pulse_rate'] ?> bpm</p>
-                </div>
-            <?php endif; ?>
-            <?php if ($vital_signs['respiratory_rate']): ?>
-                <div class="text-center p-2 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                    <p class="text-xs text-gray-500">Respiratory Rate</p>
-                    <p class="font-bold text-lg"><?= $vital_signs['respiratory_rate'] ?> /min</p>
-                </div>
-            <?php endif; ?>
-            <?php if ($vital_signs['oxygen_saturation']): ?>
-                <div class="text-center p-2 bg-teal-50 dark:bg-teal-900/20 rounded-lg">
-                    <p class="text-xs text-gray-500">Oxygen Saturation</p>
-                    <p class="font-bold text-lg"><?= $vital_signs['oxygen_saturation'] ?>%</p>
-                </div>
-            <?php endif; ?>
-            <?php if ($vital_signs['weight']): ?>
-                <div class="text-center p-2 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
-                    <p class="text-xs text-gray-500">Weight</p>
-                    <p class="font-bold text-lg"><?= $vital_signs['weight'] ?> kg</p>
-                </div>
-            <?php endif; ?>
-        </div>
-        <?php if ($vital_signs['notes']): ?>
-            <div class="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                <p class="text-xs text-gray-500">Notes</p>
-                <p class="text-sm"><?= htmlspecialchars($vital_signs['notes']) ?></p>
+                <div class="vital-label">Temperature</div>
             </div>
+            
+            <!-- 2. Blood Pressure -->
+            <div class="vital-card red">
+                <div class="vital-icon"><i class="fas fa-heart"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $systolic = $vital_signs['blood_pressure_systolic'] ?? null;
+                        $diastolic = $vital_signs['blood_pressure_diastolic'] ?? null;
+                        
+                        if ($systolic !== null && $diastolic !== null) {
+                            echo $systolic . '/' . $diastolic;
+                        } elseif ($systolic !== null) {
+                            echo $systolic;
+                        } else {
+                            echo '-';
+                        }
+                    ?>
+                    <span class="vital-unit">mmHg</span>
+                </div>
+                <div class="vital-label">Blood Pressure</div>
+            </div>
+            
+            <!-- 3. Pulse Rate -->
+            <div class="vital-card pink">
+                <div class="vital-icon"><i class="fas fa-heartbeat"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $pulse = $vital_signs['pulse_rate'] ?? null;
+                        echo $pulse !== null ? $pulse : '-';
+                    ?>
+                    <span class="vital-unit">bpm</span>
+                </div>
+                <div class="vital-label">Pulse Rate</div>
+            </div>
+            
+            <!-- 4. Weight -->
+            <div class="vital-card purple">
+                <div class="vital-icon"><i class="fas fa-weight"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $weight = $vital_signs['weight'] ?? null;
+                        echo $weight !== null ? $weight : '-';
+                    ?>
+                    <span class="vital-unit">kg</span>
+                </div>
+                <div class="vital-label">Weight</div>
+            </div>
+            
+            <!-- 5. Height -->
+            <div class="vital-card green">
+                <div class="vital-icon"><i class="fas fa-ruler-vertical"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $height = $vital_signs['height'] ?? null;
+                        echo $height !== null ? $height : '-';
+                    ?>
+                    <span class="vital-unit">cm</span>
+                </div>
+                <div class="vital-label">Height</div>
+            </div>
+            
+            <!-- 6. BMI -->
+            <div class="vital-card indigo">
+                <div class="vital-icon"><i class="fas fa-calculator"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $bmi = $vital_signs['bmi'] ?? null;
+                        echo $bmi !== null ? $bmi : '-';
+                    ?>
+                </div>
+                <div class="vital-label">BMI</div>
+            </div>
+            
+        </div>
+        
+        <?php if ($vital_signs['notes']): ?>
+        <div class="mt-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+            <p class="text-xs text-gray-500">📝 Notes</p>
+            <p class="text-sm"><?= htmlspecialchars($vital_signs['notes']) ?></p>
+        </div>
         <?php endif; ?>
+        
         <p class="text-xs text-gray-400 mt-2">
-            Recorded by: <?= htmlspecialchars($vital_signs['recorded_by_name'] ?? 'N/A') ?> 
-            at <?= date('M d, Y h:i A', strtotime($vital_signs['recorded_at'])) ?>
+            <i class="fas fa-user"></i> Recorded by: <?= htmlspecialchars($vital_signs['recorded_by_name'] ?? 'N/A') ?>
+            <?php if ($vital_signs['visit_number']): ?>
+                <span class="mx-2">|</span>
+                <i class="fas fa-stethoscope"></i> Visit: <?= htmlspecialchars($vital_signs['visit_number']) ?>
+            <?php endif; ?>
         </p>
+    </div>
+    <?php else: ?>
+    <!-- No Vital Signs Message -->
+    <div class="card mb-5">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-heartbeat title-pink mr-2"></i> Vital Signs
+            </h3>
+        </div>
+        <div class="text-center py-6 text-gray-400">
+            <i class="fas fa-heartbeat text-3xl block mb-2" style="color: #EC4899;"></i>
+            <p>No vital signs recorded for this visit</p>
+        </div>
     </div>
     <?php endif; ?>
 
@@ -1063,6 +1257,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🏥 Braick Dispensary - Visit Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name']) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c❤️ Vital Signs: Modern cards design (6 parameters)', 'font-size:13px; color:#EC4899;');
     console.log('%c📊 Status: <?= ucfirst($visit['status'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
