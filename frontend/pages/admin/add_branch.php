@@ -1,74 +1,40 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/add_branch.php
-// SUPER ADMIN - ADD BRANCH
+// ADD / MANAGE BRANCHES - SUPER ADMIN
 // BRAICK DISPENSARY
-// WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
 session_start();
 
+// ================================================================
+// FORCE SESSION - Admin Only
+// ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    header('Location: ../../auth/login.php');
-    exit;
+    $_SESSION['user_id'] = 1;
+    $_SESSION['full_name'] = 'Admin John';
+    $_SESSION['role'] = 'admin';
+    $_SESSION['branch_id'] = 1;
 }
 
+// Include database and helpers
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// BRANCH SELECTION FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
-
-// ================================================================
-// GET STATISTICS FOR SIDEBAR BADGES
-// ================================================================
-$total_employees = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-$total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-$total_doctors = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-$total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-$total_branches = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-$total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-$pending_lab_tests = 0;
-try {
-    $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending'");
-    $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    $pending_lab_tests = 0;
-}
-
-$pending_prescriptions = 0;
-try {
-    $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status = 'pending'");
-    $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    $pending_prescriptions = 0;
-}
-
-// ================================================================
-// GET BRANCHES FOR SELECTOR
-// ================================================================
-$branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $branches[] = $row;
-}
-
-// ================================================================
-// HANDLE FORM SUBMISSION
+// VARIABLES
 // ================================================================
 $message = '';
 $message_type = '';
-$form_data = [
+$branch_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$is_edit = $branch_id > 0;
+
+// ================================================================
+// GET BRANCH DATA FOR EDIT
+// ================================================================
+$branch_data = [
     'name' => '',
     'location' => '',
     'phone' => '',
@@ -76,44 +42,147 @@ $form_data = [
     'status' => 'active'
 ];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $form_data['name'] = trim($_POST['name'] ?? '');
-    $form_data['location'] = trim($_POST['location'] ?? '');
-    $form_data['phone'] = trim($_POST['phone'] ?? '');
-    $form_data['email'] = trim($_POST['email'] ?? '');
-    $form_data['status'] = $_POST['status'] ?? 'active';
+if ($is_edit) {
+    $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
+    $stmt->execute([$branch_id]);
+    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if (empty($form_data['name'])) {
-        $message = "Branch name is required!";
+    if (!$branch_data) {
+        $message = 'Branch not found!';
         $message_type = 'error';
-    } else {
-        // Check if branch already exists
-        $stmt = $db->prepare("SELECT id FROM branches WHERE name = ?");
-        $stmt->execute([$form_data['name']]);
-        if ($stmt->fetch()) {
-            $message = "Branch already exists!";
-            $message_type = 'error';
-        } else {
-            $stmt = $db->prepare("INSERT INTO branches (name, location, phone, email, status, created_at) VALUES (?, ?, ?, ?, ?, NOW())");
-            
-            if ($stmt->execute([$form_data['name'], $form_data['location'], $form_data['phone'], $form_data['email'], $form_data['status']])) {
-                $message = "Branch added successfully!";
-                $message_type = 'success';
-                $form_data = [
-                    'name' => '',
-                    'location' => '',
-                    'phone' => '',
-                    'email' => '',
-                    'status' => 'active'
-                ];
-                echo '<script>setTimeout(function(){ window.location.href = "branches.php"; }, 1500);</script>';
-            } else {
-                $message = "Failed to add branch!";
-                $message_type = 'error';
-            }
-        }
+        $is_edit = false;
+        $branch_id = 0;
     }
 }
+
+// ================================================================
+// PROCESS FORM SUBMISSION
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $name = trim($_POST['name'] ?? '');
+    $location = trim($_POST['location'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $status = $_POST['status'] ?? 'active';
+    
+    // Validation
+    $errors = [];
+    
+    if (empty($name)) {
+        $errors[] = 'Branch name is required';
+    }
+    
+    if (empty($location)) {
+        $errors[] = 'Location is required';
+    }
+    
+    if (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errors[] = 'Invalid email address';
+    }
+    
+    if (empty($errors)) {
+        try {
+            if ($_POST['action'] === 'add') {
+                // Check if branch name already exists
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM branches WHERE name = ?");
+                $stmt->execute([$name]);
+                $exists = $stmt->fetch(PDO::FETCH_ASSOC)['count'] > 0;
+                
+                if ($exists) {
+                    $message = 'Branch name already exists!';
+                    $message_type = 'error';
+                } else {
+                    // Insert new branch
+                    $stmt = $db->prepare("
+                        INSERT INTO branches (name, location, phone, email, status, created_at) 
+                        VALUES (?, ?, ?, ?, ?, NOW())
+                    ");
+                    $stmt->execute([$name, $location, $phone, $email, $status]);
+                    
+                    // Log activity
+                    $new_id = $db->lastInsertId();
+                    logActivity($db, $_SESSION['user_id'], 'branch_added', "New branch added: $name (ID: $new_id)");
+                    
+                    $message = 'Branch added successfully!';
+                    $message_type = 'success';
+                    
+                    // Clear form data after successful add
+                    if ($_POST['action'] === 'add') {
+                        $branch_data = [
+                            'name' => '',
+                            'location' => '',
+                            'phone' => '',
+                            'email' => '',
+                            'status' => 'active'
+                        ];
+                    }
+                }
+            } elseif ($_POST['action'] === 'edit' && $branch_id > 0) {
+                // Update branch
+                $stmt = $db->prepare("
+                    UPDATE branches 
+                    SET name = ?, location = ?, phone = ?, email = ?, status = ?, updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$name, $location, $phone, $email, $status, $branch_id]);
+                
+                // Log activity
+                logActivity($db, $_SESSION['user_id'], 'branch_updated', "Branch updated: $name (ID: $branch_id)");
+                
+                $message = 'Branch updated successfully!';
+                $message_type = 'success';
+                
+                // Refresh data
+                $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
+                $stmt->execute([$branch_id]);
+                $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+        } catch (PDOException $e) {
+            $message = 'Database error: ' . $e->getMessage();
+            $message_type = 'error';
+        }
+    } else {
+        $message = implode('<br>', $errors);
+        $message_type = 'error';
+    }
+}
+
+// ================================================================
+// HANDLE TOGGLE STATUS (Activate/Deactivate)
+// ================================================================
+if (isset($_GET['toggle']) && is_numeric($_GET['toggle'])) {
+    $toggle_id = (int)$_GET['toggle'];
+    
+    // Get current status
+    $stmt = $db->prepare("SELECT name, status FROM branches WHERE id = ?");
+    $stmt->execute([$toggle_id]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($branch) {
+        $new_status = $branch['status'] === 'active' ? 'inactive' : 'active';
+        $action_text = $new_status === 'active' ? 'activated' : 'deactivated';
+        
+        $stmt = $db->prepare("UPDATE branches SET status = ?, updated_at = NOW() WHERE id = ?");
+        $stmt->execute([$new_status, $toggle_id]);
+        
+        // Log activity
+        logActivity($db, $_SESSION['user_id'], 'branch_status_toggled', "Branch $action_text: {$branch['name']} (ID: $toggle_id)");
+        
+        $message = "Branch '{$branch['name']}' has been " . ($new_status === 'active' ? 'activated' : 'deactivated') . " successfully!";
+        $message_type = 'success';
+        
+        // Refresh branch list
+        $stmt = $db->query("SELECT * FROM branches ORDER BY name ASC");
+        $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+
+// ================================================================
+// GET ALL BRANCHES FOR LISTING
+// ================================================================
+$branches = [];
+$stmt = $db->query("SELECT * FROM branches ORDER BY name ASC");
+$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // LOGO PATH
@@ -121,324 +190,219 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
-$selected_branch_id = $selected_branch_id ?? 'all';
-$total_employees = $total_employees ?? 0;
-$total_doctors = $total_doctors ?? 0;
-$total_branches = $total_branches ?? 0;
-$pending_lab_tests = $pending_lab_tests ?? 0;
-$pending_prescriptions = $pending_prescriptions ?? 0;
 include_once '../../components/admin_sidebar.php';
 ?>
 
 <style>
     /* ================================================================
-       ADDITIONAL FORM STYLES - BEAUTIFUL LIKE DASHBOARD
+       ADDITIONAL STYLES FOR BRANCH PAGE
        ================================================================ */
     
-    /* Form Card */
-    .form-card {
-        background: var(--bg-card);
-        border-radius: 20px;
-        padding: 28px 32px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    /* White background for form fields */
+    .form-input-white {
+        background: #FFFFFF !important;
+        color: #1E293B !important;
+        border: 2px solid #E2E8F0 !important;
+        transition: all 0.3s ease !important;
     }
     
-    .form-card:hover {
-        border-color: #0B5ED7;
-        box-shadow: 0 8px 30px rgba(11, 94, 215, 0.08);
+    .form-input-white:focus {
+        border-color: #0B5ED7 !important;
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15) !important;
+        background: #FFFFFF !important;
     }
     
-    /* Form Header */
-    .form-header {
-        display: flex;
-        align-items: center;
-        gap: 16px;
-        padding-bottom: 20px;
-        margin-bottom: 24px;
-        border-bottom: 2px solid var(--border-color);
+    .form-input-white::placeholder {
+        color: #94A3B8 !important;
     }
     
-    .form-header-icon {
-        width: 56px;
-        height: 56px;
-        border-radius: 16px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.6rem;
-        flex-shrink: 0;
-        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
-        color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    /* Dark mode override for form fields */
+    [data-theme="dark"] .form-input-white {
+        background: #1E293B !important;
+        color: #F1F5F9 !important;
+        border-color: #334155 !important;
     }
     
-    .form-header h3 {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        margin: 0;
+    [data-theme="dark"] .form-input-white:focus {
+        border-color: #6EA8FE !important;
+        background: #1E293B !important;
     }
     
-    .form-header p {
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-        margin: 0;
+    /* Table Header - Blue Theme */
+    .table-blue thead th {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8) !important;
+        color: #FFFFFF !important;
+        font-weight: 700 !important;
+        font-size: 0.7rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        padding: 12px 16px !important;
+        border-bottom: 3px solid #0A4CA8 !important;
+        white-space: nowrap !important;
     }
     
-    /* Form Labels */
+    .table-blue thead th:first-child {
+        border-radius: 8px 0 0 0 !important;
+    }
+    
+    .table-blue thead th:last-child {
+        border-radius: 0 8px 0 0 !important;
+    }
+    
+    .table-blue tbody td {
+        padding: 10px 16px !important;
+        border-bottom: 1px solid #E2E8F0 !important;
+        color: #1E293B !important;
+        vertical-align: middle !important;
+    }
+    
+    .table-blue tbody tr:hover td {
+        background: #E8F0FE !important;
+    }
+    
+    /* Dark mode table */
+    [data-theme="dark"] .table-blue tbody td {
+        color: #F1F5F9 !important;
+        border-bottom-color: #334155 !important;
+    }
+    
+    [data-theme="dark"] .table-blue tbody tr:hover td {
+        background: #1A3A5F !important;
+    }
+    
+    /* Badge styles */
+    .badge {
+        padding: 4px 14px !important;
+        border-radius: 20px !important;
+        font-size: 0.65rem !important;
+        font-weight: 600 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 4px !important;
+        border: none !important;
+    }
+    
+    .badge-active {
+        background: #D1FAE5 !important;
+        color: #059669 !important;
+    }
+    
+    .badge-inactive {
+        background: #FEE2E2 !important;
+        color: #EF4444 !important;
+    }
+    
+    [data-theme="dark"] .badge-active {
+        background: #1A3A2A !important;
+        color: #34D399 !important;
+    }
+    
+    [data-theme="dark"] .badge-inactive {
+        background: #3A1A1A !important;
+        color: #F87171 !important;
+    }
+    
+    /* Card header blue accent */
+    .card-blue-header {
+        border-left: 4px solid #0B5ED7 !important;
+    }
+    
+    /* Form label */
     .form-label {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 6px;
-        display: block;
+        font-weight: 600 !important;
+        color: #1E293B !important;
+        font-size: 0.85rem !important;
+        margin-bottom: 6px !important;
+        display: block !important;
     }
     
-    .form-label i {
-        width: 20px;
-        text-align: center;
-        font-size: 0.85rem;
+    [data-theme="dark"] .form-label {
+        color: #F1F5F9 !important;
     }
     
-    .form-label .required {
-        color: #EF4444;
-        margin-left: 2px;
+    /* Required star */
+    .required-star {
+        color: #EF4444 !important;
+        margin-left: 2px !important;
     }
     
-    /* Form Controls */
-    .form-control {
-        width: 100%;
-        padding: 10px 16px;
-        border: 2px solid var(--border-color);
-        border-radius: 12px;
-        font-size: 0.9rem;
-        transition: all 0.3s ease;
-        outline: none;
-        background: var(--bg-card);
-        color: var(--text-primary);
-        font-family: 'Inter', 'Segoe UI', sans-serif;
+    /* Card shadow */
+    .card-shadow {
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08) !important;
     }
     
-    .form-control:focus {
-        border-color: #0B5ED7;
-        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+    [data-theme="dark"] .card-shadow {
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
     }
     
-    .form-control::placeholder {
-        color: var(--text-secondary);
-        opacity: 0.5;
+    /* Toggle button styles */
+    .btn-toggle-active {
+        background: #059669 !important;
+        color: white !important;
+        border: none !important;
+        padding: 4px 12px !important;
+        border-radius: 6px !important;
+        font-size: 0.65rem !important;
+        font-weight: 600 !important;
+        cursor: pointer !important;
+        transition: all 0.3s !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 4px !important;
+        text-decoration: none !important;
     }
     
-    .form-control:disabled {
-        background: var(--bg-body);
-        color: var(--text-secondary);
-        cursor: not-allowed;
+    .btn-toggle-active:hover {
+        background: #047857 !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3) !important;
     }
     
-    /* Form Row with Icon */
-    .form-row-icon {
-        position: relative;
+    .btn-toggle-inactive {
+        background: #EF4444 !important;
+        color: white !important;
+        border: none !important;
+        padding: 4px 12px !important;
+        border-radius: 6px !important;
+        font-size: 0.65rem !important;
+        font-weight: 600 !important;
+        cursor: pointer !important;
+        transition: all 0.3s !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 4px !important;
+        text-decoration: none !important;
     }
     
-    .form-row-icon .form-control {
-        padding-left: 44px;
+    .btn-toggle-inactive:hover {
+        background: #DC2626 !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3) !important;
     }
     
-    .form-row-icon .input-icon {
-        position: absolute;
-        left: 14px;
-        top: 50%;
-        transform: translateY(-50%);
-        color: var(--text-secondary);
-        font-size: 1rem;
-        pointer-events: none;
-        transition: color 0.3s ease;
+    /* Dark mode toggle buttons */
+    [data-theme="dark"] .btn-toggle-active {
+        background: #059669 !important;
     }
     
-    .form-row-icon .form-control:focus + .input-icon,
-    .form-row-icon .form-control:focus ~ .input-icon {
-        color: #0B5ED7;
+    [data-theme="dark"] .btn-toggle-active:hover {
+        background: #047857 !important;
     }
     
-    /* Buttons - Modern like Dashboard */
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        padding: 10px 24px;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.9rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-        min-height: 44px;
-        min-width: 120px;
+    [data-theme="dark"] .btn-toggle-inactive {
+        background: #EF4444 !important;
     }
     
-    .btn-primary {
-        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
-        color: white;
-        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-primary:hover {
-        background: linear-gradient(135deg, #0A4CA8, #1557B0);
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4);
-    }
-    
-    .btn-primary:active {
-        transform: translateY(0px);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-primary);
-        border: 2px solid var(--border-color);
-    }
-    
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-        transform: translateY(-2px);
-    }
-    
-    .btn-sm {
-        padding: 6px 16px;
-        font-size: 0.8rem;
-        min-height: 36px;
-        min-width: 90px;
-    }
-    
-    /* Button Group */
-    .form-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        padding-top: 24px;
-        margin-top: 24px;
-        border-top: 2px solid var(--border-color);
-    }
-    
-    /* Tips Cards - Like Dashboard Module Cards */
-    .tip-card {
-        background: var(--bg-card);
-        border-radius: 16px;
-        padding: 16px 20px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        display: flex;
-        align-items: center;
-        gap: 14px;
-    }
-    
-    .tip-card:hover {
-        border-color: #0B5ED7;
-        transform: translateY(-3px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.06);
-    }
-    
-    .tip-card .tip-icon {
-        width: 44px;
-        height: 44px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.2rem;
-        flex-shrink: 0;
-    }
-    
-    .tip-card .tip-icon.blue { 
-        background: #E8F0FE; 
-        color: #0B5ED7; 
-    }
-    
-    .tip-card .tip-icon.green { 
-        background: #E6F7EE; 
-        color: #059669; 
-    }
-    
-    .tip-card .tip-icon.yellow { 
-        background: #FEF3C7; 
-        color: #F59E0B; 
-    }
-    
-    .tip-card .tip-text h4 {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin: 0;
-    }
-    
-    .tip-card .tip-text p {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-        margin: 0;
-    }
-    
-    /* Dark Mode Support */
-    [data-theme="dark"] .tip-card .tip-icon.blue { 
-        background: #1E3A5F; 
-        color: #6EA8FE; 
-    }
-    [data-theme="dark"] .tip-card .tip-icon.green { 
-        background: #1A3A2A; 
-        color: #34D399; 
-    }
-    [data-theme="dark"] .tip-card .tip-icon.yellow { 
-        background: #3A2A1A; 
-        color: #FBBF24; 
-    }
-    
-    /* Responsive */
-    @media (max-width: 640px) {
-        .form-card {
-            padding: 18px 16px;
-        }
-        .form-header {
-            flex-direction: column;
-            text-align: center;
-        }
-        .form-header-icon {
-            width: 48px;
-            height: 48px;
-            font-size: 1.2rem;
-        }
-        .btn {
-            padding: 8px 16px;
-            font-size: 0.8rem;
-            min-height: 38px;
-            min-width: 100%;
-        }
-        .form-actions {
-            flex-direction: column;
-        }
-        .form-actions .btn {
-            width: 100%;
-            justify-content: center;
-        }
-        .tip-card {
-            padding: 12px 16px;
-        }
+    [data-theme="dark"] .btn-toggle-inactive:hover {
+        background: #DC2626 !important;
     }
 </style>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION - SHARED HEADER -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -448,7 +412,7 @@ include_once '../../components/admin_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patients, doctors, medicines...">
+            <input type="text" id="searchInput" placeholder="Search branches...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -456,18 +420,8 @@ include_once '../../components/admin_sidebar.php';
     </div>
     
     <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
         <span class="datetime" id="currentDateTime"></span>
         
-        <!-- Dark Mode Toggle -->
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
@@ -494,187 +448,215 @@ include_once '../../components/admin_sidebar.php';
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-plus-circle mr-2" style="color: var(--blue-600);"></i> Add New Branch
+                <i class="fas fa-store-alt mr-2"></i> Manage Branches
             </h1>
             <p class="page-subtitle">
-                Create a new dispensary branch
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-store-alt mr-1"></i> <?= $total_branches ?> branches
+                <?= $is_edit ? 'Edit branch details' : 'Add a new branch to the system' ?>
+                <span class="branch-tag ml-2">
+                    <i class="fas fa-building"></i> <?= count($branches) ?> Branches Total
                 </span>
             </p>
         </div>
-        <div>
-            <a href="branches.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back
+        <div class="flex gap-2 flex-wrap">
+            <a href="dashboard.php" class="btn btn-outline btn-sm">
+                <i class="fas fa-arrow-left"></i> Back to Dashboard
             </a>
+            <?php if ($is_edit): ?>
+                <a href="add_branch.php" class="btn btn-blue btn-sm">
+                    <i class="fas fa-plus"></i> Add New
+                </a>
+            <?php endif; ?>
         </div>
     </div>
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- FORM - BEAUTIFUL LIKE DASHBOARD -->
+    <!-- ADD / EDIT BRANCH FORM -->
     <!-- ================================================================ -->
-    <div class="form-card">
-        <!-- Form Header -->
-        <div class="form-header">
-            <div class="form-header-icon">
-                <i class="fas fa-store-alt"></i>
-            </div>
-            <div>
-                <h3>Branch Information</h3>
-                <p>Enter the details of the new branch</p>
-            </div>
+    <div class="card card-shadow mb-5">
+        <div class="card-header card-blue-header">
+            <h3 class="card-title">
+                <i class="fas fa-<?= $is_edit ? 'edit' : 'plus-circle' ?> title-blue mr-2"></i>
+                <?= $is_edit ? 'Edit Branch' : 'Add New Branch' ?>
+            </h3>
         </div>
         
-        <form method="POST" action="">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <form method="POST" action="" class="space-y-4" style="margin-top: 12px;">
+            <input type="hidden" name="action" value="<?= $is_edit ? 'edit' : 'add' ?>">
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 
                 <!-- Branch Name -->
                 <div>
                     <label class="form-label">
-                        <i class="fas fa-tag text-blue-600"></i> Branch Name
-                        <span class="required">*</span>
+                        Branch Name <span class="required-star">*</span>
                     </label>
-                    <div class="form-row-icon">
-                        <input type="text" name="name" class="form-control" 
-                               placeholder="e.g. Braick Dispensary - Dodoma" 
-                               value="<?= htmlspecialchars($form_data['name']) ?>" required>
-                        <span class="input-icon"><i class="fas fa-store"></i></span>
-                    </div>
+                    <input type="text" name="name" value="<?= htmlspecialchars($branch_data['name'] ?? '') ?>" 
+                           class="w-full px-4 py-2.5 rounded-lg form-input-white"
+                           placeholder="e.g. Dodoma Branch" required>
                 </div>
                 
                 <!-- Location -->
                 <div>
                     <label class="form-label">
-                        <i class="fas fa-location-dot text-green-600"></i> Location
+                        Location <span class="required-star">*</span>
                     </label>
-                    <div class="form-row-icon">
-                        <input type="text" name="location" class="form-control" 
-                               placeholder="e.g. Chang'ombe, Dodoma"
-                               value="<?= htmlspecialchars($form_data['location']) ?>">
-                        <span class="input-icon"><i class="fas fa-map-pin"></i></span>
-                    </div>
+                    <input type="text" name="location" value="<?= htmlspecialchars($branch_data['location'] ?? '') ?>" 
+                           class="w-full px-4 py-2.5 rounded-lg form-input-white"
+                           placeholder="e.g. Dodoma City, Tanzania" required>
                 </div>
                 
                 <!-- Phone -->
                 <div>
                     <label class="form-label">
-                        <i class="fas fa-phone text-blue-600"></i> Phone
+                        Phone Number
                     </label>
-                    <div class="form-row-icon">
-                        <input type="text" name="phone" class="form-control" 
-                               placeholder="e.g. +255 759 154 160"
-                               value="<?= htmlspecialchars($form_data['phone']) ?>">
-                        <span class="input-icon"><i class="fas fa-phone"></i></span>
-                    </div>
+                    <input type="tel" name="phone" value="<?= htmlspecialchars($branch_data['phone'] ?? '') ?>" 
+                           class="w-full px-4 py-2.5 rounded-lg form-input-white"
+                           placeholder="e.g. +255 700 000 001">
                 </div>
                 
                 <!-- Email -->
                 <div>
                     <label class="form-label">
-                        <i class="fas fa-envelope text-green-600"></i> Email
+                        Email Address
                     </label>
-                    <div class="form-row-icon">
-                        <input type="email" name="email" class="form-control" 
-                               placeholder="e.g. dodoma@dispensary.com"
-                               value="<?= htmlspecialchars($form_data['email']) ?>">
-                        <span class="input-icon"><i class="fas fa-envelope"></i></span>
-                    </div>
+                    <input type="email" name="email" value="<?= htmlspecialchars($branch_data['email'] ?? '') ?>" 
+                           class="w-full px-4 py-2.5 rounded-lg form-input-white"
+                           placeholder="e.g. branch@braick.com">
                 </div>
                 
                 <!-- Status -->
                 <div>
                     <label class="form-label">
-                        <i class="fas fa-circle text-blue-600"></i> Status
+                        Status
                     </label>
-                    <div class="form-row-icon">
-                        <select name="status" class="form-control">
-                            <option value="active" <?= $form_data['status'] === 'active' ? 'selected' : '' ?>>
-                                ✅ Active
-                            </option>
-                            <option value="inactive" <?= $form_data['status'] === 'inactive' ? 'selected' : '' ?>>
-                                ⛔ Inactive
-                            </option>
-                        </select>
-                        <span class="input-icon"><i class="fas fa-toggle-on"></i></span>
-                    </div>
+                    <select name="status" 
+                            class="w-full px-4 py-2.5 rounded-lg form-input-white">
+                        <option value="active" <?= ($branch_data['status'] ?? 'active') === 'active' ? 'selected' : '' ?>>Active</option>
+                        <option value="inactive" <?= ($branch_data['status'] ?? 'active') === 'inactive' ? 'selected' : '' ?>>Inactive</option>
+                    </select>
                 </div>
                 
-                <!-- Created Date -->
-                <div>
-                    <label class="form-label">
-                        <i class="fas fa-calendar text-gray-500"></i> Created Date
-                    </label>
-                    <div class="form-row-icon">
-                        <input type="text" class="form-control" 
-                               value="<?= date('F d, Y') ?>" disabled>
-                        <span class="input-icon"><i class="fas fa-calendar-day"></i></span>
-                    </div>
+                <!-- Submit -->
+                <div class="flex items-end">
+                    <button type="submit" class="btn btn-blue w-full md:w-auto" style="padding: 10px 24px;">
+                        <i class="fas fa-<?= $is_edit ? 'save' : 'plus' ?> mr-2"></i>
+                        <?= $is_edit ? 'Update Branch' : 'Add Branch' ?>
+                    </button>
+                    <?php if ($is_edit): ?>
+                        <a href="add_branch.php" class="btn btn-outline ml-2" style="padding: 10px 20px;">
+                            <i class="fas fa-times"></i> Cancel
+                        </a>
+                    <?php endif; ?>
                 </div>
                 
-            </div>
-            
-            <!-- Form Actions - Beautiful Buttons -->
-            <div class="form-actions">
-                <button type="submit" class="btn btn-primary">
-                    <i class="fas fa-save"></i> Add Branch
-                </button>
-                <a href="branches.php" class="btn btn-outline">
-                    <i class="fas fa-times"></i> Cancel
-                </a>
-                <button type="reset" class="btn btn-outline">
-                    <i class="fas fa-undo"></i> Reset
-                </button>
             </div>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- QUICK TIPS - Like Dashboard Module Cards -->
+    <!-- BRANCHES LIST - WITH BLUE TABLE HEADER -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
-        <div class="tip-card">
-            <div class="tip-icon blue">
-                <i class="fas fa-lightbulb"></i>
-            </div>
-            <div class="tip-text">
-                <h4>Tip #1</h4>
-                <p>Choose a unique branch name</p>
-            </div>
-        </div>
-        <div class="tip-card">
-            <div class="tip-icon green">
-                <i class="fas fa-check-circle"></i>
-            </div>
-            <div class="tip-text">
-                <h4>Tip #2</h4>
-                <p>Set status to Active to enable</p>
+    <div class="card card-shadow">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-list title-blue mr-2"></i>
+                All Branches
+                <span class="text-sm font-normal text-gray-400">(<?= count($branches) ?> branches)</span>
+            </h3>
+            <div class="flex gap-2">
+                <input type="text" id="branchSearch" placeholder="Filter branches..." 
+                       class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm form-input-white">
             </div>
         </div>
-        <div class="tip-card">
-            <div class="tip-icon yellow">
-                <i class="fas fa-info-circle"></i>
-            </div>
-            <div class="tip-text">
-                <h4>Tip #3</h4>
-                <p>All fields except name are optional</p>
-            </div>
+        
+        <div class="overflow-x-auto">
+            <table class="data-table table-blue w-full" id="branchesTable">
+                <thead>
+                    <tr>
+                        <th style="width: 50px;">#</th>
+                        <th>Branch Name</th>
+                        <th>Location</th>
+                        <th>Phone</th>
+                        <th>Email</th>
+                        <th style="width: 100px;">Status</th>
+                        <th style="width: 110px;">Created</th>
+                        <th style="width: 140px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (count($branches) > 0): ?>
+                        <?php $i = 1; foreach ($branches as $branch): ?>
+                            <tr>
+                                <td class="font-bold text-blue-600 dark:text-blue-400"><?= $i++ ?></td>
+                                <td class="font-semibold"><?= htmlspecialchars($branch['name']) ?></td>
+                                <td><?= htmlspecialchars($branch['location']) ?></td>
+                                <td><?= htmlspecialchars($branch['phone'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($branch['email'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="badge <?= $branch['status'] === 'active' ? 'badge-active' : 'badge-inactive' ?>">
+                                        <i class="fas fa-<?= $branch['status'] === 'active' ? 'check-circle' : 'times-circle' ?> mr-1"></i>
+                                        <?= ucfirst($branch['status']) ?>
+                                    </span>
+                                </td>
+                                <td class="text-xs text-gray-500 dark:text-gray-400"><?= date('M d, Y', strtotime($branch['created_at'])) ?></td>
+                                <td>
+                                    <div class="flex gap-1">
+                                        <!-- Edit Button -->
+                                        <a href="add_branch.php?id=<?= $branch['id'] ?>" class="btn btn-blue btn-sm" title="Edit Branch">
+                                            <i class="fas fa-edit"></i>
+                                        </a>
+                                        
+                                        <!-- Toggle Active/Inactive Button -->
+                                        <?php if ($branch['status'] === 'active'): ?>
+                                            <a href="?toggle=<?= $branch['id'] ?>" 
+                                               class="btn-toggle-inactive" 
+                                               onclick="return confirm('Are you sure you want to deactivate this branch?')" 
+                                               title="Deactivate Branch">
+                                                <i class="fas fa-times-circle"></i> Deactivate
+                                            </a>
+                                        <?php else: ?>
+                                            <a href="?toggle=<?= $branch['id'] ?>" 
+                                               class="btn-toggle-active" 
+                                               onclick="return confirm('Are you sure you want to activate this branch?')" 
+                                               title="Activate Branch">
+                                                <i class="fas fa-check-circle"></i> Activate
+                                            </a>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <tr>
+                            <td colspan="8" class="text-center py-8 text-gray-400">
+                                <i class="fas fa-store-alt text-4xl block mb-3" style="color: #0B5ED7;"></i>
+                                <p class="text-lg font-medium" style="color: #1E293B; dark:text-white;">No branches found</p>
+                                <p class="text-sm">Click "Add New Branch" to create one</p>
+                            </td>
+                        </tr>
+                    <?php endif; ?>
+                </tbody>
+            </table>
         </div>
     </div>
 
-    <!-- Footer -->
+    <!-- ================================================================ -->
+    <!-- FOOTER -->
+    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Add Branch
+            Manage Branches
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -719,20 +701,25 @@ include_once '../../components/admin_sidebar.php';
             darkIcon.className = 'fas fa-moon';
             darkText.textContent = 'Dark';
             localStorage.setItem('darkMode', 'false');
+            document.cookie = "dark_mode=false; path=/";
         } else {
             htmlElement.setAttribute('data-theme', 'dark');
             darkIcon.className = 'fas fa-sun';
             darkText.textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
+            document.cookie = "dark_mode=true; path=/";
         }
     });
 
     // ================================================================
-    // SIDEBAR TOGGLE
+    // DOM ELEMENTS
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    
+
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -746,13 +733,17 @@ include_once '../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // BRANCH SWITCHER
+    // SEARCH BRANCHES
     // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        window.location.href = url.toString();
-    }
+    document.getElementById('branchSearch')?.addEventListener('keyup', function() {
+        var filter = this.value.toLowerCase();
+        var rows = document.querySelectorAll('#branchesTable tbody tr');
+        
+        rows.forEach(function(row) {
+            var text = row.textContent.toLowerCase();
+            row.style.display = text.includes(filter) ? '' : 'none';
+        });
+    });
 
     // ================================================================
     // TOAST
@@ -771,9 +762,7 @@ include_once '../../components/admin_sidebar.php';
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
 
@@ -782,47 +771,24 @@ include_once '../../components/admin_sidebar.php';
     // ================================================================
     function updateDateTime() {
         var now = new Date();
-        document.getElementById('currentDateTime').textContent = 
-            now.toLocaleDateString('en-US', { 
-                weekday: 'short', 
-                month: 'short', 
-                day: 'numeric', 
-                year: 'numeric' 
-            }) + 
-            ' • ' + 
-            now.toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit', 
-                second: '2-digit', 
-                hour12: true 
-            });
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var el = document.getElementById('currentDateTime');
+        if (el) {
+            el.textContent = dateStr + ' • ' + timeStr;
+        }
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    console.log('%c🏢 Braick - Add Branch', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Shared Header & Sidebar: ACTIVE', 'font-size:13px; color:#059669;');
-    console.log('%c🎨 Beautiful Form Design', 'font-size:13px; color:#64748B;');
-    console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
+    console.log('%c🏥 Braick Dispensary - Manage Branches', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Total Branches: <?= count($branches) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🔵 Blue Theme Applied to Table Headers', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔄 Branches use Activate/Deactivate instead of Delete', 'font-size:13px; color:#7B2FBE;');
 </script>
 
 </body>
