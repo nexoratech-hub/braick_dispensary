@@ -14,7 +14,7 @@ session_start();
 // FORCE SESSION - Default to cashier (ID: 7)
 // ================================================================
 if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 7;
+    $_SESSION['user_id'] = 11;
     $_SESSION['full_name'] = 'Cashier User';
     $_SESSION['role'] = 'cashier';
     $_SESSION['branch_id'] = 1;

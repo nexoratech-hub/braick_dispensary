@@ -11,7 +11,7 @@ session_start();
 // IF NO SESSION, USE CASHIER DODOMA (ID: 10) AS DEFAULT
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 10;
+    $_SESSION['user_id'] = 11;
     $_SESSION['full_name'] = 'Cashier Dodoma';
     $_SESSION['role'] = 'cashier';
     $_SESSION['branch_id'] = 1;

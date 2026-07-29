@@ -17,7 +17,7 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 // SESSION - Default to reception.rose (Cashier)
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
+    $_SESSION['user_id'] = 11;
     $_SESSION['full_name'] = 'Rose Mwangi';
     $_SESSION['role'] = 'reception';
     $_SESSION['branch_id'] = 1;
