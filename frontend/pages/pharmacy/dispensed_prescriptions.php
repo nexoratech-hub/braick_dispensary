@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/dispensed_prescriptions.php
-// PHARMACY - DISPENSED PRESCRIPTIONS
+// PHARMACY - DISPENSED PRESCRIPTIONS (BLUE THEME)
 // Shows all prescriptions that have been dispensed
+// NO AMOUNT CARDS - Only Total Dispensed
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -51,7 +52,8 @@ $conditions = ["p.branch_id = ?", "p.status = 'dispensed'"];
 $params = [$user_branch_id];
 
 if (!empty($search)) {
-    $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR p.medication LIKE ?)";
+    $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR p.medication LIKE ? OR pi.medication_name LIKE ?)";
+    $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -71,7 +73,7 @@ if (!empty($date_to)) {
 $where_clause = implode(" AND ", $conditions);
 
 // ================================================================
-// GET DISPENSED PRESCRIPTIONS
+// GET DISPENSED PRESCRIPTIONS WITH ITEMS
 // ================================================================
 $sql = "
     SELECT 
@@ -86,6 +88,14 @@ $sql = "
         u.specialty,
         v.visit_number,
         v.visit_type,
+        pi.medication_name as item_medication,
+        pi.dosage as item_dosage,
+        pi.frequency as item_frequency,
+        pi.quantity as item_quantity,
+        pi.duration as item_duration,
+        pi.route as item_route,
+        pi.unit_price as item_unit_price,
+        pi.total_price as item_total_price,
         (
             SELECT id FROM patient_bills 
             WHERE visit_id = p.visit_id AND prescription_id = p.id
@@ -95,32 +105,14 @@ $sql = "
             SELECT bill_number FROM patient_bills 
             WHERE visit_id = p.visit_id AND prescription_id = p.id
             ORDER BY id DESC LIMIT 1
-        ) as bill_number,
-        (
-            SELECT total_amount FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_total,
-        (
-            SELECT discount_amount FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_discount,
-        (
-            SELECT balance FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_balance,
-        (
-            SELECT status FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_status
+        ) as bill_number
     FROM prescriptions p
     JOIN patients pat ON p.patient_id = pat.id
     LEFT JOIN users u ON p.doctor_id = u.id
     LEFT JOIN visits v ON p.visit_id = v.id
+    LEFT JOIN prescription_items pi ON pi.prescription_id = p.id
     WHERE $where_clause
+    GROUP BY p.id
     ORDER BY p.dispensed_at DESC
 ";
 
@@ -162,18 +154,9 @@ foreach ($prescriptions as &$pres) {
 }
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - ONLY TOTAL DISPENSED
 // ================================================================
 $total_dispensed = count($prescriptions);
-$total_amount = 0;
-$total_discount = 0;
-$total_balance = 0;
-
-foreach ($prescriptions as $pres) {
-    $total_amount += (float)($pres['bill_total'] ?? 0);
-    $total_discount += (float)($pres['bill_discount'] ?? 0);
-    $total_balance += (float)($pres['bill_balance'] ?? 0);
-}
 
 // ================================================================
 // GET DAILY DISPENSED COUNT
@@ -204,26 +187,6 @@ function formatDate($datetime) {
     return date('d/m/Y h:i A', strtotime($datetime));
 }
 
-function getBillStatusLabel($status) {
-    $map = [
-        'pending' => '⏳ Pending Payment',
-        'partial' => '🔶 Partial',
-        'paid' => '✅ Paid',
-        'cancelled' => '❌ Cancelled'
-    ];
-    return $map[$status] ?? ucfirst($status);
-}
-
-function getBillStatusBadgeClass($status) {
-    $map = [
-        'pending' => 'badge-warning',
-        'partial' => 'badge-warning',
-        'paid' => 'badge-success',
-        'cancelled' => 'badge-danger'
-    ];
-    return $map[$status] ?? 'badge-warning';
-}
-
 // ================================================================
 // INCLUDE PHARMACY HEADER & SIDEBAR
 // ================================================================
@@ -249,6 +212,7 @@ include_once '../../components/pharmacy_sidebar.php';
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
+            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --success: #059669;
             --success-dark: #047857;
             --success-bg: #D1FAE5;
@@ -286,6 +250,9 @@ include_once '../../components/pharmacy_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
+            --primary: #3B82F6;
+            --primary-dark: #2563EB;
+            --primary-bg: #1E3A5F;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -344,7 +311,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
+            background: var(--primary-gradient);
             color: white;
             border: none;
             padding: 8px 16px;
@@ -428,8 +395,11 @@ include_once '../../components/pharmacy_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        /* ================================================================
+           PAGE HEADER - BLUE THEME
+           ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--success), var(--success-dark));
+            background: var(--primary-gradient);
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -438,7 +408,7 @@ include_once '../../components/pharmacy_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
+            box-shadow: 0 4px 25px rgba(11, 94, 215, 0.3);
             position: relative;
             overflow: hidden;
         }
@@ -523,12 +493,15 @@ include_once '../../components/pharmacy_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        /* Stats Row */
+        /* ================================================================
+           STATS ROW - ONLY TOTAL DISPENSED
+           ================================================================ */
         .stats-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            grid-template-columns: 1fr;
             gap: 12px;
             margin-bottom: 24px;
+            max-width: 300px;
         }
         
         .stat-card {
@@ -547,14 +520,10 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .stat-card .stat-number {
-            font-size: 1.6rem;
+            font-size: 2rem;
             font-weight: 700;
+            color: var(--primary);
         }
-        
-        .stat-card .stat-number.green { color: var(--success); }
-        .stat-card .stat-number.blue { color: var(--primary); }
-        .stat-card .stat-number.orange { color: var(--warning); }
-        .stat-card .stat-number.red { color: var(--danger); }
         
         .stat-card .stat-label {
             font-size: 0.7rem;
@@ -566,12 +535,14 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .stat-card .stat-icon {
-            font-size: 1.2rem;
+            font-size: 1.5rem;
             display: block;
             margin-bottom: 4px;
         }
         
-        /* Filter Section */
+        /* ================================================================
+           FILTER SECTION
+           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -609,7 +580,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .btn-search {
             padding: 7px 18px;
-            background: var(--primary);
+            background: var(--primary-gradient);
             color: white;
             border: none;
             border-radius: var(--radius);
@@ -621,9 +592,12 @@ include_once '../../components/pharmacy_sidebar.php';
         .btn-search:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
         }
         
-        /* Table */
+        /* ================================================================
+           TABLE - BLUE THEME
+           ================================================================ */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -650,8 +624,8 @@ include_once '../../components/pharmacy_sidebar.php';
             text-transform: uppercase;
             letter-spacing: 0.06em;
             color: #ffffff;
-            background: var(--success);
-            border-bottom: 3px solid var(--success-dark);
+            background: var(--primary-gradient);
+            border-bottom: 3px solid var(--primary-dark);
             white-space: nowrap;
             position: sticky;
             top: 0;
@@ -714,14 +688,15 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .btn-primary {
-            background: var(--primary);
+            background: var(--primary-gradient);
             color: white;
+            box-shadow: 0 2px 10px rgba(11, 94, 215, 0.2);
         }
         
         .btn-primary:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
         }
         
         .btn-outline {
@@ -743,7 +718,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .btn-view {
-            background: var(--primary);
+            background: var(--primary-gradient);
             color: white;
             padding: 3px 10px;
             border-radius: 4px;
@@ -757,6 +732,24 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .btn-view:hover {
             background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+        
+        .btn-bill {
+            background: var(--warning);
+            color: white;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 0.55rem;
+            transition: var(--transition);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        
+        .btn-bill:hover {
+            background: #B45309;
             transform: translateY(-1px);
         }
         
@@ -779,7 +772,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .count-badge {
-            background: var(--success);
+            background: var(--primary-gradient);
             color: white;
             padding: 2px 12px;
             border-radius: 20px;
@@ -798,12 +791,14 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* Responsive */
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
-            .stats-row { grid-template-columns: repeat(2, 1fr); }
+            .stats-row { max-width: 100%; }
         }
         
         @media (max-width: 768px) {
@@ -814,7 +809,6 @@ include_once '../../components/pharmacy_sidebar.php';
             .filter-row { flex-direction: column; align-items: stretch; }
             .filter-input { width: 100%; }
             .filter-input[type="date"] { width: 100%; }
-            .stats-row { grid-template-columns: 1fr 1fr; }
             .data-table { font-size: 0.7rem; }
             .data-table thead th, .data-table tbody td { padding: 5px 8px; }
         }
@@ -822,7 +816,7 @@ include_once '../../components/pharmacy_sidebar.php';
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
-            .stats-row { grid-template-columns: 1fr; }
+            .stats-row { max-width: 100%; }
             .page-title { font-size: 1.1rem; }
             .btn { padding: 3px 8px; font-size: 0.55rem; }
         }
@@ -873,7 +867,7 @@ include_once '../../components/pharmacy_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- PAGE HEADER - BLUE THEME -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -881,13 +875,19 @@ include_once '../../components/pharmacy_sidebar.php';
                 <i class="fas fa-prescription-bottle"></i>
                 Dispensed Prescriptions
                 <span class="badge-display"><?= $total_dispensed ?> Total</span>
+                <span class="badge-display" style="background:rgba(255,255,255,0.12);">
+                    <i class="fas fa-store"></i> <?= htmlspecialchars($user_branch_name) ?>
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-check-circle"></i>
                 All prescriptions that have been dispensed in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
-                <span class="text-xs text-gray-400 ml-2">
+                <span class="text-xs text-white/60 ml-2">
                     <i class="fas fa-info-circle"></i> 
                     Showing all dispensed medications
+                </span>
+                <span class="text-xs text-white/50 ml-2">
+                    <i class="fas fa-clock"></i> Updated: <?= date('H:i:s') ?>
                 </span>
             </p>
         </div>
@@ -902,28 +902,13 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS -->
+    <!-- STATS - ONLY TOTAL DISPENSED -->
     <!-- ================================================================ -->
     <div class="stats-row">
         <div class="stat-card">
             <span class="stat-icon">💊</span>
-            <p class="stat-number green"><?= $total_dispensed ?></p>
+            <p class="stat-number"><?= $total_dispensed ?></p>
             <p class="stat-label">Total Dispensed</p>
-        </div>
-        <div class="stat-card">
-            <span class="stat-icon">💰</span>
-            <p class="stat-number blue"><?= number_format($total_amount, 2) ?></p>
-            <p class="stat-label">Total Amount</p>
-        </div>
-        <div class="stat-card">
-            <span class="stat-icon">🏷️</span>
-            <p class="stat-number orange"><?= number_format($total_discount, 2) ?></p>
-            <p class="stat-label">Total Discount</p>
-        </div>
-        <div class="stat-card">
-            <span class="stat-icon">📌</span>
-            <p class="stat-number red"><?= number_format($total_balance, 2) ?></p>
-            <p class="stat-label">Total Balance</p>
         </div>
     </div>
 
@@ -947,7 +932,7 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TABLE -->
+    <!-- TABLE - BLUE THEME (NO BILL BUTTON) -->
     <!-- ================================================================ -->
     <div class="table-container">
         <div class="table-scroll">
@@ -955,12 +940,10 @@ include_once '../../components/pharmacy_sidebar.php';
                 <thead>
                     <tr>
                         <th><i class="fas fa-hashtag"></i> #</th>
-                        <th><i class="fas fa-receipt"></i> Prescription #</th>
+                        <th><i class="fas fa-receipt"></i> Prescription</th>
                         <th><i class="fas fa-user"></i> Patient</th>
                         <th><i class="fas fa-pills"></i> Medication</th>
                         <th><i class="fas fa-cubes"></i> Qty</th>
-                        <th><i class="fas fa-money-bill"></i> Total</th>
-                        <th><i class="fas fa-percent"></i> Discount</th>
                         <th><i class="fas fa-calendar-check"></i> Dispensed</th>
                         <th><i class="fas fa-cog"></i> Actions</th>
                     </tr>
@@ -968,19 +951,22 @@ include_once '../../components/pharmacy_sidebar.php';
                 <tbody>
                     <?php if (count($prescriptions) > 0): ?>
                         <?php $i = 1; foreach ($prescriptions as $pres): 
-                            $bill_status = $pres['bill_status'] ?? 'pending';
-                            $bill_total = (float)($pres['bill_total'] ?? 0);
-                            $bill_discount = (float)($pres['bill_discount'] ?? 0);
-                            $bill_balance = (float)($pres['bill_balance'] ?? 0);
+                            $medication = !empty($pres['item_medication']) ? $pres['item_medication'] : $pres['medication'];
+                            $quantity = !empty($pres['item_quantity']) ? $pres['item_quantity'] : $pres['quantity'];
                         ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td>
-                                    <span class="font-mono text-xs font-semibold" style="color:var(--success);">
+                                    <span class="font-mono text-xs font-semibold" style="color:var(--primary);">
                                         <?= htmlspecialchars($pres['prescription_number'] ?? 'N/A') ?>
                                     </span>
                                     <?php if (!empty($pres['visit_number'])): ?>
                                         <span class="text-xs text-gray-400 block">Visit: <?= htmlspecialchars($pres['visit_number']) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($pres['doctor_name'])): ?>
+                                        <span class="text-xs text-gray-400 block">
+                                            <i class="fas fa-user-md"></i> <?= htmlspecialchars($pres['doctor_name']) ?>
+                                        </span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -994,39 +980,19 @@ include_once '../../components/pharmacy_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="text-sm font-medium"><?= htmlspecialchars($pres['medication'] ?? 'N/A') ?></span>
+                                    <span class="text-sm font-medium"><?= htmlspecialchars($medication) ?></span>
                                     <?php if (!empty($pres['dosage'])): ?>
-                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['dosage']) ?></span>
+                                        <span class="text-xs text-gray-400 block">💊 <?= htmlspecialchars($pres['dosage']) ?></span>
                                     <?php endif; ?>
                                     <?php if (!empty($pres['frequency'])): ?>
-                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['frequency']) ?></span>
+                                        <span class="text-xs text-gray-400 block">🕐 <?= htmlspecialchars($pres['frequency']) ?></span>
                                     <?php endif; ?>
-                                    <?php if (!empty($pres['doctor_name'])): ?>
-                                        <span class="text-xs text-gray-400 block">
-                                            <i class="fas fa-user-md"></i> <?= htmlspecialchars($pres['doctor_name']) ?>
-                                        </span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span class="text-sm font-semibold"><?= $pres['quantity'] ?? 0 ?></span>
                                     <?php if (!empty($pres['duration'])): ?>
-                                        <span class="text-xs text-gray-400 block"><?= $pres['duration'] ?> days</span>
+                                        <span class="text-xs text-gray-400 block">📅 <?= $pres['duration'] ?> days</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="text-sm font-bold text-green-600 font-mono">
-                                        <?= number_format($bill_total, 2) ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="text-sm font-semibold text-orange-600 font-mono">
-                                        <?= number_format($bill_discount, 2) ?>
-                                    </span>
-                                    <?php if ($bill_discount > 0): ?>
-                                        <span class="text-xs text-gray-400 block">
-                                            <?= round(($bill_discount / max($bill_total, 1)) * 100, 1) ?>%
-                                        </span>
-                                    <?php endif; ?>
+                                    <span class="text-sm font-semibold"><?= $quantity ?? 0 ?></span>
                                 </td>
                                 <td>
                                     <span class="text-xs"><?= formatDate($pres['dispensed_at'] ?? '') ?></span>
@@ -1036,7 +1002,7 @@ include_once '../../components/pharmacy_sidebar.php';
                                         </span>
                                     <?php endif; ?>
                                     <?php if ($pres['pharmacy_id'] == $user_id): ?>
-                                        <span class="text-xs text-green-600 block">By: You</span>
+                                        <span class="text-xs text-primary font-semibold block">✅ By You</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -1044,13 +1010,8 @@ include_once '../../components/pharmacy_sidebar.php';
                                         <a href="view_prescription.php?id=<?= $pres['id'] ?>" class="btn-view" title="View Details">
                                             <i class="fas fa-eye"></i> View
                                         </a>
-                                        <?php if ($pres['bill_id'] > 0): ?>
-                                            <a href="../cashier/process_payment.php?bill_id=<?= $pres['bill_id'] ?>" class="btn-view" style="background:var(--warning);" title="View Bill">
-                                                <i class="fas fa-receipt"></i> Bill
-                                            </a>
-                                        <?php endif; ?>
                                         <span class="badge-status badge-success" style="font-size:0.55rem;">
-                                            ✅ Done
+                                            ✅ Dispensed
                                         </span>
                                     </div>
                                 </td>
@@ -1058,7 +1019,7 @@ include_once '../../components/pharmacy_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="9">
+                            <td colspan="7">
                                 <div class="text-center py-8 text-gray-400">
                                     <i class="fas fa-prescription-bottle text-3xl block mb-2"></i>
                                     <p>No dispensed prescriptions found</p>
@@ -1086,6 +1047,7 @@ include_once '../../components/pharmacy_sidebar.php';
         <div class="table-footer">
             <span>
                 <i class="fas fa-list"></i> Showing <strong><?= count($prescriptions) ?></strong> dispensed prescriptions
+                <span class="text-xs text-gray-400 ml-2">🏥 <?= htmlspecialchars($user_branch_name) ?></span>
             </span>
             <span>
                 <span class="count-badge"><?= $total_dispensed ?></span> Total dispensed
@@ -1101,6 +1063,29 @@ include_once '../../components/pharmacy_sidebar.php';
             </span>
         </div>
     </div>
+
+    <!-- ================================================================ -->
+    <!-- DAILY DISPENSED CHART -->
+    <!-- ================================================================ -->
+    <?php if (count($daily_counts) > 0): ?>
+    <div class="mt-4 p-4 bg-card rounded-lg border border-border-color" style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-lg);">
+        <h4 class="text-sm font-semibold mb-3" style="color:var(--text-primary);">
+            <i class="fas fa-chart-bar mr-2" style="color:var(--primary);"></i>
+            Daily Dispensed (Last 7 Days)
+        </h4>
+        <div class="flex gap-3 flex-wrap">
+            <?php foreach ($daily_counts as $day): ?>
+                <div class="text-center" style="flex:1;min-width:50px;">
+                    <div style="background:var(--primary-bg);border-radius:6px;padding:6px 0;min-height:60px;display:flex;align-items:flex-end;justify-content:center;">
+                        <div style="width:100%;max-width:30px;background:var(--primary);border-radius:4px 4px 0 0;min-height:8px;height:<?= max(8, min(60, $day['count'] * 15)) ?>px;transition:height 0.3s ease;"></div>
+                    </div>
+                    <div class="text-xs mt-1" style="color:var(--text-secondary);"><?= date('d M', strtotime($day['date'])) ?></div>
+                    <div class="text-xs font-bold" style="color:var(--primary);"><?= $day['count'] ?></div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -1228,14 +1213,12 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c💊 Braick - Dispensed Prescriptions', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c📋 Total Dispensed: <?= $total_dispensed ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Total Amount: <?= number_format($total_amount, 2) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🏷️ Total Discount: <?= number_format($total_discount, 2) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c📌 Total Balance: <?= number_format($total_balance, 2) ?>', 'font-size:13px; color:#DC2626;');
-    <?php if (!empty($search)): ?>
-        console.log('%c🔍 Search: <?= htmlspecialchars($search) ?>', 'font-size:13px; color:#7C3AED;');
-    <?php endif; ?>
+    console.log('%c🔵 Braick - Dispensed Prescriptions (Blue Theme - No Amount Cards)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Total Dispensed: <?= $total_dispensed ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c❌ Removed: Amount, Discount, Balance cards', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ Only Total Dispensed card remains', 'font-size:13px; color:#34D399;');
+    console.log('%c💙 Blue theme applied', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
