@@ -5,6 +5,7 @@
 // REMOVED: Today's Collection Card
 // ADDED: Green Background on Header
 // WITH AUTO-UPDATE (3 SECONDS) - NO PAGE REFRESH
+// ADDED: Button to go back to Reception Dashboard
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -206,6 +207,10 @@ include_once '../../components/cashier_sidebar.php';
             </p>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <!-- Go to Reception Dashboard Button -->
+            <a href="../reception/dashboard.php" class="btn-reception-custom" style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;background:rgba(255,255,255,0.2);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:12px;font-weight:600;font-size:0.82rem;text-decoration:none;transition:all 0.3s;cursor:pointer;">
+                <i class="fas fa-arrow-left"></i> Reception Dashboard
+            </a>
             <a href="pending_bills.php" class="btn-primary-custom" style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;background:white;color:#059669;border-radius:12px;font-weight:600;font-size:0.82rem;text-decoration:none;transition:all 0.3s;border:none;cursor:pointer;box-shadow:0 4px 15px rgba(0,0,0,0.1);">
                 <i class="fas fa-receipt"></i> Pending Bills
             </a>
@@ -515,6 +520,13 @@ include_once '../../components/cashier_sidebar.php';
             <span style="font-size:1.8rem;display:block;margin-bottom:6px;">📜</span>
             <span style="font-size:0.75rem;font-weight:600;color:var(--text-primary);">Payment History</span>
             <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:3px;opacity:0.6;">View history</span>
+        </a>
+        
+        <!-- Reception Dashboard Quick Action -->
+        <a href="../reception/dashboard.php" class="quick-action-btn" style="padding:16px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
+            <span style="font-size:1.8rem;display:block;margin-bottom:6px;">🏥</span>
+            <span style="font-size:0.75rem;font-weight:600;color:var(--text-primary);">Reception</span>
+            <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:3px;opacity:0.6;">Go to Reception</span>
         </a>
     </div>
 
@@ -849,6 +861,7 @@ include_once '../../components/cashier_sidebar.php';
         .quick-action-btn:hover { border-color: var(--success); transform: translateY(-3px); box-shadow: 0 4px 15px rgba(5,150,105,0.08); }
         .btn-primary-custom:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(0,0,0,0.2) !important; }
         .btn-refresh:hover { background: rgba(255,255,255,0.25) !important; }
+        .btn-reception-custom:hover { background: rgba(255,255,255,0.3) !important; transform: translateY(-2px); }
         .payment-item:hover { background: var(--bg-body); border-radius: 8px; }
         .method-item:hover { background: var(--bg-body); border-radius: 8px; }
         .scroll-container::-webkit-scrollbar { width: 4px; }
@@ -882,6 +895,7 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c🟢 Green Header Applied', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds (NO PAGE REFRESH)', 'font-size:13px; color:#34D399;');
     console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c🏥 Added button to go back to Reception Dashboard', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

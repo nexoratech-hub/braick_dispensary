@@ -10,9 +10,10 @@
 // 4. Lab requests - NO bill (Lab creates bill when confirming results)
 // 5. Auto-update every 3 seconds - ALL FIELDS VIA AJAX
 // 6. Visit Type options from services table (category_id = 2)
-// 7. Select Patient shows ALL patients
+// 7. Select Patient shows ALL patients - NEWEST FIRST
 // 8. Bill sent to Cashier with notification
 // 9. Shared header with clock
+// 10. MODERN DESIGN - Clean, Professional, Beautiful
 // ================================================================
 
 session_start();
@@ -74,10 +75,10 @@ try {
         WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
         ORDER BY 
             CASE 
-                WHEN service_name LIKE '%General%' OR service_name LIKE '%New%' THEN 0
-                WHEN service_name LIKE '%Follow%' THEN 1
-                WHEN service_name LIKE '%Emergency%' THEN 2
-                WHEN service_name LIKE '%Specialist%' THEN 3
+                WHEN service_name LIKE '%New%' OR service_name LIKE '%General%' THEN 0
+                WHEN service_name LIKE '%Emergency%' THEN 1
+                WHEN service_name LIKE '%Specialist%' THEN 2
+                WHEN service_name LIKE '%Follow%' THEN 3
                 ELSE 4
             END,
             service_name
@@ -107,6 +108,8 @@ try {
             $icon = '🚨';
         } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
             $icon = '👨‍⚕️';
+        } elseif (strpos(strtolower($service_name), 'general') !== false) {
+            $icon = '🏥';
         }
         
         $visit_type_options[$key] = [
@@ -120,9 +123,9 @@ try {
             'icon' => $icon
         ];
         
-        // Set default to General Consultation
-        if (strpos(strtolower($service_name), 'general') !== false || 
-            strpos(strtolower($service_name), 'new') !== false) {
+        // Set default to New Patient / General Consultation
+        if (strpos(strtolower($service_name), 'new') !== false || 
+            strpos(strtolower($service_name), 'general') !== false) {
             $default_key = $key;
         }
     }
@@ -130,45 +133,45 @@ try {
     // Fallback if no consultation services found
     if (empty($visit_type_options)) {
         $visit_type_options = [
+            'new_patient' => [
+                'id' => null,
+                'name' => 'New Patient Consultation',
+                'display_name' => 'New Patient',
+                'price' => 15000,
+                'unit' => 'each',
+                'description' => 'First time consultation',
+                'is_active' => 1,
+                'icon' => '🆕'
+            ],
             'general_consultation' => [
                 'id' => null,
                 'name' => 'General Consultation',
                 'display_name' => 'General Consultation',
-                'price' => 15000,
+                'price' => 12000,
                 'unit' => 'each',
                 'description' => 'Standard doctor consultation',
                 'is_active' => 1,
-                'icon' => '🆕'
+                'icon' => '🏥'
             ],
-            'follow_up_consultation' => [
+            'follow_up' => [
                 'id' => null,
                 'name' => 'Follow-up Consultation',
-                'display_name' => 'Follow-up Consultation',
-                'price' => 10000,
+                'display_name' => 'Follow-up',
+                'price' => 8000,
                 'unit' => 'each',
                 'description' => 'Follow-up visit',
                 'is_active' => 1,
                 'icon' => '🔄'
             ],
-            'emergency_consultation' => [
+            'emergency' => [
                 'id' => null,
                 'name' => 'Emergency Consultation',
-                'display_name' => 'Emergency Consultation',
+                'display_name' => 'Emergency',
                 'price' => 25000,
                 'unit' => 'each',
                 'description' => 'Emergency visit',
                 'is_active' => 1,
                 'icon' => '🚨'
-            ],
-            'specialist_consultation' => [
-                'id' => null,
-                'name' => 'Specialist Consultation',
-                'display_name' => 'Specialist Consultation',
-                'price' => 30000,
-                'unit' => 'each',
-                'description' => 'Specialist doctor visit',
-                'is_active' => 1,
-                'icon' => '👨‍⚕️'
             ]
         ];
     }
@@ -181,7 +184,7 @@ try {
     $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET ALL PATIENTS - SHOW ALL PATIENTS
+    // GET ALL PATIENTS - ORDER BY CREATED AT DESC (NEWEST FIRST)
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -194,6 +197,7 @@ try {
             p.blood_group,
             p.allergies,
             p.assigned_doctor_id,
+            p.created_at as patient_created_at,
             u.full_name as assigned_doctor_name,
             u.is_online as assigned_doctor_online,
             v.id as visit_id,
@@ -204,21 +208,13 @@ try {
             v.doctor_id as visit_doctor_id,
             v.consultation_fee,
             v.registration_fee,
-            v.payment_status,
-            v.created_at as visit_date
+            v.payment_status
         FROM patients p
         LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
         LEFT JOIN users u ON v.doctor_id = u.id
         WHERE p.branch_id = ?
         GROUP BY p.id
-        ORDER BY 
-            CASE 
-                WHEN v.status IN ('new', 'pending', 'lab_test') THEN 0
-                WHEN v.status = 'assigned' THEN 1
-                WHEN v.status = 'with_doctor' THEN 2
-                ELSE 3
-            END,
-            p.full_name
+        ORDER BY p.created_at DESC, p.id DESC
     ");
     $stmt->execute([$selected_branch_id]);
     $all_patients = $stmt->fetchAll();
@@ -450,7 +446,6 @@ try {
         
         // ✅ NOTIFY CASHIER - Bill created
         try {
-            // Get cashier user(s)
             $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
             $stmt->execute([$branch_id]);
             $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -466,17 +461,6 @@ try {
                     "cashier_dashboard.php"
                 ]);
             }
-            
-            // Also insert into bill_activities
-            $stmt = $db->prepare("
-                INSERT INTO bill_activities (bill_id, action, performed_by, details, created_at)
-                VALUES (?, 'created', ?, ?, NOW())
-            ");
-            $stmt->execute([
-                $bill_id,
-                $user_id,
-                "Bill #$bill_number created for visit #$visit_id | Fee: TSh " . number_format($consultation_fee)
-            ]);
             
         } catch (Exception $e) {
             error_log("Cashier notification error: " . $e->getMessage());
@@ -503,7 +487,7 @@ try {
         if ($action === 'get_live_data') {
             header('Content-Type: application/json');
             
-            // Get updated patients
+            // Get updated patients - NEWEST FIRST
             $stmt = $db->prepare("
                 SELECT 
                     p.id,
@@ -512,6 +496,7 @@ try {
                     p.phone,
                     p.gender,
                     p.assigned_doctor_id,
+                    p.created_at as patient_created_at,
                     u.full_name as assigned_doctor_name,
                     u.is_online as assigned_doctor_online,
                     v.id as visit_id,
@@ -520,13 +505,13 @@ try {
                     v.doctor_id as visit_doctor_id,
                     v.consultation_fee,
                     v.registration_fee,
-                    v.visit_type,
-                    v.created_at as visit_date
+                    v.visit_type
                 FROM patients p
                 LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
                 LEFT JOIN users u ON v.doctor_id = u.id
                 WHERE p.branch_id = ?
                 GROUP BY p.id
+                ORDER BY p.created_at DESC, p.id DESC
             ");
             $stmt->execute([$selected_branch_id]);
             $updated_patients = $stmt->fetchAll();
@@ -559,10 +544,10 @@ try {
                 WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
                 ORDER BY 
                     CASE 
-                        WHEN service_name LIKE '%General%' OR service_name LIKE '%New%' THEN 0
-                        WHEN service_name LIKE '%Follow%' THEN 1
-                        WHEN service_name LIKE '%Emergency%' THEN 2
-                        WHEN service_name LIKE '%Specialist%' THEN 3
+                        WHEN service_name LIKE '%New%' OR service_name LIKE '%General%' THEN 0
+                        WHEN service_name LIKE '%Emergency%' THEN 1
+                        WHEN service_name LIKE '%Specialist%' THEN 2
+                        WHEN service_name LIKE '%Follow%' THEN 3
                         ELSE 4
                     END,
                     service_name
@@ -588,11 +573,12 @@ try {
                     $icon = '🚨';
                 } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
                     $icon = '👨‍⚕️';
+                } elseif (strpos(strtolower($service_name), 'general') !== false) {
+                    $icon = '🏥';
                 }
                 
-                // Default to General Consultation
-                $selected = (strpos(strtolower($service_name), 'general') !== false || 
-                            strpos(strtolower($service_name), 'new') !== false) ? 'selected' : '';
+                $selected = (strpos(strtolower($service_name), 'new') !== false || 
+                            strpos(strtolower($service_name), 'general') !== false) ? 'selected' : '';
                 
                 $visit_type_options_html .= '
                     <option value="' . htmlspecialchars($key) . '" data-price="' . $service['price'] . '" data-id="' . $service['id'] . '" ' . $selected . '>
@@ -614,7 +600,7 @@ try {
                 }
             }
             
-            // ✅ Build patient options - SHOW ALL PATIENTS
+            // ✅ Build patient options - SHOW ALL PATIENTS - NEWEST FIRST
             $patient_options = '';
             $patient_options .= '<optgroup label="📋 All Patients (' . count($updated_patients) . ')">';
             
@@ -649,8 +635,12 @@ try {
                 
                 $selected = ($selected_patient_id == $p['id']) ? 'selected' : '';
                 
+                // Show if patient is new (created within last 7 days)
+                $is_new = (strtotime($p['patient_created_at'] ?? 'now') > strtotime('-7 days'));
+                $new_badge = $is_new ? ' 🆕' : '';
+                
                 $patient_options .= '<option value="' . $p['id'] . '" data-status="' . $status_class . '" data-doctor="' . htmlspecialchars($p['assigned_doctor_name'] ?? '') . '" ' . $selected . '>';
-                $patient_options .= $status_icon . ' ' . htmlspecialchars($p['full_name']) . ' (' . htmlspecialchars($p['patient_id'] ?? 'N/A') . ')';
+                $patient_options .= $status_icon . ' ' . htmlspecialchars($p['full_name']) . ' (' . htmlspecialchars($p['patient_id'] ?? 'N/A') . ')' . $new_badge;
                 if (!empty($p['phone'])) {
                     $patient_options .= ' - ' . htmlspecialchars($p['phone']);
                 }
@@ -815,8 +805,7 @@ try {
                     AND pb.branch_id = ? 
                     AND pb.status = 'paid'
                     AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                    ORDER BY pb.created_at DESC
-                    LIMIT 1
+                    ORDER BY pb.created_at DESC                    LIMIT 1
                 ");
                 $stmt->execute([$patient_id, $selected_branch_id]);
                 $paid_visit = $stmt->fetch();
@@ -1590,14 +1579,14 @@ include_once '../../components/reception_sidebar.php';
     
     <style>
         /* ================================================================
-           MODERN ROOT VARIABLES
+           MODERN ROOT VARIABLES - FRESH & CLEAN
            ================================================================ */
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            --primary: #2563EB;
+            --primary-dark: #1D4ED8;
+            --primary-light: #60A5FA;
+            --primary-bg: #EFF6FF;
+            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
             
             --success: #059669;
             --success-dark: #047857;
@@ -1616,6 +1605,12 @@ include_once '../../components/reception_sidebar.php';
             --purple-dark: #5B21B6;
             --purple-light: #A78BFA;
             --purple-bg: #EDE9FE;
+            
+            --pink: #EC4899;
+            --pink-bg: #FDF2F8;
+            
+            --teal: #0D9488;
+            --teal-bg: #E6FFFA;
             
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -1652,11 +1647,15 @@ include_once '../../components/reception_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
+            --primary: #3B82F6;
+            --primary-dark: #2563EB;
+            --primary-bg: #1E3A5F;
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --purple-bg: #2D1B5F;
-            --primary-bg: #1E3A5F;
+            --pink-bg: #3A1A2E;
+            --teal-bg: #0D3D3A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1706,7 +1705,7 @@ include_once '../../components/reception_sidebar.php';
         
         .top-nav .search-wrapper:focus-within {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+            box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
         }
         
         .top-nav .search-wrapper input {
@@ -1850,7 +1849,7 @@ include_once '../../components/reception_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25);
             position: relative;
             overflow: hidden;
         }
@@ -2001,7 +2000,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           MODERN CARD
+           MODERN CARD - CLEAN & FRESH
            ================================================================ */
         .modern-card {
             background: var(--bg-card);
@@ -2057,7 +2056,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           FORM CARD - MODERN
+           FORM CARD - MODERN & CLEAN
            ================================================================ */
         .form-card-modern {
             background: var(--bg-card);
@@ -2095,7 +2094,7 @@ include_once '../../components/reception_sidebar.php';
             color: white;
             font-size: 1.4rem;
             flex-shrink: 0;
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 4px 16px rgba(37, 99, 235, 0.25);
         }
         
         .form-card-modern .form-header .form-title {
@@ -2155,7 +2154,7 @@ include_once '../../components/reception_sidebar.php';
         
         .form-control-modern:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.08);
+            box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
         
         .form-control-modern::placeholder {
@@ -2223,12 +2222,12 @@ include_once '../../components/reception_sidebar.php';
         .btn-modern-primary {
             background: var(--primary-gradient);
             color: white;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
         }
         
         .btn-modern-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35);
+            box-shadow: 0 6px 24px rgba(37, 99, 235, 0.35);
         }
         
         .btn-modern-primary:disabled {
@@ -2381,7 +2380,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARD - MODERN
+           STATS CARD - MODERN & CLEAN
            ================================================================ */
         .stat-card-modern {
             background: var(--bg-card);
@@ -2401,7 +2400,7 @@ include_once '../../components/reception_sidebar.php';
         
         .stat-card-modern .stat-number {
             font-size: 1.8rem;
-            font-weight: 600;
+            font-weight: 700;
         }
         
         .stat-card-modern .stat-number.primary {
@@ -2423,7 +2422,9 @@ include_once '../../components/reception_sidebar.php';
         .stat-card-modern .stat-label {
             font-size: 0.7rem;
             color: var(--text-secondary);
-            font-weight: 400;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
         
         .stat-card-modern .stat-icon {
@@ -2897,6 +2898,40 @@ include_once '../../components/reception_sidebar.php';
             border-left: 3px solid #94A3B8;
             border-left-style: dotted;
         }
+        
+        /* ================================================================
+           NEW PATIENT BADGE - PULSING
+           ================================================================ */
+        .new-patient-badge {
+            display: inline-block;
+            background: var(--success);
+            color: white;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-size: 0.5rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            animation: pulse-new 2s infinite;
+            margin-left: 4px;
+        }
+        
+        @keyframes pulse-new {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(0.95); }
+        }
+        
+        /* ================================================================
+           PATIENT OPTION STYLES
+           ================================================================ */
+        .patient-option-new {
+            background: var(--success-bg) !important;
+            font-weight: 600 !important;
+        }
+        
+        .patient-option-new .new-tag {
+            color: var(--success);
+            font-weight: 700;
+        }
     </style>
 </head>
 <body>
@@ -3200,7 +3235,7 @@ include_once '../../components/reception_sidebar.php';
                 <div class="form-row-modern">
                     <label class="form-label">
                         <i class="fas fa-user label-icon"></i> Select Patient <span class="required">*</span>
-                        <span class="label-badge">All Patients</span>
+                        <span class="label-badge">All Patients - Newest First</span>
                     </label>
                     <select name="patient_id" class="form-control-modern" required id="patientSelect" <?= $change_mode ? 'style="border-color:var(--warning);"' : '' ?>>
                         <option value="">-- Select Patient --</option>
@@ -3208,7 +3243,7 @@ include_once '../../components/reception_sidebar.php';
                         <?php 
                         if (!empty($all_patients) && is_array($all_patients) && count($all_patients) > 0): 
                         ?>
-                            <optgroup label="📋 All Patients (<?= count($all_patients) ?>)">
+                            <optgroup label="📋 All Patients (<?= count($all_patients) ?> - Newest First)">
                                 <?php foreach ($all_patients as $patient): 
                                     $status_label = '📋 No Visit';
                                     $status_class = 'no_visit';
@@ -3239,9 +3274,17 @@ include_once '../../components/reception_sidebar.php';
                                     }
                                     
                                     $selected = ($selected_patient_id == $patient['id']) ? 'selected' : '';
+                                    
+                                    // Check if patient is new (created within last 7 days)
+                                    $is_new = (strtotime($patient['patient_created_at'] ?? 'now') > strtotime('-7 days'));
+                                    $new_badge = $is_new ? ' 🆕' : '';
+                                    $new_class = $is_new ? 'patient-option-new' : '';
                                 ?>
-                                    <option value="<?= $patient['id'] ?>" data-status="<?= $status_class ?>" data-doctor="<?= htmlspecialchars($patient['assigned_doctor_name'] ?? '') ?>" <?= $selected ?>>
+                                    <option value="<?= $patient['id'] ?>" data-status="<?= $status_class ?>" data-doctor="<?= htmlspecialchars($patient['assigned_doctor_name'] ?? '') ?>" <?= $selected ?> class="<?= $new_class ?>">
                                         <?= $status_icon ?> <?= htmlspecialchars($patient['full_name']) ?> (<?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>)
+                                        <?php if ($is_new): ?>
+                                            <span class="new-patient-badge">New</span>
+                                        <?php endif; ?>
                                         <?php if (!empty($patient['phone'])): ?>
                                             - <?= htmlspecialchars($patient['phone']) ?>
                                         <?php endif; ?>
@@ -3381,10 +3424,10 @@ include_once '../../components/reception_sidebar.php';
                         <?php 
                         $default_key = 'general_consultation';
                         foreach ($visit_type_options as $key => $option):
-                            // Default to General Consultation / New Patient
-                            $is_default = (strpos(strtolower($option['name']), 'general') !== false || 
-                                          strpos(strtolower($option['name']), 'new') !== false ||
-                                          $key === 'general_consultation');
+                            // Default to New Patient / General Consultation
+                            $is_default = (strpos(strtolower($option['name']), 'new') !== false || 
+                                          strpos(strtolower($option['name']), 'general') !== false ||
+                                          $key === 'new_patient');
                             $selected = $is_default ? 'selected' : '';
                             if ($is_default) $default_key = $key;
                         ?>
@@ -4538,21 +4581,23 @@ include_once '../../components/reception_sidebar.php';
             });
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign / Change Doctor (MODERN - 2 Columns per Row)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Assign / Change Doctor (MODERN - 2 Columns per Row)', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👥 All Patients: <?= count($all_patients) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👥 All Patients: <?= count($all_patients) ?> (Newest First)', 'font-size:13px; color:#64748B;');
     console.log('%c🟡 Pending: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Assigned: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline)', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Live updates every 3 seconds - Auto-update (No refresh needed!)', 'font-size:13px; color:#34D399;');
-    console.log('%c📋 Visit Type: From services table (category_id=2) - Default: New Patient', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Visit Type: From services table (category_id=2) - Default: New Patient', 'font-size:13px; color:#2563EB;');
     console.log('%c💰 Fees: Included after assign doctor - Bill sent to Cashier', 'font-size:13px; color:#059669;');
     console.log('%c📋 7 Days Rule: Valid paid visit waives consultation fee', 'font-size:13px; color:#F59E0B;');
     console.log('%c🧪 Lab Request - NO bill (Lab creates bill when confirming)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🟢⚪ Doctor online/offline status updates live without refresh!', 'font-size:13px; color:#34D399;');
-    console.log('%c📐 2 Columns per row - Clean modern layout!', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📐 2 Columns per row - Clean modern layout!', 'font-size:13px; color:#2563EB;');
     console.log('%c🕐 Clock updates every second - Shared header with time', 'font-size:13px; color:#8B5CF6;');
     console.log('%c💰 Bill sent to Cashier with notification', 'font-size:13px; color:#F59E0B;');
+    console.log('%c🆕 NEW patients shown first - Ascending order', 'font-size:13px; color:#059669;');
+    console.log('%c🎨 Fresh modern design with blue theme', 'font-size:13px; color:#2563EB;');
 </script>
 
 </body>

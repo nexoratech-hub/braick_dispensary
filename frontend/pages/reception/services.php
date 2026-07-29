@@ -3,23 +3,36 @@
 // FILE: frontend/pages/reception/services.php
 // SERVICES MANAGEMENT - ADD ONLY WITH VIEW BUTTON
 // AUTO BRANCH ASSIGNMENT - NEWEST FIRST
+// NO LOGIN REQUIRED - AUTO SESSION
+// WITH MONEY FORMAT (1,000,000,000)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// SESSION CHECK
+// AUTO SESSION - NO LOGIN REQUIRED
 // ================================================================
-if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], ['admin', 'reception'])) {
-    header('Location: ../auth/login.php');
-    exit;
+if (!isset($_SESSION['user_id'])) {
+    $_SESSION['user_id'] = 11;
+    $_SESSION['full_name'] = 'Rose Mwangi';
+    $_SESSION['username'] = 'reception.rose';
+    $_SESSION['role'] = 'reception';
+    $_SESSION['branch_id'] = 1;
+    $_SESSION['branch_name'] = 'Dodoma';
+    $_SESSION['email'] = 'rose@braick.com';
+    $_SESSION['phone'] = '+255 700 000 005';
+    $_SESSION['is_admin'] = false;
+    $_SESSION['profile_pic'] = '';
 }
 
-$user_id = $_SESSION['user_id'] ?? 0;
-$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_id = $_SESSION['user_id'] ?? 11;
+$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
 $user_role = $_SESSION['role'] ?? 'reception';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_email = $_SESSION['email'] ?? 'rose@braick.com';
+$user_phone = $_SESSION['phone'] ?? '+255 700 000 005';
 
 // ================================================================
 // INCLUDE DATABASE CONFIG
@@ -27,7 +40,7 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 // ================================================================
-// FIXED: Use Database class properly
+// DATABASE CONNECTION
 // ================================================================
 $db = Database::getInstance()->getConnection();
 
@@ -56,9 +69,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $service_name = trim($_POST['service_name'] ?? '');
         $category_id = (int)($_POST['category_id'] ?? 0);
         $description = trim($_POST['description'] ?? '');
-        // AUTO BRANCH: Use user's branch
         $branch_id = $user_branch_id;
-        $price = (float)($_POST['price'] ?? 0);
+        // Remove commas from price before saving
+        $price_raw = str_replace(',', '', $_POST['price'] ?? '0');
+        $price = (float)$price_raw;
         $is_active = isset($_POST['is_active']) ? 1 : 0;
         
         if (empty($service_name)) {
@@ -710,7 +724,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           FORM
+           FORM - WITH MONEY FORMAT
            ================================================================ */
         .form-group {
             margin-bottom: 14px;
@@ -747,6 +761,18 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
         }
         
+        .form-control.price-input {
+            font-family: 'Courier New', monospace;
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        
+        .form-control.price-input:focus {
+            border-color: var(--success);
+            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.12);
+        }
+        
         textarea.form-control {
             resize: vertical;
             min-height: 60px;
@@ -779,6 +805,31 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             background: #1E3A5F;
             border-color: var(--primary);
             color: var(--primary-light);
+        }
+        
+        /* Price display preview */
+        .price-preview {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .price-preview .formatted-price {
+            font-weight: 700;
+            color: var(--success);
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            background: var(--success-bg);
+            padding: 2px 12px;
+            border-radius: 4px;
+        }
+        
+        [data-theme="dark"] .price-preview .formatted-price {
+            background: #1A3A2A;
+            color: #34D399;
         }
         
         /* ================================================================
@@ -1254,7 +1305,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ADD SERVICE FORM -->
+    <!-- ADD SERVICE FORM - WITH MONEY FORMAT -->
     <!-- ================================================================ -->
     <div id="serviceForm" class="card mb-6">
         <div class="card-header">
@@ -1271,7 +1322,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <span class="text-xs text-gray-500">(Auto-assigned to your branch)</span>
         </div>
         
-        <form method="POST" action="" style="margin-top:16px;">
+        <form method="POST" action="" style="margin-top:16px;" id="serviceForm">
             <input type="hidden" name="action" value="add_service">
             
             <div class="form-row-2">
@@ -1302,8 +1353,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <div class="form-row-2">
                 <div class="form-group">
                     <label class="form-label">Price (TSh) <span class="required">*</span></label>
-                    <input type="number" name="price" class="form-control" 
-                           value="0" step="0.01" min="0" required>
+                    <input type="text" name="price" class="form-control price-input" 
+                           id="priceInput" placeholder="e.g. 1,000,000" 
+                           value="0" required
+                           oninput="formatPriceInput(this)">
+                    <div class="price-preview">
+                        <span>Formatted:</span>
+                        <span class="formatted-price" id="pricePreview">TSh 0</span>
+                    </div>
                 </div>
                 <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
                     <label class="form-label" style="margin-bottom:0;display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -1317,7 +1374,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <button type="submit" class="btn btn-success">
                     <i class="fas fa-save"></i> Add Service
                 </button>
-                <button type="reset" class="btn btn-outline">
+                <button type="reset" class="btn btn-outline" onclick="resetPriceInput()">
                     <i class="fas fa-undo"></i> Reset
                 </button>
             </div>
@@ -1509,9 +1566,41 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - MONEY FORMAT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // MONEY FORMAT - Format price with commas (1,000,000,000)
+    // ================================================================
+    function formatPriceInput(input) {
+        // Remove all non-digit characters
+        var raw = input.value.replace(/[^0-9]/g, '');
+        
+        if (raw === '') {
+            input.value = '';
+            document.getElementById('pricePreview').textContent = 'TSh 0';
+            return;
+        }
+        
+        // Format with commas
+        var formatted = parseInt(raw).toLocaleString('en-US');
+        input.value = formatted;
+        
+        // Update preview
+        document.getElementById('pricePreview').textContent = 'TSh ' + formatted;
+    }
+    
+    // ================================================================
+    // RESET PRICE INPUT
+    // ================================================================
+    function resetPriceInput() {
+        var input = document.getElementById('priceInput');
+        if (input) {
+            input.value = '0';
+            document.getElementById('pricePreview').textContent = 'TSh 0';
+        }
+    }
+    
     // ================================================================
     // DARK MODE
     // ================================================================
@@ -1714,13 +1803,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
     });
 
-    console.log('%c🛠️ Services Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🛠️ Services Management (No Login Required)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Services: <?= count($services) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Active: <?= count(array_filter($services, function($s) { return $s['is_active'] == 1; })) ?>', 'font-size:13px; color:#34D399;');
-    console.log('%c❌ Inactive: <?= count(array_filter($services, function($s) { return $s['is_active'] == 0; })) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c💰 Total Value: TSh <?= number_format(array_sum(array_column($services, 'price')), 0) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🆕 Newest First - Services ordered by creation date', 'font-size:13px; color:#D97706;');
+    console.log('%c💰 Money Format: 1,000,000,000 with commas', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💵 Price input auto-formats with commas', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
