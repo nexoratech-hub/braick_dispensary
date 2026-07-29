@@ -2,9 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/cashier/pending_bills.php
 // CASHIER - PENDING BILLS LIST (GREEN THEME)
-// FIXED: Supports both string and integer status values
-// FIXED: Uses shared header with clock
-// FIXED: Dark mode fully working with header
+// FIXED: Auto-update removed (causing JSON error)
+// FIXED: Cancel button works via GET
+// FIXED: Buttons vertical and smaller
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -71,6 +71,102 @@ try {
     $db = getDB();
     
     // ================================================================
+    // HANDLE CANCEL BILL ACTION - FIXED
+    // ================================================================
+    if (isset($_GET['cancel_bill']) && is_numeric($_GET['cancel_bill'])) {
+        $bill_id = (int)$_GET['cancel_bill'];
+        
+        try {
+            $db->beginTransaction();
+            
+            // Get bill details
+            $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ?");
+            $stmt->execute([$bill_id, $selected_branch_id]);
+            $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($bill) {
+                // Check if bill is pending or partial (not already cancelled)
+                if (in_array($bill['status'], ['pending', 'partial', '0', '1', 0, 1])) {
+                    // Check if bill has any payments
+                    $stmt = $db->prepare("SELECT COUNT(*) as count FROM payments WHERE bill_id = ?");
+                    $stmt->execute([$bill_id]);
+                    $payment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+                    
+                    if ($payment_count == 0) {
+                        // Update bill status to cancelled
+                        $stmt = $db->prepare("
+                            UPDATE patient_bills 
+                            SET status = 'cancelled', 
+                                updated_at = NOW() 
+                            WHERE id = ? AND branch_id = ?
+                        ");
+                        $stmt->execute([$bill_id, $selected_branch_id]);
+                        
+                        // Update bill items to cancelled
+                        $stmt = $db->prepare("
+                            UPDATE bill_items 
+                            SET status = 'cancelled',
+                                payment_status = 'cancelled',
+                                updated_at = NOW()
+                            WHERE bill_id = ?
+                        ");
+                        $stmt->execute([$bill_id]);
+                        
+                        $db->commit();
+                        $_SESSION['flash_message'] = "✅ Bill #" . $bill['bill_number'] . " has been cancelled successfully!";
+                        $_SESSION['flash_type'] = 'success';
+                    } else {
+                        $db->rollBack();
+                        $_SESSION['flash_message'] = "❌ Cannot cancel bill with existing payments. Please refund payments first.";
+                        $_SESSION['flash_type'] = 'error';
+                    }
+                } else {
+                    $db->rollBack();
+                    if ($bill['status'] === 'cancelled') {
+                        $_SESSION['flash_message'] = "⚠️ Bill #" . $bill['bill_number'] . " is already cancelled.";
+                        $_SESSION['flash_type'] = 'warning';
+                    } else {
+                        $_SESSION['flash_message'] = "❌ Bill is already " . ucfirst($bill['status']) . " and cannot be cancelled.";
+                        $_SESSION['flash_type'] = 'error';
+                    }
+                }
+            } else {
+                $db->rollBack();
+                $_SESSION['flash_message'] = "❌ Bill not found.";
+                $_SESSION['flash_type'] = 'error';
+            }
+            
+        } catch (Exception $e) {
+            $db->rollBack();
+            $_SESSION['flash_message'] = "❌ Error cancelling bill: " . $e->getMessage();
+            $_SESSION['flash_type'] = 'error';
+        }
+        
+        // Redirect to remove cancel_bill from URL
+        $redirect_url = 'pending_bills.php';
+        $params = [];
+        if ($filter !== 'all') $params[] = 'filter=' . $filter;
+        if (!empty($search)) $params[] = 'search=' . urlencode($search);
+        if (!empty($start_date)) $params[] = 'start_date=' . $start_date;
+        if (!empty($end_date)) $params[] = 'end_date=' . $end_date;
+        if (!empty($params)) {
+            $redirect_url .= '?' . implode('&', $params);
+        }
+        header('Location: ' . $redirect_url);
+        exit;
+    }
+    
+    // ================================================================
+    // GET FLASH MESSAGES
+    // ================================================================
+    if (isset($_SESSION['flash_message'])) {
+        $message = $_SESSION['flash_message'];
+        $message_type = $_SESSION['flash_type'] ?? 'info';
+        unset($_SESSION['flash_message']);
+        unset($_SESSION['flash_type']);
+    }
+    
+    // ================================================================
     // BUILD DATE FILTER
     // ================================================================
     $date_condition = "";
@@ -123,7 +219,7 @@ try {
     }
     
     // ================================================================
-    // GET PENDING BILLS - FIXED: Supports both string and integer status
+    // GET PENDING BILLS - EXCLUDE CANCELLED
     // ================================================================
     $sql = "
         SELECT 
@@ -286,6 +382,8 @@ include_once '../../components/cashier_sidebar.php';
             --badge-pending-text: #D97706;
             --badge-partial-bg: #E8F0FE;
             --badge-partial-text: #0B5ED7;
+            --badge-cancelled-bg: #FEE2E2;
+            --badge-cancelled-text: #DC2626;
             --total-row-bg: #E8F0FE;
             --patient-header-bg: #E8F0FE;
             --patient-header-hover: #D1FAE5;
@@ -318,6 +416,8 @@ include_once '../../components/cashier_sidebar.php';
             --badge-pending-text: #FBBF24;
             --badge-partial-bg: #1E3A5F;
             --badge-partial-text: #6EA8FE;
+            --badge-cancelled-bg: #3A1A1A;
+            --badge-cancelled-text: #F87171;
             --total-row-bg: #1E3A5F;
             --patient-header-bg: #1E3A5F;
             --patient-header-hover: #1A3A2A;
@@ -327,9 +427,6 @@ include_once '../../components/cashier_sidebar.php';
             --warning-bg: #3D2E0A;
         }
         
-        /* ================================================================
-           GLOBAL STYLES
-           ================================================================ */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -343,9 +440,6 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* ================================================================
-           MAIN CONTENT OVERRIDE
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -370,18 +464,6 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 20px rgba(217, 119, 6, 0.25);
             position: relative;
             overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
         }
         
         .page-header .page-title {
@@ -778,7 +860,7 @@ include_once '../../components/cashier_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.8rem;
-            min-width: <?= $is_admin ? '1000px' : '900px' ?>;
+            min-width: <?= $is_admin ? '1100px' : '1000px' ?>;
         }
         
         .data-table thead th {
@@ -827,6 +909,11 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--primary);
         }
         
+        .data-table .bill-number.cancelled {
+            color: var(--danger);
+            text-decoration: line-through;
+        }
+        
         <?php if (!$is_admin): ?>
         .data-table .balance-col {
             display: none !important;
@@ -858,21 +945,31 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--badge-partial-text);
         }
         
+        .status-badge.cancelled {
+            background: var(--badge-cancelled-bg);
+            color: var(--badge-cancelled-text);
+        }
+        
         /* ================================================================
-           BUTTONS
+           BUTTONS - VERTICAL (STACKED) AND SMALLER
            ================================================================ */
         .btn {
-            display: inline-flex;
+            display: flex;
             align-items: center;
-            gap: 6px;
-            padding: 6px 14px;
-            border-radius: 8px;
+            justify-content: center;
+            gap: 4px;
+            padding: 4px 8px;
+            border-radius: 6px;
             font-weight: 600;
-            font-size: 0.72rem;
+            font-size: 0.6rem;
             transition: all 0.3s;
             cursor: pointer;
             border: none;
             text-decoration: none;
+            width: 100%;
+            min-width: 60px;
+            text-align: center;
+            white-space: nowrap;
         }
         
         .btn-view {
@@ -882,8 +979,8 @@ include_once '../../components/cashier_sidebar.php';
         
         .btn-view:hover {
             background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
         }
         
         .btn-process {
@@ -893,14 +990,70 @@ include_once '../../components/cashier_sidebar.php';
         
         .btn-process:hover {
             background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+        }
+        
+        .btn-cancel {
+            background: var(--danger);
+            color: white;
+        }
+        
+        .btn-cancel:hover {
+            background: var(--danger-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(220, 38, 38, 0.25);
+        }
+        
+        .btn-cancel:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
         }
         
         .btn-sm { 
-            padding: 4px 10px; 
-            font-size: 0.65rem; 
-            border-radius: 6px; 
+            padding: 3px 6px; 
+            font-size: 0.55rem; 
+            border-radius: 4px; 
+        }
+        
+        /* ================================================================
+           ACTION BUTTONS CONTAINER - VERTICAL STACK
+           ================================================================ */
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            align-items: stretch;
+            min-width: 65px;
+        }
+        
+        .action-buttons .btn {
+            width: 100%;
+            justify-content: center;
+            padding: 3px 6px;
+            font-size: 0.55rem;
+            border-radius: 4px;
+        }
+        
+        .action-buttons .btn i {
+            font-size: 0.5rem;
+        }
+        
+        .action-status {
+            font-size: 0.55rem;
+            padding: 3px 6px;
+            text-align: center;
+            border-radius: 4px;
+            background: var(--gray-100);
+            color: var(--text-secondary);
+            display: block;
+            width: 100%;
+        }
+        
+        [data-theme="dark"] .action-status {
+            background: var(--gray-700);
+            color: var(--gray-400);
         }
         
         .role-badge-display {
@@ -956,6 +1109,12 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--danger-bg);
             color: var(--danger);
             border-color: var(--danger);
+        }
+        
+        .message-box.warning {
+            background: var(--warning-bg);
+            color: var(--warning);
+            border-color: var(--warning);
         }
         
         .message-box i {
@@ -1055,6 +1214,8 @@ include_once '../../components/cashier_sidebar.php';
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .patient-card-header { flex-direction: column; align-items: flex-start; }
             .patient-card-header .patient-totals { width: 100%; justify-content: flex-start; }
+            .action-buttons { min-width: 50px; }
+            .action-buttons .btn { font-size: 0.5rem; padding: 2px 4px; }
         }
         
         @media (max-width: 640px) {
@@ -1067,10 +1228,12 @@ include_once '../../components/cashier_sidebar.php';
             .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
             .stat-card-box { padding: 12px 14px; }
             .stat-card-box .stat-number { font-size: 1.4rem; }
-            .btn { padding: 4px 8px; font-size: 0.6rem; }
             .data-table { font-size: 0.65rem; min-width: 600px; }
             .patient-card-header .patient-info { width: 100%; }
             .patient-card-header .patient-totals { width: 100%; flex-wrap: wrap; }
+            .action-buttons { min-width: 45px; }
+            .action-buttons .btn { font-size: 0.45rem; padding: 2px 3px; }
+            .action-buttons .btn i { font-size: 0.4rem; }
         }
     </style>
 </head>
@@ -1137,8 +1300,8 @@ include_once '../../components/cashier_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+        <div class="message-box <?= $message_type ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'warning' ? 'fa-exclamation-triangle' : 'fa-exclamation-circle') ?>"></i>
             <?= $message ?>
         </div>
     <?php endif; ?>
@@ -1301,17 +1464,24 @@ include_once '../../components/cashier_sidebar.php';
                                     <th>Status</th>
                                     <th>Items</th>
                                     <th>Created</th>
-                                    <th colspan="2">Actions</th>
+                                    <th style="text-align:center;min-width:70px;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php $i = 1; foreach ($patient['bills'] as $bill): ?>
+                                <?php $i = 1; foreach ($patient['bills'] as $bill): 
+                                    $has_payments = ($bill['payment_count'] ?? 0) > 0;
+                                    $bill_amount_zero = ($bill['total_amount'] ?? 0) == 0;
+                                    $can_cancel = in_array($bill['status'], ['pending', 'partial', '0', '1', 0, 1]) && !$has_payments;
+                                ?>
                                     <tr>
                                         <td><?= $i++ ?></td>
                                         <td>
                                             <span class="bill-number <?= $bill['status'] ?>">
                                                 <?= htmlspecialchars($bill['bill_number']) ?>
                                             </span>
+                                            <?php if ($bill_amount_zero): ?>
+                                                <span class="text-xs text-gray-400 block">(Zero)</span>
+                                            <?php endif; ?>
                                         </td>
                                         <td>
                                             <span class="font-semibold">
@@ -1322,6 +1492,9 @@ include_once '../../components/cashier_sidebar.php';
                                             <span style="color:var(--success);">
                                                 <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
                                             </span>
+                                            <?php if ($has_payments): ?>
+                                                <span class="text-xs text-gray-400 block"><?= $bill['payment_count'] ?> payment(s)</span>
+                                            <?php endif; ?>
                                         </td>
                                         <?php if ($is_admin): ?>
                                             <td class="balance-col">
@@ -1348,20 +1521,40 @@ include_once '../../components/cashier_sidebar.php';
                                             </span>
                                         </td>
                                         <td>
-                                            <!-- View Button -->
-                                            <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-view btn-sm" title="View Bill Details">
-                                                <i class="fas fa-eye"></i> View
-                                            </a>
-                                        </td>
-                                        <td>
-                                            <!-- Process Payment Button -->
-                                            <?php if (!$is_admin): ?>
-                                                <a href="process_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-process btn-sm" title="Process Payment">
-                                                    <i class="fas fa-money-bill-wave"></i> Pay
+                                            <!-- Action Buttons - VERTICAL STACK -->
+                                            <div class="action-buttons">
+                                                <!-- View Button -->
+                                                <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-view" title="View Bill Details">
+                                                    <i class="fas fa-eye"></i> View
                                                 </a>
-                                            <?php else: ?>
-                                                <span class="text-xs" style="color:var(--text-secondary);">(Read Only)</span>
-                                            <?php endif; ?>
+                                                
+                                                <!-- Process Payment Button -->
+                                                <?php if (!$is_admin && !$bill_amount_zero): ?>
+                                                    <a href="process_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-process" title="Process Payment">
+                                                        <i class="fas fa-money-bill-wave"></i> Pay
+                                                    </a>
+                                                <?php endif; ?>
+                                                
+                                                <!-- Cancel Bill Button -->
+                                                <?php if ($can_cancel): ?>
+                                                    <a href="?cancel_bill=<?= $bill['id'] ?>&filter=<?= $filter ?>&search=<?= urlencode($search) ?>" 
+                                                       class="btn btn-cancel" 
+                                                       title="Cancel this bill"
+                                                       onclick="return confirm('⚠️ Are you sure you want to cancel Bill #<?= htmlspecialchars($bill['bill_number']) ?>?\n\nPatient: <?= htmlspecialchars($patient['patient_name']) ?>\nAmount: <?= $currency ?> <?= number_format($bill['total_amount'], 0) ?>\n\nThis action cannot be undone!');">
+                                                        <i class="fas fa-times"></i> Cancel
+                                                    </a>
+                                                <?php elseif ($has_payments): ?>
+                                                    <span class="action-status" title="Cannot cancel bill with payments">
+                                                        🔒 Has payments
+                                                    </span>
+                                                <?php elseif ($bill['status'] === 'cancelled'): ?>
+                                                    <span class="action-status">Already cancelled</span>
+                                                <?php else: ?>
+                                                    <span class="action-status" title="Cannot cancel - <?= ucfirst($bill['status']) ?>">
+                                                        🔒 <?= ucfirst($bill['status']) ?>
+                                                    </span>
+                                                <?php endif; ?>
+                                            </div>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -1381,7 +1574,7 @@ include_once '../../components/cashier_sidebar.php';
                                             <?= $currency ?> <?= number_format($patient['total_balance'], 0) ?>
                                         </td>
                                     <?php endif; ?>
-                                    <td colspan="<?= $is_admin ? 5 : 4 ?>"></td>
+                                    <td colspan="<?= $is_admin ? 6 : 5 ?>"></td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1389,11 +1582,11 @@ include_once '../../components/cashier_sidebar.php';
                     
                     <!-- Patient Action Buttons -->
                     <div style="padding: 12px 0 0; display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--border-color); margin-top: 8px; transition: border-color 0.3s ease;">
-                        <a href="patient_bills.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-view">
+                        <a href="patient_bills.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-view" style="width:auto;padding:4px 12px;">
                             <i class="fas fa-file-invoice"></i> View All Bills
                         </a>
                         <?php if (!$is_admin): ?>
-                            <a href="process_payment.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-process">
+                            <a href="process_payment.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-process" style="width:auto;padding:4px 12px;">
                                 <i class="fas fa-money-bill-wave"></i> Pay All Bills
                             </a>
                         <?php endif; ?>
@@ -1443,7 +1636,7 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - NO AUTO-UPDATE (TO AVOID JSON ERROR) -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1452,7 +1645,6 @@ include_once '../../components/cashier_sidebar.php';
     (function() {
         var htmlElement = document.documentElement;
         
-        // Function to apply dark mode based on localStorage
         function syncDarkMode() {
             var isDark = localStorage.getItem('darkMode') === 'true';
             if (isDark) {
@@ -1462,17 +1654,14 @@ include_once '../../components/cashier_sidebar.php';
             }
         }
         
-        // Apply on load
         syncDarkMode();
         
-        // Listen for storage changes (from header or other pages)
         window.addEventListener('storage', function(e) {
             if (e.key === 'darkMode') {
                 syncDarkMode();
             }
         });
         
-        // Also listen for custom event from header
         document.addEventListener('darkModeChanged', function(e) {
             var isDark = e.detail && e.detail.isDark;
             if (isDark) {
@@ -1501,7 +1690,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     }
     
-    // Call every second
     setInterval(updateClock, 1000);
     updateClock();
 
@@ -1606,7 +1794,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // MANUAL REFRESH
+    // MANUAL REFRESH - WITHOUT AUTO-UPDATE
     // ================================================================
     var updateCount = 0;
     
@@ -1627,110 +1815,15 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // AUTO-UPDATE - EVERY 30 SECONDS
+    // CANCEL BUTTON - WORKS VIA GET
     // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-    var lastHash = null;
-
-    function fetchPendingBills() {
-        if (isUpdating) return;
-        isUpdating = true;
-        
-        var filter = '<?= $filter ?>';
-        var search = '<?= addslashes($search) ?>';
-        var start_date = '<?= $start_date ?>';
-        var end_date = '<?= $end_date ?>';
-        
-        var url = 'get_pending_bills.php?filter=' + encodeURIComponent(filter) + 
-                  '&search=' + encodeURIComponent(search) + 
-                  '&start_date=' + encodeURIComponent(start_date) + 
-                  '&end_date=' + encodeURIComponent(end_date) + 
-                  '&t=' + Date.now();
-        
-        fetch(url)
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    if (lastHash !== data.hash) {
-                        lastHash = data.hash;
-                        updateCount++;
-                        updateUI(data);
-                        updateFooterTime();
-                        
-                        var updateCountEl = document.getElementById('updateCount');
-                        if (updateCountEl) {
-                            updateCountEl.textContent = updateCount;
-                        }
-                    }
-                }
-                isUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Update error:', error);
-                isUpdating = false;
-            });
-    }
-
-    function updateUI(data) {
-        // Update stats
-        var stats = document.querySelectorAll('.stat-card-box .stat-number');
-        if (stats.length >= 4) {
-            stats[0].textContent = data.total_bills;
-            stats[1].textContent = data.total_patients;
-            if (stats[2]) {
-                stats[2].textContent = data.currency + ' ' + Number(data.total_amount).toLocaleString();
-            }
-        }
-        
-        // Update header badges
-        var headerBadges = document.querySelectorAll('.page-header .header-badge');
-        if (headerBadges.length >= 2) {
-            var billBadge = headerBadges[0];
-            if (billBadge) {
-                billBadge.innerHTML = '<i class="fas fa-file-invoice"></i> ' + data.total_bills + ' Bills';
-            }
-            var patientBadge = headerBadges[1];
-            if (patientBadge) {
-                patientBadge.innerHTML = '<i class="fas fa-users"></i> ' + data.total_patients + ' Patients';
-            }
-        }
-    }
-
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        fetchPendingBills();
-        updateInterval = setInterval(fetchPendingBills, 30000);
-        console.log('%c🔄 Auto-update started (every 30s)', 'font-size:12px; color:#34D399;');
-    }
-    
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
-        }
-    }
-
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
-    });
+    // Cancel button uses direct GET request with confirmation
+    // No AJAX needed - works reliably
 
     // ================================================================
     // INITIALIZE
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Start auto-update after 5 seconds
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 5000);
-        
         // Open first patient card by default
         var firstPatient = document.querySelector('.patient-card-body');
         if (firstPatient) {
@@ -1744,13 +1837,14 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c⏳ Braick - Pending Bills (Dark Mode Sync with Header)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c⏳ Braick - Pending Bills (Cancel Working - No Auto-Update)', 'font-size:18px; font-weight:bold; color:#D97706;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Bills Found: <?= $total_bills_count ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patients: <?= count($patient_bills) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Total Balance: <?= $currency ?> <?= number_format($total_pending_amount, 0) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Status check includes: pending, partial, 0, 1', 'font-size:13px; color:#34D399;');
-    console.log('%c🌓 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c🗑️ Cancel button uses GET request (reliable)', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ Cancelled bills removed from pending list', 'font-size:13px; color:#34D399;');
+    console.log('%c📌 Buttons are vertical (stacked) and smaller', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c❌ Auto-update removed to avoid JSON errors', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>
