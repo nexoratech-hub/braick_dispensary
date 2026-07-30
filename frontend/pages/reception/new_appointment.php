@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/new_appointment.php
 // RECEPTION - NEW APPOINTMENT WITH 6 VITAL SIGNS
+// WITH AJAX AUTO-UPDATE FOR DOCTOR STATUS (EVERY 3 SECONDS)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -10,13 +11,15 @@ session_start();
 // ================================================================
 // FORCE SESSION - Rose Mwangi (Reception)
 // ================================================================
-$_SESSION['user_id'] = 6;
-$_SESSION['full_name'] = 'Rose Mwangi';
-$_SESSION['role'] = 'reception';
-$_SESSION['branch_id'] = 1;
-$_SESSION['branch_name'] = 'Dodoma';
-$_SESSION['username'] = 'reception.rose';
-$_SESSION['is_admin'] = false;
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
+    $_SESSION['user_id'] = 6;
+    $_SESSION['full_name'] = 'Rose Mwangi';
+    $_SESSION['role'] = 'reception';
+    $_SESSION['branch_id'] = 1;
+    $_SESSION['branch_name'] = 'Dodoma';
+    $_SESSION['username'] = 'reception.rose';
+    $_SESSION['is_admin'] = false;
+}
 
 // ================================================================
 // PATH SAHIHI
@@ -39,14 +42,15 @@ try {
     $stmt->execute([$selected_branch_id]);
     $patients = $stmt->fetchAll();
     
-    // Get doctors in this branch
-    $stmt = $db->prepare("SELECT id, full_name, specialty, is_online FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ? ORDER BY is_online DESC, full_name");
+    // Get doctors in this branch with status
+    $stmt = $db->prepare("SELECT id, full_name, specialty, is_online, profile_pic FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ? ORDER BY is_online DESC, full_name");
     $stmt->execute([$selected_branch_id]);
     $doctors = $stmt->fetchAll();
     
     // Get online doctors count
     $online_doctors = 0;
     $total_doctors = count($doctors);
+    
     foreach ($doctors as $doc) {
         if ($doc['is_online'] == 1) {
             $online_doctors++;
@@ -77,7 +81,9 @@ try {
         $patient_id = (int)($_POST['patient_id'] ?? 0);
         $doctor_id = (int)($_POST['doctor_id'] ?? 0);
         $appointment_date = $_POST['appointment_date'] ?? '';
-        $appointment_time = $_POST['appointment_time'] ?? '';
+        $appointment_hour = $_POST['appointment_hour'] ?? '09';
+        $appointment_minute = $_POST['appointment_minute'] ?? '00';
+        $appointment_ampm = $_POST['appointment_ampm'] ?? 'AM';
         $purpose = trim($_POST['purpose'] ?? '');
         $status = $_POST['status'] ?? 'scheduled';
         $visit_type = $_POST['visit_type'] ?? 'new';
@@ -102,13 +108,25 @@ try {
         if ($patient_id <= 0) $errors[] = 'Please select a patient';
         if ($doctor_id <= 0) $errors[] = 'Please select a doctor';
         if (empty($appointment_date)) $errors[] = 'Please select a date';
-        if (empty($appointment_time)) $errors[] = 'Please select a time';
+        if (empty($appointment_hour)) $errors[] = 'Please select an hour';
+        if (empty($appointment_ampm)) $errors[] = 'Please select AM/PM';
         
         if (empty($errors)) {
             try {
                 $db->beginTransaction();
                 
-                $datetime = $appointment_date . ' ' . $appointment_time . ':00';
+                // Build time string from hour, minute, ampm
+                $hour_12 = (int)$appointment_hour;
+                if ($appointment_ampm == 'PM' && $hour_12 != 12) {
+                    $hour_24 = $hour_12 + 12;
+                } elseif ($appointment_ampm == 'AM' && $hour_12 == 12) {
+                    $hour_24 = 0;
+                } else {
+                    $hour_24 = $hour_12;
+                }
+                
+                $time_str = str_pad($hour_24, 2, '0', STR_PAD_LEFT) . ':' . $appointment_minute . ':00';
+                $datetime = $appointment_date . ' ' . $time_str;
                 
                 // Insert appointment
                 $stmt = $db->prepare("
@@ -121,8 +139,12 @@ try {
                 // ================================================================
                 // INSERT VITAL SIGNS (6 signs only)
                 // ================================================================
-                $has_vital = $temperature || $bp_systolic || $bp_diastolic || 
-                             $pulse_rate || $weight || $height;
+                $has_vital = $temperature !== null && $temperature !== '' || 
+                             $bp_systolic !== null && $bp_systolic !== '' || 
+                             $bp_diastolic !== null && $bp_diastolic !== '' || 
+                             $pulse_rate !== null && $pulse_rate !== '' || 
+                             $weight !== null && $weight !== '' || 
+                             $height !== null && $height !== '';
                 
                 if ($has_vital) {
                     $stmt = $db->prepare("
@@ -208,9 +230,6 @@ include_once '../../components/reception_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -279,9 +298,6 @@ include_once '../../components/reception_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -425,9 +441,6 @@ include_once '../../components/reception_sidebar.php';
         
         .dark-toggle-btn i { font-size: 0.9rem; }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -435,9 +448,6 @@ include_once '../../components/reception_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
@@ -565,9 +575,6 @@ include_once '../../components/reception_sidebar.php';
             backdrop-filter: blur(4px);
         }
         
-        /* ================================================================
-           FORM CARD
-           ================================================================ */
         .form-card {
             background: var(--bg-card);
             border-radius: 18px;
@@ -691,9 +698,6 @@ include_once '../../components/reception_sidebar.php';
             min-height: 60px;
         }
         
-        /* ================================================================
-           VITAL SIGNS SECTION - 6 SIGNS ONLY
-           ================================================================ */
         .vital-signs-section {
             background: var(--bg-body);
             border-radius: 14px;
@@ -777,34 +781,6 @@ include_once '../../components/reception_sidebar.php';
             display: block;
         }
         
-        .vital-sign-item .vital-normal {
-            font-size: 0.55rem;
-            color: var(--success);
-            display: block;
-            margin-top: 2px;
-        }
-        
-        .vital-sign-item .vital-abnormal {
-            font-size: 0.55rem;
-            color: var(--danger);
-            display: block;
-            margin-top: 2px;
-        }
-        
-        /* BMI Special */
-        .vital-sign-item.bmi-item {
-            background: var(--primary-bg);
-            border-color: var(--primary);
-        }
-        
-        .vital-sign-item.bmi-item .vital-input {
-            font-weight: 700;
-            color: var(--primary);
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -851,11 +827,6 @@ include_once '../../components/reception_sidebar.php';
             color: var(--primary);
         }
         
-        .btn-sm { padding: 4px 12px; font-size: 0.72rem; border-radius: 8px; }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .role-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -887,9 +858,6 @@ include_once '../../components/reception_sidebar.php';
             color: #34D399;
         }
         
-        /* ================================================================
-           STATS CARD
-           ================================================================ */
         .stat-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -927,9 +895,6 @@ include_once '../../components/reception_sidebar.php';
             margin-bottom: 4px;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -954,9 +919,6 @@ include_once '../../components/reception_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -968,9 +930,6 @@ include_once '../../components/reception_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -981,21 +940,16 @@ include_once '../../components/reception_sidebar.php';
             opacity: 0;
         }
         
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 18px;
         }
         
-        @keyframes spin { to { transform: rotate(360deg); } }
+        .grid-full {
+            grid-column: 1 / -1;
+        }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1029,31 +983,12 @@ include_once '../../components/reception_sidebar.php';
             .vital-signs-section {
                 padding: 12px 14px;
             }
-        }
-        
-        /* ================================================================
-           GRID HELPERS
-           ================================================================ */
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 18px;
-        }
-        
-        .grid-full {
-            grid-column: 1 / -1;
-        }
-        
-        @media (max-width: 640px) {
             .grid-2 {
                 grid-template-columns: 1fr;
                 gap: 12px;
             }
         }
         
-        /* ================================================================
-           MESSAGE ALERT
-           ================================================================ */
         .alert {
             padding: 14px 18px;
             border-radius: 12px;
@@ -1083,13 +1018,108 @@ include_once '../../components/reception_sidebar.php';
         .alert .alert-content {
             flex: 1;
         }
+
+        /* Time select styling - can type or select */
+        .time-select-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .time-select-group .time-input {
+            flex: 1;
+            min-width: 60px;
+            max-width: 80px;
+            text-align: center;
+            padding: 10px 8px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 0.85rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        
+        .time-select-group .time-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.08);
+        }
+        
+        .time-select-group .time-input::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.5;
+        }
+        
+        .time-select-group .time-separator {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            padding: 0 2px;
+        }
+        
+        .time-select-group .ampm-select {
+            flex: 0.6;
+            min-width: 80px;
+            max-width: 100px;
+        }
+        
+        .time-select-group .time-label {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        @media (max-width: 640px) {
+            .time-select-group {
+                flex-wrap: wrap;
+            }
+            .time-select-group .time-input {
+                flex: 1 1 30%;
+                min-width: 50px;
+            }
+            .time-select-group .ampm-select {
+                flex: 1 1 100%;
+                max-width: 100%;
+            }
+        }
+
+        /* Doctor status info - simple count only */
+        .doctor-status-info {
+            background: var(--bg-body);
+            border-radius: 10px;
+            padding: 10px 16px;
+            margin-top: 8px;
+            border: 1px solid var(--border-color);
+            font-size: 0.8rem;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .doctor-status-info .online-doctors {
+            color: var(--success);
+            font-weight: 600;
+        }
+        
+        .doctor-status-info .offline-doctors {
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+        
+        .doctor-status-info .status-icon {
+            margin-right: 4px;
+        }
+        
+        .doctor-status-info .status-count {
+            font-weight: 700;
+        }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -1129,14 +1159,10 @@ include_once '../../components/reception_sidebar.php';
     </div>
 </nav>
 
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1182,9 +1208,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- APPOINTMENT FORM WITH 6 VITAL SIGNS -->
-    <!-- ================================================================ -->
+    <!-- APPOINTMENT FORM -->
     <div class="form-card animate-fade-in-up">
         <div class="form-header">
             <div class="form-icon">
@@ -1197,15 +1221,13 @@ include_once '../../components/reception_sidebar.php';
         </div>
         
         <form method="POST" action="" id="appointmentForm">
-            <!-- ============================================================ -->
             <!-- ROW 1: Patient + Doctor -->
-            <!-- ============================================================ -->
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-user label-icon"></i> Patient <span class="required">*</span>
                     </label>
-                    <select name="patient_id" class="form-control" required id="patientSelect" onchange="this.form.submit()">
+                    <select name="patient_id" class="form-control" required id="patientSelect">
                         <option value="">-- Select Patient --</option>
                         <?php foreach ($patients as $patient): ?>
                             <option value="<?= $patient['id'] ?>" <?= $patient_id == $patient['id'] ? 'selected' : '' ?>>
@@ -1230,10 +1252,9 @@ include_once '../../components/reception_sidebar.php';
                     <label class="form-label">
                         <i class="fas fa-user-md label-icon"></i> Doctor <span class="required">*</span>
                     </label>
-                    <select name="doctor_id" class="form-control" required>
-                        <option value="">-- Select Doctor --</option>
+                    <select name="doctor_id" class="form-control" required id="doctorSelect">
                         <?php foreach ($doctors as $doctor): ?>
-                            <option value="<?= $doctor['id'] ?>">
+                            <option value="<?= $doctor['id'] ?>" data-online="<?= $doctor['is_online'] ?>" data-name="<?= htmlspecialchars($doctor['full_name']) ?>" data-specialty="<?= htmlspecialchars($doctor['specialty'] ?? '') ?>">
                                 Dr. <?= htmlspecialchars($doctor['full_name']) ?>
                                 <?php if (!empty($doctor['specialty'])): ?>
                                     (<?= htmlspecialchars($doctor['specialty']) ?>)
@@ -1252,18 +1273,31 @@ include_once '../../components/reception_sidebar.php';
                             No doctors available.
                         </p>
                     <?php else: ?>
-                        <p class="text-xs text-gray-400 mt-1">
+                        <p class="text-xs text-gray-400 mt-1" id="doctorStatusText">
                             <i class="fas fa-info-circle mr-1"></i> 
                             <?= $total_doctors ?> doctor(s) available 
-                            <span class="text-green-500">(<?= $online_doctors ?> online)</span>
+                            <span class="text-green-500" id="onlineDoctorsText">(<?= $online_doctors ?> online)</span>
                         </p>
+                        
+                        <!-- DOCTOR STATUS INFO - Simple counts only -->
+                        <div class="doctor-status-info" id="doctorStatusInfo">
+                            <span class="online-doctors">
+                                <i class="fas fa-circle status-icon" style="color:#059669;font-size:0.5rem;"></i>
+                                Online: <span class="status-count" id="onlineCountDisplay"><?= $online_doctors ?></span>
+                            </span>
+                            <span class="offline-doctors">
+                                <i class="fas fa-circle status-icon" style="color:#94A3B8;font-size:0.5rem;"></i>
+                                Offline: <span class="status-count" id="offlineCountDisplay"><?= $total_doctors - $online_doctors ?></span>
+                            </span>
+                            <span class="text-gray-400" style="font-weight:400;">
+                                Total: <?= $total_doctors ?>
+                            </span>
+                        </div>
                     <?php endif; ?>
                 </div>
             </div>
             
-            <!-- ============================================================ -->
-            <!-- ROW 2: Date + Time -->
-            <!-- ============================================================ -->
+            <!-- ROW 2: Date + Time (12 HOUR FORMAT with manual input) -->
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
@@ -1277,14 +1311,37 @@ include_once '../../components/reception_sidebar.php';
                     <label class="form-label">
                         <i class="fas fa-clock label-icon"></i> Time <span class="required">*</span>
                     </label>
-                    <input type="time" name="appointment_time" class="form-control" 
-                           value="09:00" required>
+                    <div class="time-select-group">
+                        <!-- Hour Input (1-12) - Can type or select -->
+                        <input type="number" name="appointment_hour" 
+                               class="time-input" id="hourInput" 
+                               value="09" min="1" max="12" 
+                               placeholder="HH" required>
+                        <span class="time-label">Hour</span>
+                        
+                        <span class="time-separator">:</span>
+                        
+                        <!-- Minute Input (00-59) - Can type or select -->
+                        <input type="number" name="appointment_minute" 
+                               class="time-input" id="minuteInput" 
+                               value="00" min="0" max="59" 
+                               placeholder="MM" required>
+                        <span class="time-label">Min</span>
+                        
+                        <!-- AM/PM Select -->
+                        <select name="appointment_ampm" class="form-control ampm-select" id="ampmSelect" required>
+                            <option value="AM" selected>AM</option>
+                            <option value="PM">PM</option>
+                        </select>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">
+                        <i class="fas fa-info-circle mr-1"></i> 
+                        Enter hour (1-12) and minutes (00-59) or use the dropdowns
+                    </p>
                 </div>
             </div>
             
-            <!-- ============================================================ -->
             <!-- ROW 3: Visit Type + Status -->
-            <!-- ============================================================ -->
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
@@ -1309,9 +1366,7 @@ include_once '../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- ============================================================ -->
             <!-- ROW 4: Purpose (Full Width) -->
-            <!-- ============================================================ -->
             <div class="form-row grid-full">
                 <label class="form-label">
                     <i class="fas fa-notes-medical label-icon"></i> Purpose
@@ -1319,14 +1374,12 @@ include_once '../../components/reception_sidebar.php';
                 <textarea name="purpose" class="form-control" placeholder="Reason for appointment..." rows="3"></textarea>
             </div>
             
-            <!-- ================================================================ -->
             <!-- 6 VITAL SIGNS SECTION -->
-            <!-- ================================================================ -->
             <div class="vital-signs-section">
                 <div class="vital-title">
                     <i class="fas fa-heartbeat"></i>
                     6 Vital Signs
-                    <span class="text-sm font-normal text-gray-400">(Record patient vital signs)</span>
+                    <span class="text-sm font-normal text-gray-400">(Record patient vital signs - any value accepted)</span>
                     <?php if ($patient_id > 0 && $latest_vital_signs): ?>
                         <span class="text-xs text-green-500 ml-auto">
                             <i class="fas fa-check-circle"></i> Last recorded: <?= date('d/m/Y H:i', strtotime($latest_vital_signs['recorded_at'])) ?>
@@ -1340,11 +1393,9 @@ include_once '../../components/reception_sidebar.php';
                     <div class="vital-sign-item">
                         <label class="vital-label">🌡️ Temperature</label>
                         <input type="number" name="temperature" class="vital-input" 
-                               step="0.1" min="35" max="42" 
-                               placeholder="36.5" 
+                               step="0.1" placeholder="e.g. 36.5" 
                                value="<?= $latest_vital_signs['temperature'] ?? '' ?>">
                         <span class="vital-unit">°C</span>
-                        <span class="vital-normal">Normal: 36.5 - 37.5</span>
                     </div>
                     
                     <!-- 2. Blood Pressure -->
@@ -1352,49 +1403,45 @@ include_once '../../components/reception_sidebar.php';
                         <label class="vital-label">💓 Blood Pressure</label>
                         <div style="display:flex;gap:6px;align-items:center;">
                             <input type="number" name="bp_systolic" class="vital-input" 
-                                   style="width:50%;" min="80" max="220" placeholder="120"
+                                   style="width:50%;" placeholder="120"
                                    value="<?= $latest_vital_signs['blood_pressure_systolic'] ?? '' ?>">
                             <span style="color:var(--text-secondary);font-weight:700;">/</span>
                             <input type="number" name="bp_diastolic" class="vital-input" 
-                                   style="width:50%;" min="50" max="140" placeholder="80"
+                                   style="width:50%;" placeholder="80"
                                    value="<?= $latest_vital_signs['blood_pressure_diastolic'] ?? '' ?>">
                         </div>
                         <span class="vital-unit">mmHg</span>
-                        <span class="vital-normal">Normal: 120/80</span>
                     </div>
                     
                     <!-- 3. Pulse Rate -->
                     <div class="vital-sign-item">
                         <label class="vital-label">💓 Pulse Rate</label>
                         <input type="number" name="pulse_rate" class="vital-input" 
-                               min="40" max="180" placeholder="72"
+                               placeholder="72"
                                value="<?= $latest_vital_signs['pulse_rate'] ?? '' ?>">
                         <span class="vital-unit">bpm</span>
-                        <span class="vital-normal">Normal: 60 - 100</span>
                     </div>
                     
                     <!-- 4. Weight -->
                     <div class="vital-sign-item">
                         <label class="vital-label">⚖️ Weight</label>
                         <input type="number" name="weight" class="vital-input" 
-                               step="0.1" min="2" max="300" placeholder="65"
+                               step="0.1" placeholder="65"
                                id="weightInput"
                                value="<?= $latest_vital_signs['weight'] ?? '' ?>"
                                oninput="calculateBMI()">
                         <span class="vital-unit">kg</span>
-                        <span class="vital-normal">Record patient weight</span>
                     </div>
                     
                     <!-- 5. Height -->
                     <div class="vital-sign-item">
                         <label class="vital-label">📏 Height</label>
                         <input type="number" name="height" class="vital-input" 
-                               step="0.1" min="40" max="250" placeholder="170"
+                               step="0.1" placeholder="170"
                                id="heightInput"
                                value="<?= $latest_vital_signs['height'] ?? '' ?>"
                                oninput="calculateBMI()">
                         <span class="vital-unit">cm</span>
-                        <span class="vital-normal">Record patient height</span>
                     </div>
                     
                     <!-- 6. BMI (Auto-calculated) -->
@@ -1402,7 +1449,7 @@ include_once '../../components/reception_sidebar.php';
                         <label class="vital-label">📊 BMI</label>
                         <input type="number" name="bmi" class="vital-input" 
                                id="bmiOutput" readonly
-                               step="0.1" placeholder="22.5"
+                               step="0.1" placeholder="Auto-calculated"
                                value="<?= $latest_vital_signs['bmi'] ?? '' ?>">
                         <span class="vital-unit">kg/m²</span>
                         <span class="vital-bmi-category" id="bmiCategory" style="font-size:0.6rem;font-weight:600;display:block;margin-top:2px;">
@@ -1422,9 +1469,7 @@ include_once '../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- ============================================================ -->
             <!-- FORM ACTIONS -->
-            <!-- ============================================================ -->
             <div class="form-actions">
                 <button type="submit" class="btn btn-success" id="submitBtn">
                     <i class="fas fa-save"></i> Schedule Appointment
@@ -1437,9 +1482,7 @@ include_once '../../components/reception_sidebar.php';
                 </a>
             </div>
             
-            <!-- ============================================================ -->
             <!-- FOOTER INFO -->
-            <!-- ============================================================ -->
             <div class="mt-4 pt-3 text-xs text-gray-400 text-center border-t border-gray-200 dark:border-gray-700">
                 <i class="fas fa-info-circle mr-1"></i>
                 Schedule an appointment with 6 vital signs: BP, Weight, Height, Temperature, Pulse, BMI
@@ -1449,9 +1492,7 @@ include_once '../../components/reception_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
     <!-- QUICK STATS -->
-    <!-- ================================================================ -->
     <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-5" style="max-width:950px;margin:24px auto 0;">
         <div class="stat-card">
             <div class="stat-icon">👥</div>
@@ -1460,7 +1501,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
         <div class="stat-card">
             <div class="stat-icon">👨‍⚕️</div>
-            <p class="stat-number green"><?= $total_doctors ?></p>
+            <p class="stat-number green" id="totalDoctorsStat"><?= $total_doctors ?></p>
             <p class="stat-label">Doctors Available</p>
             <p class="text-xs text-gray-400" id="onlineDoctorsStatTime"><?= $online_doctors ?> online</p>
         </div>
@@ -1477,16 +1518,14 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             New Appointment with 6 Vital Signs
             <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1494,9 +1533,7 @@ include_once '../../components/reception_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1506,7 +1543,7 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH BMI CALCULATOR & AUTO-UPDATE -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1558,7 +1595,7 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - 12 HOUR FORMAT
     // ================================================================
     function updateDateTime() {
         var now = new Date();
@@ -1568,12 +1605,60 @@ include_once '../../components/reception_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
-        document.getElementById('formTimestamp').textContent = timeStr;
+        
+        var dtEl = document.getElementById('currentDateTime');
+        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+        
+        var ftEl = document.getElementById('footerTimestamp');
+        if (ftEl) ftEl.textContent = 'Last updated: ' + timeStr;
+        
+        var formTs = document.getElementById('formTimestamp');
+        if (formTs) formTs.textContent = timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // TIME INPUT VALIDATION - Manual entry
+    // ================================================================
+    var hourInput = document.getElementById('hourInput');
+    var minuteInput = document.getElementById('minuteInput');
+    
+    if (hourInput) {
+        hourInput.addEventListener('input', function() {
+            var val = parseInt(this.value);
+            if (val < 1) this.value = 1;
+            if (val > 12) this.value = 12;
+            if (this.value.length > 2) this.value = this.value.slice(0, 2);
+        });
+        
+        hourInput.addEventListener('blur', function() {
+            if (this.value === '' || this.value === '0') {
+                this.value = '09';
+            }
+            if (this.value.length === 1) {
+                this.value = '0' + this.value;
+            }
+        });
+    }
+    
+    if (minuteInput) {
+        minuteInput.addEventListener('input', function() {
+            var val = parseInt(this.value);
+            if (val < 0) this.value = 0;
+            if (val > 59) this.value = 59;
+            if (this.value.length > 2) this.value = this.value.slice(0, 2);
+        });
+        
+        minuteInput.addEventListener('blur', function() {
+            if (this.value === '' || this.value === '0') {
+                this.value = '00';
+            }
+            if (this.value.length === 1) {
+                this.value = '0' + this.value;
+            }
+        });
+    }
 
     // ================================================================
     // SEARCH
@@ -1614,7 +1699,6 @@ include_once '../../components/reception_sidebar.php';
             
             bmiOutput.value = bmi;
             
-            // Determine category and color
             var category = '';
             var color = '';
             if (bmi < 16) {
@@ -1650,20 +1734,14 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // AUTO-SUBMIT ON PATIENT SELECT
-    // ================================================================
-    document.getElementById('patientSelect')?.addEventListener('change', function() {
-        // Auto-submit to load vital signs for selected patient
-        this.form.submit();
-    });
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
+        
+        if (!toast) return;
         
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
@@ -1681,62 +1759,245 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // GLOBAL STATS AUTO-UPDATE (3 SECONDS)
+    // AJAX AUTO-UPDATE DOCTOR STATUS USING get_online_doctors.php
     // ================================================================
     var updateInterval = null;
     var isUpdating = false;
+    var currentBranchId = <?= json_encode($selected_branch_id) ?>;
+    var retryCount = 0;
+    var maxRetries = 5;
+    var doctorSelect = document.getElementById('doctorSelect');
+    var updateCount = 0;
 
-    function fetchAndUpdateStats() {
-        if (isUpdating) return;
-        isUpdating = true;
+    function getCurrentTime() {
+        var now = new Date();
+        return now.toLocaleTimeString('en-US', { 
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true 
+        });
+    }
+
+    function updateDoctorDropdown(doctorsData) {
+        if (!doctorSelect) {
+            console.error('❌ Doctor select not found!');
+            return;
+        }
         
-        fetch('/dispensary_system/frontend/api/get_global_stats.php?t=' + new Date().getTime())
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    var stats = data.stats || {};
-                    var onlineCount = stats.online_doctors || 0;
-                    
-                    // Update online doctors count
-                    document.getElementById('onlineDoctorCount').textContent = onlineCount;
-                    document.getElementById('onlineDoctorsStatTime').textContent = onlineCount + ' online';
-                    
-                    // Update update badge
-                    var now = new Date();
-                    document.getElementById('updateBadge').innerHTML = 
-                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
-                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    document.getElementById('footerTimestamp').textContent = 'Last updated: ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        var currentValue = doctorSelect.value;
+        var onlineCount = 0;
+        var offlineCount = 0;
+        
+        // Clear all options
+        while (doctorSelect.options.length > 0) {
+            doctorSelect.remove(0);
+        }
+        
+        // Add placeholder option
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = '-- Select Doctor --';
+        doctorSelect.appendChild(placeholder);
+        
+        // Add each doctor and count online/offline
+        doctorsData.forEach(function(doctor) {
+            var option = document.createElement('option');
+            option.value = doctor.id;
+            option.dataset.online = doctor.is_online;
+            option.dataset.name = doctor.full_name;
+            option.dataset.specialty = doctor.specialty || '';
+            
+            var label = 'Dr. ' + doctor.full_name;
+            if (doctor.specialty) {
+                label += ' (' + doctor.specialty + ')';
+            }
+            
+            if (doctor.is_online == 1) {
+                label += ' 🟢 Online';
+                option.style.color = '#059669';
+                option.style.fontWeight = '600';
+                onlineCount++;
+            } else {
+                label += ' ⚪ Offline';
+                option.style.color = '#94A3B8';
+                option.style.fontWeight = '400';
+                offlineCount++;
+            }
+            
+            option.textContent = label;
+            doctorSelect.appendChild(option);
+        });
+        
+        // Try to restore previous selection
+        var found = false;
+        for (var i = 0; i < doctorSelect.options.length; i++) {
+            if (doctorSelect.options[i].value == currentValue) {
+                doctorSelect.value = currentValue;
+                found = true;
+                break;
+            }
+        }
+        
+        // If not found or no selection, select first online doctor
+        if (!found || !currentValue) {
+            for (var i = 0; i < doctorSelect.options.length; i++) {
+                var opt = doctorSelect.options[i];
+                if (opt.value && opt.dataset.online == '1') {
+                    doctorSelect.value = opt.value;
+                    break;
                 }
-                isUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Update error:', error);
-                isUpdating = false;
-            });
+            }
+        }
+        
+        // Update status text and counts
+        updateDoctorStatusText();
+        updateDoctorStatusCounts(onlineCount, offlineCount);
+        
+        // Log update
+        updateCount++;
+        console.log('✅ Dropdown updated (' + updateCount + ' times) - ' + doctorsData.length + ' doctors loaded');
+        console.log('   Online: ' + onlineCount + ', Offline: ' + offlineCount);
+    }
+
+    function updateDoctorStatusText() {
+        var selectedOption = doctorSelect.options[doctorSelect.selectedIndex];
+        var doctorStatusText = document.getElementById('doctorStatusText');
+        if (selectedOption && selectedOption.dataset && doctorStatusText) {
+            var isOnline = selectedOption.dataset.online == '1';
+            var doctorName = selectedOption.dataset.name || 'Doctor';
+            if (isOnline) {
+                doctorStatusText.innerHTML = '<i class="fas fa-check-circle" style="color:#059669;"></i> Dr. ' + doctorName + ' is <strong style="color:#059669;">Online</strong> and available';
+            } else {
+                doctorStatusText.innerHTML = '<i class="fas fa-clock" style="color:#D97706;"></i> Dr. ' + doctorName + ' is <strong style="color:#D97706;">Offline</strong> - may not respond immediately';
+            }
+        }
+    }
+
+    function updateDoctorStatusCounts(onlineCount, offlineCount) {
+        var onlineDisplay = document.getElementById('onlineCountDisplay');
+        var offlineDisplay = document.getElementById('offlineCountDisplay');
+        
+        if (onlineDisplay) onlineDisplay.textContent = onlineCount;
+        if (offlineDisplay) offlineDisplay.textContent = offlineCount;
+    }
+
+    function fetchDoctorStatus() {
+        if (isUpdating) {
+            return;
+        }
+        
+        isUpdating = true;
+        var timestamp = new Date().getTime();
+        var url = '/dispensary_system/frontend/api/get_online_doctors.php?branch_id=' + encodeURIComponent(currentBranchId) + '&t=' + timestamp;
+        
+        console.log('🔄 Fetching doctor status... (attempt ' + (retryCount + 1) + ')');
+        
+        fetch(url, {
+            method: 'GET',
+            cache: 'no-cache',
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache'
+            }
+        })
+        .then(function(response) { 
+            if (!response.ok) {
+                throw new Error('HTTP error! status: ' + response.status);
+            }
+            return response.json(); 
+        })
+        .then(function(data) {
+            retryCount = 0;
+            if (data.success) {
+                console.log('✅ API response: ' + data.total_doctors + ' doctors, ' + data.online_count + ' online');
+                
+                // Update the dropdown with new data
+                updateDoctorDropdown(data.doctors);
+                
+                // Update online count
+                var onlineCount = data.online_count || 0;
+                
+                // Update UI elements
+                var onlineCountEl = document.getElementById('onlineDoctorCount');
+                if (onlineCountEl) onlineCountEl.textContent = onlineCount;
+                
+                var onlineDoctorsText = document.getElementById('onlineDoctorsText');
+                if (onlineDoctorsText) onlineDoctorsText.textContent = '(' + onlineCount + ' online)';
+                
+                var onlineDoctorsStatTime = document.getElementById('onlineDoctorsStatTime');
+                if (onlineDoctorsStatTime) onlineDoctorsStatTime.textContent = onlineCount + ' online';
+                
+                var totalDoctorsStat = document.getElementById('totalDoctorsStat');
+                if (totalDoctorsStat) totalDoctorsStat.textContent = data.total_doctors || 0;
+                
+                // Update badge
+                var timeStr = getCurrentTime();
+                var updateBadge = document.getElementById('updateBadge');
+                if (updateBadge) {
+                    updateBadge.innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
+                }
+                
+                var footerTs = document.getElementById('footerTimestamp');
+                if (footerTs) {
+                    footerTs.textContent = 'Last updated: ' + timeStr;
+                }
+                
+            } else {
+                console.warn('⚠️ API returned success=false:', data.message || 'Unknown error');
+            }
+            isUpdating = false;
+        })
+        .catch(function(error) {
+            console.error('❌ Doctor status update error:', error);
+            isUpdating = false;
+            
+            retryCount++;
+            if (retryCount < maxRetries) {
+                console.log('🔄 Retrying in 3 seconds... (attempt ' + (retryCount + 1) + '/' + maxRetries + ')');
+                setTimeout(fetchDoctorStatus, 3000);
+            } else {
+                var updateBadge = document.getElementById('updateBadge');
+                if (updateBadge) {
+                    updateBadge.innerHTML = '<i class="fas fa-exclamation-triangle" style="color:#F59E0B;"></i> Offline';
+                }
+                retryCount = 0;
+                console.log('❌ Max retries reached. Please refresh page.');
+            }
+        });
     }
 
     // ================================================================
-    // START / STOP AUTO-UPDATE
+    // LISTEN FOR DOCTOR SELECTION CHANGES
+    // ================================================================
+    if (doctorSelect) {
+        doctorSelect.addEventListener('change', function() {
+            updateDoctorStatusText();
+        });
+    }
+
+    // ================================================================
+    // START AUTO-UPDATE
     // ================================================================
     function startAutoUpdate() {
         if (updateInterval) {
             clearInterval(updateInterval);
+            updateInterval = null;
         }
-        updateInterval = setInterval(fetchAndUpdateStats, 3000);
-        fetchAndUpdateStats();
+        // Initial update after 1 second
+        setTimeout(function() {
+            fetchDoctorStatus();
+        }, 1000);
+        // Set interval
+        updateInterval = setInterval(fetchDoctorStatus, 3000);
+        console.log('✅ Auto-update timer started (every 3 seconds)');
     }
 
     function stopAutoUpdate() {
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
+            console.log('⏹️ Auto-update stopped');
         }
     }
 
-    // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopAutoUpdate();
@@ -1746,43 +2007,30 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
-        }
-        if (e.key === 'Escape' && document.activeElement === searchInput) {
-            searchInput.value = '';
-            searchInput.blur();
-        }
-    });
-
-    // ================================================================
-    // INITIALIZE
+    // INITIALIZATION
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Calculate BMI if values exist
         calculateBMI();
-        
-        // Start auto-update
+        // Initialize doctor status text
         setTimeout(function() {
+            updateDoctorStatusText();
             startAutoUpdate();
-        }, 1500);
+            console.log('✅ System initialized');
+            console.log('🔄 Doctor status will update in dropdown WITHOUT page refresh');
+            console.log('📡 Using API: get_online_doctors.php');
+        }, 500);
     });
 
-    // ================================================================
-    // CONSOLE
-    // ================================================================
     console.log('%c📅 Braick - New Appointment with 6 Vital Signs', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= $_SESSION['full_name'] ?? 'Rose Mwangi' ?> (<?= $_SESSION['role'] ?? 'reception' ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Patients: <?= count($patients) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (<?= $online_doctors ?> online)', 'font-size:13px; color:#64748B;');
     console.log('%c💓 6 Vital Signs: BP, Weight, Height, Temperature, Pulse Rate, BMI', 'font-size:13px; color:#DC2626;');
-    console.log('%c📊 BMI Auto-calculates from weight and height', 'font-size:13px; color:#059669;');
-    console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Auto-update: Every 3 seconds (Doctor status via AJAX)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Dropdown updates WITHOUT page refresh', 'font-size:13px; color:#059669;');
+    console.log('%c🕐 Time format: 12-hour (Manual input or select)', 'font-size:13px; color:#64748B;');
+    console.log('%c📡 API URL: /dispensary_system/frontend/api/get_online_doctors.php', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>
