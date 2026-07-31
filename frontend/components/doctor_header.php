@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/components/doctor_header.php
 // DOCTOR - SHARED HEADER WITH SEARCH BAR & ONLINE STATUS
+// WITH WORKING SIDEBAR TOGGLE - FULLY FIXED
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -210,7 +211,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAVIGATION - WITH SEARCH BAR
+           TOP NAVIGATION - WITH SEARCH BAR & WORKING SIDEBAR TOGGLE
            ================================================================ */
         .top-nav {
             position: fixed;
@@ -227,6 +228,43 @@ $current_page = basename($_SERVER['PHP_SELF']);
             border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
             gap: 12px;
+            box-shadow: var(--shadow);
+        }
+        
+        /* ================================================================
+           SIDEBAR TOGGLE BUTTON - CRITICAL: VISIBLE ON MOBILE
+           ================================================================ */
+        .sidebar-toggle-btn {
+            display: none;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            font-size: 1.4rem;
+            cursor: pointer;
+            padding: 6px 10px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        
+        .sidebar-toggle-btn:hover {
+            background: var(--primary-bg);
+            color: var(--primary);
+        }
+        
+        .sidebar-toggle-btn:active {
+            transform: scale(0.9);
+        }
+        
+        /* Show on mobile */
+        @media (max-width: 1024px) {
+            .sidebar-toggle-btn {
+                display: block !important;
+            }
+            .top-nav {
+                left: 0;
+            }
         }
         
         /* ================================================================
@@ -284,6 +322,36 @@ $current_page = basename($_SERVER['PHP_SELF']);
         }
         
         /* ================================================================
+           DASHBOARD LINK
+           ================================================================ */
+        .dashboard-link {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-primary);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            padding: 4px 8px;
+            border-radius: 8px;
+        }
+        
+        .dashboard-link:hover {
+            color: var(--primary);
+            background: var(--primary-bg);
+        }
+        
+        .dashboard-link i {
+            color: var(--primary);
+            font-size: 1.1rem;
+        }
+        
+        [data-theme="dark"] .dashboard-link:hover {
+            background: #1E3A5F;
+        }
+        
+        /* ================================================================
            TOP NAV RIGHT ELEMENTS
            ================================================================ */
         .top-nav .datetime {
@@ -291,6 +359,15 @@ $current_page = basename($_SERVER['PHP_SELF']);
             color: var(--text-secondary);
             font-weight: 500;
             white-space: nowrap;
+        }
+        
+        .top-nav .datetime i {
+            color: var(--primary);
+            margin-right: 4px;
+        }
+        
+        [data-theme="dark"] .top-nav .datetime i {
+            color: var(--primary-light);
         }
         
         /* ================================================================
@@ -369,6 +446,9 @@ $current_page = basename($_SERVER['PHP_SELF']);
         .avatar-color-6 { background: #0D9488; }
         .avatar-color-7 { background: #DB2777; }
         
+        /* ================================================================
+           ICON BUTTONS (Notifications)
+           ================================================================ */
         .top-nav .icon-btn {
             width: 38px;
             height: 38px;
@@ -496,16 +576,6 @@ $current_page = basename($_SERVER['PHP_SELF']);
             font-size: 0.9rem;
         }
         
-        .sidebar-toggle-btn {
-            display: none;
-            background: transparent;
-            border: none;
-            color: var(--text-primary);
-            font-size: 1.3rem;
-            cursor: pointer;
-            padding: 4px 8px;
-        }
-        
         /* ================================================================
            MAIN CONTENT OFFSET
            ================================================================ */
@@ -524,6 +594,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
         .page-header {
             border-bottom: 3px solid var(--primary);
             padding-bottom: 12px;
+            margin-bottom: 20px;
         }
         
         .page-header .page-title {
@@ -604,31 +675,45 @@ $current_page = basename($_SERVER['PHP_SELF']);
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .sidebar-toggle-btn { display: block; }
-            .main-content { margin-left: 0; }
-            .search-wrapper { max-width: 300px; }
+            .top-nav { left: 0; padding: 0 16px; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .search-wrapper { max-width: 300px; min-width: 120px; }
         }
         
         @media (max-width: 768px) {
+            .top-nav { height: 60px; padding: 0 12px; }
             .top-nav .datetime { display: none; }
             .top-nav .status-toggle { display: none; }
-            .main-content { padding: 16px; }
-            .search-wrapper { max-width: 180px; }
-        }
-        
-        @media (max-width: 640px) {
-            .top-nav { padding: 0 12px; gap: 8px; }
-            .search-wrapper { max-width: 120px; }
+            .main-content { padding: 12px; margin-top: 60px; }
+            .search-wrapper { max-width: 180px; min-width: 100px; }
+            .search-wrapper input { font-size: 0.75rem; padding: 6px 10px; }
             .search-wrapper .search-btn { padding: 6px 10px; font-size: 0.7rem; }
             .search-wrapper .search-btn span { display: none; }
             .search-wrapper .search-btn i { margin-right: 0; }
-            .dark-toggle-btn { padding: 4px 8px; font-size: 0.7rem; }
+            .dark-toggle-btn { padding: 4px 10px; font-size: 0.7rem; }
             .dark-toggle-btn span { display: none; }
-            .main-content { padding: 10px; }
-            .page-header .page-title { font-size: 1.2rem; }
+            .top-nav .icon-btn { width: 32px; height: 32px; }
+            .top-nav .icon-btn i { font-size: 0.9rem; }
             .avatar-link .avatar-img { width: 32px; height: 32px; }
             .avatar-link .avatar-placeholder { width: 32px; height: 32px; font-size: 0.8rem; }
+            .page-header .page-title { font-size: 1.2rem; }
+            .dashboard-link span { display: none; }
+        }
+        
+        @media (max-width: 480px) {
+            .top-nav { height: 56px; padding: 0 8px; gap: 4px; }
+            .main-content { padding: 8px; margin-top: 56px; }
+            .search-wrapper { max-width: 120px; min-width: 60px; }
+            .search-wrapper input { font-size: 0.65rem; padding: 4px 8px; }
+            .search-wrapper .search-btn { padding: 4px 8px; font-size: 0.6rem; }
+            .dark-toggle-btn { padding: 3px 8px; font-size: 0.6rem; }
+            .dark-toggle-btn i { font-size: 0.7rem; }
+            .top-nav .icon-btn { width: 28px; height: 28px; }
+            .top-nav .icon-btn i { font-size: 0.8rem; }
+            .avatar-link .avatar-img { width: 28px; height: 28px; }
+            .avatar-link .avatar-placeholder { width: 28px; height: 28px; font-size: 0.7rem; }
+            .page-header .page-title { font-size: 1rem; }
+            .sidebar-toggle-btn { font-size: 1.1rem; padding: 4px 6px; }
         }
         
         @keyframes fadeInUp {
@@ -645,27 +730,33 @@ $current_page = basename($_SERVER['PHP_SELF']);
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - WITH SEARCH BAR -->
+<!-- TOP NAVIGATION - WITH SEARCH BAR & WORKING SIDEBAR TOGGLE -->
 <!-- ================================================================ -->
-<nav class="top-nav">
+<nav class="top-nav" id="topNav">
     
     <!-- Left Side -->
     <div class="flex items-center gap-3 flex-1 min-w-0">
-        <button id="sidebarToggle" class="sidebar-toggle-btn" aria-label="Toggle Sidebar">
+        
+        <!-- ================================================================ -->
+        <!-- SIDEBAR TOGGLE BUTTON - CRITICAL: Must have id="sidebarToggle" -->
+        <!-- ================================================================ -->
+        <button id="sidebarToggle" class="sidebar-toggle-btn" aria-label="Toggle Sidebar Menu" title="Toggle Sidebar">
             <i class="fas fa-bars"></i>
         </button>
         
-        <a href="dashboard.php" class="flex items-center gap-2 text-gray-700 hover:text-primary transition shrink-0" style="color:var(--text-primary);">
-            <i class="fas fa-home text-primary"></i>
-            <span class="font-semibold text-sm hidden sm:inline">Dashboard</span>
+        <!-- Dashboard Link -->
+        <a href="dashboard.php" class="dashboard-link" title="Go to Dashboard">
+            <i class="fas fa-home"></i>
+            <span>Dashboard</span>
         </a>
     </div>
     
     <!-- Search Bar -->
     <div class="search-wrapper">
         <i class="fas fa-search text-gray-400 ml-3"></i>
-        <input type="text" id="searchInput" placeholder="Search patients by name, ID or phone...">
-        <button id="searchBtn" class="search-btn">
+        <input type="text" id="searchInput" placeholder="Search patients by name, ID or phone..." 
+               aria-label="Search" autocomplete="off">
+        <button id="searchBtn" class="search-btn" aria-label="Search">
             <i class="fas fa-search mr-1"></i><span>Search</span>
         </button>
     </div>
@@ -673,25 +764,34 @@ $current_page = basename($_SERVER['PHP_SELF']);
     <!-- Right Side -->
     <div class="flex items-center gap-3 shrink-0">
         
-        <span class="datetime" id="currentDateTime"></span>
+        <!-- Date & Time -->
+        <span class="datetime" id="currentDateTime">
+            <i class="fas fa-clock"></i>
+            <span id="clockDisplay"><?= date('D, M d, Y • h:i:s A') ?></span>
+        </span>
         
-        <button id="statusToggle" class="status-toggle <?= $is_online ? '' : 'offline' ?>" title="Toggle Online Status">
+        <!-- Status Toggle Button -->
+        <button id="statusToggle" class="status-toggle <?= $is_online ? '' : 'offline' ?>" 
+                title="Click to toggle online/offline status">
             <span class="status-dot <?= $is_online ? 'online' : 'offline' ?>" id="statusDot"></span>
             <span class="status-text" id="statusText"><?= $is_online ? 'Online' : 'Offline' ?></span>
             <span class="status-spinner"></span>
         </button>
         
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+        <!-- Dark Mode Toggle -->
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode (Ctrl+D)">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
         
+        <!-- Notifications -->
         <button class="icon-btn" id="notifBtn" title="Notifications">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot" id="notifDot" style="display: none;"></span>
         </button>
         
-        <a href="profile.php" class="avatar-link" title="Profile">
+        <!-- Profile Avatar -->
+        <a href="profile.php" class="avatar-link" title="View Profile">
             <?php if ($show_initial): ?>
                 <div class="avatar-placeholder avatar-color-<?= (abs(crc32($full_name)) % 7) + 1 ?>">
                     <?= $initial ?>
@@ -706,9 +806,130 @@ $current_page = basename($_SERVER['PHP_SELF']);
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - DARK MODE, STATUS (UPDATES DATABASE), SEARCH, DATE/TIME -->
+<!-- JAVASCRIPT - FULL HEADER FUNCTIONALITY -->
 <!-- ================================================================ -->
 <script>
+// ================================================================
+// SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
+// ================================================================
+(function() {
+    // Wait for DOM to be ready
+    function initSidebarToggle() {
+        var sidebar = document.getElementById('sidebar');
+        var sidebarToggle = document.getElementById('sidebarToggle');
+        var overlay = document.getElementById('sidebarOverlay');
+        
+        console.log('🔧 Sidebar toggle initialization...');
+        console.log('📱 Sidebar element:', sidebar);
+        console.log('🔘 Toggle button:', sidebarToggle);
+        
+        // Create overlay if not exists
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'sidebarOverlay';
+            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+            document.body.appendChild(overlay);
+            console.log('✅ Sidebar overlay created');
+        }
+        
+        if (!sidebar) {
+            console.error('❌ Sidebar element not found!');
+            return;
+        }
+        
+        // Toggle function
+        function openSidebar() {
+            sidebar.classList.add('open');
+            overlay.style.display = 'block';
+            document.body.style.overflow = 'hidden';
+            console.log('🔓 Sidebar opened');
+        }
+        
+        function closeSidebar() {
+            sidebar.classList.remove('open');
+            overlay.style.display = 'none';
+            document.body.style.overflow = '';
+            console.log('🔒 Sidebar closed');
+        }
+        
+        function toggleSidebar() {
+            if (sidebar.classList.contains('open')) {
+                closeSidebar();
+            } else {
+                openSidebar();
+            }
+        }
+        
+        // ================================================================
+        // EVENT: Toggle button (hamburger icon)
+        // ================================================================
+        if (sidebarToggle) {
+            // Remove all existing listeners to avoid duplicates
+            var newToggle = sidebarToggle.cloneNode(true);
+            sidebarToggle.parentNode.replaceChild(newToggle, sidebarToggle);
+            var freshToggle = document.getElementById('sidebarToggle');
+            
+            freshToggle.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🔘 Hamburger clicked!');
+                toggleSidebar();
+            });
+            console.log('✅ Toggle button event attached');
+        } else {
+            console.warn('⚠️ Toggle button not found - trying fallback');
+            // Try to find by class
+            var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
+            if (fallbackBtn) {
+                fallbackBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleSidebar();
+                });
+                console.log('✅ Fallback toggle button attached');
+            }
+        }
+        
+        // ================================================================
+        // EVENT: Close sidebar when clicking overlay
+        // ================================================================
+        if (overlay) {
+            overlay.addEventListener('click', function(e) {
+                if (e.target === overlay) {
+                    closeSidebar();
+                }
+            });
+        }
+        
+        // ================================================================
+        // EVENT: Close sidebar with ESC key
+        // ================================================================
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+        
+        // ================================================================
+        // EVENT: Auto-close on window resize (desktop)
+        // ================================================================
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+        
+        console.log('✅ Sidebar toggle fully initialized!');
+    }
+    
+    // Run on DOM ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initSidebarToggle);
+    } else {
+        initSidebarToggle();
+    }
+})();
+
 // ================================================================
 // DARK MODE TOGGLE
 // ================================================================
@@ -780,47 +1001,30 @@ $current_page = basename($_SERVER['PHP_SELF']);
 })();
 
 // ================================================================
-// SIDEBAR TOGGLE
+// DATE & TIME - REAL TIME
 // ================================================================
-document.addEventListener('DOMContentLoaded', function() {
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
+(function() {
+    var clockDisplay = document.getElementById('clockDisplay');
     
-    if (sidebarToggle && sidebar) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
+    function updateClock() {
+        if (!clockDisplay) return;
+        var now = new Date();
+        var options = {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        };
+        clockDisplay.textContent = now.toLocaleDateString('en-US', options);
     }
     
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && sidebarToggle) {
-                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                    sidebar.classList.remove('open');
-                }
-            }
-        }
-    });
-});
-
-// ================================================================
-// DATE & TIME
-// ================================================================
-function updateDateTime() {
-    var now = new Date();
-    var dateStr = now.toLocaleDateString('en-US', {
-        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-    });
-    var timeStr = now.toLocaleTimeString('en-US', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-    });
-    var el = document.getElementById('currentDateTime');
-    if (el) {
-        el.textContent = dateStr + ' • ' + timeStr;
-    }
-}
-updateDateTime();
-setInterval(updateDateTime, 1000);
+    updateClock();
+    setInterval(updateClock, 1000);
+})();
 
 // ================================================================
 // ONLINE STATUS TOGGLE - UPDATES DATABASE
@@ -832,7 +1036,6 @@ document.addEventListener('DOMContentLoaded', function() {
     var avatarStatusRing = document.getElementById('avatarStatusRing');
     var isUpdating = false;
     
-    // Get doctor_id from PHP
     var doctorId = <?= json_encode($doctor_id) ?>;
     
     if (statusToggle) {
@@ -859,11 +1062,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
             
-            // Show loading state
             isUpdating = true;
             statusToggle.classList.add('updating');
             
-            // Send AJAX request to update status
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/dispensary_system/frontend/pages/doctor/update_doctor_status.php', true);
             xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
@@ -881,7 +1082,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                     'success');
                             } else {
                                 showToast('❌ Error', response.message || 'Failed to update status', 'error');
-                                // Revert UI
                                 if (newStatus === 1) {
                                     statusDot.classList.remove('online');
                                     statusDot.classList.add('offline');
@@ -900,7 +1100,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         } catch (e) {
                             showToast('❌ Error', 'Server error', 'error');
-                            // Revert UI
                             if (newStatus === 1) {
                                 statusDot.classList.remove('online');
                                 statusDot.classList.add('offline');
@@ -919,7 +1118,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     } else {
                         showToast('❌ Error', 'Network error', 'error');
-                        // Revert UI
                         if (newStatus === 1) {
                             statusDot.classList.remove('online');
                             statusDot.classList.add('offline');
@@ -944,7 +1142,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ================================================================
-// SEARCH
+// SEARCH FUNCTIONALITY
 // ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var searchBtn = document.getElementById('searchBtn');
@@ -963,7 +1161,23 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (searchInput) {
         searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                performSearch();
+            }
+        });
+        
+        // Ctrl+K to focus search
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                searchInput.focus();
+                searchInput.select();
+            }
+            if (e.key === 'Escape' && document.activeElement === searchInput) {
+                searchInput.value = '';
+                searchInput.blur();
+            }
         });
     }
 });
@@ -1046,14 +1260,18 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-console.log('%c👨‍⚕️ Braick - Doctor Header (WITH SEARCH BAR)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+// ================================================================
+// CONSOLE LOG
+// ================================================================
+console.log('%c👨‍⚕️ Braick - Doctor Header (WORKING SIDEBAR TOGGLE)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
 console.log('%c🟢 Status: <?= $is_online ? 'Online ✅' : 'Offline ❌' ?>', 'font-size:12px; color:#059669;');
 console.log('%c🆔 Doctor ID: <?= $doctor_id ?>', 'font-size:12px; color:#64748B;');
-console.log('%c👤 Doctor Name: <?= $full_name ?>', 'font-size:12px; color:#64748B;');
-console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:12px; color:#64748B;');
+console.log('%c👤 Doctor: <?= $full_name ?>', 'font-size:12px; color:#64748B;');
 console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
-console.log('%c🔍 Search: Ctrl+K to focus search', 'font-size:12px; color:#64748B;');
-console.log('%c🔄 Status: Ctrl+Shift+S to toggle online/offline', 'font-size:12px; color:#64748B;');
+console.log('%c🔍 Search: Ctrl+K to focus', 'font-size:12px; color:#64748B;');
+console.log('%c🔄 Status: Ctrl+Shift+S to toggle', 'font-size:12px; color:#64748B;');
+console.log('%c📱 Hamburger button: Click ☰ to toggle sidebar', 'font-size:12px; color:#34D399;');
+console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

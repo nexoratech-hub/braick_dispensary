@@ -1,11 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/components/admin_sidebar.php
-// SUPER ADMIN - SHARED SIDEBAR
+// SUPER ADMIN - SHARED SIDEBAR (FULLY FIXED)
 // FULLY RESPONSIVE - ALL DEVICES
 // BACKGROUND: BLUE | HOVER: GREEN
 // WITH AJAX REAL-TIME DATA UPDATES
-// NO SYSTEM LOGS & BACKUPS IN SIDEBAR
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -22,7 +21,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
 $current_module = basename(dirname($_SERVER['PHP_SELF']));
 
 // ================================================================
-// FUNCTION TO CHECK ACTIVE STATE - PAGE BASED
+// FUNCTION TO CHECK ACTIVE STATE
 // ================================================================
 function isActive($page) {
     global $current_page;
@@ -32,9 +31,6 @@ function isActive($page) {
     return '';
 }
 
-// ================================================================
-// FUNCTION TO CHECK ADMIN PAGES
-// ================================================================
 function isAdminPage($pages) {
     global $current_page;
     if (in_array($current_page, $pages)) {
@@ -91,6 +87,7 @@ try {
             $stmt->execute([(int)$selected_branch_id]);
         }
         $doctor_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $total_doctors = $doctor_count;
         
         // Patient counts
         if ($selected_branch_id === 'all') {
@@ -154,19 +151,19 @@ try {
     $patient_counts = ['total' => 0, 'today' => 0];
     $service_counts = ['total' => 0, 'today' => 0];
     $real_employee_count = $total_employees;
-    $doctor_count = $total_doctors;
 }
 
 $total_employees = $real_employee_count;
-$total_doctors = $doctor_count;
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 ?>
 
 <style>
     /* ================================================================
-       SIDEBAR STYLES - BLUE BACKGROUND, GREEN HOVER
+       SIDEBAR STYLES - FULL
        ================================================================ */
+    
+    /* Sidebar Container */
     .sidebar {
         position: fixed; 
         top: 0; 
@@ -177,21 +174,33 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         color: white;
         z-index: 50; 
         overflow-y: auto;
-        transition: transform 0.3s ease;
+        overflow-x: hidden;
+        transition: transform 0.3s ease-in-out;
         transform: translateX(-100%);
+        box-shadow: 4px 0 20px rgba(0,0,0,0.15);
     }
     
+    /* Sidebar Open State */
     .sidebar.open {
         transform: translateX(0);
     }
     
+    /* Scrollbar */
     .sidebar::-webkit-scrollbar { width: 5px; }
     .sidebar::-webkit-scrollbar-track { background: #0B3D8A; }
     .sidebar::-webkit-scrollbar-thumb { background: #0AA84F; border-radius: 10px; }
+    .sidebar::-webkit-scrollbar-thumb:hover { background: #0AA84F; }
     
+    /* ================================================================
+       SIDEBAR BRAND / HEADER
+       ================================================================ */
     .sidebar-brand {
         padding: 18px 16px 14px;
         border-bottom: 2px solid #0B3D8A;
+        background: #0B4EA8;
+        position: sticky;
+        top: 0;
+        z-index: 5;
     }
     
     .sidebar-brand .logo {
@@ -201,22 +210,29 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         object-fit: cover; 
         background: white; 
         padding: 4px;
+        border: 2px solid rgba(255,255,255,0.1);
     }
     
     .sidebar-brand .brand-text { 
         color: white; 
         font-weight: 700; 
         font-size: 0.95rem; 
+        line-height: 1.2;
     }
     
     .sidebar-brand .brand-sub { 
         color: #9EC5FE; 
         font-size: 0.65rem; 
+        font-weight: 500;
     }
     
+    /* ================================================================
+       BRANCH SELECTOR
+       ================================================================ */
     .sidebar-branch-selector {
         padding: 10px 14px;
         border-bottom: 2px solid #0B3D8A;
+        background: #0B4EA8;
     }
     
     .sidebar-branch-selector select {
@@ -230,19 +246,32 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         cursor: pointer;
         outline: none;
         transition: all 0.3s ease;
+        appearance: none;
+        -webkit-appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='white' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 10px center;
     }
     
     .sidebar-branch-selector select:hover {
-        background: rgba(255,255,255,0.2);
+        background-color: rgba(255,255,255,0.2);
+    }
+    
+    .sidebar-branch-selector select:focus {
+        box-shadow: 0 0 0 2px rgba(10, 168, 79, 0.5);
     }
     
     .sidebar-branch-selector select option {
         background: #0B4EA8;
         color: white;
+        padding: 8px;
     }
     
+    /* ================================================================
+       NAVIGATION
+       ================================================================ */
     .sidebar-nav { 
-        padding: 10px 8px; 
+        padding: 10px 8px 20px; 
     }
     
     .sidebar-nav .nav-label {
@@ -251,10 +280,17 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         letter-spacing: 0.08em; 
         color: #6EA8FE;
         padding: 0 10px; 
-        margin: 10px 0 4px; 
+        margin: 12px 0 4px; 
         font-weight: 700;
     }
     
+    .sidebar-nav .nav-label:first-of-type {
+        margin-top: 0;
+    }
+    
+    /* ================================================================
+       SIDEBAR LINKS
+       ================================================================ */
     .sidebar-link {
         display: flex; 
         align-items: center; 
@@ -263,34 +299,52 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         border-radius: 8px;
         color: #D2E3FC; 
         text-decoration: none;
-        transition: all 0.3s ease; 
+        transition: all 0.25s ease; 
         font-size: 0.8rem; 
         font-weight: 500;
         margin: 1px 0;
         background: transparent;
         cursor: pointer;
+        border: none;
+        width: 100%;
+        text-align: left;
+        position: relative;
     }
     
     .sidebar-link:hover {
         background: #0AA84F;
         color: white;
-        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.4);
+        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
         transform: translateX(4px);
     }
     
     .sidebar-link.active {
         background: #0AA84F;
         color: white;
-        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.4);
+        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
+    }
+    
+    .sidebar-link.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 20%;
+        bottom: 20%;
+        width: 4px;
+        background: white;
+        border-radius: 0 4px 4px 0;
     }
     
     .sidebar-link i { 
-        width: 18px; 
+        width: 20px; 
         text-align: center; 
         font-size: 0.9rem; 
         flex-shrink: 0;
     }
     
+    /* ================================================================
+       BADGES ON SIDEBAR
+       ================================================================ */
     .sidebar-link .badge {
         margin-left: auto;
         background: rgba(255,255,255,0.15);
@@ -314,6 +368,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         background: #059669;
     }
     
+    .sidebar-link .badge.warning {
+        background: #F59E0B;
+        color: #1E293B;
+    }
+    
     .sidebar-link:hover .badge {
         background: rgba(255,255,255,0.25);
     }
@@ -328,6 +387,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         50% { transform: scale(1.1); }
     }
     
+    /* ================================================================
+       LOGOUT LINK
+       ================================================================ */
     .sidebar-link.logout-link {
         border-top: 2px solid rgba(255,255,255,0.08);
         padding-top: 10px;
@@ -341,6 +403,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
     }
     
+    /* ================================================================
+       BADGE UPDATE ANIMATION
+       ================================================================ */
     .badge-update {
         animation: badgePop 0.3s ease;
     }
@@ -352,15 +417,36 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     }
     
     /* ================================================================
+       OVERLAY - For mobile
+       ================================================================ */
+    #sidebarOverlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 45;
+        display: none;
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
+    }
+    
+    /* ================================================================
        RESPONSIVE BREAKPOINTS
        ================================================================ */
     
+    /* Desktop: Sidebar always visible */
     @media (min-width: 1025px) {
         .sidebar {
             transform: translateX(0) !important;
         }
+        #sidebarOverlay {
+            display: none !important;
+        }
     }
     
+    /* Tablet and below: Sidebar hidden by default */
     @media (max-width: 1024px) {
         .sidebar {
             width: 260px;
@@ -385,7 +471,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             gap: 8px;
         }
         .sidebar-link i {
-            width: 16px;
+            width: 18px;
             font-size: 0.8rem;
         }
         .sidebar-link .badge {
@@ -394,6 +480,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     }
     
+    /* Mobile phones */
     @media (max-width: 768px) {
         .sidebar {
             width: 280px;
@@ -425,8 +512,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             font-size: 0.5rem;
             padding: 1px 6px;
         }
+        .sidebar-nav .nav-label {
+            font-size: 0.45rem;
+        }
     }
     
+    /* Small phones */
     @media (max-width: 480px) {
         .sidebar {
             width: 100%;
@@ -463,10 +554,18 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 </style>
 
 <!-- ================================================================ -->
+<!-- SIDEBAR OVERLAY (Mobile) -->
+<!-- ================================================================ -->
+<div id="sidebarOverlay"></div>
+
+<!-- ================================================================ -->
 <!-- SIDEBAR -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     
+    <!-- ================================================================ -->
+    <!-- BRAND / HEADER -->
+    <!-- ================================================================ -->
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
@@ -478,6 +577,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         </div>
     </div>
     
+    <!-- ================================================================ -->
+    <!-- BRANCH SELECTOR -->
+    <!-- ================================================================ -->
     <div class="sidebar-branch-selector">
         <select id="sidebarBranchSelector" onchange="switchBranch(this.value)">
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
@@ -499,11 +601,14 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         </select>
     </div>
     
+    <!-- ================================================================ -->
+    <!-- NAVIGATION -->
+    <!-- ================================================================ -->
     <nav class="sidebar-nav">
         
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <!-- MAIN MENU -->
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <div class="nav-label">Main Menu</div>
         
         <a href="../admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
@@ -526,9 +631,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <!-- MODULES -->
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Modules</div>
         
         <a href="../admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
@@ -567,9 +672,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <span class="badge" id="badgeCashier"><?= $module_counts['cashier'] ?? 0 ?></span>
         </a>
         
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <!-- SERVICES -->
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Services</div>
         
         <a href="../admin/services.php?branch=<?= $selected_branch_id ?>" 
@@ -581,24 +686,24 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <!-- MANAGEMENT -->
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Management</div>
         
         <a href="../admin/branches.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('branches.php') ?>">
+           class="sidebar-link <?= isActive('branches.php') || isAdminPage(['view_branch.php', 'add_branch.php', 'edit_branch.php']) ? 'active' : '' ?>">
             <i class="fas fa-store-alt"></i> Branches
             <span class="badge" id="badgeBranches"><?= $total_branches ?></span>
         </a>
         
         <a href="../admin/departments.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('departments.php') ?>">
+           class="sidebar-link <?= isActive('departments.php') || isAdminPage(['add_department.php', 'edit_department.php']) ? 'active' : '' ?>">
             <i class="fas fa-building"></i> Departments
         </a>
         
         <a href="../admin/bills.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('bills.php') || isActive('bill_details.php') || isActive('print_bill.php') ? 'active' : '' ?>">
+           class="sidebar-link <?= isActive('bills.php') || isActive('bill_details.php') || isActive('print_bill.php') || isActive('cancel_bill.php') ? 'active' : '' ?>">
             <i class="fas fa-file-invoice"></i> Bills
         </a>
         
@@ -607,9 +712,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <i class="fas fa-chart-bar"></i> Reports
         </a>
         
-        <!-- ================================================================ -->
-        <!-- SYSTEM - ONLY SETTINGS (NO SYSTEM LOGS & BACKUPS) -->
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
+        <!-- SYSTEM -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">System</div>
         
         <a href="../admin/settings.php?branch=<?= $selected_branch_id ?>" 
@@ -617,9 +722,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <i class="fas fa-cog"></i> Settings
         </a>
         
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <!-- ACCOUNT -->
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Account</div>
         
         <a href="../admin/profile.php" 
@@ -636,7 +741,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - FULL SIDEBAR FUNCTIONALITY -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -645,6 +750,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
+        // Remove id parameter if exists (for view pages)
         if (url.searchParams.has('id')) {
             url.searchParams.delete('id');
         }
@@ -652,35 +758,62 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     }
 
     // ================================================================
-    // SIDEBAR TOGGLE
+    // SIDEBAR TOGGLE - FULLY FIXED
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var sidebar = document.getElementById('sidebar');
         var sidebarToggle = document.getElementById('sidebarToggle');
-        var overlay = document.createElement('div');
-        overlay.id = 'sidebarOverlay';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:45;display:none;';
-        document.body.appendChild(overlay);
+        var overlay = document.getElementById('sidebarOverlay');
         
+        // Create overlay if not exists
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'sidebarOverlay';
+            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:45;display:none;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);';
+            document.body.appendChild(overlay);
+        }
+        
+        // Toggle function
         function toggleSidebar() {
             sidebar.classList.toggle('open');
             overlay.style.display = sidebar.classList.contains('open') ? 'block' : 'none';
             document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
         }
         
+        // ================================================================
+        // EVENT: Sidebar toggle button (hamburger icon)
+        // ================================================================
         if (sidebarToggle) {
+            // Remove any existing listeners to avoid duplicates
+            sidebarToggle.removeEventListener('click', toggleSidebar);
             sidebarToggle.addEventListener('click', function(e) {
                 e.stopPropagation();
                 toggleSidebar();
             });
         }
         
+        // ================================================================
+        // EVENT: Also listen for any element with class .icon-btn
+        // ================================================================
+        document.querySelectorAll('.icon-btn, .menu-toggle, [data-toggle="sidebar"]').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                toggleSidebar();
+            });
+        });
+        
+        // ================================================================
+        // EVENT: Close sidebar when clicking overlay
+        // ================================================================
         overlay.addEventListener('click', function() {
             sidebar.classList.remove('open');
             overlay.style.display = 'none';
             document.body.style.overflow = '';
         });
         
+        // ================================================================
+        // EVENT: Close sidebar with ESC key
+        // ================================================================
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                 sidebar.classList.remove('open');
@@ -689,6 +822,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             }
         });
         
+        // ================================================================
+        // EVENT: Auto-close on window resize (desktop)
+        // ================================================================
         window.addEventListener('resize', function() {
             if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                 sidebar.classList.remove('open');
@@ -696,6 +832,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 document.body.style.overflow = '';
             }
         });
+        
+        // ================================================================
+        // LOG: Debug info
+        // ================================================================
+        console.log('✅ Sidebar initialized');
+        console.log('📱 Sidebar element:', sidebar);
+        console.log('🔘 Toggle button:', sidebarToggle);
+        console.log('📐 Window width:', window.innerWidth);
+        console.log('📱 Is mobile:', window.innerWidth <= 1024);
     });
 
     // ================================================================
@@ -713,6 +858,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         
         fetch(url)
             .then(function(response) { 
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
                 return response.json(); 
             })
             .then(function(data) {
@@ -752,6 +900,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                     el.textContent = val;
                     el.style.display = '';
                     el.classList.remove('badge-update');
+                    // Trigger reflow for animation
                     void el.offsetWidth;
                     el.classList.add('badge-update');
                 } else {
@@ -765,9 +914,11 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
+        // Initial update after 2 seconds
         setTimeout(function() {
             updateSidebarData();
         }, 2000);
+        // Then every 15 seconds
         sidebarUpdateInterval = setInterval(updateSidebarData, 15000);
     }
 
@@ -778,6 +929,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     }
 
+    // Start/stop updates based on page visibility
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarUpdates();
@@ -786,14 +938,19 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         }
     });
 
+    // Start updates after page load
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarUpdates();
         }, 3000);
     });
 
-    console.log('%c🏥 Admin Sidebar - Clean Menu', 'font-size:16px; font-weight:bold; color:#0AA84F;');
-    console.log('%c📁 System Logs & Backups REMOVED from sidebar', 'font-size:13px; color:#F59E0B;');
-    console.log('%c👤 Employees: <?= $total_employees ?>', 'font-size:13px; color:#34D399;');
+    // ================================================================
+    // CONSOLE LOG
+    // ================================================================
+    console.log('%c🏥 Braick Dispensary - Admin Sidebar', 'font-size:16px; font-weight:bold; color:#0AA84F;');
+    console.log('%c📁 Full Sidebar with all menu items', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 Employees: <?= $total_employees ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c🔄 AJAX updates every 15 seconds', 'font-size:13px; color:#6EA8FE;');
+    console.log('%c📱 Responsive: Desktop fixed, Mobile hidden with toggle', 'font-size:13px; color:#F59E0B;');
 </script>

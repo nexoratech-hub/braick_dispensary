@@ -5,6 +5,7 @@
 // WITH PROFILE PICTURE - SHOWS ON ALL PAGES
 // WITH DATE AND TIME - LIVE UPDATE
 // WITH DARK MODE - FULLY WORKING
+// WITH SIDEBAR TOGGLE - FULLY WORKING ON MOBILE
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -210,8 +211,49 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
+            gap: 12px;
         }
         
+        /* ================================================================
+           SIDEBAR TOGGLE BUTTON - CRITICAL: VISIBLE ON MOBILE
+           ================================================================ */
+        .sidebar-toggle-btn {
+            display: none;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            font-size: 1.4rem;
+            cursor: pointer;
+            padding: 6px 10px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        
+        .sidebar-toggle-btn:hover {
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        .sidebar-toggle-btn:active {
+            transform: scale(0.9);
+        }
+        
+        /* Show on mobile */
+        @media (max-width: 1024px) {
+            .sidebar-toggle-btn {
+                display: block !important;
+            }
+            .top-nav {
+                left: 0;
+                padding: 0 16px;
+            }
+        }
+        
+        /* ================================================================
+           SEARCH WRAPPER
+           ================================================================ */
         .top-nav .search-wrapper {
             display: flex;
             align-items: center;
@@ -221,6 +263,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             transition: all 0.3s;
             flex: 1;
             max-width: 500px;
+            min-width: 120px;
         }
         
         .top-nav .search-wrapper:focus-within {
@@ -258,6 +301,40 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             background: var(--success-dark);
         }
         
+        /* ================================================================
+           DASHBOARD LINK
+           ================================================================ */
+        .dashboard-link {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-primary);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            padding: 4px 8px;
+            border-radius: 8px;
+            white-space: nowrap;
+        }
+        
+        .dashboard-link:hover {
+            color: var(--success);
+            background: var(--success-bg);
+        }
+        
+        .dashboard-link i {
+            color: var(--success);
+            font-size: 1.1rem;
+        }
+        
+        [data-theme="dark"] .dashboard-link:hover {
+            background: #1A3A2A;
+        }
+        
+        /* ================================================================
+           TOP NAV RIGHT ELEMENTS
+           ================================================================ */
         .top-nav .datetime {
             font-size: 0.78rem;
             color: var(--text-secondary);
@@ -265,6 +342,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             display: flex;
             align-items: center;
             gap: 6px;
+            white-space: nowrap;
         }
         
         .top-nav .datetime .date-part {
@@ -369,6 +447,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             display: flex;
             align-items: center;
             gap: 6px;
+            white-space: nowrap;
         }
         
         .dark-toggle-btn:hover {
@@ -398,6 +477,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             border-radius: 20px;
             background: var(--success-bg);
             color: var(--success);
+            white-space: nowrap;
         }
         
         [data-theme="dark"] .branch-badge {
@@ -695,23 +775,46 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
+            .top-nav { left: 0; padding: 0 16px; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
+            .top-nav .search-wrapper { max-width: 300px; min-width: 100px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav { height: 60px; padding: 0 12px; }
+            .top-nav .search-wrapper { max-width: 180px; min-width: 80px; }
+            .top-nav .search-wrapper input { font-size: 0.75rem; padding: 6px 10px; }
+            .top-nav .search-wrapper .search-btn { padding: 6px 10px; font-size: 0.7rem; }
+            .top-nav .search-wrapper .search-btn span { display: none; }
+            .top-nav .search-wrapper .search-btn i { margin-right: 0; }
             .top-nav .datetime .date-part { display: none; }
             .top-nav .datetime .time-part { font-size: 0.7rem; }
+            .top-nav .icon-btn { width: 32px; height: 32px; }
+            .top-nav .icon-btn i { font-size: 0.9rem; }
+            .top-nav .avatar, .top-nav .avatar-avatar { width: 32px; height: 32px; font-size: 0.8rem; }
+            .dark-toggle-btn { padding: 4px 10px; font-size: 0.7rem; }
+            .dark-toggle-btn span { display: none; }
+            .branch-badge { font-size: 0.5rem; padding: 2px 8px; }
+            .main-content { padding: 12px; margin-top: 60px; }
+            .sidebar-toggle-btn { font-size: 1.2rem; padding: 4px 8px; }
+            .dashboard-link span { display: none; }
         }
         
-        @media (max-width: 640px) {
-            .main-content { padding: 10px; }
-            .stat-card .stat-number { font-size: 1.4rem; }
-            .top-nav .datetime .date-part { display: none; }
-            .top-nav .datetime .time-part { font-size: 0.65rem; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
+        @media (max-width: 480px) {
+            .top-nav { height: 56px; padding: 0 8px; gap: 4px; }
+            .main-content { padding: 8px; margin-top: 56px; }
+            .top-nav .search-wrapper { max-width: 100px; min-width: 60px; }
+            .top-nav .search-wrapper input { font-size: 0.6rem; padding: 4px 6px; }
+            .top-nav .search-wrapper .search-btn { padding: 4px 6px; font-size: 0.55rem; }
+            .top-nav .datetime .time-part { font-size: 0.6rem; }
+            .dark-toggle-btn { padding: 3px 6px; font-size: 0.6rem; }
+            .dark-toggle-btn i { font-size: 0.7rem; }
+            .top-nav .icon-btn { width: 28px; height: 28px; }
+            .top-nav .icon-btn i { font-size: 0.8rem; }
+            .top-nav .avatar, .top-nav .avatar-avatar { width: 28px; height: 28px; font-size: 0.7rem; }
+            .branch-badge { font-size: 0.45rem; padding: 2px 6px; }
+            .sidebar-toggle-btn { font-size: 1rem; padding: 2px 6px; }
+            .page-header .page-title { font-size: 1rem; }
         }
         
         @keyframes fadeInUp {
@@ -738,44 +841,64 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION - WITH SIDEBAR TOGGLE -->
 <!-- ================================================================ -->
 <nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
+    
+    <!-- Left Side -->
+    <div class="flex items-center gap-3 flex-1 min-w-0">
+        
+        <!-- ================================================================ -->
+        <!-- SIDEBAR TOGGLE BUTTON - CRITICAL: Must have id="sidebarToggle" -->
+        <!-- ================================================================ -->
+        <button id="sidebarToggle" class="sidebar-toggle-btn" aria-label="Toggle Sidebar Menu" title="Toggle Sidebar">
+            <i class="fas fa-bars"></i>
         </button>
         
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patients...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
+        <!-- Dashboard Link -->
+        <a href="dashboard.php" class="dashboard-link" title="Go to Dashboard">
+            <i class="fas fa-home"></i>
+            <span>Dashboard</span>
+        </a>
     </div>
     
-    <div class="flex items-center gap-3">
+    <!-- Search Bar -->
+    <div class="search-wrapper">
+        <i class="fas fa-search text-gray-400 ml-3"></i>
+        <input type="text" id="searchInput" placeholder="Search patients..." aria-label="Search" autocomplete="off">
+        <button id="searchBtn" class="search-btn" aria-label="Search">
+            <i class="fas fa-search mr-1"></i><span>Search</span>
+        </button>
+    </div>
+    
+    <!-- Right Side -->
+    <div class="flex items-center gap-3 shrink-0">
+        
+        <!-- Branch Badge -->
         <span class="branch-badge">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
+        <!-- Date & Time -->
         <span class="datetime" id="currentDateTime">
             <span class="date-part" id="datePart"><?= date('D, M d, Y') ?></span>
             <span class="time-part" id="timePart"><?= date('h:i:s A') ?></span>
         </span>
         
-        <button id="darkModeToggle" class="dark-toggle-btn">
+        <!-- Dark Mode Toggle -->
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
         
-        <button class="icon-btn">
+        <!-- Notifications -->
+        <button class="icon-btn" id="notifBtn" title="Notifications">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
-        <a href="profile.php">
+        <!-- Profile Avatar -->
+        <a href="profile.php" title="View Profile">
             <?php if ($profile_pic_exists && !empty($profile_pic)): ?>
                 <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar" style="object-fit:cover;">
             <?php else: ?>
@@ -788,9 +911,130 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - DARK MODE + DATE/TIME -->
+<!-- JAVASCRIPT - DARK MODE + DATE/TIME + SIDEBAR TOGGLE -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // SIDEBAR TOGGLE - FULLY WORKING ON MOBILE
+    // ================================================================
+    (function() {
+        // Wait for DOM to be ready
+        function initSidebarToggle() {
+            var sidebar = document.getElementById('sidebar');
+            var sidebarToggle = document.getElementById('sidebarToggle');
+            var overlay = document.getElementById('sidebarOverlay');
+            
+            console.log('🔧 Cashier Sidebar toggle initialization...');
+            console.log('📱 Sidebar element:', sidebar);
+            console.log('🔘 Toggle button:', sidebarToggle);
+            
+            // Create overlay if not exists
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'sidebarOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+                document.body.appendChild(overlay);
+                console.log('✅ Sidebar overlay created');
+            }
+            
+            if (!sidebar) {
+                console.error('❌ Sidebar element not found!');
+                return;
+            }
+            
+            // Toggle function
+            function openSidebar() {
+                sidebar.classList.add('open');
+                overlay.style.display = 'block';
+                document.body.style.overflow = 'hidden';
+                console.log('🔓 Sidebar opened');
+            }
+            
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                overlay.style.display = 'none';
+                document.body.style.overflow = '';
+                console.log('🔒 Sidebar closed');
+            }
+            
+            function toggleSidebar() {
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                } else {
+                    openSidebar();
+                }
+            }
+            
+            // ================================================================
+            // EVENT: Toggle button (hamburger icon)
+            // ================================================================
+            if (sidebarToggle) {
+                // Remove all existing listeners to avoid duplicates
+                var newToggle = sidebarToggle.cloneNode(true);
+                sidebarToggle.parentNode.replaceChild(newToggle, sidebarToggle);
+                var freshToggle = document.getElementById('sidebarToggle');
+                
+                freshToggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('🔘 Hamburger clicked!');
+                    toggleSidebar();
+                });
+                console.log('✅ Toggle button event attached');
+            } else {
+                console.warn('⚠️ Toggle button not found - trying fallback');
+                // Try to find by class
+                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
+                if (fallbackBtn) {
+                    fallbackBtn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleSidebar();
+                    });
+                    console.log('✅ Fallback toggle button attached');
+                }
+            }
+            
+            // ================================================================
+            // EVENT: Close sidebar when clicking overlay
+            // ================================================================
+            if (overlay) {
+                overlay.addEventListener('click', function(e) {
+                    if (e.target === overlay) {
+                        closeSidebar();
+                    }
+                });
+            }
+            
+            // ================================================================
+            // EVENT: Close sidebar with ESC key
+            // ================================================================
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            // ================================================================
+            // EVENT: Auto-close on window resize (desktop)
+            // ================================================================
+            window.addEventListener('resize', function() {
+                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            console.log('✅ Cashier Sidebar toggle fully initialized!');
+        }
+        
+        // Run on DOM ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initSidebarToggle);
+        } else {
+            initSidebarToggle();
+        }
+    })();
+
     // ================================================================
     // DARK MODE - PERSISTENT & FULLY WORKING
     // ================================================================
@@ -935,34 +1179,76 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
     }
     if (searchInput) {
         searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    var sidebar = document.getElementById('sidebar');
-    
-    if (sidebarToggle && sidebar) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                performSearch();
+            }
         });
         
-        document.addEventListener('click', function(e) {
-            if (window.innerWidth <= 1024) {
-                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                    sidebar.classList.remove('open');
-                }
+        // Ctrl+K to focus search
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                searchInput.focus();
+                searchInput.select();
+            }
+            if (e.key === 'Escape' && document.activeElement === searchInput) {
+                searchInput.value = '';
+                searchInput.blur();
             }
         });
     }
 
-    console.log('%c🟢 Cashier Header - Green Theme', 'font-size:16px; font-weight:bold; color:#059669;');
+    // ================================================================
+    // NOTIFICATIONS
+    // ================================================================
+    var notifBtn = document.getElementById('notifBtn');
+    if (notifBtn) {
+        notifBtn.addEventListener('click', function() {
+            window.location.href = 'notifications.php';
+        });
+    }
+
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        // Ctrl+D = Toggle Dark Mode
+        if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+            e.preventDefault();
+            var darkBtn = document.getElementById('darkModeToggle');
+            if (darkBtn) {
+                darkBtn.click();
+            }
+        }
+        // Ctrl+K = Focus Search
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            var searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
+        }
+        // Escape = Clear Search
+        if (e.key === 'Escape') {
+            var searchInput = document.getElementById('searchInput');
+            if (searchInput && document.activeElement === searchInput) {
+                searchInput.value = '';
+                searchInput.blur();
+            }
+        }
+    });
+
+    console.log('%c🟢 Cashier Header - With Sidebar Toggle', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📸 Profile Pic: <?= $profile_pic_exists ? '✅ Uploaded' : '❌ Default' ?>', 'font-size:13px; color:#059669;');
     console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? '🌙 Dark' : '☀️ Light'), 'font-size:13px; color:#D97706;');
     console.log('%c📅 Date/Time: ' + new Date().toLocaleString(), 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📱 Hamburger button: Click ☰ to toggle sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:13px; color:#059669;');
 </script>
+
+</body>
+</html>

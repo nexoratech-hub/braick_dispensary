@@ -3,6 +3,8 @@
 // FILE: frontend/components/reception_sidebar.php
 // RECEPTION - SHARED SIDEBAR (BLUE BACKGROUND)
 // WITH SERVICES SECTION - SHOWS ALL SERVICES FROM services TABLE
+// WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
+// FULLY RESPONSIVE - ALL DEVICES
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -142,121 +144,221 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 ?>
 
 <style>
+    /* ================================================================
+       SIDEBAR STYLES - FULLY FIXED FOR MOBILE
+       ================================================================ */
+    
+    /* Sidebar Container */
     .sidebar {
-        position: fixed; 
-        top: 0; 
-        left: 0; 
+        position: fixed;
+        top: 0;
+        left: 0;
         bottom: 0;
-        width: 270px; 
+        width: 280px;
         background: #0B4EA8;
         color: white;
-        z-index: 50; 
+        z-index: 9999;
         overflow-y: auto;
-        transition: transform 0.3s ease;
+        overflow-x: hidden;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        transform: translateX(-100%);
+        box-shadow: 4px 0 30px rgba(0,0,0,0.3);
+        padding-bottom: 20px;
     }
     
     [data-theme="dark"] .sidebar {
         background: #0A3D7A;
+        box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
+    /* Sidebar Open State - CRITICAL: !important ensures it works */
+    .sidebar.open {
+        transform: translateX(0) !important;
+    }
+    
+    /* Scrollbar */
     .sidebar::-webkit-scrollbar { width: 5px; }
     .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
     .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
+    .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
     
+    /* ================================================================
+       OVERLAY - For mobile
+       ================================================================ */
+    #sidebarOverlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.6);
+        z-index: 9998;
+        display: none;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        transition: opacity 0.3s ease;
+    }
+    
+    #sidebarOverlay.active {
+        display: block !important;
+    }
+    
+    /* ================================================================
+       SIDEBAR BRAND / HEADER
+       ================================================================ */
     .sidebar-brand {
-        padding: 22px 20px 16px;
-        border-bottom: 2px solid #0A3D7A;
+        padding: 18px 16px 14px;
+        border-bottom: 2px solid rgba(255,255,255,0.08);
+        background: #0B4EA8;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+    
+    [data-theme="dark"] .sidebar-brand {
+        background: #0A3D7A;
     }
     
     .sidebar-brand .logo {
-        width: 48px; 
-        height: 48px; 
-        border-radius: 12px;
-        object-fit: cover; 
-        background: white; 
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+        object-fit: cover;
+        background: white;
         padding: 4px;
+        border: 2px solid rgba(255,255,255,0.1);
     }
     
-    .sidebar-brand .brand-text { 
-        color: white; 
-        font-weight: 700; 
-        font-size: 1rem; 
+    .sidebar-brand .brand-text {
+        color: white;
+        font-weight: 700;
+        font-size: 0.95rem;
+        line-height: 1.2;
     }
     
-    .sidebar-brand .brand-sub { 
-        color: #9EC5FE; 
-        font-size: 0.7rem; 
+    .sidebar-brand .brand-sub {
+        color: #9EC5FE;
+        font-size: 0.65rem;
+        font-weight: 500;
     }
     
-    .sidebar-nav { 
-        padding: 14px 10px; 
+    /* ================================================================
+       SIDEBAR CLOSE BUTTON (Mobile)
+       ================================================================ */
+    .sidebar-close-btn {
+        display: none;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        color: white;
+        font-size: 1.2rem;
+        cursor: pointer;
+        padding: 4px 10px;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+        margin-left: auto;
+    }
+    
+    .sidebar-close-btn:hover {
+        background: rgba(255,255,255,0.2);
+        transform: scale(1.05);
+    }
+    
+    @media (max-width: 1024px) {
+        .sidebar-close-btn {
+            display: block;
+        }
+    }
+    
+    /* ================================================================
+       NAVIGATION
+       ================================================================ */
+    .sidebar-nav {
+        padding: 10px 8px 20px;
     }
     
     .sidebar-nav .nav-label {
-        font-size: 0.55rem; 
+        font-size: 0.5rem;
         text-transform: uppercase;
-        letter-spacing: 0.1em; 
+        letter-spacing: 0.08em;
         color: #9EC5FE;
-        padding: 0 12px; 
-        margin: 12px 0 6px; 
+        padding: 0 10px;
+        margin: 12px 0 4px;
         font-weight: 700;
     }
     
+    .sidebar-nav .nav-label:first-of-type {
+        margin-top: 0;
+    }
+    
+    /* ================================================================
+       SIDEBAR LINKS
+       ================================================================ */
     .sidebar-link {
-        display: flex; 
-        align-items: center; 
-        gap: 12px;
-        padding: 9px 14px; 
-        border-radius: 10px;
-        color: #D2E3FC; 
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        color: #D2E3FC;
         text-decoration: none;
-        transition: all 0.3s ease; 
-        font-size: 0.85rem; 
+        transition: all 0.25s ease;
+        font-size: 0.8rem;
         font-weight: 500;
-        margin: 2px 0;
+        margin: 1px 0;
         background: transparent;
         cursor: pointer;
+        border: none;
+        width: 100%;
+        text-align: left;
+        position: relative;
     }
     
     .sidebar-link:hover {
         background: #0B5ED7;
         color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.4);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
         transform: translateX(4px);
     }
     
     .sidebar-link.active {
         background: #0B5ED7;
         color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.4);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
     }
     
-    .sidebar-link i { 
-        width: 20px; 
-        text-align: center; 
-        font-size: 1rem; 
+    .sidebar-link.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 20%;
+        bottom: 20%;
+        width: 4px;
+        background: white;
+        border-radius: 0 4px 4px 0;
     }
     
+    .sidebar-link i {
+        width: 20px;
+        text-align: center;
+        font-size: 0.9rem;
+        flex-shrink: 0;
+    }
+    
+    /* ================================================================
+       BADGES ON SIDEBAR
+       ================================================================ */
     .sidebar-link .badge {
         margin-left: auto;
         background: rgba(255,255,255,0.15);
-        padding: 1px 9px;
+        padding: 1px 8px;
         border-radius: 20px;
-        font-size: 0.65rem;
+        font-size: 0.6rem;
         font-weight: 600;
         color: white;
         transition: all 0.3s ease;
-        min-width: 18px;
+        flex-shrink: 0;
+        min-width: 20px;
         text-align: center;
-    }
-    
-    .sidebar-link:hover .badge {
-        background: rgba(255,255,255,0.25);
-    }
-    
-    .sidebar-link.active .badge {
-        background: rgba(255,255,255,0.25);
-        color: white;
     }
     
     .sidebar-link .badge.danger {
@@ -276,15 +378,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         background: #7C3AED;
     }
     
+    .sidebar-link .badge.blue {
+        background: #0B5ED7;
+    }
+    
+    .sidebar-link:hover .badge {
+        background: rgba(255,255,255,0.25);
+    }
+    
+    .sidebar-link.active .badge {
+        background: rgba(255,255,255,0.25);
+        color: white;
+    }
+    
     @keyframes pulse-badge {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.1); }
     }
     
+    /* ================================================================
+       LOGOUT LINK
+       ================================================================ */
     .sidebar-link.logout-link {
-        border-top: 2px solid rgba(255,255,255,0.1);
-        padding-top: 12px;
-        margin-top: 8px;
+        border-top: 2px solid rgba(255,255,255,0.08);
+        padding-top: 10px;
+        margin-top: 6px;
         color: #FCA5A5;
     }
     
@@ -294,17 +412,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
     }
     
+    /* ================================================================
+       BADGE UPDATE ANIMATION
+       ================================================================ */
+    .badge-update {
+        animation: badgePop 0.3s ease;
+    }
+    
+    @keyframes badgePop {
+        0% { transform: scale(0.5); opacity: 0; }
+        70% { transform: scale(1.3); }
+        100% { transform: scale(1); opacity: 1; }
+    }
+    
+    /* ================================================================
+       SIDEBAR STATUS (Footer)
+       ================================================================ */
     .sidebar-status {
-        padding: 12px 20px;
-        border-top: 2px solid #0A3D7A;
+        padding: 10px 16px;
+        border-top: 2px solid rgba(255,255,255,0.08);
         display: flex;
         align-items: center;
         gap: 10px;
+        background: #0B4EA8;
+        position: sticky;
+        bottom: 0;
+    }
+    
+    [data-theme="dark"] .sidebar-status {
+        background: #0A3D7A;
     }
     
     .sidebar-status .status-dot {
-        width: 10px;
-        height: 10px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         display: inline-block;
     }
@@ -319,12 +460,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     .sidebar-status .status-text {
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         color: #D2E3FC;
     }
     
     .sidebar-status .status-time {
-        font-size: 0.6rem;
+        font-size: 0.55rem;
         color: #9EC5FE;
         margin-left: auto;
         display: flex;
@@ -342,28 +483,190 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     @keyframes pulse-dot {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.4; }
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.8); }
     }
     
-    .mt-2 { margin-top: 8px; }
+    /* ================================================================
+       RESPONSIVE BREAKPOINTS
+       ================================================================ */
     
-    @media (max-width: 1024px) {
-        .sidebar { 
-            transform: translateX(-100%); 
+    /* Desktop: Sidebar always visible */
+    @media (min-width: 1025px) {
+        .sidebar {
+            transform: translateX(0) !important;
+            z-index: 50;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
         }
-        .sidebar.open { 
-            transform: translateX(0); 
+        #sidebarOverlay {
+            display: none !important;
+        }
+        .sidebar-close-btn {
+            display: none !important;
+        }
+    }
+    
+    /* Tablet and below: Sidebar hidden by default */
+    @media (max-width: 1024px) {
+        .sidebar {
+            width: 280px;
+            transform: translateX(-100%);
+            z-index: 9999;
+            border-radius: 0 12px 12px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        #sidebarOverlay {
+            display: none;
+            z-index: 9998;
+        }
+        #sidebarOverlay.active {
+            display: block !important;
+        }
+        .sidebar-brand {
+            padding: 14px 14px 10px;
+        }
+        .sidebar-brand .logo {
+            width: 36px;
+            height: 36px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.85rem;
+        }
+        .sidebar-link {
+            padding: 7px 10px;
+            font-size: 0.75rem;
+            gap: 8px;
+        }
+        .sidebar-link i {
+            width: 18px;
+            font-size: 0.8rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.55rem;
+            padding: 1px 7px;
+        }
+        .sidebar-status {
+            padding: 8px 14px;
+        }
+    }
+    
+    /* Mobile phones */
+    @media (max-width: 768px) {
+        .sidebar {
+            width: 300px;
+            transform: translateX(-100%);
+            border-radius: 0 16px 16px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        .sidebar-brand {
+            padding: 12px 12px 10px;
+        }
+        .sidebar-brand .logo {
+            width: 34px;
+            height: 34px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.8rem;
+        }
+        .sidebar-link {
+            padding: 6px 10px;
+            font-size: 0.7rem;
+            gap: 8px;
+        }
+        .sidebar-link i {
+            width: 16px;
+            font-size: 0.75rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.5rem;
+            padding: 1px 6px;
+        }
+        .sidebar-nav .nav-label {
+            font-size: 0.45rem;
+        }
+        .sidebar-status {
+            padding: 6px 12px;
+        }
+        .sidebar-status .status-text {
+            font-size: 0.6rem;
+        }
+        .sidebar-status .status-time {
+            font-size: 0.5rem;
+        }
+    }
+    
+    /* Small phones */
+    @media (max-width: 480px) {
+        .sidebar {
+            width: 100%;
+            max-width: 320px;
+            transform: translateX(-100%);
+            border-radius: 0 20px 20px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        .sidebar-brand {
+            padding: 10px 10px 8px;
+        }
+        .sidebar-brand .logo {
+            width: 30px;
+            height: 30px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.75rem;
+        }
+        .sidebar-link {
+            padding: 5px 8px;
+            font-size: 0.65rem;
+            gap: 6px;
+        }
+        .sidebar-link i {
+            width: 14px;
+            font-size: 0.7rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.45rem;
+            padding: 1px 5px;
+            min-width: 16px;
+        }
+        .sidebar-nav .nav-label {
+            font-size: 0.4rem;
+            padding: 0 8px;
+        }
+        .sidebar-status {
+            padding: 4px 10px;
+        }
+        .sidebar-status .status-text {
+            font-size: 0.55rem;
+        }
+        .sidebar-status .status-time {
+            font-size: 0.45rem;
+        }
+        .sidebar-status .status-dot {
+            width: 6px;
+            height: 6px;
         }
     }
 </style>
+
+<!-- ================================================================ -->
+<!-- SIDEBAR OVERLAY (Mobile) -->
+<!-- ================================================================ -->
+<div id="sidebarOverlay"></div>
 
 <!-- ================================================================ -->
 <!-- SIDEBAR - RECEPTION PANEL -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     
-    <!-- Brand -->
+    <!-- ================================================================ -->
+    <!-- BRAND / HEADER -->
+    <!-- ================================================================ -->
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
@@ -372,12 +675,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <p class="brand-text">Braick Dispensary</p>
                 <p class="brand-sub">Reception Panel</p>
             </div>
+            <!-- Close button for mobile -->
+            <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
+                <i class="fas fa-times"></i>
+            </button>
         </div>
     </div>
     
+    <!-- ================================================================ -->
+    <!-- NAVIGATION -->
+    <!-- ================================================================ -->
     <nav class="sidebar-nav">
         
-        <!-- ===== RECEPTION MENU ===== -->
+        <!-- ============================================================ -->
+        <!-- RECEPTION MENU -->
+        <!-- ============================================================ -->
         <div class="nav-label">Reception</div>
         
         <!-- 1. Dashboard -->
@@ -396,7 +708,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <span class="badge" id="receptionPatientCount"><?= $patient_count ?></span>
         </a>
         
-        <!-- ===== APPOINTMENTS ===== -->
+        <!-- ============================================================ -->
+        <!-- APPOINTMENTS -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Appointments</div>
         
         <!-- 4. Appointments -->
@@ -409,7 +723,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- ===== VISITS ===== -->
+        <!-- ============================================================ -->
+        <!-- VISITS -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Visits</div>
         
         <!-- 5. Visit -->
@@ -428,9 +744,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- ================================================================ -->
-        <!-- 7. SERVICES - NEW SECTION -->
-        <!-- ================================================================ -->
+        <!-- ============================================================ -->
+        <!-- SERVICES -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Services</div>
         
         <a href="../reception/services.php" class="sidebar-link <?= isActive('services.php') ?>">
@@ -442,7 +758,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- ===== CASHIER ===== -->
+        <!-- ============================================================ -->
+        <!-- FINANCE -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Finance</div>
         
         <!-- 8. Cashier -->
@@ -450,7 +768,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <i class="fas fa-cash-register"></i> Cashier
         </a>
         
-        <!-- ===== ACCOUNT ===== -->
+        <!-- ============================================================ -->
+        <!-- ACCOUNT -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Account</div>
         
         <!-- Profile -->
@@ -465,7 +785,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
     </nav>
     
-    <!-- Online Status -->
+    <!-- ================================================================ -->
+    <!-- SIDEBAR STATUS (Footer) -->
+    <!-- ================================================================ -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
@@ -477,61 +799,204 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - AUTO-UPDATE -->
+<!-- JAVASCRIPT - FULL SIDEBAR FUNCTIONALITY -->
 <!-- ================================================================ -->
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        var sidebar = document.getElementById('sidebar');
-        var sidebarToggle = document.getElementById('sidebarToggle');
-        
-        if (sidebarToggle && sidebar) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('open');
-            });
-        }
-        
-        document.addEventListener('click', function(e) {
-            if (window.innerWidth <= 1024) {
-                if (sidebar && sidebarToggle) {
-                    if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                        sidebar.classList.remove('open');
-                    }
+    // ================================================================
+    // SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
+    // ================================================================
+    (function() {
+        // Wait for DOM to be ready
+        function initSidebar() {
+            console.log('🔧 Initializing Reception Sidebar...');
+            
+            var sidebar = document.getElementById('sidebar');
+            var toggleBtn = document.getElementById('sidebarToggle');
+            var closeBtn = document.getElementById('sidebarCloseBtn');
+            var overlay = document.getElementById('sidebarOverlay');
+            
+            // Create overlay if not exists
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'sidebarOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+                document.body.appendChild(overlay);
+                console.log('✅ Sidebar overlay created');
+            }
+            
+            if (!sidebar) {
+                console.error('❌ Sidebar element not found!');
+                return;
+            }
+            
+            // Toggle function
+            function openSidebar() {
+                sidebar.classList.add('open');
+                overlay.style.display = 'block';
+                overlay.classList.add('active');
+                document.body.style.overflow = 'hidden';
+                console.log('🔓 Sidebar opened');
+            }
+            
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                overlay.style.display = 'none';
+                overlay.classList.remove('active');
+                document.body.style.overflow = '';
+                console.log('🔒 Sidebar closed');
+            }
+            
+            function toggleSidebar() {
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                } else {
+                    openSidebar();
                 }
             }
-        });
-    });
+            
+            // ================================================================
+            // EVENT: Toggle button (hamburger icon from header)
+            // ================================================================
+            if (toggleBtn) {
+                // Remove all existing listeners to avoid duplicates
+                var newToggle = toggleBtn.cloneNode(true);
+                toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
+                var freshToggle = document.getElementById('sidebarToggle');
+                
+                freshToggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('🔘 Hamburger clicked!');
+                    toggleSidebar();
+                });
+                console.log('✅ Toggle button attached');
+            } else {
+                console.warn('⚠️ Toggle button not found - trying fallback');
+                // Try to find by class
+                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
+                if (fallbackBtn) {
+                    fallbackBtn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleSidebar();
+                    });
+                    console.log('✅ Fallback toggle button attached');
+                }
+            }
+            
+            // ================================================================
+            // EVENT: Close button (X icon in sidebar)
+            // ================================================================
+            if (closeBtn) {
+                closeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeSidebar();
+                });
+                console.log('✅ Close button attached');
+            }
+            
+            // ================================================================
+            // EVENT: Close sidebar when clicking overlay
+            // ================================================================
+            if (overlay) {
+                overlay.addEventListener('click', function(e) {
+                    if (e.target === overlay) {
+                        closeSidebar();
+                    }
+                });
+                console.log('✅ Overlay click handler attached');
+            }
+            
+            // ================================================================
+            // EVENT: Close sidebar with ESC key
+            // ================================================================
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            // ================================================================
+            // EVENT: Auto-close on window resize (desktop)
+            // ================================================================
+            window.addEventListener('resize', function() {
+                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            console.log('✅ Reception Sidebar fully initialized!');
+            console.log('📱 Sidebar element:', sidebar);
+            console.log('🔘 Toggle button:', document.getElementById('sidebarToggle'));
+            console.log('❌ Close button:', document.getElementById('sidebarCloseBtn'));
+            console.log('📐 Window width:', window.innerWidth);
+            console.log('📱 Is mobile:', window.innerWidth <= 1024);
+        }
+        
+        // Run on DOM ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initSidebar);
+        } else {
+            initSidebar();
+        }
+    })();
 
+    // ================================================================
+    // UPDATE SIDEBAR BADGES
+    // ================================================================
     function updateSidebarBadges(patientCount, appointmentCount, pendingAppointments, todayVisits, pendingPatients, servicesCount) {
+        // Patient Count
         var el = document.getElementById('receptionPatientCount');
         if (el && patientCount !== undefined) {
             el.textContent = patientCount;
             el.style.opacity = patientCount === 0 ? '0.6' : '1';
+            el.classList.remove('badge-update');
+            void el.offsetWidth;
+            el.classList.add('badge-update');
         }
         
+        // Appointment Count
         el = document.getElementById('receptionAppointmentCount');
         if (el && appointmentCount !== undefined) {
             el.textContent = appointmentCount;
             el.className = pendingAppointments > 0 ? 'badge danger' : 'badge';
+            el.classList.remove('badge-update');
+            void el.offsetWidth;
+            el.classList.add('badge-update');
         }
         
+        // Today Visits
         el = document.getElementById('receptionTodayVisits');
         if (el && todayVisits !== undefined) {
             el.textContent = todayVisits;
             el.className = todayVisits > 0 ? 'badge green' : 'badge';
+            el.classList.remove('badge-update');
+            void el.offsetWidth;
+            el.classList.add('badge-update');
         }
         
+        // Pending Patients
         el = document.getElementById('receptionPendingPatients');
         if (el && pendingPatients !== undefined) {
             el.textContent = pendingPatients;
             el.className = pendingPatients > 0 ? 'badge danger' : 'badge';
+            el.classList.remove('badge-update');
+            void el.offsetWidth;
+            el.classList.add('badge-update');
         }
         
+        // Services Count
         el = document.getElementById('receptionServicesCount');
         if (el && servicesCount !== undefined) {
             el.textContent = servicesCount;
             el.className = servicesCount > 0 ? 'badge purple' : 'badge';
+            el.classList.remove('badge-update');
+            void el.offsetWidth;
+            el.classList.add('badge-update');
         }
         
+        // Update time
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
@@ -545,6 +1010,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
 
+    // ================================================================
+    // FETCH SIDEBAR DATA (Self-contained - uses same file)
+    // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
     var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
@@ -558,6 +1026,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         formData.append('action', 'get_reception_sidebar_data');
         formData.append('branch_id', branchId);
         
+        // Send request to the SAME FILE (self-contained)
         fetch(window.location.href, {
             method: 'POST',
             body: formData
@@ -570,6 +1039,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         })
         .then(function(data) {
             if (data.success) {
+                // Only update if data has changed
                 if (lastDataHash !== data.hash) {
                     lastDataHash = data.hash;
                     updateSidebarBadges(
@@ -585,25 +1055,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             sidebarIsUpdating = false;
         })
         .catch(function(error) {
+            // Silent fail
             sidebarIsUpdating = false;
         });
     }
 
+    // ================================================================
+    // START / STOP AUTO-UPDATE
+    // ================================================================
     function startSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        fetchSidebarData();
+        // Initial update after 1 second
+        setTimeout(function() {
+            fetchSidebarData();
+        }, 1000);
+        // Then every 3 seconds
         sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
+        console.log('%c🔄 Reception Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
 
     function stopSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
             sidebarUpdateInterval = null;
+            console.log('%c⏹️ Reception Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
+    // ================================================================
+    // VISIBILITY CHANGE
+    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -612,18 +1095,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     });
 
+    // ================================================================
+    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
+    // ================================================================
+    window.updateSidebarBadges = updateSidebarBadges;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
+
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 2000);
     });
 
-    window.updateSidebarBadges = updateSidebarBadges;
-    window.fetchSidebarData = fetchSidebarData;
-    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
-    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
-
-    console.log('%c🏥 Reception Sidebar - Auto-update enabled', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Services section added', 'font-size:12px; color:#7C3AED;');
-    console.log('%c📋 Services Count: <?= $services_count ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c🏥 Reception Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Patients: <?= $patient_count ?> | Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c📋 Services: <?= $services_count ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
+    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
 </script>

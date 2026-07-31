@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
 // PHARMACY - SHARED SIDEBAR (FIXED)
+// WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
+// FULLY RESPONSIVE - ALL DEVICES
 // ================================================================
 // CHANGES:
 // 1. Removed "Dispensing" menu item
@@ -9,6 +11,7 @@
 // 3. Changed "Pending Prescriptions" to "Prescriptions"
 // 4. Auto-update every 3 seconds from database
 // 5. Self-contained AJAX
+// 6. Added sidebar toggle working with header
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -171,123 +174,220 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 ?>
 <style>
     /* ================================================================
-       SIDEBAR STYLES - BLUE THEME
+       SIDEBAR STYLES - FULLY FIXED FOR MOBILE
        ================================================================ */
+    
+    /* Sidebar Container */
     .sidebar {
-        position: fixed; 
-        top: 0; 
-        left: 0; 
+        position: fixed;
+        top: 0;
+        left: 0;
         bottom: 0;
-        width: 270px; 
+        width: 280px;
         background: #0B4EA8;
         color: white;
-        z-index: 50; 
+        z-index: 9999;
         overflow-y: auto;
-        transition: transform 0.3s ease;
+        overflow-x: hidden;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        transform: translateX(-100%);
+        box-shadow: 4px 0 30px rgba(0,0,0,0.3);
+        padding-bottom: 20px;
     }
     
     [data-theme="dark"] .sidebar {
         background: #0A3D7A;
+        box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
+    /* Sidebar Open State - CRITICAL: !important ensures it works */
+    .sidebar.open {
+        transform: translateX(0) !important;
+    }
+    
+    /* Scrollbar */
     .sidebar::-webkit-scrollbar { width: 5px; }
     .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
     .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
+    .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
     
+    /* ================================================================
+       OVERLAY - For mobile
+       ================================================================ */
+    #sidebarOverlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.6);
+        z-index: 9998;
+        display: none;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        transition: opacity 0.3s ease;
+    }
+    
+    #sidebarOverlay.active {
+        display: block !important;
+    }
+    
+    /* ================================================================
+       SIDEBAR BRAND / HEADER
+       ================================================================ */
     .sidebar-brand {
-        padding: 22px 20px 16px;
-        border-bottom: 2px solid #0A3D7A;
+        padding: 18px 16px 14px;
+        border-bottom: 2px solid rgba(255,255,255,0.08);
+        background: #0B4EA8;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+    
+    [data-theme="dark"] .sidebar-brand {
+        background: #0A3D7A;
     }
     
     .sidebar-brand .logo {
-        width: 48px; 
-        height: 48px; 
-        border-radius: 12px;
-        object-fit: cover; 
-        background: white; 
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+        object-fit: cover;
+        background: white;
         padding: 4px;
+        border: 2px solid rgba(255,255,255,0.1);
     }
     
-    .sidebar-brand .brand-text { 
-        color: white; 
-        font-weight: 700; 
-        font-size: 1rem; 
+    .sidebar-brand .brand-text {
+        color: white;
+        font-weight: 700;
+        font-size: 0.95rem;
+        line-height: 1.2;
     }
     
-    .sidebar-brand .brand-sub { 
-        color: #9EC5FE; 
-        font-size: 0.7rem; 
+    .sidebar-brand .brand-sub {
+        color: #9EC5FE;
+        font-size: 0.65rem;
+        font-weight: 500;
     }
     
-    .sidebar-nav { 
-        padding: 14px 10px; 
+    /* ================================================================
+       SIDEBAR CLOSE BUTTON (Mobile)
+       ================================================================ */
+    .sidebar-close-btn {
+        display: none;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        color: white;
+        font-size: 1.2rem;
+        cursor: pointer;
+        padding: 4px 10px;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+        margin-left: auto;
+    }
+    
+    .sidebar-close-btn:hover {
+        background: rgba(255,255,255,0.2);
+        transform: scale(1.05);
+    }
+    
+    @media (max-width: 1024px) {
+        .sidebar-close-btn {
+            display: block;
+        }
+    }
+    
+    /* ================================================================
+       NAVIGATION
+       ================================================================ */
+    .sidebar-nav {
+        padding: 10px 8px 20px;
     }
     
     .sidebar-nav .nav-label {
-        font-size: 0.55rem; 
+        font-size: 0.5rem;
         text-transform: uppercase;
-        letter-spacing: 0.1em; 
+        letter-spacing: 0.08em;
         color: #9EC5FE;
-        padding: 0 12px; 
-        margin: 12px 0 6px; 
+        padding: 0 10px;
+        margin: 12px 0 4px;
         font-weight: 700;
     }
     
+    .sidebar-nav .nav-label:first-of-type {
+        margin-top: 0;
+    }
+    
+    /* ================================================================
+       SIDEBAR LINKS
+       ================================================================ */
     .sidebar-link {
-        display: flex; 
-        align-items: center; 
-        gap: 12px;
-        padding: 9px 14px; 
-        border-radius: 10px;
-        color: #D2E3FC; 
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        color: #D2E3FC;
         text-decoration: none;
-        transition: all 0.3s ease; 
-        font-size: 0.85rem; 
+        transition: all 0.25s ease;
+        font-size: 0.8rem;
         font-weight: 500;
-        margin: 2px 0;
+        margin: 1px 0;
         background: transparent;
         cursor: pointer;
+        border: none;
+        width: 100%;
+        text-align: left;
+        position: relative;
     }
     
     .sidebar-link:hover {
         background: #0AA84F;
         color: white;
-        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.4);
+        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
         transform: translateX(4px);
     }
     
     .sidebar-link.active {
         background: #0AA84F;
         color: white;
-        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.4);
+        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
     }
     
-    .sidebar-link i { 
-        width: 20px; 
-        text-align: center; 
-        font-size: 1rem; 
+    .sidebar-link.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 20%;
+        bottom: 20%;
+        width: 4px;
+        background: white;
+        border-radius: 0 4px 4px 0;
     }
     
+    .sidebar-link i {
+        width: 20px;
+        text-align: center;
+        font-size: 0.9rem;
+        flex-shrink: 0;
+    }
+    
+    /* ================================================================
+       BADGES ON SIDEBAR
+       ================================================================ */
     .sidebar-link .badge {
         margin-left: auto;
         background: rgba(255,255,255,0.15);
-        padding: 1px 9px;
+        padding: 1px 8px;
         border-radius: 20px;
-        font-size: 0.65rem;
+        font-size: 0.6rem;
         font-weight: 600;
         color: white;
         transition: all 0.3s ease;
-        min-width: 18px;
+        flex-shrink: 0;
+        min-width: 20px;
         text-align: center;
-    }
-    
-    .sidebar-link:hover .badge {
-        background: rgba(255,255,255,0.25);
-    }
-    
-    .sidebar-link.active .badge {
-        background: rgba(255,255,255,0.25);
-        color: white;
     }
     
     .sidebar-link .badge.danger {
@@ -312,15 +412,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         animation: pulse-badge 2s infinite;
     }
     
+    .sidebar-link:hover .badge {
+        background: rgba(255,255,255,0.25);
+    }
+    
+    .sidebar-link.active .badge {
+        background: rgba(255,255,255,0.25);
+        color: white;
+    }
+    
     @keyframes pulse-badge {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.1); }
     }
     
+    /* ================================================================
+       LOGOUT LINK
+       ================================================================ */
     .sidebar-link.logout-link {
-        border-top: 2px solid rgba(255,255,255,0.1);
-        padding-top: 12px;
-        margin-top: 8px;
+        border-top: 2px solid rgba(255,255,255,0.08);
+        padding-top: 10px;
+        margin-top: 6px;
         color: #FCA5A5;
     }
     
@@ -330,17 +442,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
     }
     
+    /* ================================================================
+       BADGE UPDATE ANIMATION
+       ================================================================ */
+    .badge-update {
+        animation: badgePop 0.3s ease;
+    }
+    
+    @keyframes badgePop {
+        0% { transform: scale(0.5); opacity: 0; }
+        70% { transform: scale(1.3); }
+        100% { transform: scale(1); opacity: 1; }
+    }
+    
+    /* ================================================================
+       SIDEBAR STATUS (Footer)
+       ================================================================ */
     .sidebar-status {
-        padding: 12px 20px;
-        border-top: 2px solid #0A3D7A;
+        padding: 10px 16px;
+        border-top: 2px solid rgba(255,255,255,0.08);
         display: flex;
         align-items: center;
         gap: 10px;
+        background: #0B4EA8;
+        position: sticky;
+        bottom: 0;
+    }
+    
+    [data-theme="dark"] .sidebar-status {
+        background: #0A3D7A;
     }
     
     .sidebar-status .status-dot {
-        width: 10px;
-        height: 10px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         display: inline-block;
     }
@@ -355,12 +490,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     .sidebar-status .status-text {
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         color: #D2E3FC;
     }
     
     .sidebar-status .status-time {
-        font-size: 0.6rem;
+        font-size: 0.55rem;
         color: #9EC5FE;
         margin-left: auto;
         display: flex;
@@ -378,28 +513,190 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     @keyframes pulse-dot {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.4; }
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.8); }
     }
     
-    .mt-2 { margin-top: 8px; }
+    /* ================================================================
+       RESPONSIVE BREAKPOINTS
+       ================================================================ */
     
-    @media (max-width: 1024px) {
-        .sidebar { 
-            transform: translateX(-100%); 
+    /* Desktop: Sidebar always visible */
+    @media (min-width: 1025px) {
+        .sidebar {
+            transform: translateX(0) !important;
+            z-index: 50;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
         }
-        .sidebar.open { 
-            transform: translateX(0); 
+        #sidebarOverlay {
+            display: none !important;
+        }
+        .sidebar-close-btn {
+            display: none !important;
+        }
+    }
+    
+    /* Tablet and below: Sidebar hidden by default */
+    @media (max-width: 1024px) {
+        .sidebar {
+            width: 280px;
+            transform: translateX(-100%);
+            z-index: 9999;
+            border-radius: 0 12px 12px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        #sidebarOverlay {
+            display: none;
+            z-index: 9998;
+        }
+        #sidebarOverlay.active {
+            display: block !important;
+        }
+        .sidebar-brand {
+            padding: 14px 14px 10px;
+        }
+        .sidebar-brand .logo {
+            width: 36px;
+            height: 36px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.85rem;
+        }
+        .sidebar-link {
+            padding: 7px 10px;
+            font-size: 0.75rem;
+            gap: 8px;
+        }
+        .sidebar-link i {
+            width: 18px;
+            font-size: 0.8rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.55rem;
+            padding: 1px 7px;
+        }
+        .sidebar-status {
+            padding: 8px 14px;
+        }
+    }
+    
+    /* Mobile phones */
+    @media (max-width: 768px) {
+        .sidebar {
+            width: 300px;
+            transform: translateX(-100%);
+            border-radius: 0 16px 16px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        .sidebar-brand {
+            padding: 12px 12px 10px;
+        }
+        .sidebar-brand .logo {
+            width: 34px;
+            height: 34px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.8rem;
+        }
+        .sidebar-link {
+            padding: 6px 10px;
+            font-size: 0.7rem;
+            gap: 8px;
+        }
+        .sidebar-link i {
+            width: 16px;
+            font-size: 0.75rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.5rem;
+            padding: 1px 6px;
+        }
+        .sidebar-nav .nav-label {
+            font-size: 0.45rem;
+        }
+        .sidebar-status {
+            padding: 6px 12px;
+        }
+        .sidebar-status .status-text {
+            font-size: 0.6rem;
+        }
+        .sidebar-status .status-time {
+            font-size: 0.5rem;
+        }
+    }
+    
+    /* Small phones */
+    @media (max-width: 480px) {
+        .sidebar {
+            width: 100%;
+            max-width: 320px;
+            transform: translateX(-100%);
+            border-radius: 0 20px 20px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        .sidebar-brand {
+            padding: 10px 10px 8px;
+        }
+        .sidebar-brand .logo {
+            width: 30px;
+            height: 30px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.75rem;
+        }
+        .sidebar-link {
+            padding: 5px 8px;
+            font-size: 0.65rem;
+            gap: 6px;
+        }
+        .sidebar-link i {
+            width: 14px;
+            font-size: 0.7rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.45rem;
+            padding: 1px 5px;
+            min-width: 16px;
+        }
+        .sidebar-nav .nav-label {
+            font-size: 0.4rem;
+            padding: 0 8px;
+        }
+        .sidebar-status {
+            padding: 4px 10px;
+        }
+        .sidebar-status .status-text {
+            font-size: 0.55rem;
+        }
+        .sidebar-status .status-time {
+            font-size: 0.45rem;
+        }
+        .sidebar-status .status-dot {
+            width: 6px;
+            height: 6px;
         }
     }
 </style>
+
+<!-- ================================================================ -->
+<!-- SIDEBAR OVERLAY (Mobile) -->
+<!-- ================================================================ -->
+<div id="sidebarOverlay"></div>
 
 <!-- ================================================================ -->
 <!-- SIDEBAR - PHARMACY -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     
-    <!-- Brand -->
+    <!-- ================================================================ -->
+    <!-- BRAND / HEADER -->
+    <!-- ================================================================ -->
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
             <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
@@ -408,12 +705,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <p class="brand-text">Braick Dispensary</p>
                 <p class="brand-sub">Pharmacy Panel</p>
             </div>
+            <!-- Close button for mobile -->
+            <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
+                <i class="fas fa-times"></i>
+            </button>
         </div>
     </div>
     
+    <!-- ================================================================ -->
+    <!-- NAVIGATION -->
+    <!-- ================================================================ -->
     <nav class="sidebar-nav">
         
-        <!-- ===== PHARMACY MENU ===== -->
+        <!-- ============================================================ -->
+        <!-- PHARMACY MENU -->
+        <!-- ============================================================ -->
         <div class="nav-label">Pharmacy</div>
         
         <!-- 1. Dashboard -->
@@ -421,7 +727,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <i class="fas fa-home"></i> Dashboard
         </a>
         
-        <!-- ===== PRESCRIPTION SALES ===== -->
+        <!-- ============================================================ -->
+        <!-- PRESCRIPTION SALES -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Prescription Sales</div>
         
         <!-- Prescriptions (was: Pending Prescriptions) -->
@@ -442,7 +750,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <span class="badge" id="sidebarTodayPrescriptions"><?= $today_sales ?></span>
         </a>
         
-        <!-- ===== OTC SALES ===== -->
+        <!-- ============================================================ -->
+        <!-- OTC SALES -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">OTC Sales</div>
         
         <!-- New OTC Sale -->
@@ -456,7 +766,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <span class="badge" id="sidebarTodayOtc"><?= $today_otc ?></span>
         </a>
         
-        <!-- ===== MEDICINES ===== -->
+        <!-- ============================================================ -->
+        <!-- MEDICINES -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Medicines</div>
         
         <!-- Inventory -->
@@ -484,12 +796,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- ===== REPORTS ===== -->
+        <!-- ============================================================ -->
+        <!-- REPORTS -->
+        <!-- ============================================================ -->
         <a href="../pharmacy/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
             <i class="fas fa-chart-bar"></i> Reports
         </a>
         
-        <!-- ===== ACCOUNT ===== -->
+        <!-- ============================================================ -->
+        <!-- ACCOUNT -->
+        <!-- ============================================================ -->
         <div class="nav-label mt-2">Account</div>
         
         <!-- Profile -->
@@ -504,7 +820,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
     </nav>
     
-    <!-- Online Status with Live Update Indicator -->
+    <!-- ================================================================ -->
+    <!-- SIDEBAR STATUS (Footer) -->
+    <!-- ================================================================ -->
     <div class="sidebar-status">
         <span class="status-dot online" id="sidebarStatusDot"></span>
         <span class="status-text" id="sidebarStatusText">Online</span>
@@ -515,30 +833,149 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     </div>
 </aside>
 
+<!-- ================================================================ -->
+<!-- JAVASCRIPT - FULL SIDEBAR FUNCTIONALITY -->
+<!-- ================================================================ -->
 <script>
     // ================================================================
-    // SIDEBAR TOGGLE (Mobile)
+    // SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
     // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var sidebar = document.getElementById('sidebar');
-        var sidebarToggle = document.getElementById('sidebarToggle');
-        
-        if (sidebarToggle && sidebar) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('open');
-            });
-        }
-        
-        document.addEventListener('click', function(e) {
-            if (window.innerWidth <= 1024) {
-                if (sidebar && sidebarToggle) {
-                    if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                        sidebar.classList.remove('open');
-                    }
+    (function() {
+        // Wait for DOM to be ready
+        function initSidebar() {
+            console.log('🔧 Initializing Pharmacy Sidebar...');
+            
+            var sidebar = document.getElementById('sidebar');
+            var toggleBtn = document.getElementById('sidebarToggle');
+            var closeBtn = document.getElementById('sidebarCloseBtn');
+            var overlay = document.getElementById('sidebarOverlay');
+            
+            // Create overlay if not exists
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'sidebarOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+                document.body.appendChild(overlay);
+                console.log('✅ Sidebar overlay created');
+            }
+            
+            if (!sidebar) {
+                console.error('❌ Sidebar element not found!');
+                return;
+            }
+            
+            // Toggle function
+            function openSidebar() {
+                sidebar.classList.add('open');
+                overlay.style.display = 'block';
+                overlay.classList.add('active');
+                document.body.style.overflow = 'hidden';
+                console.log('🔓 Sidebar opened');
+            }
+            
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                overlay.style.display = 'none';
+                overlay.classList.remove('active');
+                document.body.style.overflow = '';
+                console.log('🔒 Sidebar closed');
+            }
+            
+            function toggleSidebar() {
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                } else {
+                    openSidebar();
                 }
             }
-        });
-    });
+            
+            // ================================================================
+            // EVENT: Toggle button (hamburger icon from header)
+            // ================================================================
+            if (toggleBtn) {
+                // Remove all existing listeners to avoid duplicates
+                var newToggle = toggleBtn.cloneNode(true);
+                toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
+                var freshToggle = document.getElementById('sidebarToggle');
+                
+                freshToggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('🔘 Hamburger clicked!');
+                    toggleSidebar();
+                });
+                console.log('✅ Toggle button attached');
+            } else {
+                console.warn('⚠️ Toggle button not found - trying fallback');
+                // Try to find by class
+                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
+                if (fallbackBtn) {
+                    fallbackBtn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleSidebar();
+                    });
+                    console.log('✅ Fallback toggle button attached');
+                }
+            }
+            
+            // ================================================================
+            // EVENT: Close button (X icon in sidebar)
+            // ================================================================
+            if (closeBtn) {
+                closeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeSidebar();
+                });
+                console.log('✅ Close button attached');
+            }
+            
+            // ================================================================
+            // EVENT: Close sidebar when clicking overlay
+            // ================================================================
+            if (overlay) {
+                overlay.addEventListener('click', function(e) {
+                    if (e.target === overlay) {
+                        closeSidebar();
+                    }
+                });
+                console.log('✅ Overlay click handler attached');
+            }
+            
+            // ================================================================
+            // EVENT: Close sidebar with ESC key
+            // ================================================================
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            // ================================================================
+            // EVENT: Auto-close on window resize (desktop)
+            // ================================================================
+            window.addEventListener('resize', function() {
+                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            console.log('✅ Pharmacy Sidebar fully initialized!');
+            console.log('📱 Sidebar element:', sidebar);
+            console.log('🔘 Toggle button:', document.getElementById('sidebarToggle'));
+            console.log('❌ Close button:', document.getElementById('sidebarCloseBtn'));
+            console.log('📐 Window width:', window.innerWidth);
+            console.log('📱 Is mobile:', window.innerWidth <= 1024);
+        }
+        
+        // Run on DOM ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initSidebar);
+        } else {
+            initSidebar();
+        }
+    })();
 
     // ================================================================
     // UPDATE SIDEBAR BADGES (AJAX every 3 seconds)
@@ -549,6 +986,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (pendingBadge) {
             pendingBadge.textContent = pending;
             pendingBadge.className = pending > 0 ? 'badge danger' : 'badge';
+            pendingBadge.classList.remove('badge-update');
+            void pendingBadge.offsetWidth;
+            pendingBadge.classList.add('badge-update');
         }
         
         // Update Low Stock Badge
@@ -556,6 +996,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (lowStockBadge) {
             lowStockBadge.textContent = lowStock;
             lowStockBadge.className = lowStock > 0 ? 'badge danger' : 'badge';
+            lowStockBadge.classList.remove('badge-update');
+            void lowStockBadge.offsetWidth;
+            lowStockBadge.classList.add('badge-update');
         }
         
         // Update Expired Badge
@@ -563,6 +1006,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (expiredBadge) {
             expiredBadge.textContent = expired;
             expiredBadge.className = expired > 0 ? 'badge red' : 'badge';
+            expiredBadge.classList.remove('badge-update');
+            void expiredBadge.offsetWidth;
+            expiredBadge.classList.add('badge-update');
         }
         
         // Update Today Prescriptions Badge
@@ -570,6 +1016,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (todayPrescriptionsBadge) {
             todayPrescriptionsBadge.textContent = todayPrescriptions;
             todayPrescriptionsBadge.className = todayPrescriptions > 0 ? 'badge green' : 'badge';
+            todayPrescriptionsBadge.classList.remove('badge-update');
+            void todayPrescriptionsBadge.offsetWidth;
+            todayPrescriptionsBadge.classList.add('badge-update');
         }
         
         // Update Today OTC Badge
@@ -577,6 +1026,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (todayOtcBadge) {
             todayOtcBadge.textContent = todayOtc;
             todayOtcBadge.className = todayOtc > 0 ? 'badge green' : 'badge';
+            todayOtcBadge.classList.remove('badge-update');
+            void todayOtcBadge.offsetWidth;
+            todayOtcBadge.classList.add('badge-update');
         }
         
         // Update status time
@@ -641,8 +1093,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        // Initial update
-        fetchSidebarData();
+        // Initial update after 1 second
+        setTimeout(function() {
+            fetchSidebarData();
+        }, 1000);
         // Then every 3 seconds
         sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
         console.log('%c🔄 Pharmacy Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
@@ -684,7 +1138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
-    console.log('%c💊 Pharmacy Sidebar (SELF-CONTAINED - Auto-update every 3s)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Pharmacy Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Prescriptions: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Expired: <?= $expired_count ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c📊 Today Rx: <?= $today_sales ?> | Today OTC: <?= $today_otc ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
@@ -692,4 +1146,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     console.log('%c✅ "Dispensing" REMOVED from menu', 'font-size:12px; color:#DC2626;');
     console.log('%c✅ "Expired Stock" ADDED to menu', 'font-size:12px; color:#34D399;');
     console.log('%c✅ "Pending Prescriptions" changed to "Prescriptions"', 'font-size:12px; color:#34D399;');
+    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
 </script>
