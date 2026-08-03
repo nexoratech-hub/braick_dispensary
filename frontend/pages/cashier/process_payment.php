@@ -2,15 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/cashier/process_payment.php
 // CASHIER - PROCESS PAYMENT WITH PATIENT CARD DESIGN
-// FIXED: Uses shared header with clock
-// FIXED: Dark mode fully working with header
-// FIXED: Green theme applied throughout
-// FIXED: Default user: Rose Mwangi (ID: 11)
-// FIXED: Partial amount stays as entered (not reduced by discount)
-// FIXED: All items displayed in table with prices
-// FIXED: Comma formatting for amount fields
-// FIXED: Updates OTC sales payment_status when bill is paid
-// BRAICK DISPENSARY
+// FIXED: Database connection path
+// FIXED: Shows ALL bills for patient in one table with items
+// FIXED: Green theme with modern design
 // ================================================================
 
 session_start();
@@ -46,7 +40,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 $is_admin = ($_SESSION['role'] === 'admin' || $_SESSION['is_admin'] === true);
 
 // ================================================================
-// PATH SAHIHI
+// PATH SAHIHI - FIXED
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
@@ -170,7 +164,7 @@ try {
                     ");
                     $stmt->execute([$bill_id]);
                     
-                    // Update OTC sales when bill is paid
+                    // Update OTC sales
                     $stmt = $db->prepare("
                         SELECT id FROM otc_sales 
                         WHERE bill_id = ? AND payment_status IN ('pending', 'partial')
@@ -235,7 +229,7 @@ try {
         }
         
         // ================================================================
-        // PARTIAL PAYMENT
+        // PARTIAL PAYMENT - FIXED
         // ================================================================
         if ($action === 'partial_payment') {
             if (empty($bill_ids) || !is_array($bill_ids)) {
@@ -462,7 +456,7 @@ try {
     }
 
     // ================================================================
-    // GET BILLS - FILTER BY SELECTED BILL ID IF PROVIDED
+    // GET BILLS - WITH ALL ITEMS
     // ================================================================
 
     $bills_query = "
@@ -515,7 +509,7 @@ try {
     $bills = $stmt->fetchAll();
 
     // ================================================================
-    // GET ITEMS FOR EACH BILL
+    // GET ALL ITEMS FOR EACH BILL
     // ================================================================
     foreach ($bills as &$bill) {
         $stmt = $db->prepare("
@@ -744,9 +738,6 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* ================================================================
-           MAIN CONTENT OVERRIDE
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -906,7 +897,7 @@ include_once '../../components/cashier_sidebar.php';
         .stat-box .label { font-size: 0.7rem; color: var(--text-secondary); font-weight: 500; margin-top: 2px; }
         
         /* ================================================================
-           PATIENT CARD
+           PATIENT CARD - SHOWS ALL BILLS WITH ITEMS
            ================================================================ */
         .patient-card {
             background: var(--bg-card);
@@ -990,97 +981,77 @@ include_once '../../components/cashier_sidebar.php';
         .patient-card .card-body.collapsed { display: none; }
         
         /* ================================================================
-           BILLS TABLE
+           MASTER TABLE - SHOWS ALL BILLS WITH ITEMS
            ================================================================ */
-        .bills-table-wrap { overflow-x: auto; }
-        
-        .bills-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.82rem;
-            min-width: 900px;
+        .master-table-wrap {
+            overflow-x: auto;
+            padding: 0;
         }
         
-        .bills-table thead th {
+        .master-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            min-width: 1000px;
+        }
+        
+        .master-table thead th {
             text-align: left;
-            padding: 8px 12px;
-            font-weight: 600;
-            font-size: 0.65rem;
+            padding: 10px 14px;
+            font-weight: 700;
+            font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: var(--text-secondary);
             background: var(--bg-body);
-            border-bottom: 2px solid var(--border-color);
+            border-bottom: 3px solid var(--border-color);
             white-space: nowrap;
             position: sticky;
             top: 0;
-            z-index: 5;
+            z-index: 10;
         }
         
-        .bills-table thead th:first-child { text-align: center; width: 40px; }
-        .bills-table tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); vertical-align: middle; }
-        .bills-table tbody tr:hover td { background: var(--table-hover); }
-        .bills-table tbody tr.selected td { background: var(--primary-bg); }
-        .bills-table tbody tr.bill-paid td { opacity: 0.6; background: var(--success-bg); }
+        .master-table thead th:first-child { text-align: center; width: 40px; }
+        .master-table tbody td { 
+            padding: 8px 14px; 
+            border-bottom: 1px solid var(--border-color); 
+            color: var(--text-primary); 
+            vertical-align: middle;
+        }
         
-        .bills-table .bill-checkbox {
+        .master-table tbody tr:hover td { background: var(--table-hover); }
+        .master-table tbody tr.selected td { background: var(--primary-bg); }
+        .master-table tbody tr.bill-paid td { opacity: 0.6; background: var(--success-bg); }
+        
+        .master-table .bill-checkbox {
             width: 18px;
             height: 18px;
             cursor: pointer;
             accent-color: var(--success);
             border-radius: 4px;
         }
-        .bills-table .bill-checkbox:disabled { opacity: 0.3; cursor: not-allowed; }
+        .master-table .bill-checkbox:disabled { opacity: 0.3; cursor: not-allowed; }
         
-        .bills-table .total-row td {
-            font-weight: 700;
-            background: var(--primary-bg);
-            border-top: 2px solid var(--success);
-            padding: 8px 12px;
-        }
-        
-        /* ================================================================
-           STATUS BADGES
-           ================================================================ */
-        .bill-status {
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .bill-status.pending { background: var(--badge-pending-bg); color: var(--badge-pending-text); }
-        .bill-status.partial { background: var(--badge-partial-bg); color: var(--badge-partial-text); }
-        .bill-status.paid { background: var(--badge-paid-bg); color: var(--badge-paid-text); }
-        .bill-status.cancelled { background: var(--badge-cancelled-bg); color: var(--badge-cancelled-text); }
-        
-        .amount-total { font-weight: 700; color: var(--success); font-family: monospace; }
-        .amount-balance { font-weight: 600; font-family: monospace; }
-        .amount-balance.positive { color: var(--danger); }
-        .amount-balance.zero { color: var(--success); }
-        
-        /* ================================================================
-           ITEMS TABLE
-           ================================================================ */
-        .items-table-wrap {
-            margin: 10px 0 10px 30px;
-            border-radius: 8px;
-            overflow: hidden;
-            border: 1px solid var(--border-color);
+        /* Item details row */
+        .master-table .items-detail-row td {
+            padding: 0;
             background: var(--bg-body);
         }
         
-        .items-table {
+        .master-table .items-detail-row .items-container {
+            padding: 10px 20px 10px 40px;
+            border-top: 2px solid var(--border-color);
+            border-bottom: 2px solid var(--border-color);
+            background: var(--bg-body);
+        }
+        
+        .items-detail-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.75rem;
-            min-width: 450px;
         }
         
-        .items-table thead th {
+        .items-detail-table thead th {
             text-align: left;
             padding: 6px 10px;
             font-weight: 600;
@@ -1093,19 +1064,19 @@ include_once '../../components/cashier_sidebar.php';
             white-space: nowrap;
         }
         
-        .items-table thead th:last-child { text-align: right; }
-        .items-table tbody td {
-            padding: 5px 10px;
+        .items-detail-table tbody td {
+            padding: 4px 10px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
         }
-        .items-table tbody td:last-child { text-align: right; font-weight: 600; font-family: monospace; }
-        .items-table tbody tr:last-child td { border-bottom: none; }
-        .items-table tbody tr.paid-item td { opacity: 0.6; background: var(--success-bg); }
-        .items-table tbody tr.pending-item td { background: var(--warning-bg); }
         
-        .items-table .item-badge {
+        .items-detail-table tbody td:last-child { text-align: right; font-weight: 600; font-family: monospace; }
+        .items-detail-table tbody tr:last-child td { border-bottom: none; }
+        .items-detail-table tbody tr.paid-item td { opacity: 0.6; background: var(--success-bg); }
+        .items-detail-table tbody tr.pending-item td { background: var(--warning-bg); }
+        
+        .items-detail-table .item-badge {
             padding: 1px 8px;
             border-radius: 10px;
             font-size: 0.55rem;
@@ -1114,26 +1085,19 @@ include_once '../../components/cashier_sidebar.php';
             align-items: center;
             gap: 3px;
         }
-        .items-table .item-badge.paid { background: var(--success-bg); color: var(--success); }
-        .items-table .item-badge.pending { background: var(--warning-bg); color: var(--warning); }
+        .items-detail-table .item-badge.paid { background: var(--success-bg); color: var(--success); }
+        .items-detail-table .item-badge.pending { background: var(--warning-bg); color: var(--warning); }
         
-        .items-table .items-total-row td {
+        .items-detail-table .items-total-row td {
             font-weight: 700;
             border-top: 2px solid var(--success);
             background: var(--primary-bg);
             padding: 6px 10px;
         }
-        .items-table .items-total-row td:last-child {
+        .items-detail-table .items-total-row td:last-child {
             color: var(--danger);
             font-size: 0.85rem;
         }
-        
-        .items-container {
-            display: none;
-            padding: 8px 0;
-            transition: all 0.3s ease;
-        }
-        .items-container.open { display: block; }
         
         .expand-btn {
             background: none;
@@ -1164,6 +1128,38 @@ include_once '../../components/cashier_sidebar.php';
             min-width: 18px;
             text-align: center;
         }
+        
+        .master-table .patient-total-row td {
+            font-weight: 700;
+            background: var(--primary-bg);
+            border-top: 3px solid var(--success);
+            padding: 10px 14px;
+        }
+        .master-table .patient-total-row td:first-child { text-align: center; }
+        .master-table .patient-total-row td:last-child { text-align: right; }
+        
+        /* ================================================================
+           STATUS BADGES
+           ================================================================ */
+        .bill-status {
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .bill-status.pending { background: var(--badge-pending-bg); color: var(--badge-pending-text); }
+        .bill-status.partial { background: var(--badge-partial-bg); color: var(--badge-partial-text); }
+        .bill-status.paid { background: var(--badge-paid-bg); color: var(--badge-paid-text); }
+        .bill-status.cancelled { background: var(--badge-cancelled-bg); color: var(--badge-cancelled-text); }
+        
+        .amount-total { font-weight: 700; color: var(--success); font-family: monospace; }
+        .amount-balance { font-weight: 600; font-family: monospace; }
+        .amount-balance.positive { color: var(--danger); }
+        .amount-balance.zero { color: var(--success); }
         
         /* ================================================================
            PAYMENT CONTROLS
@@ -1396,7 +1392,7 @@ include_once '../../components/cashier_sidebar.php';
         @media (max-width: 768px) {
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .bills-table { font-size: 0.7rem; min-width: 600px; }
+            .master-table { font-size: 0.7rem; min-width: 700px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .payment-controls { flex-direction: column; align-items: stretch; }
             .payment-controls .control-group { justify-content: center; }
@@ -1404,8 +1400,6 @@ include_once '../../components/cashier_sidebar.php';
             .patient-card .card-header { flex-direction: column; align-items: stretch; }
             .patient-card .card-header .patient-details { font-size: 0.65rem; }
             .total-display { flex-wrap: wrap; justify-content: center; }
-            .items-table-wrap { margin-left: 10px; }
-            .items-table { min-width: 300px; font-size: 0.65rem; }
             .amount-input-wrap input { width: 120px; }
             .selected-bill-alert { flex-direction: column; align-items: stretch; text-align: center; }
         }
@@ -1418,10 +1412,6 @@ include_once '../../components/cashier_sidebar.php';
     </style>
 </head>
 <body>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - FROM HEADER (Already included) -->
-<!-- ================================================================ -->
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1475,7 +1465,7 @@ include_once '../../components/cashier_sidebar.php';
 
     <!-- Message -->
     <?php if (isset($message) && $message): ?>
-        <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?>">
+        <div class="message-box <?= $message_type === 'success' ? 'success' : 'error' ?>" style="padding:12px 16px;border-radius:10px;margin-bottom:16px;display:flex;align-items:center;gap:10px;background:var(--success-bg);border:1px solid var(--success);color:var(--success);">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <?= $message ?>
         </div>
@@ -1524,16 +1514,20 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PATIENT CARDS WITH BILLS -->
+    <!-- PATIENT CARDS WITH MASTER TABLE - SHOWS ALL BILLS WITH ITEMS -->
     <!-- ================================================================ -->
     <?php if (count($patient_bills_data) > 0): ?>
         <?php foreach ($patient_bills_data as $patient): 
             $patient_bills = isset($patient['bills']) && is_array($patient['bills']) ? $patient['bills'] : [];
             $patient_total_balance = 0;
             $patient_total_amount = 0;
+            $total_pending_items = 0;
+            $total_paid_items = 0;
             foreach ($patient_bills as $bill) {
                 $patient_total_balance += (float)$bill['balance'];
                 $patient_total_amount += (float)$bill['total_amount'];
+                $total_pending_items += (int)$bill['pending_items'];
+                $total_paid_items += (int)$bill['paid_items'];
             }
             $doctor_name = $patient['doctor_name'] ?? 'Not Assigned';
             $is_selected_patient = $has_selected_bill && $selected_bill && $selected_bill['patient_id'] == $patient['patient_id'];
@@ -1567,6 +1561,8 @@ include_once '../../components/cashier_sidebar.php';
                     <div class="bill-summary">
                         <span>Bills: <strong><?= count($patient_bills) ?></strong></span>
                         <span>|</span>
+                        <span>Items: <strong><?= $total_pending_items + $total_paid_items ?></strong></span>
+                        <span>|</span>
                         <span>Total: <strong class="amount"><?= $currency ?> <?= number_format($patient_total_amount, 0) ?></strong></span>
                         <span>|</span>
                         <span>Balance: <strong class="amount" style="color: <?= $patient_total_balance > 0 ? '#fcd34d' : '#34d399' ?>;">
@@ -1580,8 +1576,8 @@ include_once '../../components/cashier_sidebar.php';
             </div>
             
             <div class="card-body <?= $is_selected_patient ? '' : 'collapsed' ?>">
-                <div class="bills-table-wrap">
-                    <table class="bills-table">
+                <div class="master-table-wrap">
+                    <table class="master-table">
                         <thead>
                             <tr>
                                 <th style="width:40px; text-align:center;">
@@ -1590,12 +1586,12 @@ include_once '../../components/cashier_sidebar.php';
                                            onchange="selectPatientBills(this, <?= $patient['patient_id'] ?>)"
                                            title="Select all bills for this patient">
                                 </th>
-                                <th>Bill #</th>
-                                <th>Visit</th>
+                                <th style="min-width:120px;">Bill #</th>
+                                <th style="min-width:100px;">Visit</th>
                                 <th style="min-width:200px;">Items</th>
-                                <th style="text-align:right;">Total</th>
-                                <th style="text-align:right;">Balance</th>
-                                <th style="text-align:center;">Status</th>
+                                <th style="text-align:right; min-width:100px;">Total</th>
+                                <th style="text-align:right; min-width:100px;">Balance</th>
+                                <th style="text-align:center; min-width:80px;">Status</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1664,95 +1660,93 @@ include_once '../../components/cashier_sidebar.php';
                                             <?php endif; ?>
                                         </button>
                                         
-                                        <!-- ITEMS TABLE -->
+                                        <!-- ITEMS DETAIL TABLE -->
                                         <div class="items-container" id="items-container-<?= $bill['id'] ?>" style="display:none;">
-                                            <div class="items-table-wrap">
-                                                <table class="items-table">
-                                                    <thead>
-                                                        <tr>
-                                                            <th style="width:40%;">Item Name</th>
-                                                            <th style="width:15%;">Type</th>
-                                                            <th style="width:10%; text-align:center;">Qty</th>
-                                                            <th style="width:15%; text-align:right;">Unit Price</th>
-                                                            <th style="width:20%; text-align:right;">Total</th>
-                                                            <th style="width:15%; text-align:center;">Status</th>
+                                            <table class="items-detail-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th style="width:35%;">Item Name</th>
+                                                        <th style="width:15%;">Type</th>
+                                                        <th style="width:10%; text-align:center;">Qty</th>
+                                                        <th style="width:15%; text-align:right;">Unit Price</th>
+                                                        <th style="width:20%; text-align:right;">Total</th>
+                                                        <th style="width:15%; text-align:center;">Status</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <?php 
+                                                    $total_pending = 0;
+                                                    foreach ($items as $item): 
+                                                        $is_paid = ($item['is_paid'] ?? 0) == 1;
+                                                        $price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
+                                                        $unit_price = (float)($item['unit_price'] ?? $item['total_price'] ?? 0);
+                                                        $qty = (int)($item['quantity'] ?? 1);
+                                                        if ($unit_price == 0 && $qty > 0) {
+                                                            $unit_price = $price / $qty;
+                                                        }
+                                                        if (!$is_paid) {
+                                                            $total_pending += $price;
+                                                        }
+                                                    ?>
+                                                        <tr class="<?= $is_paid ? 'paid-item' : 'pending-item' ?>">
+                                                            <td>
+                                                                <strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong>
+                                                                <?php if (!empty($item['description'])): ?>
+                                                                    <br><small style="color:var(--text-secondary);"><?= htmlspecialchars($item['description']) ?></small>
+                                                                <?php endif; ?>
+                                                            </td>
+                                                            <td>
+                                                                <span style="font-size:0.55rem; background:var(--bg-body); padding:1px 8px; border-radius:4px; border:1px solid var(--border-color);">
+                                                                    <?= ucfirst($item['item_type'] ?? 'item') ?>
+                                                                </span>
+                                                            </td>
+                                                            <td style="text-align:center;"><?= $qty ?></td>
+                                                            <td style="text-align:right; font-family:monospace;">
+                                                                <?= $currency ?> <?= number_format($unit_price, 0) ?>
+                                                            </td>
+                                                            <td style="text-align:right; font-family:monospace; font-weight:600; <?= $is_paid ? 'color:var(--success);' : 'color:var(--danger);' ?>">
+                                                                <?= $currency ?> <?= number_format($price, 0) ?>
+                                                            </td>
+                                                            <td style="text-align:center;">
+                                                                <span class="item-badge <?= $is_paid ? 'paid' : 'pending' ?>">
+                                                                    <?= $is_paid ? '✅ Paid' : '⏳ Pending' ?>
+                                                                </span>
+                                                            </td>
                                                         </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        <?php 
-                                                        $total_pending = 0;
-                                                        foreach ($items as $item): 
-                                                            $is_paid = ($item['is_paid'] ?? 0) == 1;
-                                                            $price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
-                                                            $unit_price = (float)($item['unit_price'] ?? $item['total_price'] ?? 0);
-                                                            $qty = (int)($item['quantity'] ?? 1);
-                                                            if ($unit_price == 0 && $qty > 0) {
-                                                                $unit_price = $price / $qty;
-                                                            }
-                                                            if (!$is_paid) {
-                                                                $total_pending += $price;
-                                                            }
-                                                        ?>
-                                                            <tr class="<?= $is_paid ? 'paid-item' : 'pending-item' ?>">
-                                                                <td>
-                                                                    <strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong>
-                                                                    <?php if (!empty($item['description'])): ?>
-                                                                        <br><small style="color:var(--text-secondary);"><?= htmlspecialchars($item['description']) ?></small>
-                                                                    <?php endif; ?>
-                                                                </td>
-                                                                <td>
-                                                                    <span style="font-size:0.6rem; background:var(--bg-body); padding:1px 8px; border-radius:4px; border:1px solid var(--border-color);">
-                                                                        <?= ucfirst($item['item_type'] ?? 'item') ?>
-                                                                    </span>
-                                                                </td>
-                                                                <td style="text-align:center;"><?= $qty ?></td>
-                                                                <td style="text-align:right; font-family:monospace;">
-                                                                    <?= $currency ?> <?= number_format($unit_price, 0) ?>
-                                                                </td>
-                                                                <td style="text-align:right; font-family:monospace; font-weight:600; <?= $is_paid ? 'color:var(--success);' : 'color:var(--danger);' ?>">
-                                                                    <?= $currency ?> <?= number_format($price, 0) ?>
-                                                                </td>
-                                                                <td style="text-align:center;">
-                                                                    <span class="item-badge <?= $is_paid ? 'paid' : 'pending' ?>">
-                                                                        <?= $is_paid ? '✅ Paid' : '⏳ Pending' ?>
-                                                                    </span>
-                                                                </td>
-                                                            </tr>
-                                                        <?php endforeach; ?>
-                                                    </tbody>
-                                                    <tfoot>
-                                                        <tr class="items-total-row">
-                                                            <td colspan="4" style="text-align:right; font-weight:700; color:var(--text-primary);">
-                                                                <i class="fas fa-calculator"></i> Pending Items Total:
-                                                            </td>
-                                                            <td style="text-align:right; font-weight:700; color:var(--danger); font-family:monospace; font-size:0.9rem;">
-                                                                <?= $currency ?> <?= number_format($total_pending, 0) ?>
-                                                            </td>
-                                                            <td></td>
-                                                        </tr>
-                                                        <?php if ($paid_items > 0): ?>
-                                                        <tr style="background:var(--success-bg);">
-                                                            <td colspan="4" style="text-align:right; font-weight:600; color:var(--success);">
-                                                                <i class="fas fa-check-circle"></i> Paid Items Total:
-                                                            </td>
-                                                            <td style="text-align:right; font-weight:600; color:var(--success); font-family:monospace;">
-                                                                <?= $currency ?> <?= number_format($bill['total_amount'] - $total_pending, 0) ?>
-                                                            </td>
-                                                            <td></td>
-                                                        </tr>
-                                                        <?php endif; ?>
-                                                        <tr style="background:var(--primary-bg); border-top:3px solid var(--success);">
-                                                            <td colspan="4" style="text-align:right; font-weight:700; font-size:0.85rem; color:var(--text-primary);">
-                                                                <i class="fas fa-receipt"></i> GRAND TOTAL:
-                                                            </td>
-                                                            <td style="text-align:right; font-weight:700; font-size:0.95rem; color:var(--success); font-family:monospace;">
-                                                                <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
-                                                            </td>
-                                                            <td></td>
-                                                        </tr>
-                                                    </tfoot>
-                                                </table>
-                                            </div>
+                                                    <?php endforeach; ?>
+                                                </tbody>
+                                                <tfoot>
+                                                    <tr class="items-total-row">
+                                                        <td colspan="4" style="text-align:right; font-weight:700; color:var(--text-primary);">
+                                                            <i class="fas fa-calculator"></i> Pending Items Total:
+                                                        </td>
+                                                        <td style="text-align:right; font-weight:700; color:var(--danger); font-family:monospace; font-size:0.9rem;">
+                                                            <?= $currency ?> <?= number_format($total_pending, 0) ?>
+                                                        </td>
+                                                        <td></td>
+                                                    </tr>
+                                                    <?php if ($paid_items > 0): ?>
+                                                    <tr style="background:var(--success-bg);">
+                                                        <td colspan="4" style="text-align:right; font-weight:600; color:var(--success);">
+                                                            <i class="fas fa-check-circle"></i> Paid Items Total:
+                                                        </td>
+                                                        <td style="text-align:right; font-weight:600; color:var(--success); font-family:monospace;">
+                                                            <?= $currency ?> <?= number_format($bill['total_amount'] - $total_pending, 0) ?>
+                                                        </td>
+                                                        <td></td>
+                                                    </tr>
+                                                    <?php endif; ?>
+                                                    <tr style="background:var(--primary-bg); border-top:3px solid var(--success);">
+                                                        <td colspan="4" style="text-align:right; font-weight:700; font-size:0.85rem; color:var(--text-primary);">
+                                                            <i class="fas fa-receipt"></i> GRAND TOTAL:
+                                                        </td>
+                                                        <td style="text-align:right; font-weight:700; font-size:0.95rem; color:var(--success); font-family:monospace;">
+                                                            <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
+                                                        </td>
+                                                        <td></td>
+                                                    </tr>
+                                                </tfoot>
+                                            </table>
                                         </div>
                                     </div>
                                 </td>
@@ -1774,18 +1768,20 @@ include_once '../../components/cashier_sidebar.php';
                             </tr>
                             <?php endforeach; ?>
                             
-                            <!-- Total row for this patient -->
-                            <tr class="total-row">
-                                <td colspan="3" style="text-align:right; font-weight:700; color:var(--text-primary);">
-                                    Patient Total:
+                            <!-- Patient Total Row -->
+                            <tr class="patient-total-row">
+                                <td colspan="3" style="text-align:right; font-weight:700; font-size:0.9rem; color:var(--text-primary);">
+                                    <i class="fas fa-user"></i> PATIENT TOTAL:
                                 </td>
-                                <td style="font-weight:600; color:var(--success); font-family:monospace;">
+                                <td style="font-weight:600; color:var(--success); font-family:monospace; font-size:0.9rem;">
                                     <?= $currency ?> <?= number_format($patient_total_amount, 0) ?>
                                 </td>
-                                <td style="font-weight:600; color:<?= $patient_total_balance > 0 ? 'var(--danger)' : 'var(--success)' ?>; font-family:monospace;">
+                                <td style="font-weight:700; color:<?= $patient_total_balance > 0 ? 'var(--danger)' : 'var(--success)' ?>; font-family:monospace; font-size:0.9rem;">
                                     <?= $currency ?> <?= number_format($patient_total_balance, 0) ?>
                                 </td>
-                                <td></td>
+                                <td style="text-align:center; font-weight:600; color:var(--text-secondary); font-size:0.75rem;">
+                                    <?= count($patient_bills) ?> bills
+                                </td>
                             </tr>
                         </tbody>
                     </table>
@@ -1798,7 +1794,7 @@ include_once '../../components/cashier_sidebar.php';
             <i class="fas fa-check-circle text-5xl" style="color:var(--success);display:block;margin-bottom:16px;"></i>
             <h3 class="text-xl font-semibold" style="color:var(--text-primary);">No Pending Bills</h3>
             <p style="color:var(--text-secondary);margin-top:8px;">All bills have been paid. Great job! 🎉</p>
-            <a href="dashboard.php" class="btn btn-primary mt-4">
+            <a href="dashboard.php" class="btn btn-success mt-4">
                 <i class="fas fa-arrow-left"></i> Back to Dashboard
             </a>
         </div>
@@ -2013,7 +2009,7 @@ include_once '../../components/cashier_sidebar.php';
                 if (icon) {
                     icon.className = 'fas fa-chevron-down';
                 }
-                var text = element.querySelector('span:not(.badge-count)');
+                var text = element.querySelector('span:not(.badge-count):not([style])');
                 if (text) text.textContent = ' Hide Items';
             } else {
                 container.style.display = 'none';
@@ -2021,7 +2017,7 @@ include_once '../../components/cashier_sidebar.php';
                 if (icon) {
                     icon.className = 'fas fa-chevron-right';
                 }
-                var text = element.querySelector('span:not(.badge-count)');
+                var text = element.querySelector('span:not(.badge-count):not([style])');
                 if (text) text.textContent = ' Show Items';
             }
         }
@@ -2300,7 +2296,9 @@ include_once '../../components/cashier_sidebar.php';
             method: 'POST',
             body: formData
         })
-        .then(function(response) { return response.json(); })
+        .then(function(response) { 
+            return response.json(); 
+        })
         .then(function(data) {
             if (data.success) {
                 showToast('✅ Success', data.message, 'success');
@@ -2461,18 +2459,8 @@ include_once '../../components/cashier_sidebar.php';
                     icon.className = 'fas fa-chevron-down';
                 }
                 if (btn) {
-                    var text = btn.querySelector('span:not(.badge-count)');
+                    var text = btn.querySelector('span:not(.badge-count):not([style])');
                     if (text) text.textContent = ' Hide Items';
-                }
-            } else {
-                container.style.display = 'none';
-                container.classList.remove('open');
-                if (icon) {
-                    icon.className = 'fas fa-chevron-right';
-                }
-                if (btn) {
-                    var text = btn.querySelector('span:not(.badge-count)');
-                    if (text) text.textContent = ' Show Items';
                 }
             }
         }
@@ -2480,11 +2468,10 @@ include_once '../../components/cashier_sidebar.php';
 
     console.log('%c💰 Braick - Process Payments (Green Theme)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: Rose Mwangi (ID: 11)', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Shows ALL bills with ALL items in one master table', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Partial amount stays as entered (not reduced by discount)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ All items displayed in table with prices', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Comma formatting for amount fields', 'font-size:13px; color:#34D399;');
     console.log('%c✅ OTC Sales payment_status updated when bill is paid', 'font-size:13px; color:#34D399;');
-    console.log('%c🌓 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
     <?php if ($has_selected_bill && $selected_bill): ?>
         console.log('%c📋 Selected Bill: <?= $selected_bill['bill_number'] ?>', 'font-size:13px; color:#3B82F6;');
         console.log('%c👤 Patient: <?= $selected_bill['patient_name'] ?>', 'font-size:13px; color:#64748B;');
