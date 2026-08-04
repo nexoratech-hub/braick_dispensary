@@ -3,6 +3,7 @@
 // FILE: frontend/pages/laboratory/completed_requests.php
 // LABORATORY - COMPLETED REQUESTS (FROM lab_requests + lab_tests)
 // WITH REAL-TIME AUTO-UPDATE (3 SECONDS)
+// FIXED: Single VIEW button only
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -396,11 +397,32 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
     .btn-blue { background: #0B5ED7; color: white; }
     .btn-blue:hover { background: #0A4CA8; transform: scale(1.05); }
-    .btn-green { background: #059669; color: white; }
-    .btn-green:hover { background: #047857; transform: scale(1.05); }
     .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
     .btn-outline:hover { background: var(--bg-body); border-color: #0B5ED7; color: #0B5ED7; }
     .btn-sm { padding: 3px 8px; font-size: 0.65rem; border-radius: 4px; }
+    
+    /* SINGLE VIEW BUTTON - BLUE */
+    .btn-view {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        padding: 5px 14px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.7rem;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: none;
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
+    }
+    .btn-view:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.4);
+        color: white;
+    }
     
     .data-table {
         width: 100%;
@@ -510,6 +532,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .data-table { font-size: 0.7rem; min-width: 750px; }
         .filter-group { flex-wrap: wrap; }
         .action-buttons { flex-direction: column; }
+        .btn-view { width: 100%; justify-content: center; }
     }
 </style>
 
@@ -579,7 +602,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <a href="dashboard.php" class="btn btn-outline btn-sm">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
-            <a href="javascript:window.print()" class="btn btn-blue btn-sm">
+            <a href="javascript:window.print()" class="btn btn-outline btn-sm">
                 <i class="fas fa-print"></i> Print
             </a>
         </div>
@@ -672,7 +695,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         <th>Source</th>
                         <th>Status</th>
                         <th>Completed</th>
-                        <th style="border-radius: 0 8px 0 0;">Actions</th>
+                        <th style="border-radius: 0 8px 0 0;">Action</th>
                     </tr>
                 </thead>
                 <tbody id="completedTableBody">
@@ -693,10 +716,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                             
                             if ($is_test) {
                                 $view_link = "view_test.php?id=" . $item['id'];
-                                $print_link = "view_test.php?id=" . $item['id'] . "&print=1";
                             } else {
                                 $view_link = "view_results.php?request_id=" . $item['id'];
-                                $print_link = "view_results.php?request_id=" . $item['id'] . "&print=1";
                             }
                         ?>
                             <tr class="item-row" data-id="<?= $item['id'] ?>">
@@ -738,14 +759,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="action-buttons">
-                                        <a href="<?= $view_link ?>" class="btn btn-blue btn-sm" title="View Details">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <a href="<?= $print_link ?>" class="btn btn-outline btn-sm" title="Print" style="border-color:#059669;color:#059669;" target="_blank">
-                                            <i class="fas fa-print"></i>
-                                        </a>
-                                    </div>
+                                    <!-- SINGLE VIEW BUTTON -->
+                                    <a href="<?= $view_link ?>" class="btn-view" title="View Details">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -958,6 +975,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     console.log('%c📊 Total: <?= $total_completed ?> | Today: <?= $completed_today ?> | Week: <?= $completed_week ?> | Month: <?= $completed_month ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📈 Completion Rate: <?= $completion_rate ?>%', 'font-size:13px; color:#7C3AED;');
     console.log('%c📋 Showing: <?= count($completed_items) ?> items', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Single VIEW button only', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
