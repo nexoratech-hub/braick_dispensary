@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/patient_details.php
 // DOCTOR - PATIENT DETAILS WITH VITAL SIGNS & PDF EXPORT
+// FIXED: Uses shared header and sidebar with dark mode
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -16,6 +17,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
     $_SESSION['role'] = 'doctor';
     $_SESSION['branch_id'] = 1;
     $_SESSION['branch_name'] = 'Dodoma';
+    $_SESSION['is_online'] = 1;
 }
 
 // Include database and helpers
@@ -35,6 +37,20 @@ if ($patient_id <= 0) {
 }
 
 $doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'];
+
+// ================================================================
+// GET DOCTOR PROFILE PICTURE
+// ================================================================
+$profile_pic = '';
+$stmt = $db->prepare("SELECT profile_pic FROM users WHERE id = ? AND role = 'doctor'");
+$stmt->execute([$doctor_id]);
+$user_data = $stmt->fetch(PDO::FETCH_ASSOC);
+if ($user_data && !empty($user_data['profile_pic'])) {
+    $profile_pic = $user_data['profile_pic'];
+}
+$_SESSION['profile_pic'] = $profile_pic;
+$is_online = $_SESSION['is_online'] ?? 1;
 
 // ================================================================
 // GET PATIENT DATA - Verify doctor has access
@@ -53,18 +69,6 @@ if (!$patient) {
     header('Location: my_patients.php');
     exit;
 }
-
-// ================================================================
-// GET DOCTOR PROFILE PICTURE
-// ================================================================
-$doctor_profile_pic = '';
-$stmt = $db->prepare("SELECT profile_pic FROM users WHERE id = ? AND role = 'doctor'");
-$stmt->execute([$doctor_id]);
-$user_data = $stmt->fetch(PDO::FETCH_ASSOC);
-if ($user_data && !empty($user_data['profile_pic'])) {
-    $doctor_profile_pic = $user_data['profile_pic'];
-}
-$_SESSION['profile_pic'] = $doctor_profile_pic;
 
 // ================================================================
 // GET STATISTICS
@@ -237,7 +241,7 @@ $recent_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR - FIXED
 // ================================================================
 include_once '../../components/doctor_header.php';
 include_once '../../components/doctor_sidebar.php';
@@ -245,7 +249,7 @@ include_once '../../components/doctor_sidebar.php';
 
 <style>
     /* ================================================================
-       ADDITIONAL STYLES
+       ADDITIONAL STYLES - WITH DARK MODE SUPPORT
        ================================================================ */
     
     /* Profile Header */
@@ -718,82 +722,6 @@ include_once '../../components/doctor_sidebar.php';
         box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5);
     }
     
-    /* ================================================================
-       AVATAR IN HEADER - FIXED
-       ================================================================ */
-    .avatar-link {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        text-decoration: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        position: relative;
-        flex-shrink: 0;
-    }
-    
-    .avatar-link:hover {
-        transform: scale(1.05);
-    }
-    
-    .avatar-link .avatar-img {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        background: var(--bg-card);
-    }
-    
-    .avatar-link:hover .avatar-img {
-        border-color: var(--primary);
-    }
-    
-    .avatar-link .avatar-placeholder {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1rem;
-        font-weight: 700;
-        color: white;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        text-transform: uppercase;
-        flex-shrink: 0;
-    }
-    
-    .avatar-link:hover .avatar-placeholder {
-        border-color: var(--primary);
-        transform: scale(1.05);
-    }
-    
-    .avatar-link .status-ring {
-        position: absolute;
-        bottom: -2px;
-        right: -2px;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        border: 2px solid var(--bg-nav);
-        background: var(--green);
-    }
-    
-    .avatar-link .status-ring.offline {
-        background: var(--text-muted);
-    }
-    
-    .avatar-color-1 { background: #0B5ED7; }
-    .avatar-color-2 { background: #059669; }
-    .avatar-color-3 { background: #7C3AED; }
-    .avatar-color-4 { background: #DC2626; }
-    .avatar-color-5 { background: #D97706; }
-    .avatar-color-6 { background: #0D9488; }
-    .avatar-color-7 { background: #DB2777; }
-    
     /* Responsive */
     @media (max-width: 640px) {
         .profile-header {
@@ -848,71 +776,6 @@ include_once '../../components/doctor_sidebar.php';
         }
     }
 </style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - WITH PROFILE PICTURE -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <form method="GET" action="my_patients.php" class="flex-1 flex">
-                <input type="text" name="search" placeholder="Search patients..." 
-                       class="flex-1 px-3 py-2 bg-transparent border-none outline-none text-sm" 
-                       style="color: var(--text-primary);">
-                <button type="submit" class="search-btn">
-                    <i class="fas fa-search mr-1"></i> Search
-                </button>
-            </form>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($_SESSION['branch_name'] ?? 'Dodoma') ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="profile.php" class="avatar-link" title="Profile">
-            <?php 
-                $show_initial = true;
-                $initial = strtoupper(substr($_SESSION['full_name'] ?? 'Dr. John Mushi', 0, 1));
-                $avatar_url = '';
-                
-                if (!empty($doctor_profile_pic)) {
-                    $file_path = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $doctor_profile_pic;
-                    if (file_exists($file_path)) {
-                        $avatar_url = '/dispensary_system/frontend/assets/uploads/profiles/' . $doctor_profile_pic;
-                        $show_initial = false;
-                    }
-                }
-            ?>
-            <?php if ($show_initial): ?>
-                <div class="avatar-placeholder avatar-color-<?= (abs(crc32($_SESSION['full_name'] ?? 'Dr. John Mushi')) % 7) + 1 ?>">
-                    <?= $initial ?>
-                </div>
-            <?php else: ?>
-                <img src="<?= $avatar_url ?>" alt="Profile" class="avatar-img">
-            <?php endif; ?>
-            <span class="status-ring <?= ($_SESSION['is_online'] ?? 1) ? '' : 'offline' ?>" id="avatarStatusRing"></span>
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1563,7 +1426,7 @@ include_once '../../components/doctor_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - SYNC WITH HEADER
     // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
@@ -1675,7 +1538,7 @@ include_once '../../components/doctor_sidebar.php';
     console.log('%c❤️ Vital Signs Records: <?= $total_vital_signs ?>', 'font-size:13px; color:#EC4899;');
     console.log('%c📊 Visits: <?= $total_visits ?> | Bills: <?= $total_bills ?> | Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📄 PDF Export: Modern design button', 'font-size:13px; color:#DC2626;');
-    console.log('%c🖼️ Profile Picture: <?= !empty($doctor_profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🌓 Dark mode synced with header', 'font-size:13px; color:#8B5CF6;');
 </script>
 
 </body>

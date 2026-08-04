@@ -3,6 +3,8 @@
 // FILE: frontend/pages/doctor/dashboard.php
 // DOCTOR DASHBOARD - FULL VERSION WITH AUTO-UPDATE
 // 8 CLICKABLE CARDS - SMART AUTO-UPDATE (3 SECONDS)
+// FIXED: Dark mode works with header (CSS + localStorage)
+// FULL CSS INCLUDED
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -733,16 +735,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </div>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
+<!-- FULL CSS - LIGHT & DARK MODE SUPPORT -->
 <!-- ================================================================ -->
 <style>
     /* ================================================================
-       FULL STYLES - Same as before
+       ROOT VARIABLES - LIGHT & DARK MODE
        ================================================================ */
-    
-    /* Reset & Base */
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    
     :root {
         --primary: #0B5ED7;
         --primary-dark: #0A4CA8;
@@ -792,6 +790,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         --shadow-lg: 0 8px 25px rgba(0,0,0,0.4);
     }
     
+    /* ================================================================
+       BASE STYLES
+       ================================================================ */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
     body {
         font-family: 'Inter', 'Segoe UI', sans-serif;
         background: var(--bg-body);
@@ -799,19 +802,21 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         transition: background 0.3s ease, color 0.3s ease;
     }
     
-    /* Main Content */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg-body); }
+    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+    
+    /* ================================================================
+       MAIN CONTENT
+       ================================================================ */
     .main-content {
         margin-left: 270px;
         margin-top: 68px;
         padding: 24px 28px;
         min-height: calc(100vh - 68px);
         transition: all 0.3s ease;
+        background: var(--bg-body);
     }
-    
-    /* Scrollbar */
-    ::-webkit-scrollbar { width: 5px; height: 5px; }
-    ::-webkit-scrollbar-track { background: var(--bg-body); }
-    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
     
     /* Grid */
     .grid { display: grid; }
@@ -821,7 +826,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .gap-6 { gap: 24px; }
     .mb-6 { margin-bottom: 24px; }
     .lg\:col-span-2 { grid-column: span 2; }
-    .lg\:col-span-3 { grid-column: span 3; }
     
     /* ================================================================
        WELCOME HERO
@@ -1639,22 +1643,236 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .specialty-badge, .branch-badge, .date-badge { font-size: 0.7rem; padding: 2px 10px; }
     }
     
-    /* Dark theme overrides */
-    [data-theme="dark"] .stat-card:hover { box-shadow: var(--shadow-lg); }
-    [data-theme="dark"] .queue-item-first { background: #1E3A5F; }
-    [data-theme="dark"] .queue-item:hover { background: #0F172A; }
-    [data-theme="dark"] .appointment-item:hover { background: #1E3A5F; }
-    [data-theme="dark"] .activity-item:hover { background: #0F172A; }
-    [data-theme="dark"] .queue-card { border-color: #3D2E0A; }
-    [data-theme="dark"] .appointment-status.scheduled { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .appointment-status.confirmed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .appointment-status.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .appointment-status.cancelled { background: #3A1A1A; color: #F87171; }
-    [data-theme="dark"] .appointment-status.pending { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .queue-status.pending { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .queue-status.assigned { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .queue-status.with_doctor { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .empty-state i { color: #334155; }
+    /* ================================================================
+       DARK MODE OVERRIDES - CSS ONLY
+       ================================================================ */
+    [data-theme="dark"] .stat-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .stat-card:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+    }
+    [data-theme="dark"] .stat-card-number {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .stat-card-label {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .stat-detail.pending {
+        color: #FBBF24;
+    }
+    [data-theme="dark"] .stat-detail.completed {
+        color: #34D399;
+    }
+    [data-theme="dark"] .stat-detail.text-orange {
+        color: #FBBF24;
+    }
+    [data-theme="dark"] .stat-card-trend {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .stat-card-trend .fa-arrow-up {
+        color: #34D399;
+    }
+    [data-theme="dark"] .dashboard-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .dashboard-card:hover {
+        border-color: #0B5ED7;
+    }
+    [data-theme="dark"] .dashboard-card-title {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .title-blue { color: #6EA8FE; }
+    [data-theme="dark"] .title-green { color: #34D399; }
+    [data-theme="dark"] .title-orange { color: #FBBF24; }
+    [data-theme="dark"] .title-yellow { color: #FBBF24; }
+    [data-theme="dark"] .card-link { color: #6EA8FE; }
+    [data-theme="dark"] .card-link:hover { color: #93C5FD; }
+    [data-theme="dark"] .appointment-item {
+        border-color: #334155;
+    }
+    [data-theme="dark"] .appointment-item:hover {
+        background: #1E3A5F;
+    }
+    [data-theme="dark"] .appointment-name {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .appointment-id {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .appointment-time {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .queue-item {
+        border-color: #334155;
+    }
+    [data-theme="dark"] .queue-item:hover {
+        background: #0F172A;
+    }
+    [data-theme="dark"] .queue-item-first {
+        background: #1E3A5F;
+        border-left-color: #6EA8FE;
+    }
+    [data-theme="dark"] .queue-name {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .queue-details {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .queue-number {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .queue-time {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .queue-time-long {
+        color: #F87171;
+    }
+    [data-theme="dark"] .queue-card {
+        border-color: #3D2E0A;
+    }
+    [data-theme="dark"] .activity-item {
+        border-color: #334155;
+    }
+    [data-theme="dark"] .activity-item:hover {
+        background: #0F172A;
+    }
+    [data-theme="dark"] .activity-action {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .activity-patient {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .activity-details {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .activity-time {
+        color: #64748B;
+    }
+    [data-theme="dark"] .quick-action {
+        background: #1E293B;
+        border-color: #334155;
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .quick-action:hover {
+        border-color: #0B5ED7;
+    }
+    [data-theme="dark"] .quick-action i {
+        color: #6EA8FE;
+    }
+    [data-theme="dark"] .quick-action-green i {
+        color: #34D399;
+    }
+    [data-theme="dark"] .empty-state {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .empty-state i {
+        color: #334155;
+    }
+    [data-theme="dark"] .text-gray-400 {
+        color: #94A3B8 !important;
+    }
+    [data-theme="dark"] .text-gray-300 {
+        color: #64748B !important;
+    }
+    [data-theme="dark"] .text-green-500 {
+        color: #34D399 !important;
+    }
+    [data-theme="dark"] .welcome-hero {
+        background: linear-gradient(135deg, #0A4CA8, #0B5ED7);
+    }
+    [data-theme="dark"] .welcome-title .doctor-name {
+        color: #93C5FD;
+    }
+    [data-theme="dark"] .specialty-badge {
+        background: rgba(255,255,255,0.1);
+        color: white;
+    }
+    [data-theme="dark"] .branch-badge {
+        background: rgba(255,255,255,0.08);
+        color: #BFDBFE;
+    }
+    [data-theme="dark"] .date-badge {
+        background: rgba(255,255,255,0.06);
+        color: #93C5FD;
+    }
+    [data-theme="dark"] .update-badge {
+        background: rgba(255,255,255,0.08);
+        color: #93C5FD;
+    }
+    [data-theme="dark"] .mini-stat-number {
+        color: white;
+    }
+    [data-theme="dark"] .mini-stat-label {
+        color: #93C5FD;
+    }
+    [data-theme="dark"] .mini-stat-divider {
+        background: rgba(255,255,255,0.15);
+    }
+    [data-theme="dark"] .btn-refresh {
+        background: rgba(255,255,255,0.1);
+        color: white;
+        border-color: rgba(255,255,255,0.15);
+    }
+    [data-theme="dark"] .btn-refresh:hover {
+        background: rgba(255,255,255,0.2);
+    }
+    [data-theme="dark"] .dashboard-card-footer {
+        border-color: #334155;
+    }
+    [data-theme="dark"] .appointment-status.scheduled {
+        background: #1E3A5F;
+        color: #6EA8FE;
+    }
+    [data-theme="dark"] .appointment-status.confirmed {
+        background: #1A3A2A;
+        color: #34D399;
+    }
+    [data-theme="dark"] .appointment-status.completed {
+        background: #1A3A2A;
+        color: #34D399;
+    }
+    [data-theme="dark"] .appointment-status.cancelled {
+        background: #3A1A1A;
+        color: #F87171;
+    }
+    [data-theme="dark"] .appointment-status.pending {
+        background: #3D2E0A;
+        color: #FBBF24;
+    }
+    [data-theme="dark"] .queue-status.pending {
+        background: #3D2E0A;
+        color: #FBBF24;
+    }
+    [data-theme="dark"] .queue-status.assigned {
+        background: #1E3A5F;
+        color: #6EA8FE;
+    }
+    [data-theme="dark"] .queue-status.with_doctor {
+        background: #1A3A2A;
+        color: #34D399;
+    }
+    [data-theme="dark"] .btn-consult {
+        background: #6D28D9;
+    }
+    [data-theme="dark"] .btn-consult:hover {
+        background: #5B21B6;
+    }
+    [data-theme="dark"] .btn-consult-sm {
+        background: #6D28D9;
+    }
+    [data-theme="dark"] .btn-consult-sm:hover {
+        background: #5B21B6;
+    }
+    [data-theme="dark"] .btn-view-sm {
+        background: #0A4CA8;
+    }
+    [data-theme="dark"] .btn-view-sm:hover {
+        background: #0B5ED7;
+    }
 </style>
 
 <!-- ================================================================ -->
@@ -1681,7 +1899,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     // ================================================================
-    // CHART - INITIAL RENDER
+    // CHART - RENDER
     // ================================================================
     var chartInstance = null;
     var chartLabels = <?= json_encode($chart_labels) ?>;
@@ -1706,8 +1924,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 datasets: [{
                     label: 'Appointments',
                     data: values,
-                    backgroundColor: '#0B5ED7',
-                    borderColor: '#0A4CA8',
+                    backgroundColor: isDark ? '#6EA8FE' : '#0B5ED7',
+                    borderColor: isDark ? '#0B5ED7' : '#0A4CA8',
                     borderWidth: 2,
                     borderRadius: 6,
                 }]
@@ -1754,34 +1972,33 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     // ================================================================
-    // DARK MODE TOGGLE (if not already defined)
+    // DARK MODE - LISTEN FOR CHANGES FROM HEADER
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    if (darkModeToggle) {
-        darkModeToggle.addEventListener('click', function() {
-            var html = document.documentElement;
-            var isDark = html.getAttribute('data-theme') === 'dark';
-            if (isDark) {
-                html.removeAttribute('data-theme');
-                localStorage.setItem('darkMode', 'false');
-                showToast('☀️ Light Mode', 'Switched to light mode', 'info');
-            } else {
-                html.setAttribute('data-theme', 'dark');
-                localStorage.setItem('darkMode', 'true');
-                showToast('🌙 Dark Mode', 'Switched to dark mode', 'info');
-            }
-        });
-    }
-    
-    // Load saved dark mode
-    if (localStorage.getItem('darkMode') === 'true') {
-        document.documentElement.setAttribute('data-theme', 'dark');
-    }
+    document.addEventListener('darkModeChanged', function(e) {
+        var isDark = e.detail && e.detail.isDark;
+        var html = document.documentElement;
+        
+        if (isDark) {
+            html.setAttribute('data-theme', 'dark');
+        } else {
+            html.removeAttribute('data-theme');
+        }
+        
+        // Re-render chart with new colors
+        renderChart(chartLabels, chartValues);
+        
+        console.log('🌙 Dashboard dark mode synced: ' + (isDark ? 'ON ✅' : 'OFF'));
+    });
     
     // ================================================================
-    // INITIALIZE - Render chart and start auto-update
+    // INITIALIZE
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
+        // Check initial dark mode from localStorage
+        if (localStorage.getItem('darkMode') === 'true') {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+        
         renderChart(chartLabels, chartValues);
         
         // Show welcome toast
@@ -1793,8 +2010,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 1500);
     });
     
+    // Re-render chart when dark mode changes via mutation observer
+    var observer = new MutationObserver(function() {
+        renderChart(chartLabels, chartValues);
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    
     console.log('%c👨‍⚕️ Doctor Dashboard Initialized', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🔄 Auto-update active every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c🌙 Dark mode uses CSS + localStorage (syncs with header)', 'font-size:12px; color:#6EA8FE;');
     console.log('%c💡 Dashboard updates automatically - no refresh needed!', 'font-size:12px; color:#64748B;');
 </script>
 

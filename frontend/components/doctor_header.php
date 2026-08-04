@@ -3,6 +3,7 @@
 // FILE: frontend/components/doctor_header.php
 // DOCTOR - SHARED HEADER WITH SEARCH BAR & ONLINE STATUS
 // WITH WORKING SIDEBAR TOGGLE - FULLY FIXED
+// FIXED: Dark mode uses localStorage only (syncs everywhere)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -123,16 +124,14 @@ if (empty($page_title) || $page_title == '') {
     $page_title = 'Dashboard';
 }
 
-$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
-$is_dark = $dark_mode === 'true';
-
 // ================================================================
-// GET CURRENT PAGE FOR ACTIVE NAV
+// DARK MODE - FIXED: No PHP logic, will be handled by JavaScript
 // ================================================================
-$current_page = basename($_SERVER['PHP_SELF']);
+// Dark mode is now handled entirely by JavaScript using localStorage
+// This ensures it works consistently across all pages
 ?>
 <!DOCTYPE html>
-<html lang="en" data-theme="<?= $is_dark ? 'dark' : 'light' ?>">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -550,7 +549,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
         }
         
         /* ================================================================
-           DARK MODE TOGGLE
+           DARK MODE TOGGLE - FIXED: Better visibility
            ================================================================ */
         .dark-toggle-btn {
             background: var(--bg-body);
@@ -570,10 +569,15 @@ $current_page = basename($_SERVER['PHP_SELF']);
         .dark-toggle-btn:hover {
             border-color: var(--primary);
             background: var(--bg-card);
+            transform: scale(1.02);
         }
         
         .dark-toggle-btn i {
             font-size: 0.9rem;
+        }
+        
+        .dark-toggle-btn:active {
+            transform: scale(0.95);
         }
         
         /* ================================================================
@@ -806,9 +810,138 @@ $current_page = basename($_SERVER['PHP_SELF']);
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - FULL HEADER FUNCTIONALITY -->
+<!-- JAVASCRIPT - FULL HEADER FUNCTIONALITY - FIXED DARK MODE -->
 <!-- ================================================================ -->
 <script>
+// ================================================================
+// TOAST NOTIFICATION - DEFINED FIRST BEFORE USE
+// ================================================================
+function showToast(title, message, type) {
+    var existingToast = document.querySelector('.toast-custom');
+    if (existingToast) {
+        existingToast.remove();
+    }
+    
+    var toast = document.createElement('div');
+    toast.className = 'toast-custom ' + type;
+    var icon = document.createElement('i');
+    icon.className = 'fas ' + (type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle');
+    icon.style.fontSize = '1.2rem';
+    
+    var content = document.createElement('div');
+    content.innerHTML = `
+        <p style="font-weight:600;font-size:0.9rem;margin:0;">${title}</p>
+        <p style="font-size:0.78rem;opacity:0.9;margin:0;">${message}</p>
+    `;
+    
+    toast.appendChild(icon);
+    toast.appendChild(content);
+    document.body.appendChild(toast);
+    
+    setTimeout(function() {
+        toast.classList.add('show');
+    }, 50);
+    
+    setTimeout(function() {
+        toast.classList.remove('show');
+        setTimeout(function() {
+            if (toast.parentNode) {
+                toast.remove();
+            }
+        }, 400);
+    }, 4000);
+}
+
+// ================================================================
+// DARK MODE - FIXED: Uses localStorage ONLY (syncs everywhere)
+// ================================================================
+(function() {
+    var darkModeToggle = document.getElementById('darkModeToggle');
+    var darkIcon = document.getElementById('darkIcon');
+    var darkText = document.getElementById('darkText');
+    var htmlElement = document.documentElement;
+    
+    // ================================================================
+    // Get current dark mode state from localStorage
+    // ================================================================
+    function getDarkMode() {
+        return localStorage.getItem('darkMode') === 'true';
+    }
+    
+    // ================================================================
+    // Set dark mode (updates localStorage + dispatches event)
+    // ================================================================
+    function setDarkMode(isDark) {
+        // Update HTML data-theme
+        if (isDark) {
+            htmlElement.setAttribute('data-theme', 'dark');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
+        } else {
+            htmlElement.removeAttribute('data-theme');
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
+        }
+        
+        // Update localStorage
+        localStorage.setItem('darkMode', isDark ? 'true' : 'false');
+        
+        // Dispatch event for other components (dashboard, etc.)
+        document.dispatchEvent(new CustomEvent('darkModeChanged', { 
+            detail: { isDark: isDark } 
+        }));
+        
+        console.log('%c🌙 Dark mode ' + (isDark ? 'ENABLED ✅' : 'DISABLED'), 'font-size:12px; color:' + (isDark ? '#6EA8FE' : '#94A3B8'));
+    }
+    
+    // ================================================================
+    // Initialize dark mode on page load
+    // ================================================================
+    function initDarkMode() {
+        var isDark = getDarkMode();
+        setDarkMode(isDark);
+        console.log('🌙 Dark mode initialized: ' + (isDark ? 'ON ✅' : 'OFF'));
+    }
+    
+    // ================================================================
+    // Toggle dark mode when button is clicked
+    // ================================================================
+    if (darkModeToggle) {
+        // Remove existing listeners to avoid duplicates
+        var newToggle = darkModeToggle.cloneNode(true);
+        darkModeToggle.parentNode.replaceChild(newToggle, darkModeToggle);
+        var freshToggle = document.getElementById('darkModeToggle');
+        
+        freshToggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+            setDarkMode(!isDark);
+            
+            // Show toast notification
+            showToast('🌙 Dark Mode', isDark ? 'Light mode activated' : 'Dark mode activated', 'info');
+        });
+        console.log('✅ Dark mode toggle button attached');
+    }
+    
+    // ================================================================
+    // Listen for dark mode changes from other pages/tabs
+    // ================================================================
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'darkMode') {
+            var isDark = e.newValue === 'true';
+            setDarkMode(isDark);
+            console.log('🌙 Dark mode synced from another tab: ' + (isDark ? 'ON' : 'OFF'));
+        }
+    });
+    
+    // ================================================================
+    // Initialize
+    // ================================================================
+    initDarkMode();
+})();
+
 // ================================================================
 // SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
 // ================================================================
@@ -931,76 +1064,6 @@ $current_page = basename($_SERVER['PHP_SELF']);
 })();
 
 // ================================================================
-// DARK MODE TOGGLE
-// ================================================================
-(function() {
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    function getCookie(name) {
-        var value = "; " + document.cookie;
-        var parts = value.split("; " + name + "=");
-        if (parts.length === 2) {
-            return parts.pop().split(";").shift();
-        }
-        return null;
-    }
-    
-    function setCookie(name, value, days) {
-        var expires = "";
-        if (days) {
-            var date = new Date();
-            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-            expires = "; expires=" + date.toUTCString();
-        }
-        document.cookie = name + "=" + value + expires + "; path=/";
-    }
-    
-    var savedDarkMode = getCookie('dark_mode');
-    
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        if (darkIcon) {
-            darkIcon.className = 'fas fa-sun';
-        }
-        if (darkText) {
-            darkText.textContent = 'Light';
-        }
-    }
-    
-    if (darkModeToggle) {
-        darkModeToggle.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-            
-            if (isDark) {
-                htmlElement.removeAttribute('data-theme');
-                if (darkIcon) {
-                    darkIcon.className = 'fas fa-moon';
-                }
-                if (darkText) {
-                    darkText.textContent = 'Dark';
-                }
-                setCookie('dark_mode', 'false', 365);
-            } else {
-                htmlElement.setAttribute('data-theme', 'dark');
-                if (darkIcon) {
-                    darkIcon.className = 'fas fa-sun';
-                }
-                if (darkText) {
-                    darkText.textContent = 'Light';
-                }
-                setCookie('dark_mode', 'true', 365);
-            }
-        });
-    }
-})();
-
-// ================================================================
 // DATE & TIME - REAL TIME
 // ================================================================
 (function() {
@@ -1039,7 +1102,12 @@ document.addEventListener('DOMContentLoaded', function() {
     var doctorId = <?= json_encode($doctor_id) ?>;
     
     if (statusToggle) {
-        statusToggle.addEventListener('click', function() {
+        // Remove existing listeners to avoid duplicates
+        var newToggle = statusToggle.cloneNode(true);
+        statusToggle.parentNode.replaceChild(newToggle, statusToggle);
+        var freshToggle = document.getElementById('statusToggle');
+        
+        freshToggle.addEventListener('click', function() {
             if (isUpdating) return;
             
             var currentIsOnline = statusDot.classList.contains('online');
@@ -1063,7 +1131,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             
             isUpdating = true;
-            statusToggle.classList.add('updating');
+            freshToggle.classList.add('updating');
             
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/dispensary_system/frontend/pages/doctor/update_doctor_status.php', true);
@@ -1071,7 +1139,7 @@ document.addEventListener('DOMContentLoaded', function() {
             xhr.onreadystatechange = function() {
                 if (xhr.readyState === 4) {
                     isUpdating = false;
-                    statusToggle.classList.remove('updating');
+                    freshToggle.classList.remove('updating');
                     
                     if (xhr.status === 200) {
                         try {
@@ -1082,6 +1150,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                     'success');
                             } else {
                                 showToast('❌ Error', response.message || 'Failed to update status', 'error');
+                                // Revert UI
                                 if (newStatus === 1) {
                                     statusDot.classList.remove('online');
                                     statusDot.classList.add('offline');
@@ -1100,6 +1169,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         } catch (e) {
                             showToast('❌ Error', 'Server error', 'error');
+                            // Revert UI
                             if (newStatus === 1) {
                                 statusDot.classList.remove('online');
                                 statusDot.classList.add('offline');
@@ -1118,6 +1188,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     } else {
                         showToast('❌ Error', 'Network error', 'error');
+                        // Revert UI
                         if (newStatus === 1) {
                             statusDot.classList.remove('online');
                             statusDot.classList.add('offline');
@@ -1138,6 +1209,7 @@ document.addEventListener('DOMContentLoaded', function() {
             };
             xhr.send('status=' + newStatus + '&doctor_id=' + doctorId);
         });
+        console.log('✅ Status toggle button attached');
     }
 });
 
@@ -1183,45 +1255,6 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ================================================================
-// TOAST NOTIFICATION
-// ================================================================
-function showToast(title, message, type) {
-    var existingToast = document.querySelector('.toast-custom');
-    if (existingToast) {
-        existingToast.remove();
-    }
-    
-    var toast = document.createElement('div');
-    toast.className = 'toast-custom ' + type;
-    var icon = document.createElement('i');
-    icon.className = 'fas ' + (type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle');
-    icon.style.fontSize = '1.2rem';
-    
-    var content = document.createElement('div');
-    content.innerHTML = `
-        <p style="font-weight:600;font-size:0.9rem;margin:0;">${title}</p>
-        <p style="font-size:0.78rem;opacity:0.9;margin:0;">${message}</p>
-    `;
-    
-    toast.appendChild(icon);
-    toast.appendChild(content);
-    document.body.appendChild(toast);
-    
-    setTimeout(function() {
-        toast.classList.add('show');
-    }, 50);
-    
-    setTimeout(function() {
-        toast.classList.remove('show');
-        setTimeout(function() {
-            if (toast.parentNode) {
-                toast.remove();
-            }
-        }, 400);
-    }, 4000);
-}
-
-// ================================================================
 // KEYBOARD SHORTCUTS
 // ================================================================
 document.addEventListener('keydown', function(e) {
@@ -1263,11 +1296,12 @@ document.addEventListener('keydown', function(e) {
 // ================================================================
 // CONSOLE LOG
 // ================================================================
-console.log('%c👨‍⚕️ Braick - Doctor Header (WORKING SIDEBAR TOGGLE)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👨‍⚕️ Braick - Doctor Header (FULLY FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
 console.log('%c🟢 Status: <?= $is_online ? 'Online ✅' : 'Offline ❌' ?>', 'font-size:12px; color:#059669;');
 console.log('%c🆔 Doctor ID: <?= $doctor_id ?>', 'font-size:12px; color:#64748B;');
 console.log('%c👤 Doctor: <?= $full_name ?>', 'font-size:12px; color:#64748B;');
-console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
+console.log('%c🌙 Dark Mode uses localStorage ONLY (syncs everywhere)', 'font-size:12px; color:#6EA8FE;');
+console.log('%c✅ Dark mode works on ALL pages - no cookie needed!', 'font-size:12px; color:#34D399;');
 console.log('%c🔍 Search: Ctrl+K to focus', 'font-size:12px; color:#64748B;');
 console.log('%c🔄 Status: Ctrl+Shift+S to toggle', 'font-size:12px; color:#64748B;');
 console.log('%c📱 Hamburger button: Click ☰ to toggle sidebar', 'font-size:12px; color:#34D399;');

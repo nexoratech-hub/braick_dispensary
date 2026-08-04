@@ -3,6 +3,7 @@
 // FILE: frontend/pages/doctor/my_patients.php
 // DOCTOR - MY PATIENTS LIST
 // FIXED: Single VIEW button only
+// FIXED: Full CSS with dark mode support
 // New Visit moved to patient_details page
 // BRAICK DISPENSARY
 // ================================================================
@@ -158,12 +159,131 @@ include_once '../../components/doctor_header.php';
 include_once '../../components/doctor_sidebar.php';
 ?>
 
+<!-- ================================================================ -->
+<!-- FULL CSS WITH DARK MODE SUPPORT -->
+<!-- ================================================================ -->
 <style>
     /* ================================================================
-       ADDITIONAL STYLES
+       ROOT VARIABLES - LIGHT & DARK MODE
        ================================================================ */
+    :root {
+        --primary: #0B5ED7;
+        --primary-dark: #0A4CA8;
+        --primary-light: #6EA8FE;
+        --primary-bg: #E8F0FE;
+        --success: #059669;
+        --success-dark: #047857;
+        --success-light: #34D399;
+        --success-bg: #D1FAE5;
+        --danger: #DC2626;
+        --danger-dark: #B91C1C;
+        --danger-light: #F87171;
+        --danger-bg: #FEE2E2;
+        --warning: #D97706;
+        --warning-bg: #FEF3C7;
+        --purple: #7C3AED;
+        --purple-bg: #EDE9FE;
+        --white: #FFFFFF;
+        --gray-50: #F8FAFC;
+        --gray-100: #F1F5F9;
+        --gray-200: #E2E8F0;
+        --gray-300: #CBD5E1;
+        --gray-400: #94A3B8;
+        --gray-500: #64748B;
+        --gray-600: #475569;
+        --gray-700: #334155;
+        --gray-800: #1E293B;
+        --gray-900: #0F172A;
+        --bg-body: #F1F5F9;
+        --bg-card: #FFFFFF;
+        --bg-nav: #FFFFFF;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --border-color: #E2E8F0;
+        --shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.07);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.1);
+    }
     
-    /* Stat Cards */
+    [data-theme="dark"] {
+        --bg-body: #0F172A;
+        --bg-card: #1E293B;
+        --bg-nav: #1E293B;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --border-color: #334155;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.4);
+    }
+    
+    /* ================================================================
+       BASE STYLES
+       ================================================================ */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg-body); }
+    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+    
+    /* ================================================================
+       MAIN CONTENT
+       ================================================================ */
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 24px 28px;
+        min-height: calc(100vh - 68px);
+        transition: all 0.3s ease;
+        background: var(--bg-body);
+    }
+    
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header {
+        border-bottom: 3px solid var(--primary);
+        padding-bottom: 12px;
+        margin-bottom: 20px;
+    }
+    
+    .page-title {
+        color: var(--primary-dark);
+        font-size: 1.8rem;
+        font-weight: 700;
+    }
+    
+    [data-theme="dark"] .page-title {
+        color: var(--primary-light);
+    }
+    
+    .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+    }
+    
+    .branch-tag {
+        background: var(--primary);
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    /* ================================================================
+       STAT CARDS
+       ================================================================ */
     .stat-card-mini {
         background: var(--bg-card);
         border-radius: 12px;
@@ -220,7 +340,9 @@ include_once '../../components/doctor_sidebar.php';
         color: #34D399;
     }
     
-    /* Table Header - Blue Theme */
+    /* ================================================================
+       TABLE - BLUE THEME WITH DARK MODE
+       ================================================================ */
     .table-blue thead th {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8) !important;
         color: #FFFFFF !important;
@@ -265,7 +387,9 @@ include_once '../../components/doctor_sidebar.php';
         background: #1A3A5F !important;
     }
     
-    /* Badge styles */
+    /* ================================================================
+       BADGES - DARK MODE SUPPORT
+       ================================================================ */
     .badge {
         padding: 3px 12px !important;
         border-radius: 20px !important;
@@ -347,7 +471,9 @@ include_once '../../components/doctor_sidebar.php';
         color: #34D399 !important;
     }
     
-    /* Filter Buttons */
+    /* ================================================================
+       FILTER BUTTONS - DARK MODE SUPPORT
+       ================================================================ */
     .filter-btn {
         padding: 4px 14px;
         border-radius: 20px;
@@ -387,7 +513,9 @@ include_once '../../components/doctor_sidebar.php';
     
     .filter-btn i { margin-right: 4px; }
     
-    /* Filter Section */
+    /* ================================================================
+       FILTER SECTION
+       ================================================================ */
     .filter-section {
         background: var(--bg-card);
         border-radius: 14px;
@@ -407,7 +535,9 @@ include_once '../../components/doctor_sidebar.php';
         margin-right: 4px;
     }
     
-    /* Action Buttons - SINGLE VIEW BUTTON */
+    /* ================================================================
+       ACTION BUTTON - SINGLE VIEW BUTTON
+       ================================================================ */
     .btn-action {
         display: inline-flex;
         align-items: center;
@@ -446,7 +576,9 @@ include_once '../../components/doctor_sidebar.php';
         color: white;
     }
     
-    /* Card */
+    /* ================================================================
+       CARD
+       ================================================================ */
     .card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -477,7 +609,9 @@ include_once '../../components/doctor_sidebar.php';
     
     .title-blue { color: #0B5ED7; }
     
-    /* Table Header with Search */
+    /* ================================================================
+       TABLE HEADER WITH SEARCH
+       ================================================================ */
     .table-header-wrapper {
         display: flex;
         flex-wrap: wrap;
@@ -546,7 +680,9 @@ include_once '../../components/doctor_sidebar.php';
         color: #6EA8FE;
     }
     
-    /* Pagination */
+    /* ================================================================
+       PAGINATION
+       ================================================================ */
     .pagination {
         display: flex;
         gap: 4px;
@@ -591,37 +727,139 @@ include_once '../../components/doctor_sidebar.php';
         border-color: #0B5ED7;
     }
     
-    /* Responsive */
-    @media (max-width: 640px) {
-        .stat-card-mini .stat-number {
-            font-size: 1.4rem;
-        }
-        .filter-section {
-            flex-direction: column;
-            align-items: stretch;
-        }
-        .filter-section .filter-label {
-            margin-bottom: 4px;
-        }
-        .table-blue tbody td {
-            font-size: 0.7rem;
-            padding: 6px 10px !important;
-        }
-        .btn {
-            font-size: 0.7rem;
-            padding: 4px 10px;
-        }
-        .table-header-wrapper {
-            flex-direction: column;
-            align-items: stretch;
-        }
-        .table-header-wrapper .search-box {
-            max-width: 100%;
-        }
-        .btn-action {
-            padding: 4px 12px;
-            font-size: 0.65rem;
-        }
+    /* ================================================================
+       TOAST
+       ================================================================ */
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #EF4444; }
+    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.warning { background: #D97706; }
+    
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    .text-gray-300 { color: #D1D5DB; }
+    .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
+    
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1024px) {
+        .main-content { padding: 16px; }
+    }
+    @media (max-width: 768px) {
+        .main-content { padding: 12px; }
+        .table-blue tbody td { font-size: 0.7rem; padding: 6px 10px !important; }
+        .filter-section { flex-direction: column; align-items: stretch; }
+        .filter-section .filter-label { margin-bottom: 4px; }
+        .table-header-wrapper { flex-direction: column; align-items: stretch; }
+        .table-header-wrapper .search-box { max-width: 100%; }
+        .btn-action { padding: 4px 12px; font-size: 0.65rem; }
+        .stat-card-mini .stat-number { font-size: 1.4rem; }
+        .page-title { font-size: 1.2rem; }
+    }
+    @media (max-width: 480px) {
+        .main-content { padding: 8px; }
+        .stat-card-mini .stat-number { font-size: 1.2rem; }
+        .page-title { font-size: 1rem; }
+        .btn-action { padding: 3px 10px; font-size: 0.6rem; }
+        .stat-card-mini { padding: 10px 12px; }
+        .card { padding: 12px 14px; }
+    }
+    
+    /* ================================================================
+       DARK MODE OVERRIDES - FULL CSS
+       ================================================================ */
+    [data-theme="dark"] .stat-card-mini {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .stat-card-mini:hover {
+        border-color: #0B5ED7;
+    }
+    [data-theme="dark"] .stat-card-mini .stat-number {
+        color: #6EA8FE;
+    }
+    [data-theme="dark"] .stat-card-mini .stat-number.green {
+        color: #34D399;
+    }
+    [data-theme="dark"] .card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .card:hover {
+        border-color: #0B5ED7;
+    }
+    [data-theme="dark"] .card-title {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .filter-section {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .filter-btn {
+        color: #94A3B8;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .filter-btn:hover {
+        background: #1E3A5F;
+        border-color: #0B5ED7;
+        color: #6EA8FE;
+    }
+    [data-theme="dark"] .filter-btn.active {
+        background: #0B5ED7;
+        color: white;
+        border-color: #0B5ED7;
+    }
+    [data-theme="dark"] .table-header-wrapper {
+        border-color: #334155;
+    }
+    [data-theme="dark"] .pagination .page-link {
+        background: #1E293B;
+        border-color: #334155;
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .pagination .page-link:hover {
+        background: #0B5ED7;
+        color: white;
+        border-color: #0B5ED7;
+    }
+    [data-theme="dark"] .page-subtitle {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .footer {
+        border-color: #334155;
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .toast-custom {
+        box-shadow: 0 8px 30px rgba(0,0,0,0.4);
     }
 </style>
 
@@ -938,36 +1176,24 @@ include_once '../../components/doctor_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - SYNC WITH HEADER (localStorage)
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+    // Listen for dark mode changes from header
+    document.addEventListener('darkModeChanged', function(e) {
+        var isDark = e.detail && e.detail.isDark;
+        var html = document.documentElement;
+        
         if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
+            html.setAttribute('data-theme', 'dark');
         } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
+            html.removeAttribute('data-theme');
         }
     });
+    
+    // Check initial dark mode from localStorage
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
 
     // ================================================================
     // DOM ELEMENTS
@@ -1079,6 +1305,7 @@ include_once '../../components/doctor_sidebar.php';
     console.log('%c🟢 Active: <?= $active_patients ?> | ⏳ Pending Visits: <?= $pending_visits ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔍 Real-time table search filter enabled', 'font-size:13px; color:#7B2FBE;');
     console.log('%c✅ Single VIEW button - New Visit moved to patient_details page', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
 </script>
 
 </body>
