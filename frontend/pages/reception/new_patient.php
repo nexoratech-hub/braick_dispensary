@@ -2,9 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/reception/new_patient.php
 // RECEPTION - REGISTER NEW PATIENT - WITH ASSIGN DOCTOR OPTION
-// FIXED: AJAX doctor status update working without page refresh
-// FIXED: Doctor online/offline status updates every 3 seconds
-// FIXED: No page refresh needed - real-time updates
+// FIXED: Can save WITHOUT assigning doctor (optional)
+// FIXED: Uses 'New Patient' service (category_id=2, price=10000)
+// FIXED: All visits are created as 'new' visit_type
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -43,7 +43,6 @@ $offline_doctors = [];
 $online_doctors_count = 0;
 $offline_doctors_count = 0;
 $total_doctors = 0;
-$visit_type_options = [];
 $latest_patient_id = null;
 $latest_visit_id = null;
 
@@ -51,14 +50,13 @@ try {
     $db = getDB();
 
     // ================================================================
-    // ✅ AJAX HANDLER - GET DOCTOR STATUS (NO REFRESH NEEDED)
+    // ✅ AJAX HANDLER - GET DOCTOR STATUS
     // ================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'get_doctor_status') {
         header('Content-Type: application/json');
         
         $branch_id = isset($_POST['branch_id']) ? (int)$_POST['branch_id'] : $selected_branch_id;
         
-        // Get doctors with their current status
         $stmt = $db->prepare("
             SELECT id, full_name, specialty, is_online 
             FROM users 
@@ -83,7 +81,6 @@ try {
             }
         }
         
-        // Build HTML for doctor select options
         $options_html = '<option value="">-- Select Doctor --</option>';
         
         if ($online_count > 0) {
@@ -156,7 +153,7 @@ try {
     $total_doctors = count($doctors);
     
     // ================================================================
-    // GET CONSULTATION SERVICES FOR VISIT TYPE
+    // GET CONSULTATION SERVICES - Use 'New Patient' as default
     // ================================================================
     $stmt = $db->prepare("
         SELECT id, service_name, description, price, unit, is_active
@@ -164,11 +161,12 @@ try {
         WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
         ORDER BY 
             CASE 
-                WHEN service_name LIKE '%New%' OR service_name LIKE '%General%' THEN 0
-                WHEN service_name LIKE '%Emergency%' THEN 1
-                WHEN service_name LIKE '%Specialist%' THEN 2
-                WHEN service_name LIKE '%Follow%' THEN 3
-                ELSE 4
+                WHEN service_name LIKE '%New Patient%' THEN 0
+                WHEN service_name LIKE '%General%' THEN 1
+                WHEN service_name LIKE '%Emergency%' THEN 2
+                WHEN service_name LIKE '%Specialist%' THEN 3
+                WHEN service_name LIKE '%Follow%' THEN 4
+                ELSE 5
             END,
             service_name
     ");
@@ -177,7 +175,7 @@ try {
     
     // Build visit type options
     $visit_type_options = [];
-    $default_key = 'general_consultation';
+    $default_key = 'new_patient';
     
     foreach ($consultation_services as $service) {
         $service_name = $service['service_name'];
@@ -190,8 +188,10 @@ try {
         
         $display_name = $service_name;
         
-        $icon = '🆕';
-        if (strpos(strtolower($service_name), 'follow') !== false) {
+        $icon = '🏥';
+        if (strpos(strtolower($service_name), 'new patient') !== false) {
+            $icon = '🆕';
+        } elseif (strpos(strtolower($service_name), 'follow') !== false) {
             $icon = '🔄';
         } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
             $icon = '🚨';
@@ -212,9 +212,8 @@ try {
             'icon' => $icon
         ];
         
-        // Set default to New Patient / General Consultation
-        if (strpos(strtolower($service_name), 'new') !== false || 
-            strpos(strtolower($service_name), 'general') !== false) {
+        // Set default to 'New Patient'
+        if (strpos(strtolower($service_name), 'new patient') !== false) {
             $default_key = $key;
         }
     }
@@ -224,11 +223,11 @@ try {
         $visit_type_options = [
             'new_patient' => [
                 'id' => null,
-                'name' => 'New Patient Consultation',
+                'name' => 'New Patient',
                 'display_name' => 'New Patient',
-                'price' => 15000,
+                'price' => 10000,
                 'unit' => 'each',
-                'description' => 'First time consultation',
+                'description' => 'New patient consultation',
                 'is_active' => 1,
                 'icon' => '🆕'
             ],
@@ -236,7 +235,7 @@ try {
                 'id' => null,
                 'name' => 'General Consultation',
                 'display_name' => 'General Consultation',
-                'price' => 12000,
+                'price' => 15000,
                 'unit' => 'each',
                 'description' => 'Standard doctor consultation',
                 'is_active' => 1,
@@ -246,7 +245,7 @@ try {
                 'id' => null,
                 'name' => 'Follow-up Consultation',
                 'display_name' => 'Follow-up',
-                'price' => 8000,
+                'price' => 10000,
                 'unit' => 'each',
                 'description' => 'Follow-up visit',
                 'is_active' => 1,
@@ -273,7 +272,7 @@ try {
     $patient_id_number = 'P-' . date('Y') . '-' . $next_id;
     
     // ================================================================
-    // HANDLE FORM SUBMISSION - REGISTER & ASSIGN DOCTOR
+    // HANDLE FORM SUBMISSION - REGISTER & ASSIGN DOCTOR (OPTIONAL)
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_patient'])) {
         $full_name = trim($_POST['full_name'] ?? '');
@@ -286,16 +285,18 @@ try {
         $emergency_contact = trim($_POST['emergency_contact'] ?? '');
         $blood_group = $_POST['blood_group'] ?? null;
         $allergies = trim($_POST['allergies'] ?? '');
-        $patient_type = $_POST['patient_type'] ?? 'new';
         $branch_id = $selected_branch_id;
         
-        // Assign doctor fields
+        // Assign doctor fields (OPTIONAL)
         $assign_doctor = isset($_POST['assign_doctor']) ? 1 : 0;
         $doctor_id = (int)($_POST['doctor_id'] ?? 0);
-        $visit_type_key = $_POST['visit_type'] ?? 'general_consultation';
+        $visit_type_key = $_POST['visit_type'] ?? 'new_patient';
         $symptoms = trim($_POST['symptoms'] ?? '');
         $complaint = trim($_POST['complaint'] ?? '');
         $notes = trim($_POST['notes'] ?? '');
+        
+        // Get consultation fee from selected visit type
+        $consultation_fee = $visit_type_options[$visit_type_key]['price'] ?? 10000;
         
         // Validation
         $errors = [];
@@ -384,17 +385,16 @@ try {
                 $latest_patient_id = $patient_db_id;
                 
                 // ================================================================
-                // 2. CREATE VISIT
+                // 2. CREATE VISIT - ALWAYS 'new' visit_type
                 // ================================================================
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT);
                 
+                // Default status is 'pending' (no doctor assigned)
                 $visit_status = 'pending';
-                $consultation_fee = 0;
                 
-                // If doctor assigned, status becomes 'assigned' and consultation fee is set
+                // If doctor assigned, status becomes 'assigned'
                 if ($assign_doctor && $doctor_id > 0) {
                     $visit_status = 'assigned';
-                    $consultation_fee = $visit_type_options[$visit_type_key]['price'] ?? 0;
                 }
                 
                 $stmt = $db->prepare("
@@ -410,7 +410,7 @@ try {
                     $patient_db_id, 
                     $user_id, 
                     $branch_id,
-                    $patient_type,
+                    'new',  // visit_type is always 'new'
                     $visit_status,
                     $consultation_fee,
                     $assign_doctor && $doctor_id > 0 ? $doctor_id : null,
@@ -446,10 +446,10 @@ try {
                         $stmt->execute([$user_id, "New patient registered and assigned to doctor ID #$doctor_id: $full_name (ID: $patient_id_number) - Visit: $visit_number"]);
                     } catch (Exception $e) {}
                 } else {
-                    // Log activity
+                    // Log activity - NO doctor assigned
                     try {
                         $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'patient_registered', ?, NOW())");
-                        $stmt->execute([$user_id, "New patient registered: $full_name (ID: $patient_id_number) in $branch_name - Visit: $visit_number (No bill created)"]);
+                        $stmt->execute([$user_id, "New patient registered: $full_name (ID: $patient_id_number) in $branch_name - Visit: $visit_number (No doctor assigned)"]);
                     } catch (Exception $e) {}
                 }
                 
@@ -462,6 +462,7 @@ try {
                 $message = "✅ Patient registered successfully!";
                 $message .= "<br>📋 Patient ID: <strong>$patient_id_number</strong>";
                 $message .= "<br>📋 Visit #: <strong>$visit_number</strong>";
+                $message .= "<br>💰 Consultation Fee: <strong>TSh " . number_format($consultation_fee, 0) . "</strong>";
                 
                 if ($assign_doctor && $doctor_id > 0) {
                     $doctor_name = '';
@@ -479,8 +480,8 @@ try {
                         $message .= "<br>💰 Bill: <strong>No bill created</strong> (Fee waived or zero)";
                     }
                 } else {
-                    $message .= "<br>⏳ <strong>No bill created</strong> - Bill will be created after doctor assigned";
-                    $message .= "<br>👨‍⚕️ Doctor: <strong>Not assigned</strong> - Go to Assign Doctor page";
+                    $message .= "<br>⏳ Doctor: <strong>Not assigned</strong> - Patient is in Pending list";
+                    $message .= "<br>💰 <strong>No bill created</strong> - Bill will be created when doctor is assigned";
                 }
                 
                 $message_type = 'success';
@@ -673,27 +674,6 @@ $marital_statuses = [
     'Divorced' => 'Divorced',
     'Widowed' => 'Widowed',
     'Separated' => 'Separated'
-];
-
-// ================================================================
-// COMMON SYMPTOMS LIST
-// ================================================================
-$common_symptoms = [
-    'Fever' => 'Fever',
-    'Headache' => 'Headache',
-    'Cough' => 'Cough',
-    'Sore Throat' => 'Sore Throat',
-    'Body Pain' => 'Body Pain',
-    'Fatigue' => 'Fatigue',
-    'Nausea' => 'Nausea',
-    'Vomiting' => 'Vomiting',
-    'Diarrhea' => 'Diarrhea',
-    'Chest Pain' => 'Chest Pain',
-    'Shortness of Breath' => 'Shortness of Breath',
-    'Abdominal Pain' => 'Abdominal Pain',
-    'Dizziness' => 'Dizziness',
-    'Rash' => 'Rash',
-    'Swelling' => 'Swelling'
 ];
 
 // ================================================================
@@ -1027,16 +1007,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             align-items: center;
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .page-header .header-badge .no-bill {
-            color: #FCD34D;
-            font-weight: 700;
-        }
-        
-        .page-header .header-badge .bill-created {
-            color: #34D399;
-            font-weight: 700;
         }
         
         .page-header .btn-outline-light {
@@ -1724,7 +1694,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+            <span class="notif-dot no-notif"></span>
         </button>
         
         <a href="profile.php">
@@ -1760,7 +1730,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 
                 <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.2);">
                     <i class="fas fa-user-md"></i>
-                    <span class="bill-created">Assign Doctor</span>
+                    <span style="color:#34D399;">Optional</span>
                 </span>
                 
                 <span class="header-badge" style="background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.15);">
@@ -1946,13 +1916,13 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 8: ASSIGN DOCTOR SECTION - WITH AUTO-UPDATE -->
+            <!-- ROW 8: ASSIGN DOCTOR SECTION - OPTIONAL -->
             <!-- ============================================================ -->
             <div class="form-row grid-full">
                 <div class="assign-doctor-section">
                     <div class="section-title">
                         <i class="fas fa-user-md"></i>
-                        Assign Doctor (Optional)
+                        Assign Doctor <span style="font-weight:400;font-size:0.8rem;color:var(--text-secondary);">(Optional)</span>
                         <span class="text-xs font-normal text-gray-400">- Patient will be assigned immediately</span>
                         <span class="live-update-text" style="margin-left:auto;">
                             <span class="live-update-indicator"></span>
@@ -1964,7 +1934,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     <!-- Toggle -->
                     <div class="assign-doctor-toggle" onclick="toggleAssignDoctor(event)">
                         <input type="checkbox" name="assign_doctor" id="assignDoctorCheckbox" value="1" 
-                               <?= isset($_POST['assign_doctor']) ? 'checked' : '' ?>>
+                               <?= isset($_POST['assign_doctor']) && $_POST['assign_doctor'] == 1 ? 'checked' : '' ?>>
                         <span class="toggle-label">
                             <i class="fas fa-check-circle"></i> Assign doctor after registration
                         </span>
@@ -1972,14 +1942,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     </div>
                     
                     <!-- Doctor Fields -->
-                    <div class="assign-doctor-fields <?= isset($_POST['assign_doctor']) ? 'show' : '' ?>" id="assignDoctorFields">
+                    <div class="assign-doctor-fields <?= (isset($_POST['assign_doctor']) && $_POST['assign_doctor'] == 1) ? 'show' : '' ?>" id="assignDoctorFields">
                         <div class="grid-2">
                             <div class="form-row" style="margin-bottom:0;">
                                 <label class="form-label">
-                                    <i class="fas fa-user-md label-icon"></i> Select Doctor <span class="required" id="doctorRequired">*</span>
+                                    <i class="fas fa-user-md label-icon"></i> Select Doctor 
                                     <span id="doctorCountBadge" class="text-xs font-normal text-gray-400">(<?= $online_doctors_count ?> online, <?= $offline_doctors_count ?> offline)</span>
                                 </label>
-                                <select name="doctor_id" class="form-control" id="doctorSelect" required>
+                                <select name="doctor_id" class="form-control" id="doctorSelect">
                                     <option value="">-- Select Doctor --</option>
                                     
                                     <?php if (!empty($online_doctors) && count($online_doctors) > 0): ?>
@@ -2024,18 +1994,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             
                             <div class="form-row" style="margin-bottom:0;">
                                 <label class="form-label">
-                                    <i class="fas fa-tag label-icon"></i> Visit Type <span class="required">*</span>
-                                    <span class="text-xs font-normal text-gray-400" id="visitTypePrice">Fee: TSh 15,000</span>
+                                    <i class="fas fa-tag label-icon"></i> Visit Type 
+                                    <span class="text-xs font-normal text-gray-400" id="visitTypePrice">Fee: TSh 10,000</span>
                                 </label>
                                 <select name="visit_type" class="form-control" id="visitTypeSelect" onchange="updateVisitTypePrice()">
                                     <?php foreach ($visit_type_options as $key => $option):
-                                        $is_default = (strpos(strtolower($option['name']), 'new') !== false || 
-                                                      strpos(strtolower($option['name']), 'general') !== false ||
-                                                      $key === 'new_patient');
+                                        $is_default = (strpos(strtolower($option['name']), 'new patient') !== false);
                                         $selected = $is_default ? 'selected' : '';
                                     ?>
                                         <option value="<?= htmlspecialchars($key) ?>" data-price="<?= $option['price'] ?>" <?= $selected ?>>
-                                            <?= $option['icon'] ?? '🆕' ?> <?= htmlspecialchars($option['display_name']) ?> - TSh <?= number_format($option['price'], 0) ?>
+                                            <?= $option['icon'] ?? '🏥' ?> <?= htmlspecialchars($option['display_name']) ?> - TSh <?= number_format($option['price'], 0) ?>
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
@@ -2113,7 +2081,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 Patient ID: <strong><?= $patient_id_number ?></strong>
                 <span class="mx-2">|</span>
                 <i class="fas fa-user-md mr-1"></i>
-                <span class="text-green-500">Assign doctor option available</span>
+                <span style="color:var(--text-secondary);">Assign doctor is <strong>optional</strong></span>
                 <span class="mx-2">|</span>
                 <i class="fas fa-clock mr-1"></i>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
@@ -2171,7 +2139,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -2350,10 +2318,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         if (checkbox.checked) {
             fields.classList.add('show');
-            document.getElementById('doctorSelect').setAttribute('required', 'required');
         } else {
             fields.classList.remove('show');
-            document.getElementById('doctorSelect').removeAttribute('required');
         }
     }
     
@@ -2370,7 +2336,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         if (!select || !priceDisplay) return;
         
         var selectedOption = select.options[select.selectedIndex];
-        var price = selectedOption.dataset.price || 0;
+        var price = selectedOption.dataset.price || 10000;
         priceDisplay.textContent = 'Fee: TSh ' + parseInt(price).toLocaleString();
     }
 
@@ -2407,7 +2373,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // ✅ AUTO-UPDATE DOCTOR STATUS - EVERY 3 SECONDS (NO REFRESH)
+    // AUTO-UPDATE DOCTOR STATUS - EVERY 3 SECONDS
     // ================================================================
     var doctorUpdateInterval = null;
     var isUpdatingDoctors = false;
@@ -2421,7 +2387,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         formData.append('action', 'get_doctor_status');
         formData.append('branch_id', '<?= $selected_branch_id ?>');
         
-        // Send to SAME page - AJAX handler is at the top of this file
         fetch(window.location.href, { 
             method: 'POST', 
             body: formData 
@@ -2445,7 +2410,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         
-        // Update counts
         var onlineCount = document.getElementById('onlineCountDisplay');
         var offlineCount = document.getElementById('offlineCountDisplay');
         var statOnline = document.getElementById('statOnlineDoctors');
@@ -2468,15 +2432,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         if (updateBadge) updateBadge.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> ' + timeStr;
         if (doctorUpdateStatus) doctorUpdateStatus.textContent = 'Live ' + timeStr;
         
-        // ✅ Update doctor select options WITHOUT losing selection
+        // Update doctor select options WITHOUT losing selection
         var doctorSelect = document.getElementById('doctorSelect');
         if (doctorSelect && data.doctor_options !== undefined) {
             var currentValue = doctorSelect.value;
-            
-            // Update options
             doctorSelect.innerHTML = data.doctor_options;
-            
-            // Restore selection
             if (currentValue) {
                 var found = false;
                 var options = doctorSelect.querySelectorAll('option');
@@ -2489,7 +2449,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             }
         }
         
-        // ✅ Update doctor status display
+        // Update doctor status display
         var doctorStatusDisplay = document.getElementById('doctorStatusDisplay');
         if (doctorStatusDisplay) {
             doctorStatusDisplay.innerHTML = 
@@ -2500,7 +2460,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 '<span id="lastDoctorUpdate" class="text-gray-400">Updated: ' + timeStr + '</span>';
         }
         
-        // ✅ Show toast notification when doctor status changes
+        // Show toast notification when doctor status changes
         if (lastOnlineCount !== null && lastOnlineCount !== data.online_count) {
             if (data.online_count > lastOnlineCount) {
                 showToast('🟢 Doctor Online', data.online_count + ' doctor(s) are now online', 'success');
@@ -2513,11 +2473,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 
     function startDoctorAutoUpdate() {
         if (doctorUpdateInterval) clearInterval(doctorUpdateInterval);
-        // Initial fetch after 1 second
         setTimeout(function() {
             fetchDoctorStatus();
         }, 1000);
-        // Then every 3 seconds
         doctorUpdateInterval = setInterval(fetchDoctorStatus, 3000);
         console.log('%c🔄 Doctor status auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
@@ -2539,7 +2497,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // FORM VALIDATION
+    // FORM VALIDATION - FIXED: Save without doctor
     // ================================================================
     document.getElementById('registrationForm').addEventListener('submit', function(e) {
         var name = document.querySelector('input[name="full_name"]').value.trim();
@@ -2563,6 +2521,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             return false;
         }
         
+        // Only validate doctor if checkbox is checked
         if (assignDoctor) {
             var doctorSelect = document.getElementById('doctorSelect');
             if (!doctorSelect.value) {
@@ -2583,20 +2542,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         updateVisitTypePrice();
-        // Start doctor auto-update after 2 seconds
         setTimeout(function() {
             startDoctorAutoUpdate();
         }, 2000);
         
-        // Show initial status
         console.log('%c👤 Braick - New Patient Registration', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-        console.log('%c✅ Doctor status auto-updates every 3 seconds (NO REFRESH NEEDED)', 'font-size:13px; color:#34D399;');
+        console.log('%c✅ Doctor assignment is OPTIONAL', 'font-size:13px; color:#34D399;');
+        console.log('%c✅ Patient can be saved WITHOUT assigning doctor', 'font-size:13px; color:#34D399;');
+        console.log('%c💰 Default fee: TSh 10,000 (New Patient)', 'font-size:13px; color:#059669;');
         console.log('%c🟢 Online: <?= $online_doctors_count ?> | ⚪ Offline: <?= $offline_doctors_count ?>', 'font-size:13px; color:#64748B;');
-        console.log('%c🔄 Doctor changes status - UI updates automatically!', 'font-size:13px; color:#059669;');
     });
-
-    console.log('%c🔄 Doctor status auto-update active (3s interval)', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ No page refresh needed - Real-time updates!', 'font-size:12px; color:#059669;');
 </script>
 
 </body>
