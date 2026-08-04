@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/doctor/my_patients.php
 // DOCTOR - MY PATIENTS LIST
+// FIXED: Single VIEW button only
+// New Visit moved to patient_details page
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -97,7 +99,7 @@ $sql = "
            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status = 'completed') as completed_visits,
            (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
            (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status != 'cancelled') as total_bills,
-           (SELECT MAX(visit_date) FROM visits WHERE patient_id = p.id) as last_visit_date
+           (SELECT MAX(created_at) FROM visits WHERE patient_id = p.id) as last_visit_date
     FROM patients p
     LEFT JOIN branches b ON p.branch_id = b.id
     $where_clause
@@ -405,14 +407,14 @@ include_once '../../components/doctor_sidebar.php';
         margin-right: 4px;
     }
     
-    /* Action Buttons */
+    /* Action Buttons - SINGLE VIEW BUTTON */
     .btn-action {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-size: 0.6rem;
+        gap: 6px;
+        padding: 6px 16px;
+        border-radius: 8px;
+        font-size: 0.75rem;
         font-weight: 600;
         transition: all 0.3s ease;
         text-decoration: none;
@@ -420,47 +422,27 @@ include_once '../../components/doctor_sidebar.php';
         cursor: pointer;
     }
     
-    .btn-action i { font-size: 0.65rem; }
+    .btn-action i { font-size: 0.8rem; }
     
     .btn-view {
-        background: #E8F0FE;
-        color: #0B5ED7;
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
     }
     
     .btn-view:hover {
-        background: #0B5ED7;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.4);
         color: white;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-visit {
-        background: #D1FAE5;
-        color: #059669;
-    }
-    
-    .btn-visit:hover {
-        background: #059669;
-        color: white;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
     }
     
     [data-theme="dark"] .btn-view {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    [data-theme="dark"] .btn-view:hover {
-        background: #0B5ED7;
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
         color: white;
     }
     
-    [data-theme="dark"] .btn-visit {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    [data-theme="dark"] .btn-visit:hover {
-        background: #059669;
+    [data-theme="dark"] .btn-view:hover {
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
         color: white;
     }
     
@@ -635,6 +617,10 @@ include_once '../../components/doctor_sidebar.php';
         }
         .table-header-wrapper .search-box {
             max-width: 100%;
+        }
+        .btn-action {
+            padding: 4px 12px;
+            font-size: 0.65rem;
         }
     }
 </style>
@@ -832,7 +818,7 @@ include_once '../../components/doctor_sidebar.php';
                         <th style="min-width: 80px;">Visits</th>
                         <th style="min-width: 80px;">Prescriptions</th>
                         <th style="min-width: 110px;">Last Visit</th>
-                        <th style="min-width: 150px;">Actions</th>
+                        <th style="min-width: 120px;">Action</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody">
@@ -855,19 +841,11 @@ include_once '../../components/doctor_sidebar.php';
                                     <?= $patient['last_visit_date'] ? date('M d, Y', strtotime($patient['last_visit_date'])) : 'Never' ?>
                                 </td>
                                 <td>
-                                    <div class="action-buttons">
-                                        <!-- View Patient -->
-                                        <a href="patient_details.php?id=<?= $patient['id'] ?>" 
-                                           class="btn-action btn-view" title="View Patient">
-                                            <i class="fas fa-eye"></i> View
-                                        </a>
-                                        
-                                        <!-- New Visit -->
-                                        <a href="add_visit.php?patient=<?= $patient['id'] ?>" 
-                                           class="btn-action btn-visit" title="Create New Visit">
-                                            <i class="fas fa-stethoscope"></i> Visit
-                                        </a>
-                                    </div>
+                                    <!-- SINGLE VIEW BUTTON -->
+                                    <a href="patient_details.php?id=<?= $patient['id'] ?>" 
+                                       class="btn-action btn-view" title="View Patient Details">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1037,15 +1015,6 @@ include_once '../../components/doctor_sidebar.php';
     }
 
     // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
@@ -1109,6 +1078,7 @@ include_once '../../components/doctor_sidebar.php';
     console.log('%c👤 Total Patients: <?= $total_assigned ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🟢 Active: <?= $active_patients ?> | ⏳ Pending Visits: <?= $pending_visits ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔍 Real-time table search filter enabled', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c✅ Single VIEW button - New Visit moved to patient_details page', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

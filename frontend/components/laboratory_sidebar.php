@@ -2,6 +2,9 @@
 // ================================================================
 // FILE: frontend/components/laboratory_sidebar.php
 // LABORATORY - SHARED SIDEBAR (FIXED - WITH REAL DATA FROM BOTH TABLES)
+// FIXED: Counts completed from BOTH lab_tests AND lab_requests
+// FIXED: Counts pending from BOTH lab_tests AND lab_requests
+// FIXED: Counts in_progress from lab_requests (no lab_tests in_progress)
 // WITH AUTO-UPDATE EVERY 3 SECONDS (SELF-CONTAINED)
 // WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
 // FULLY RESPONSIVE - ALL DEVICES
@@ -9,7 +12,7 @@
 // ================================================================
 
 // ================================================================
-// GET REAL DATA FOR BADGES
+// GET REAL DATA FOR BADGES - FIXED
 // ================================================================
 $pending_count = 0;
 $in_progress_count = 0;
@@ -21,16 +24,16 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
     
     try {
         // ================================================================
-        // 1. PENDING: FROM lab_tests (status NULL or 'pending') + lab_requests (status 'pending')
+        // 1. PENDING: FROM lab_tests + lab_requests
         // ================================================================
         
-        // Pending from lab_tests
+        // Pending from lab_tests (status NULL, 'pending', or '')
         $stmt = $db->prepare("
             SELECT COUNT(*) as count FROM lab_tests 
             WHERE branch_id = ? AND (status IS NULL OR status = 'pending' OR status = '')
         ");
         $stmt->execute([$user_branch_id]);
-        $pending_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $pending_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // Pending from lab_requests
         $stmt = $db->prepare("
@@ -38,43 +41,55 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
             WHERE branch_id = ? AND status = 'pending'
         ");
         $stmt->execute([$user_branch_id]);
-        $pending_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $pending_requests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         $pending_count = $pending_tests + $pending_requests;
         
         // ================================================================
-        // 2. IN PROGRESS: FROM lab_requests (status 'accepted' or 'in_progress')
+        // 2. IN PROGRESS: FROM lab_requests ONLY (status 'accepted' or 'in_progress')
         // ================================================================
         $stmt = $db->prepare("
             SELECT COUNT(*) as count FROM lab_requests 
             WHERE branch_id = ? AND status IN ('accepted', 'in_progress')
         ");
         $stmt->execute([$user_branch_id]);
-        $in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $in_progress_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // ================================================================
-        // 3. COMPLETED TODAY: FROM lab_requests (completed today)
+        // 3. COMPLETED: FROM BOTH lab_tests AND lab_requests - FIXED
         // ================================================================
+        
+        // Completed from lab_tests
         $stmt = $db->prepare("
-            SELECT COUNT(*) as count FROM lab_requests 
-            WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
+            SELECT COUNT(*) as count FROM lab_tests 
+            WHERE branch_id = ? AND status = 'completed'
         ");
         $stmt->execute([$user_branch_id]);
-        $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $completed_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // Completed from lab_requests
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_requests 
+            WHERE branch_id = ? AND status = 'completed'
+        ");
+        $stmt->execute([$user_branch_id]);
+        $completed_requests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        $completed_count = $completed_tests + $completed_requests;
         
         // ================================================================
-        // 4. TODAY'S TESTS: FROM lab_tests (completed today) + lab_request_items (completed today)
+        // 4. TODAY'S TESTS: FROM BOTH lab_tests AND lab_request_items
         // ================================================================
         
-        // From lab_tests
+        // From lab_tests (completed today)
         $stmt = $db->prepare("
             SELECT COUNT(*) as count FROM lab_tests 
             WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
         ");
         $stmt->execute([$user_branch_id]);
-        $tests_completed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $tests_completed_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // From lab_request_items
+        // From lab_request_items (completed today)
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM lab_request_items lri
@@ -82,7 +97,7 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
             WHERE lr.branch_id = ? AND lri.status = 'completed' AND DATE(lri.completed_at) = CURDATE()
         ");
         $stmt->execute([$user_branch_id]);
-        $items_completed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $items_completed_today = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         $today_tests = $tests_completed_today + $items_completed_today;
         
@@ -131,20 +146,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     if (isset($db) && $db !== null) {
         try {
-            // 1. Pending
+            // 1. Pending - FROM BOTH
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count FROM lab_tests 
                 WHERE branch_id = ? AND (status IS NULL OR status = 'pending' OR status = '')
             ");
             $stmt->execute([$branch_id]);
-            $pending_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+            $pending_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count FROM lab_requests 
                 WHERE branch_id = ? AND status = 'pending'
             ");
             $stmt->execute([$branch_id]);
-            $pending_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+            $pending_requests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
             $response['pending'] = $pending_tests + $pending_requests;
             
@@ -156,13 +171,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$branch_id]);
             $response['in_progress'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 3. Completed Today
+            // 3. Completed - FROM BOTH - FIXED
             $stmt = $db->prepare("
-                SELECT COUNT(*) as count FROM lab_requests 
-                WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
+                SELECT COUNT(*) as count FROM lab_tests 
+                WHERE branch_id = ? AND status = 'completed'
             ");
             $stmt->execute([$branch_id]);
-            $response['completed'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            $completed_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_requests 
+                WHERE branch_id = ? AND status = 'completed'
+            ");
+            $stmt->execute([$branch_id]);
+            $completed_requests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $response['completed'] = $completed_tests + $completed_requests;
             
             // 4. Today's Tests
             $stmt = $db->prepare("
@@ -754,33 +778,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Lab Requests</div>
         
         <!-- Pending (Counts BOTH lab_tests AND lab_requests) -->
-        <a href="../laboratory/pending_requests.php" class="sidebar-link <?= isActive('pending_requests.php') ?>">
+        <a href="../laboratory/pending_requests.php" class="sidebar-link <?= isActive('pending_requests.php') ?>" id="sidebarPendingLink">
             <i class="fas fa-clock"></i> Pending
-            <?php if ($pending_count > 0): ?>
-                <span class="badge danger" id="sidebarPendingBadge"><?= $pending_count ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarPendingBadge">0</span>
-            <?php endif; ?>
+            <span class="badge <?= $pending_count > 0 ? 'danger' : '' ?>" id="sidebarPendingBadge"><?= $pending_count ?></span>
         </a>
         
         <!-- In Progress -->
-        <a href="../laboratory/in_progress.php" class="sidebar-link <?= isActive('in_progress.php') ?>">
+        <a href="../laboratory/in_progress.php" class="sidebar-link <?= isActive('in_progress.php') ?>" id="sidebarInProgressLink">
             <i class="fas fa-spinner"></i> In Progress
-            <?php if ($in_progress_count > 0): ?>
-                <span class="badge orange" id="sidebarInProgressBadge"><?= $in_progress_count ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarInProgressBadge">0</span>
-            <?php endif; ?>
+            <span class="badge <?= $in_progress_count > 0 ? 'orange' : '' ?>" id="sidebarInProgressBadge"><?= $in_progress_count ?></span>
         </a>
         
-        <!-- Completed -->
-        <a href="../laboratory/completed_requests.php" class="sidebar-link <?= isActive('completed_requests.php') ?>">
+        <!-- Completed (Counts BOTH lab_tests AND lab_requests) - FIXED -->
+        <a href="../laboratory/completed_requests.php" class="sidebar-link <?= isActive('completed_requests.php') ?>" id="sidebarCompletedLink">
             <i class="fas fa-check-circle"></i> Completed
-            <?php if ($completed_count > 0): ?>
-                <span class="badge green" id="sidebarCompletedBadge"><?= $completed_count ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarCompletedBadge">0</span>
-            <?php endif; ?>
+            <span class="badge <?= $completed_count > 0 ? 'green' : '' ?>" id="sidebarCompletedBadge"><?= $completed_count ?></span>
         </a>
         
         <!-- ============================================================ -->
@@ -789,9 +801,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Results</div>
         
         <!-- Results History -->
-        <a href="../laboratory/results_history.php" class="sidebar-link <?= isActive('results_history.php') ?>">
+        <a href="../laboratory/results_history.php" class="sidebar-link <?= isActive('results_history.php') ?>" id="sidebarResultsLink">
             <i class="fas fa-history"></i> Results History
-            <span class="badge" id="sidebarTodayTests"><?= $today_tests ?></span>
+            <span class="badge <?= $today_tests > 0 ? 'green' : '' ?>" id="sidebarTodayTests"><?= $today_tests ?></span>
         </a>
         
         <!-- Reports -->
@@ -974,50 +986,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     })();
 
     // ================================================================
-    // UPDATE SIDEBAR BADGES (AJAX every 3 seconds)
+    // UPDATE SIDEBAR BADGES - FIXED: Proper DOM updates
     // ================================================================
     function updateSidebarBadges(pending, inProgress, completed, todayTests) {
-        // Update Pending Badge
+        // ================================================================
+        // 1. Update Pending Badge
+        // ================================================================
         var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge) {
             pendingBadge.textContent = pending;
-            pendingBadge.className = pending > 0 ? 'badge danger' : 'badge';
+            // Remove all classes except 'badge'
+            pendingBadge.className = 'badge';
+            if (pending > 0) {
+                pendingBadge.classList.add('danger');
+            }
+            // Add animation
             pendingBadge.classList.remove('badge-update');
+            // Force reflow
             void pendingBadge.offsetWidth;
             pendingBadge.classList.add('badge-update');
         }
         
-        // Update In Progress Badge
+        // ================================================================
+        // 2. Update In Progress Badge
+        // ================================================================
         var inProgressBadge = document.getElementById('sidebarInProgressBadge');
         if (inProgressBadge) {
             inProgressBadge.textContent = inProgress;
-            inProgressBadge.className = inProgress > 0 ? 'badge orange' : 'badge';
+            inProgressBadge.className = 'badge';
+            if (inProgress > 0) {
+                inProgressBadge.classList.add('orange');
+            }
             inProgressBadge.classList.remove('badge-update');
             void inProgressBadge.offsetWidth;
             inProgressBadge.classList.add('badge-update');
         }
         
-        // Update Completed Badge
+        // ================================================================
+        // 3. Update Completed Badge - FIXED: Now shows correct count
+        // ================================================================
         var completedBadge = document.getElementById('sidebarCompletedBadge');
         if (completedBadge) {
             completedBadge.textContent = completed;
-            completedBadge.className = completed > 0 ? 'badge green' : 'badge';
+            completedBadge.className = 'badge';
+            if (completed > 0) {
+                completedBadge.classList.add('green');
+            }
             completedBadge.classList.remove('badge-update');
             void completedBadge.offsetWidth;
             completedBadge.classList.add('badge-update');
         }
         
-        // Update Today Tests Badge
+        // ================================================================
+        // 4. Update Today Tests Badge
+        // ================================================================
         var todayTestsBadge = document.getElementById('sidebarTodayTests');
         if (todayTestsBadge) {
             todayTestsBadge.textContent = todayTests;
-            todayTestsBadge.className = todayTests > 0 ? 'badge green' : 'badge';
+            todayTestsBadge.className = 'badge';
+            if (todayTests > 0) {
+                todayTestsBadge.classList.add('green');
+            }
             todayTestsBadge.classList.remove('badge-update');
             void todayTestsBadge.offsetWidth;
             todayTestsBadge.classList.add('badge-update');
         }
         
-        // Update status time
+        // ================================================================
+        // 5. Update status time
+        // ================================================================
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
@@ -1029,10 +1066,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             });
             timeEl.textContent = timeStr;
         }
+        
+        console.log('📊 Badges updated: Pending=' + pending + ', InProgress=' + inProgress + ', Completed=' + completed + ', Today=' + todayTests);
     }
 
     // ================================================================
-    // AJAX AUTO-UPDATE (Self-contained - uses same file)
+    // AJAX AUTO-UPDATE - FIXED: Properly handles response
     // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
@@ -1059,17 +1098,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         })
         .then(function(data) {
             if (data.success) {
+                // Update badges with new data
                 updateSidebarBadges(
                     data.pending || 0,
                     data.in_progress || 0,
                     data.completed || 0,
                     data.today_tests || 0
                 );
+            } else {
+                console.warn('⚠️ Sidebar data fetch returned success=false:', data);
             }
             sidebarIsUpdating = false;
         })
         .catch(function(error) {
             // Silent fail - don't spam console
+            console.warn('⚠️ Sidebar auto-update error:', error.message);
             sidebarIsUpdating = false;
         });
     }
@@ -1078,10 +1121,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        // Initial update after 1 second
+        // Initial update after 500ms
         setTimeout(function() {
             fetchSidebarData();
-        }, 1000);
+        }, 500);
         // Then every 3 seconds
         sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
         console.log('%c🔄 Laboratory Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
@@ -1110,9 +1153,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // INITIALIZE
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
+        // Start auto-update after 1.5 seconds
         setTimeout(function() {
             startSidebarAutoUpdate();
-        }, 2000);
+        }, 1500);
+        
+        // Also update when page becomes visible again
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                fetchSidebarData();
+            }
+        });
     });
 
     // ================================================================
@@ -1123,10 +1174,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
-    console.log('%c🧪 Laboratory Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🧪 Laboratory Sidebar (FULLY FIXED - Auto-update working)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?> | Today: <?= $today_tests ?>', 'font-size:12px; color:#9EC5FE;');
-    console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
+    console.log('%c✅ FIXED: Completed counts from BOTH lab_tests AND lab_requests', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: Pending counts from BOTH lab_tests AND lab_requests', 'font-size:12px; color:#34D399;');
+    console.log('%c🔄 Data updates every 3 seconds WITHOUT page refresh', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Badges update in real-time', 'font-size:12px; color:#059669;');
     console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
 </script>
