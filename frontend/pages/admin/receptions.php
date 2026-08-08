@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/pharmacies.php
-// SUPER ADMIN - VIEW ALL PHARMACIES
+// FILE: frontend/pages/admin/receptions.php
+// SUPER ADMIN - VIEW ALL RECEPTIONS
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
@@ -24,105 +24,97 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET FILTERS
+// GET FILTER PARAMETERS
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
 $search = $_GET['search'] ?? '';
 $status_filter = $_GET['status'] ?? 'all';
 
 // ================================================================
-// BUILD QUERY FOR PHARMACIES
+// BUILD QUERY WITH FILTERS
 // ================================================================
-$sql = "
+$query = "
     SELECT 
         b.*,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'pharmacy' AND status = 'active') as active_pharmacists,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'pharmacy') as total_pharmacists,
-        (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active') as total_medicines,
-        (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND quantity <= reorder_level AND quantity > 0) as low_stock_items,
-        (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND quantity <= 0) as out_of_stock_items,
-        (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'pending') as pending_prescriptions,
-        (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'dispensed') as dispensed_prescriptions,
-        (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = b.id AND status = 'paid' AND bill_number LIKE 'BILL-PRES-%') as prescription_revenue,
-        (SELECT COUNT(*) FROM otc_sales WHERE branch_id = b.id) as total_otc_sales,
-        (SELECT COALESCE(SUM(net_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid') as otc_revenue,
-        (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND expiry_date < CURDATE()) as expired_medicines,
-        (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)) as expiring_soon_medicines,
-        (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active') as total_active_medicines
+        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception' AND status = 'active') as active_receptionists,
+        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception') as total_receptionists,
+        (SELECT COUNT(*) FROM patients WHERE branch_id = b.id) as total_patients,
+        (SELECT COUNT(*) FROM patients WHERE branch_id = b.id AND DATE(created_at) = CURDATE()) as today_patients,
+        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'pending') as pending_visits,
+        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'assigned') as assigned_visits,
+        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'scheduled') as scheduled_appointments,
+        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'confirmed') as confirmed_appointments,
+        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND DATE(appointment_date) = CURDATE()) as today_appointments,
+        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()) as today_visits,
+        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id) as total_appointments
     FROM branches b
     WHERE 1=1
 ";
 
-// Apply filters
-if ($selected_branch_id !== 'all') {
-    $sql .= " AND b.id = " . (int)$selected_branch_id;
+$params = [];
+
+// Branch filter
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $query .= " AND b.id = ?";
+    $params[] = (int)$selected_branch_id;
 }
 
+// Status filter
 if ($status_filter !== 'all') {
-    $sql .= " AND b.status = '" . $db->quote($status_filter) . "'";
+    $query .= " AND b.status = ?";
+    $params[] = $status_filter;
 }
 
+// Search filter
 if (!empty($search)) {
-    $sql .= " AND (b.name LIKE '%" . $db->quote($search) . "%' OR b.location LIKE '%" . $db->quote($search) . "%')";
+    $query .= " AND (b.name LIKE ? OR b.location LIKE ? OR b.phone LIKE ? OR b.email LIKE ?)";
+    $search_term = "%$search%";
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
 }
 
-$sql .= " ORDER BY b.name ASC";
+$query .= " ORDER BY b.name ASC";
 
-$pharmacies = [];
+// ================================================================
+// EXECUTE QUERY
+// ================================================================
+$receptions = [];
 try {
-    $stmt = $db->query($sql);
-    $pharmacies = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $db->prepare($query);
+    $stmt->execute($params);
+    $receptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $pharmacies = [];
+    error_log("Error fetching receptions: " . $e->getMessage());
+    $receptions = [];
 }
 
 // ================================================================
 // GET BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// CALCULATE TOTALS
-// ================================================================
-$total_pharmacies = count($pharmacies);
-$total_medicines = 0;
-$total_prescriptions = 0;
-$total_otc_sales = 0;
-$total_revenue = 0;
-$total_out_of_stock = 0;
-$total_low_stock = 0;
-$total_expired = 0;
-$total_expiring_soon = 0;
-
-foreach ($pharmacies as $p) {
-    $total_medicines += $p['total_medicines'] ?? 0;
-    $total_prescriptions += $p['total_prescriptions'] ?? 0;
-    $total_otc_sales += $p['total_otc_sales'] ?? 0;
-    $total_revenue += ($p['prescription_revenue'] ?? 0) + ($p['otc_revenue'] ?? 0);
-    $total_out_of_stock += $p['out_of_stock_items'] ?? 0;
-    $total_low_stock += $p['low_stock_items'] ?? 0;
-    $total_expired += $p['expired_medicines'] ?? 0;
-    $total_expiring_soon += $p['expiring_soon_medicines'] ?? 0;
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
 }
 
 // ================================================================
-// STATUS BADGE CLASS
+// GET SUMMARY STATISTICS
 // ================================================================
-function getStatusBadge($status) {
-    $classes = [
-        'active' => 'success',
-        'inactive' => 'danger',
-        'pending' => 'warning',
-        'dispensed' => 'success',
-        'confirmed' => 'info',
-        'cancelled' => 'danger',
-        'paid' => 'success',
-        'partial' => 'warning'
-    ];
-    return $classes[$status] ?? 'secondary';
+$total_receptions = count($receptions);
+$total_patients = 0;
+$total_appointments = 0;
+$pending_visits = 0;
+$today_visits = 0;
+
+foreach ($receptions as $r) {
+    $total_patients += ($r['total_patients'] ?? 0);
+    $total_appointments += ($r['total_appointments'] ?? 0);
+    $pending_visits += ($r['pending_visits'] ?? 0);
+    $today_visits += ($r['today_visits'] ?? 0);
 }
 
 // ================================================================
@@ -146,7 +138,7 @@ include_once '../../components/admin_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pharmacies - Braick Dispensary</title>
+    <title>Receptions - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -156,7 +148,7 @@ include_once '../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BLUE THEME
+           ROOT VARIABLES - BOLDER BLUE THEME
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -164,7 +156,7 @@ include_once '../../components/admin_sidebar.php';
             --primary-light: #3B82F6;
             --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-hover: linear-gradient(135deg, #0A4CA8, #083C8A);
+            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #073B8A);
             
             --success: #059669;
             --success-dark: #047857;
@@ -182,6 +174,9 @@ include_once '../../components/admin_sidebar.php';
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
             
+            --teal: #0D9488;
+            --teal-bg: #ECFDF5;
+            
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -198,7 +193,6 @@ include_once '../../components/admin_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.12);
             
             --bg-body: #F0F4F8;
             --bg-card: #FFFFFF;
@@ -222,10 +216,11 @@ include_once '../../components/admin_sidebar.php';
             --primary-dark: #2563EB;
             --primary-light: #60A5FA;
             --primary-bg: #1E3A5F;
+            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
+            --primary-gradient-strong: linear-gradient(135deg, #1D4ED8, #1E40AF);
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.5);
             --table-hover: #1E293B;
         }
         
@@ -424,10 +419,10 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER - BLUE THEME
+           PAGE HEADER - BOLDER BLUE THEME
            ================================================================ */
         .page-header {
-            background: var(--primary-gradient);
+            background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
             padding: 28px 36px;
             margin-bottom: 28px;
@@ -436,7 +431,7 @@ include_once '../../components/admin_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
             position: relative;
             overflow: hidden;
         }
@@ -555,11 +550,11 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS - BLUE THEME OVERVIEW
+           STATS ROW - BOLDER BLUE CARDS
            ================================================================ */
-        .stats-grid {
+        .stats-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -567,201 +562,264 @@ include_once '../../components/admin_sidebar.php';
         .stat-card {
             background: var(--bg-card);
             border-radius: var(--radius);
-            padding: 18px 20px;
+            padding: 16px 20px;
             border: 2px solid var(--border-color);
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
-            text-decoration: none;
-            color: inherit;
+            transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
         }
         
-        .stat-card::after {
+        /* BOLDER BLUE accent line on left */
+        .stat-card::before {
             content: '';
             position: absolute;
-            bottom: 0;
+            top: 0;
             left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--primary-gradient);
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            width: 5px;
+            height: 100%;
+            background: var(--primary-gradient-strong);
+            border-radius: 0 3px 3px 0;
+            opacity: 0.8;
         }
         
         .stat-card:hover {
             border-color: var(--primary);
             transform: translateY(-4px);
-            box-shadow: var(--shadow-lg);
+            box-shadow: 0 8px 25px rgba(11, 94, 215, 0.15);
         }
         
-        .stat-card:hover::after {
+        .stat-card:hover::before {
             opacity: 1;
+            width: 6px;
         }
         
-        .stat-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
+        .stat-card .stat-icon-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .stat-card .stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.2rem;
+            font-size: 1.15rem;
             flex-shrink: 0;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
         }
         
-        .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-icon.green { background: #ECFDF5; color: #059669; }
-        .stat-icon.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
-        .stat-icon.teal { background: #ECFDF5; color: #0D9488; }
+        .stat-card:hover .stat-icon {
+            transform: scale(1.05);
+        }
         
-        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .stat-icon.green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .stat-icon.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .stat-icon.teal { background: #1A3A2A; color: #2DD4BF; }
+        .stat-card .stat-icon.blue { 
+            background: var(--primary-bg); 
+            color: var(--primary);
+            border-color: rgba(11, 94, 215, 0.2);
+        }
+        .stat-card .stat-icon.green { 
+            background: #ECFDF5; 
+            color: #059669;
+            border-color: rgba(5, 150, 105, 0.2);
+        }
+        .stat-card .stat-icon.orange { 
+            background: #FFFBEB; 
+            color: #F59E0B;
+            border-color: rgba(245, 158, 11, 0.2);
+        }
+        .stat-card .stat-icon.purple { 
+            background: #F5F3FF; 
+            color: #7C3AED;
+            border-color: rgba(124, 58, 237, 0.2);
+        }
+        .stat-card .stat-icon.teal { 
+            background: #ECFDF5; 
+            color: #0D9488;
+            border-color: rgba(13, 148, 136, 0.2);
+        }
+        .stat-card .stat-icon.red { 
+            background: #FEF2F2; 
+            color: #DC2626;
+            border-color: rgba(220, 38, 38, 0.2);
+        }
         
-        .stat-label {
-            font-size: 0.65rem;
+        [data-theme="dark"] .stat-card .stat-icon.blue { 
+            background: #1E3A5F; 
+            color: #3B82F6;
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+        [data-theme="dark"] .stat-card .stat-icon.green { 
+            background: #1A3A2A; 
+            color: #34D399;
+            border-color: rgba(52, 211, 153, 0.3);
+        }
+        [data-theme="dark"] .stat-card .stat-icon.orange { 
+            background: #3D2E0A; 
+            color: #FBBF24;
+            border-color: rgba(251, 191, 36, 0.3);
+        }
+        [data-theme="dark"] .stat-card .stat-icon.purple { 
+            background: #2D1B4E; 
+            color: #A78BFA;
+            border-color: rgba(167, 139, 250, 0.3);
+        }
+        [data-theme="dark"] .stat-card .stat-icon.teal { 
+            background: #0F3D3D; 
+            color: #5EEAD4;
+            border-color: rgba(94, 234, 212, 0.3);
+        }
+        [data-theme="dark"] .stat-card .stat-icon.red { 
+            background: #3A1A1A; 
+            color: #F87171;
+            border-color: rgba(248, 113, 113, 0.3);
+        }
+        
+        .stat-card .stat-label {
+            font-size: 0.6rem;
             color: var(--text-secondary);
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 0;
+            letter-spacing: 0.06em;
+            margin: 0 0 2px 0;
         }
         
-        .stat-value {
+        .stat-card .stat-value {
             font-size: 1.3rem;
-            font-weight: 700;
+            font-weight: 800;
             color: var(--text-primary);
             margin: 0;
             line-height: 1.2;
         }
         
-        .stat-value.blue-text { color: var(--primary); }
-        .stat-value.green-text { color: #059669; }
-        .stat-value.orange-text { color: #F59E0B; }
-        .stat-value.purple-text { color: #7C3AED; }
-        .stat-value.red-text { color: #DC2626; }
-        .stat-value.teal-text { color: #0D9488; }
+        .stat-card .stat-value.blue { color: var(--primary); }
+        .stat-card .stat-value.green { color: #059669; }
+        .stat-card .stat-value.orange { color: #F59E0B; }
+        .stat-card .stat-value.purple { color: #7C3AED; }
+        .stat-card .stat-value.teal { color: #0D9488; }
+        .stat-card .stat-value.red { color: #DC2626; }
         
-        .stat-sub {
+        .stat-card .stat-change {
             font-size: 0.6rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .badge {
+            font-weight: 600;
+            margin-top: 4px;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: white;
-            letter-spacing: 0.02em;
+            gap: 3px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: var(--bg-body);
         }
         
-        .badge-success { background: #059669; }
-        .badge-danger { background: #DC2626; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-info { background: #0B5ED7; }
-        .badge-secondary { background: #64748B; }
-        .badge-blue-light { background: var(--primary-bg); color: var(--primary); }
-        
-        [data-theme="dark"] .badge-warning { color: #1E293B; }
+        .stat-card .stat-change.up { color: #059669; }
+        .stat-card .stat-change.down { color: #DC2626; }
+        .stat-card .stat-change.neutral { color: var(--text-secondary); }
         
         /* ================================================================
-           FILTERS
+           FILTER BAR - BOLDER BLUE
            ================================================================ */
         .filter-bar {
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            padding: 14px 18px;
+            border: 2px solid var(--border-color);
             display: flex;
             flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 20px;
+            gap: 10px;
             align-items: center;
-            background: var(--bg-card);
-            padding: 16px 20px;
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
+            margin-bottom: 24px;
             box-shadow: var(--shadow-sm);
+            position: relative;
+            overflow: hidden;
         }
         
-        .filter-bar select, .filter-bar input {
+        /* BOLDER BLUE accent on filter bar */
+        .filter-bar::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--primary-gradient-strong);
+        }
+        
+        .filter-bar .filter-label {
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        
+        .filter-bar select,
+        .filter-bar input {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 8px 14px;
-            font-size: 0.8rem;
+            border-radius: 8px;
+            padding: 5px 10px;
+            font-size: 0.75rem;
             color: var(--text-primary);
             outline: none;
             transition: all 0.3s;
-            min-width: 150px;
         }
         
-        .filter-bar select:focus, .filter-bar input:focus {
+        .filter-bar select:focus,
+        .filter-bar input:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.15);
         }
         
-        .filter-bar .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 18px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-primary {
-            background: var(--primary-gradient);
+        .filter-bar .btn-filter {
+            background: var(--primary-gradient-strong);
             color: white;
+            border: none;
+            padding: 6px 16px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: all 0.3s;
         }
         
-        .btn-primary:hover {
-            background: var(--primary-gradient-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        .filter-bar .btn-filter:hover {
+            transform: scale(1.03);
+            box-shadow: 0 4px 16px rgba(10, 76, 168, 0.35);
         }
         
-        .btn-outline {
+        .filter-bar .btn-reset {
             background: transparent;
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
+            padding: 6px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
         }
         
-        .btn-outline:hover {
-            background: var(--bg-body);
+        .filter-bar .btn-reset:hover {
             border-color: var(--primary);
             color: var(--primary);
         }
         
         /* ================================================================
-           PHARMACY CARDS - BLUE THEME
+           RECEPTION CARDS - BOLDER BLUE THEME
            ================================================================ */
-        .pharmacy-grid {
+        .reception-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
             gap: 20px;
-            margin-bottom: 24px;
         }
         
-        .pharmacy-card {
+        .reception-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
             border: 2px solid var(--border-color);
@@ -771,186 +829,219 @@ include_once '../../components/admin_sidebar.php';
             position: relative;
         }
         
-        .pharmacy-card::before {
+        /* BOLDER BLUE accent line on top of card */
+        .reception-card::before {
             content: '';
             position: absolute;
             top: 0;
             left: 0;
             right: 0;
-            height: 4px;
-            background: var(--primary-gradient);
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            height: 5px;
+            background: var(--primary-gradient-strong);
+            opacity: 0.7;
+            transition: opacity 0.3s ease, height 0.3s ease;
         }
         
-        .pharmacy-card:hover {
-            transform: translateY(-6px);
+        .reception-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 35px rgba(11, 94, 215, 0.15);
             border-color: var(--primary);
-            box-shadow: var(--shadow-xl);
         }
         
-        .pharmacy-card:hover::before {
+        .reception-card:hover::before {
             opacity: 1;
+            height: 6px;
         }
         
-        .pharmacy-card-header {
-            padding: 16px 20px;
-            background: var(--primary-gradient);
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+        /* CARD HEADER - BLUE BACKGROUND */
+        .reception-card .card-top {
+            padding: 16px 18px 12px 18px;
+            border-bottom: 2px solid var(--border-color);
             display: flex;
             justify-content: space-between;
-            align-items: center;
+            align-items: start;
+            background: var(--primary-gradient-strong);
+            position: relative;
+            overflow: hidden;
         }
         
-        .pharmacy-card-header .pharmacy-name {
-            font-size: 1rem;
-            font-weight: 600;
+        .reception-card .card-top::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 200px;
+            height: 200px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        [data-theme="dark"] .reception-card .card-top {
+            background: linear-gradient(135deg, #1D4ED8, #1E40AF);
+        }
+        
+        .reception-card .card-top .name {
+            font-size: 1.05rem;
+            font-weight: 800;
             color: white;
+            position: relative;
+            z-index: 1;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        }
+        
+        .reception-card .card-top .name i {
+            color: rgba(255,255,255,0.85);
+            margin-right: 8px;
+        }
+        
+        .reception-card .card-top .location-text {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.75);
+            margin-top: 2px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .reception-card .card-top .location-text i {
+            color: rgba(255,255,255,0.6);
+            font-size: 0.65rem;
+        }
+        
+        .reception-card .card-top .status-badge {
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            position: relative;
+            z-index: 1;
+            backdrop-filter: blur(4px);
+        }
+        
+        .reception-card .card-top .status-badge.active {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        
+        .reception-card .card-top .status-badge.inactive {
+            background: rgba(220, 38, 38, 0.3);
+            color: #FCA5A5;
+            border: 1px solid rgba(220, 38, 38, 0.3);
+        }
+        
+        .reception-card .card-body {
+            padding: 14px 18px 16px 18px;
+        }
+        
+        .reception-card .card-body .info-row {
             display: flex;
             align-items: center;
             gap: 8px;
-        }
-        
-        .pharmacy-card-header .pharmacy-name i {
-            color: rgba(255,255,255,0.8);
-        }
-        
-        .pharmacy-card-header .badge {
-            font-size: 0.6rem;
-            padding: 2px 12px;
-        }
-        
-        .pharmacy-card-body {
-            padding: 16px 20px;
-        }
-        
-        .pharmacy-card-body .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 0.82rem;
-        }
-        
-        .pharmacy-card-body .info-row:last-child {
-            border-bottom: none;
-        }
-        
-        .pharmacy-card-body .info-label {
+            font-size: 0.75rem;
             color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
+            padding: 4px 0;
         }
         
-        .pharmacy-card-body .info-label i {
+        .reception-card .card-body .info-row i {
+            width: 18px;
             color: var(--primary);
-            width: 16px;
             font-size: 0.75rem;
         }
         
-        .pharmacy-card-body .info-value {
-            color: var(--text-primary);
-            font-weight: 600;
-        }
-        
-        .pharmacy-card-body .info-value.text-success { color: #059669; }
-        .pharmacy-card-body .info-value.text-danger { color: #DC2626; }
-        .pharmacy-card-body .info-value.text-warning { color: #D97706; }
-        .pharmacy-card-body .info-value.text-primary { color: var(--primary); }
-        
-        .pharmacy-card-footer {
-            padding: 12px 20px;
+        .reception-card .card-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 4px;
+            padding: 10px 18px;
             background: var(--bg-body);
             border-top: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
+            border-bottom: 2px solid var(--border-color);
         }
         
-        [data-theme="dark"] .pharmacy-card-footer {
+        [data-theme="dark"] .reception-card .card-stats {
             background: #0F172A;
         }
         
-        .pharmacy-card-footer .btn-sm {
-            padding: 4px 12px;
-            font-size: 0.7rem;
-            border-radius: 6px;
-            font-weight: 600;
+        .reception-card .card-stats .stat-item {
+            text-align: center;
+            padding: 6px 0;
+            border-radius: 8px;
             transition: all 0.3s ease;
-            border: none;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
         }
         
-        .pharmacy-card-footer .btn-sm-primary {
-            background: var(--primary-gradient);
-            color: white;
+        .reception-card .card-stats .stat-item:hover {
+            background: var(--primary-bg);
+            transform: scale(1.02);
         }
         
-        .pharmacy-card-footer .btn-sm-primary:hover {
-            background: var(--primary-gradient-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        [data-theme="dark"] .reception-card .card-stats .stat-item:hover {
+            background: #1E3A5F;
         }
         
-        .pharmacy-card-footer .btn-sm-outline {
-            background: transparent;
+        .reception-card .card-stats .stat-item .num {
+            font-size: 1rem;
+            font-weight: 800;
+            color: var(--text-primary);
+        }
+        
+        .reception-card .card-stats .stat-item .num.blue { color: var(--primary); }
+        .reception-card .card-stats .stat-item .num.green { color: #059669; }
+        .reception-card .card-stats .stat-item .num.orange { color: #F59E0B; }
+        .reception-card .card-stats .stat-item .num.purple { color: #7C3AED; }
+        .reception-card .card-stats .stat-item .num.red { color: #DC2626; }
+        .reception-card .card-stats .stat-item .num.teal { color: #0D9488; }
+        
+        .reception-card .card-stats .stat-item .label {
+            font-size: 0.5rem;
             color: var(--text-secondary);
-            border: 2px solid var(--border-color);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-weight: 700;
         }
         
-        .pharmacy-card-footer .btn-sm-outline:hover {
+        .reception-card .card-actions {
+            padding: 10px 18px;
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        
+        .reception-card .card-actions .btn-action {
+            padding: 5px 14px;
+            border-radius: 8px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-decoration: none;
+            transition: all 0.3s;
+            border: 2px solid var(--border-color);
+            color: var(--text-secondary);
+            background: transparent;
+            cursor: pointer;
+        }
+        
+        .reception-card .card-actions .btn-action:hover {
             border-color: var(--primary);
             color: var(--primary);
-            background: var(--primary-bg);
+            transform: translateY(-2px);
         }
         
-        /* Alert badges inside card */
-        .alert-badge {
-            font-size: 0.55rem;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
+        .reception-card .card-actions .btn-action.primary {
+            background: var(--primary-gradient-strong);
+            color: white;
+            border-color: var(--primary);
         }
         
-        .alert-badge-danger {
-            background: #FEE2E2;
-            color: #DC2626;
-        }
-        
-        .alert-badge-warning {
-            background: #FEF3C7;
-            color: #D97706;
-        }
-        
-        .alert-badge-success {
-            background: #D1FAE5;
-            color: #059669;
-        }
-        
-        [data-theme="dark"] .alert-badge-danger {
-            background: #3A1A1A;
-            color: #F87171;
-        }
-        
-        [data-theme="dark"] .alert-badge-warning {
-            background: #3D2E0A;
-            color: #FBBF24;
-        }
-        
-        [data-theme="dark"] .alert-badge-success {
-            background: #1A3A2A;
-            color: #34D399;
+        .reception-card .card-actions .btn-action.primary:hover {
+            background: var(--primary-dark);
+            border-color: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(10, 76, 168, 0.35);
         }
         
         /* ================================================================
@@ -960,21 +1051,22 @@ include_once '../../components/admin_sidebar.php';
             text-align: center;
             padding: 60px 20px;
             color: var(--text-secondary);
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px dashed var(--border-color);
         }
         
         .empty-state i {
-            font-size: 3.5rem;
+            font-size: 4rem;
             color: var(--border-color);
             margin-bottom: 16px;
         }
         
         .empty-state h3 {
-            font-size: 1.2rem;
+            font-size: 1.3rem;
             color: var(--text-primary);
             margin-bottom: 8px;
+        }
+        
+        .empty-state p {
+            font-size: 0.9rem;
         }
         
         /* ================================================================
@@ -991,7 +1083,7 @@ include_once '../../components/admin_sidebar.php';
         
         .footer .footer-brand {
             color: var(--primary);
-            font-weight: 600;
+            font-weight: 700;
         }
         
         /* ================================================================
@@ -1001,7 +1093,6 @@ include_once '../../components/admin_sidebar.php';
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
-            .pharmacy-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
         }
         
         @media (max-width: 768px) {
@@ -1009,16 +1100,17 @@ include_once '../../components/admin_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .pharmacy-grid { grid-template-columns: 1fr; }
+            .reception-grid { grid-template-columns: 1fr; }
+            .stats-row { grid-template-columns: 1fr 1fr; }
             .filter-bar { flex-direction: column; align-items: stretch; }
-            .filter-bar select, .filter-bar input { width: 100%; min-width: unset; }
+            .reception-card .card-stats { grid-template-columns: repeat(4, 1fr); }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .stats-grid { grid-template-columns: 1fr; }
+            .stats-row { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .reception-card .card-stats { grid-template-columns: repeat(2, 1fr); }
         }
         
         /* ================================================================
@@ -1034,35 +1126,23 @@ include_once '../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-        
-        .stat-card:hover .stat-icon {
-            animation: pulse 0.5s ease;
-        }
-        
         /* ================================================================
            PRINT STYLES
            ================================================================ */
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle, .filter-bar { display: none !important; }
+            .filter-bar, .footer, #sidebarToggle { display: none !important; }
             .main-content { margin: 0; padding: 20px; }
-            .pharmacy-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .pharmacy-card-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-            .pharmacy-card-header .pharmacy-name { color: white !important; }
+            .reception-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
             .page-header {
                 background: #0B5ED7 !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
-            .page-title, .page-subtitle, .role-badge-display, .header-badge {
+            .page-title, .page-subtitle, .header-badge, .role-badge-display {
                 color: white !important;
             }
-            .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; }
         }
     </style>
 </head>
@@ -1079,7 +1159,7 @@ include_once '../../components/admin_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search pharmacies..." value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search receptions..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -1124,261 +1204,205 @@ include_once '../../components/admin_sidebar.php';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-prescription-bottle"></i>
-                Pharmacies
+                <i class="fas fa-headset"></i>
+                Receptions
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-store-alt"></i>
-                <strong><?= $total_pharmacies ?></strong> pharmacy branches
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-pills"></i> <?= number_format($total_medicines) ?> Total Medicines
+                <strong><?= $total_receptions ?></strong> reception desks found
+                <span class="header-badge">
+                    <i class="fas fa-users"></i> <?= number_format($total_patients) ?> Patients
+                </span>
+                <span class="header-badge" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.3);color:#A78BFA;">
+                    <i class="fas fa-calendar-check"></i> <?= number_format($total_appointments) ?> Appointments
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue, 0) ?> Revenue
+                    <i class="fas fa-clock"></i> <?= number_format($pending_visits) ?> Pending
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="add_pharmacy.php" class="btn-outline-light">
-                <i class="fas fa-plus"></i> Add Pharmacy
+            <a href="add_reception.php" class="btn-outline-light">
+                <i class="fas fa-plus"></i> Add Reception
             </a>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- OVERVIEW STATS CARDS -->
+    <!-- STATISTICS ROW - BOLDER BLUE CARDS -->
     <!-- ================================================================ -->
-    <div class="stats-grid animate-fade-in-up">
+    <div class="stats-row animate-fade-in-up">
         <div class="stat-card">
-            <div class="stat-icon blue">
-                <i class="fas fa-store"></i>
+            <div class="stat-icon-wrapper">
+                <div class="stat-icon blue"><i class="fas fa-headset"></i></div>
+                <span class="stat-change up"><i class="fas fa-arrow-up"></i> +<?= $total_receptions ?></span>
             </div>
-            <div>
-                <p class="stat-label">Total Pharmacies</p>
-                <p class="stat-value blue-text"><?= number_format($total_pharmacies) ?></p>
-            </div>
+            <p class="stat-label">Total Receptions</p>
+            <p class="stat-value blue"><?= $total_receptions ?></p>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon green">
-                <i class="fas fa-pills"></i>
+            <div class="stat-icon-wrapper">
+                <div class="stat-icon green"><i class="fas fa-users"></i></div>
+                <span class="stat-change up"><i class="fas fa-arrow-up"></i> Active</span>
             </div>
-            <div>
-                <p class="stat-label">Total Medicines</p>
-                <p class="stat-value green-text"><?= number_format($total_medicines) ?></p>
-            </div>
+            <p class="stat-label">Total Patients</p>
+            <p class="stat-value green"><?= number_format($total_patients) ?></p>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon purple">
-                <i class="fas fa-prescription"></i>
+            <div class="stat-icon-wrapper">
+                <div class="stat-icon purple"><i class="fas fa-calendar-check"></i></div>
+                <span class="stat-change neutral"><i class="fas fa-minus"></i> All</span>
             </div>
-            <div>
-                <p class="stat-label">Total Prescriptions</p>
-                <p class="stat-value purple-text"><?= number_format($total_prescriptions) ?></p>
-            </div>
+            <p class="stat-label">Total Appointments</p>
+            <p class="stat-value purple"><?= number_format($total_appointments) ?></p>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon orange">
-                <i class="fas fa-shopping-cart"></i>
+            <div class="stat-icon-wrapper">
+                <div class="stat-icon <?= $pending_visits > 0 ? 'orange' : 'green' ?>">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <span class="stat-change <?= $pending_visits > 0 ? 'down' : 'up' ?>">
+                    <?php if ($pending_visits > 0): ?>
+                        <i class="fas fa-exclamation-triangle"></i> Attention
+                    <?php else: ?>
+                        <i class="fas fa-check-circle"></i> Clear
+                    <?php endif; ?>
+                </span>
             </div>
-            <div>
-                <p class="stat-label">OTC Sales</p>
-                <p class="stat-value orange-text"><?= number_format($total_otc_sales) ?></p>
-            </div>
+            <p class="stat-label">Pending Visits</p>
+            <p class="stat-value <?= $pending_visits > 0 ? 'orange' : 'green' ?>">
+                <?= number_format($pending_visits) ?>
+            </p>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon teal">
-                <i class="fas fa-money-bill-wave"></i>
+            <div class="stat-icon-wrapper">
+                <div class="stat-icon teal"><i class="fas fa-calendar-day"></i></div>
+                <span class="stat-change up"><i class="fas fa-arrow-up"></i> Today</span>
             </div>
-            <div>
-                <p class="stat-label">Total Revenue</p>
-                <p class="stat-value teal-text">TSh <?= number_format($total_revenue, 0) ?></p>
-            </div>
-        </div>
-        
-        <div class="stat-card">
-            <div class="stat-icon red">
-                <i class="fas fa-exclamation-triangle"></i>
-            </div>
-            <div>
-                <p class="stat-label">Stock Alerts</p>
-                <p class="stat-value red-text"><?= number_format($total_out_of_stock + $total_low_stock) ?></p>
-                <p class="stat-sub"><?= $total_out_of_stock ?> out of stock · <?= $total_low_stock ?> low stock</p>
-            </div>
+            <p class="stat-label">Today's Visits</p>
+            <p class="stat-value teal"><?= number_format($today_visits) ?></p>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- FILTERS -->
+    <!-- FILTER BAR -->
     <!-- ================================================================ -->
     <div class="filter-bar animate-fade-in-up" style="animation-delay:0.05s;">
-        <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
-            <select name="branch" onchange="this.form.submit()" class="flex-1 min-w-[150px]">
-                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>All Branches</option>
-                <?php foreach ($branches as $b): ?>
-                    <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($b['name']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
+        <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
+        
+        <form method="GET" action="" class="flex flex-wrap gap-2 items-center w-full">
+            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             
-            <select name="status" onchange="this.form.submit()" class="flex-1 min-w-[150px]">
+            <select name="status" class="flex-1 min-w-[120px]">
                 <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Status</option>
                 <option value="active" <?= $status_filter === 'active' ? 'selected' : '' ?>>Active</option>
                 <option value="inactive" <?= $status_filter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
             </select>
             
-            <input type="text" name="search" placeholder="Search pharmacies..." value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[200px]">
+            <input type="text" name="search" placeholder="Search by name, location..." 
+                   value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[180px]">
             
-            <button type="submit" class="btn btn-primary">
-                <i class="fas fa-search"></i> Filter
+            <button type="submit" class="btn-filter">
+                <i class="fas fa-search"></i> Apply
             </button>
             
-            <a href="pharmacies.php" class="btn btn-outline">
-                <i class="fas fa-times"></i> Clear
+            <a href="receptions.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-reset">
+                <i class="fas fa-times"></i> Reset
             </a>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- PHARMACY GRID -->
+    <!-- RECEPTION GRID - BOLDER BLUE CARDS WITH BLUE HEADERS -->
     <!-- ================================================================ -->
-    <?php if (count($pharmacies) > 0): ?>
-        <div class="pharmacy-grid animate-fade-in-up" style="animation-delay:0.1s;">
-            <?php foreach ($pharmacies as $pharmacy): 
-                $pharmacy_revenue = ($pharmacy['prescription_revenue'] ?? 0) + ($pharmacy['otc_revenue'] ?? 0);
-                $has_alerts = ($pharmacy['out_of_stock_items'] ?? 0) > 0 || 
-                              ($pharmacy['low_stock_items'] ?? 0) > 0 ||
-                              ($pharmacy['expired_medicines'] ?? 0) > 0 ||
-                              ($pharmacy['expiring_soon_medicines'] ?? 0) > 0;
-            ?>
-                <div class="pharmacy-card">
-                    <!-- Card Header - Blue Gradient -->
-                    <div class="pharmacy-card-header">
-                        <span class="pharmacy-name">
-                            <i class="fas fa-store-alt"></i>
-                            <?= htmlspecialchars($pharmacy['name']) ?>
-                        </span>
-                        <span class="badge badge-<?= getStatusBadge($pharmacy['status'] ?? 'active') ?>" style="font-size:0.6rem;padding:2px 12px;">
-                            <?= ucfirst($pharmacy['status'] ?? 'Active') ?>
+    <?php if (count($receptions) > 0): ?>
+        <div class="reception-grid animate-fade-in-up" style="animation-delay:0.1s;">
+            <?php foreach ($receptions as $reception): ?>
+                <div class="reception-card">
+                    <!-- CARD HEADER - BLUE BACKGROUND -->
+                    <div class="card-top">
+                        <div>
+                            <div class="name">
+                                <i class="fas fa-headset"></i>
+                                <?= htmlspecialchars($reception['name']) ?>
+                            </div>
+                            <div class="location-text">
+                                <i class="fas fa-map-marker-alt"></i>
+                                <?= htmlspecialchars($reception['location'] ?? 'N/A') ?>
+                            </div>
+                        </div>
+                        <span class="status-badge <?= $reception['status'] === 'active' ? 'active' : 'inactive' ?>">
+                            <?= $reception['status'] === 'active' ? 'Active' : 'Inactive' ?>
                         </span>
                     </div>
                     
-                    <!-- Card Body -->
-                    <div class="pharmacy-card-body">
+                    <div class="card-body">
                         <div class="info-row">
-                            <span class="info-label"><i class="fas fa-map-marker-alt"></i> Location</span>
-                            <span class="info-value"><?= htmlspecialchars($pharmacy['location'] ?? 'N/A') ?></span>
+                            <i class="fas fa-phone"></i>
+                            <?= htmlspecialchars($reception['phone'] ?? 'N/A') ?>
                         </div>
                         <div class="info-row">
-                            <span class="info-label"><i class="fas fa-phone"></i> Phone</span>
-                            <span class="info-value"><?= htmlspecialchars($pharmacy['phone'] ?? 'N/A') ?></span>
+                            <i class="fas fa-envelope"></i>
+                            <?= htmlspecialchars($reception['email'] ?? 'N/A') ?>
                         </div>
                         <div class="info-row">
-                            <span class="info-label"><i class="fas fa-user-md"></i> Pharmacists</span>
-                            <span class="info-value"><?= $pharmacy['active_pharmacists'] ?? 0 ?> Active / <?= $pharmacy['total_pharmacists'] ?? 0 ?> Total</span>
+                            <i class="fas fa-user-tie"></i>
+                            <?= ($reception['active_receptionists'] ?? 0) ?> Active / <?= ($reception['total_receptionists'] ?? 0) ?> Receptionists
                         </div>
                         <div class="info-row">
-                            <span class="info-label"><i class="fas fa-pills"></i> Medicines</span>
-                            <span class="info-value text-primary"><?= number_format($pharmacy['total_medicines'] ?? 0) ?></span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label"><i class="fas fa-prescription"></i> Prescriptions</span>
-                            <span class="info-value"><?= number_format($pharmacy['total_prescriptions'] ?? 0) ?> 
-                                <span class="text-xs text-gray-400">(<?= $pharmacy['pending_prescriptions'] ?? 0 ?> pending)</span>
-                            </span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label"><i class="fas fa-shopping-cart"></i> OTC Sales</span>
-                            <span class="info-value"><?= number_format($pharmacy['total_otc_sales'] ?? 0) ?></span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label"><i class="fas fa-money-bill-wave"></i> Revenue</span>
-                            <span class="info-value text-success">TSh <?= number_format($pharmacy_revenue, 0) ?></span>
-                        </div>
-                        <div class="info-row">
-                            <span class="info-label"><i class="fas fa-exclamation-triangle"></i> Alerts</span>
-                            <span class="info-value <?= $has_alerts ? 'text-danger' : 'text-success' ?>">
-                                <?php if ($has_alerts): ?>
-                                    <?php 
-                                        $alert_count = ($pharmacy['out_of_stock_items'] ?? 0) + 
-                                                       ($pharmacy['low_stock_items'] ?? 0) + 
-                                                       ($pharmacy['expired_medicines'] ?? 0) + 
-                                                       ($pharmacy['expiring_soon_medicines'] ?? 0);
-                                        echo $alert_count . ' alert' . ($alert_count > 1 ? 's' : '');
-                                    ?>
-                                <?php else: ?>
-                                    ✅ All clear
-                                <?php endif; ?>
-                            </span>
+                            <i class="fas fa-calendar-plus"></i>
+                            Created: <?= date('M d, Y', strtotime($reception['created_at'] ?? 'now')) ?>
                         </div>
                     </div>
                     
-                    <!-- Card Footer -->
-                    <div class="pharmacy-card-footer">
-                        <div class="flex gap-1 flex-wrap">
-                            <?php if (($pharmacy['out_of_stock_items'] ?? 0) > 0): ?>
-                                <span class="alert-badge alert-badge-danger">
-                                    <i class="fas fa-times-circle"></i> <?= $pharmacy['out_of_stock_items'] ?> Out
-                                </span>
-                            <?php endif; ?>
-                            <?php if (($pharmacy['low_stock_items'] ?? 0) > 0): ?>
-                                <span class="alert-badge alert-badge-warning">
-                                    <i class="fas fa-exclamation-triangle"></i> <?= $pharmacy['low_stock_items'] ?> Low
-                                </span>
-                            <?php endif; ?>
-                            <?php if (($pharmacy['expired_medicines'] ?? 0) > 0): ?>
-                                <span class="alert-badge alert-badge-danger">
-                                    <i class="fas fa-skull"></i> <?= $pharmacy['expired_medicines'] ?> Exp
-                                </span>
-                            <?php endif; ?>
-                            <?php if (($pharmacy['expiring_soon_medicines'] ?? 0) > 0): ?>
-                                <span class="alert-badge alert-badge-warning">
-                                    <i class="fas fa-hourglass-half"></i> <?= $pharmacy['expiring_soon_medicines'] ?> Soon
-                                </span>
-                            <?php endif; ?>
-                            <?php if (!$has_alerts): ?>
-                                <span class="alert-badge alert-badge-success">
-                                    <i class="fas fa-check-circle"></i> Healthy
-                                </span>
-                            <?php endif; ?>
+                    <div class="card-stats">
+                        <div class="stat-item">
+                            <div class="num blue"><?= number_format($reception['total_patients'] ?? 0) ?></div>
+                            <div class="label">Patients</div>
                         </div>
-                        <div class="flex gap-2">
-                            <a href="view_pharmacy.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-sm btn-sm-primary">
-                                <i class="fas fa-eye"></i> View
-                            </a>
-                            <a href="edit_pharmacy.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-sm btn-sm-outline">
-                                <i class="fas fa-edit"></i>
-                            </a>
+                        <div class="stat-item">
+                            <div class="num purple"><?= number_format(($reception['scheduled_appointments'] ?? 0) + ($reception['confirmed_appointments'] ?? 0)) ?></div>
+                            <div class="label">Appointments</div>
                         </div>
+                        <div class="stat-item">
+                            <div class="num <?= ($reception['pending_visits'] ?? 0) > 0 ? 'orange' : 'green' ?>">
+                                <?= number_format($reception['pending_visits'] ?? 0) ?>
+                            </div>
+                            <div class="label">Pending</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="num teal"><?= number_format($reception['today_visits'] ?? 0) ?></div>
+                            <div class="label">Today</div>
+                        </div>
+                    </div>
+                    
+                    <div class="card-actions">
+                        <a href="view_reception.php?id=<?= $reception['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                           class="btn-action primary">
+                            <i class="fas fa-eye"></i> View
+                        </a>
+                        <a href="edit_reception.php?id=<?= $reception['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                           class="btn-action">
+                            <i class="fas fa-edit"></i> Edit
+                        </a>
+                        <a href="reception_dashboard.php?id=<?= $reception['id'] ?>" 
+                           class="btn-action">
+                            <i class="fas fa-chart-bar"></i> Dashboard
+                        </a>
                     </div>
                 </div>
             <?php endforeach; ?>
         </div>
-        
-        <!-- Total count -->
-        <div class="text-center text-sm text-gray-500 dark:text-gray-400 py-2">
-            Showing <strong><?= count($pharmacies) ?></strong> pharmacy branch<?= count($pharmacies) > 1 ? 'es' : '' ?>
-        </div>
     <?php else: ?>
-        <!-- Empty State -->
-        <div class="empty-state animate-fade-in-up">
-            <i class="fas fa-prescription-bottle"></i>
-            <h3>No Pharmacies Found</h3>
-            <p class="text-gray-400"><?= !empty($search) ? 'No results match your search criteria.' : 'No pharmacy branches have been created yet.' ?></p>
-            <?php if (!empty($search)): ?>
-                <a href="pharmacies.php" class="btn btn-primary mt-4">
-                    <i class="fas fa-times"></i> Clear Filters
-                </a>
-            <?php else: ?>
-                <a href="add_pharmacy.php" class="btn btn-primary mt-4">
-                    <i class="fas fa-plus"></i> Add Pharmacy
-                </a>
-            <?php endif; ?>
+        <div class="empty-state animate-fade-in-up" style="animation-delay:0.1s;">
+            <i class="fas fa-headset"></i>
+            <h3>No Receptions Found</h3>
+            <p>Try adjusting your filters or <a href="add_reception.php" class="text-blue-600 hover:underline">add a new reception</a></p>
         </div>
     <?php endif; ?>
 
@@ -1389,7 +1413,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Pharmacies - <?= $total_pharmacies ?> branches
+            Receptions
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1463,13 +1487,13 @@ include_once '../../components/admin_sidebar.php';
     // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
-        var url = new URL(window.location.href);
+        var branch = '<?= $selected_branch_id ?>';
+        var status = '<?= $status_filter ?>';
+        var url = 'receptions.php?branch=' + encodeURIComponent(branch) + '&status=' + encodeURIComponent(status);
         if (query.length > 0) {
-            url.searchParams.set('search', query);
-        } else {
-            url.searchParams.delete('search');
+            url += '&search=' + encodeURIComponent(query);
         }
-        window.location.href = url.toString();
+        window.location.href = url;
     }
     
     searchBtn?.addEventListener('click', performSearch);
@@ -1506,14 +1530,11 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Pharmacies (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Total Pharmacies: <?= $total_pharmacies ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💊 Total Medicines: <?= number_format($total_medicines) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📋 Total Prescriptions: <?= number_format($total_prescriptions) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🛒 OTC Sales: <?= number_format($total_otc_sales) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
-    console.log('%c⚠️ Out of Stock: <?= $total_out_of_stock ?> | Low Stock: <?= $total_low_stock ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c⏰ Expired: <?= $total_expired ?> | Expiring Soon: <?= $total_expiring_soon ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c📋 Braick Dispensary - Receptions (BOLDER BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏢 Total Receptions: <?= $total_receptions ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👥 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📅 Total Appointments: <?= number_format($total_appointments) ?>', 'font-size:13px; color:#F59E0B;');
+    console.log('%c🔄 Pending Visits: <?= number_format($pending_visits) ?>', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

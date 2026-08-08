@@ -2,8 +2,6 @@
 // ================================================================
 // FILE: frontend/components/doctor_header.php
 // DOCTOR - SHARED HEADER WITH SEARCH BAR & ONLINE STATUS
-// WITH WORKING SIDEBAR TOGGLE - FULLY FIXED
-// FIXED: Dark mode uses localStorage only (syncs everywhere)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -124,14 +122,16 @@ if (empty($page_title) || $page_title == '') {
     $page_title = 'Dashboard';
 }
 
+$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
+$is_dark = $dark_mode === 'true';
+
 // ================================================================
-// DARK MODE - FIXED: No PHP logic, will be handled by JavaScript
+// GET CURRENT PAGE FOR ACTIVE NAV
 // ================================================================
-// Dark mode is now handled entirely by JavaScript using localStorage
-// This ensures it works consistently across all pages
+$current_page = basename($_SERVER['PHP_SELF']);
 ?>
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="<?= $is_dark ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -210,7 +210,7 @@ if (empty($page_title) || $page_title == '') {
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAVIGATION - WITH SEARCH BAR & WORKING SIDEBAR TOGGLE
+           TOP NAVIGATION - WITH SEARCH BAR
            ================================================================ */
         .top-nav {
             position: fixed;
@@ -227,43 +227,6 @@ if (empty($page_title) || $page_title == '') {
             border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
             gap: 12px;
-            box-shadow: var(--shadow);
-        }
-        
-        /* ================================================================
-           SIDEBAR TOGGLE BUTTON - CRITICAL: VISIBLE ON MOBILE
-           ================================================================ */
-        .sidebar-toggle-btn {
-            display: none;
-            background: transparent;
-            border: none;
-            color: var(--text-primary);
-            font-size: 1.4rem;
-            cursor: pointer;
-            padding: 6px 10px;
-            border-radius: 8px;
-            transition: all 0.3s ease;
-            line-height: 1;
-            flex-shrink: 0;
-        }
-        
-        .sidebar-toggle-btn:hover {
-            background: var(--primary-bg);
-            color: var(--primary);
-        }
-        
-        .sidebar-toggle-btn:active {
-            transform: scale(0.9);
-        }
-        
-        /* Show on mobile */
-        @media (max-width: 1024px) {
-            .sidebar-toggle-btn {
-                display: block !important;
-            }
-            .top-nav {
-                left: 0;
-            }
         }
         
         /* ================================================================
@@ -321,36 +284,6 @@ if (empty($page_title) || $page_title == '') {
         }
         
         /* ================================================================
-           DASHBOARD LINK
-           ================================================================ */
-        .dashboard-link {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: var(--text-primary);
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 0.9rem;
-            transition: all 0.3s ease;
-            padding: 4px 8px;
-            border-radius: 8px;
-        }
-        
-        .dashboard-link:hover {
-            color: var(--primary);
-            background: var(--primary-bg);
-        }
-        
-        .dashboard-link i {
-            color: var(--primary);
-            font-size: 1.1rem;
-        }
-        
-        [data-theme="dark"] .dashboard-link:hover {
-            background: #1E3A5F;
-        }
-        
-        /* ================================================================
            TOP NAV RIGHT ELEMENTS
            ================================================================ */
         .top-nav .datetime {
@@ -358,15 +291,6 @@ if (empty($page_title) || $page_title == '') {
             color: var(--text-secondary);
             font-weight: 500;
             white-space: nowrap;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary);
-            margin-right: 4px;
-        }
-        
-        [data-theme="dark"] .top-nav .datetime i {
-            color: var(--primary-light);
         }
         
         /* ================================================================
@@ -445,9 +369,6 @@ if (empty($page_title) || $page_title == '') {
         .avatar-color-6 { background: #0D9488; }
         .avatar-color-7 { background: #DB2777; }
         
-        /* ================================================================
-           ICON BUTTONS (Notifications)
-           ================================================================ */
         .top-nav .icon-btn {
             width: 38px;
             height: 38px;
@@ -549,7 +470,7 @@ if (empty($page_title) || $page_title == '') {
         }
         
         /* ================================================================
-           DARK MODE TOGGLE - FIXED: Better visibility
+           DARK MODE TOGGLE
            ================================================================ */
         .dark-toggle-btn {
             background: var(--bg-body);
@@ -569,15 +490,20 @@ if (empty($page_title) || $page_title == '') {
         .dark-toggle-btn:hover {
             border-color: var(--primary);
             background: var(--bg-card);
-            transform: scale(1.02);
         }
         
         .dark-toggle-btn i {
             font-size: 0.9rem;
         }
         
-        .dark-toggle-btn:active {
-            transform: scale(0.95);
+        .sidebar-toggle-btn {
+            display: none;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            font-size: 1.3rem;
+            cursor: pointer;
+            padding: 4px 8px;
         }
         
         /* ================================================================
@@ -598,7 +524,6 @@ if (empty($page_title) || $page_title == '') {
         .page-header {
             border-bottom: 3px solid var(--primary);
             padding-bottom: 12px;
-            margin-bottom: 20px;
         }
         
         .page-header .page-title {
@@ -679,45 +604,31 @@ if (empty($page_title) || $page_title == '') {
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; padding: 0 16px; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .search-wrapper { max-width: 300px; min-width: 120px; }
+            .top-nav { left: 0; }
+            .sidebar-toggle-btn { display: block; }
+            .main-content { margin-left: 0; }
+            .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav { height: 60px; padding: 0 12px; }
             .top-nav .datetime { display: none; }
             .top-nav .status-toggle { display: none; }
-            .main-content { padding: 12px; margin-top: 60px; }
-            .search-wrapper { max-width: 180px; min-width: 100px; }
-            .search-wrapper input { font-size: 0.75rem; padding: 6px 10px; }
+            .main-content { padding: 16px; }
+            .search-wrapper { max-width: 180px; }
+        }
+        
+        @media (max-width: 640px) {
+            .top-nav { padding: 0 12px; gap: 8px; }
+            .search-wrapper { max-width: 120px; }
             .search-wrapper .search-btn { padding: 6px 10px; font-size: 0.7rem; }
             .search-wrapper .search-btn span { display: none; }
             .search-wrapper .search-btn i { margin-right: 0; }
-            .dark-toggle-btn { padding: 4px 10px; font-size: 0.7rem; }
+            .dark-toggle-btn { padding: 4px 8px; font-size: 0.7rem; }
             .dark-toggle-btn span { display: none; }
-            .top-nav .icon-btn { width: 32px; height: 32px; }
-            .top-nav .icon-btn i { font-size: 0.9rem; }
+            .main-content { padding: 10px; }
+            .page-header .page-title { font-size: 1.2rem; }
             .avatar-link .avatar-img { width: 32px; height: 32px; }
             .avatar-link .avatar-placeholder { width: 32px; height: 32px; font-size: 0.8rem; }
-            .page-header .page-title { font-size: 1.2rem; }
-            .dashboard-link span { display: none; }
-        }
-        
-        @media (max-width: 480px) {
-            .top-nav { height: 56px; padding: 0 8px; gap: 4px; }
-            .main-content { padding: 8px; margin-top: 56px; }
-            .search-wrapper { max-width: 120px; min-width: 60px; }
-            .search-wrapper input { font-size: 0.65rem; padding: 4px 8px; }
-            .search-wrapper .search-btn { padding: 4px 8px; font-size: 0.6rem; }
-            .dark-toggle-btn { padding: 3px 8px; font-size: 0.6rem; }
-            .dark-toggle-btn i { font-size: 0.7rem; }
-            .top-nav .icon-btn { width: 28px; height: 28px; }
-            .top-nav .icon-btn i { font-size: 0.8rem; }
-            .avatar-link .avatar-img { width: 28px; height: 28px; }
-            .avatar-link .avatar-placeholder { width: 28px; height: 28px; font-size: 0.7rem; }
-            .page-header .page-title { font-size: 1rem; }
-            .sidebar-toggle-btn { font-size: 1.1rem; padding: 4px 6px; }
         }
         
         @keyframes fadeInUp {
@@ -734,33 +645,27 @@ if (empty($page_title) || $page_title == '') {
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - WITH SEARCH BAR & WORKING SIDEBAR TOGGLE -->
+<!-- TOP NAVIGATION - WITH SEARCH BAR -->
 <!-- ================================================================ -->
-<nav class="top-nav" id="topNav">
+<nav class="top-nav">
     
     <!-- Left Side -->
     <div class="flex items-center gap-3 flex-1 min-w-0">
-        
-        <!-- ================================================================ -->
-        <!-- SIDEBAR TOGGLE BUTTON - CRITICAL: Must have id="sidebarToggle" -->
-        <!-- ================================================================ -->
-        <button id="sidebarToggle" class="sidebar-toggle-btn" aria-label="Toggle Sidebar Menu" title="Toggle Sidebar">
+        <button id="sidebarToggle" class="sidebar-toggle-btn" aria-label="Toggle Sidebar">
             <i class="fas fa-bars"></i>
         </button>
         
-        <!-- Dashboard Link -->
-        <a href="dashboard.php" class="dashboard-link" title="Go to Dashboard">
-            <i class="fas fa-home"></i>
-            <span>Dashboard</span>
+        <a href="dashboard.php" class="flex items-center gap-2 text-gray-700 hover:text-primary transition shrink-0" style="color:var(--text-primary);">
+            <i class="fas fa-home text-primary"></i>
+            <span class="font-semibold text-sm hidden sm:inline">Dashboard</span>
         </a>
     </div>
     
     <!-- Search Bar -->
     <div class="search-wrapper">
         <i class="fas fa-search text-gray-400 ml-3"></i>
-        <input type="text" id="searchInput" placeholder="Search patients by name, ID or phone..." 
-               aria-label="Search" autocomplete="off">
-        <button id="searchBtn" class="search-btn" aria-label="Search">
+        <input type="text" id="searchInput" placeholder="Search patients by name, ID or phone...">
+        <button id="searchBtn" class="search-btn">
             <i class="fas fa-search mr-1"></i><span>Search</span>
         </button>
     </div>
@@ -768,34 +673,25 @@ if (empty($page_title) || $page_title == '') {
     <!-- Right Side -->
     <div class="flex items-center gap-3 shrink-0">
         
-        <!-- Date & Time -->
-        <span class="datetime" id="currentDateTime">
-            <i class="fas fa-clock"></i>
-            <span id="clockDisplay"><?= date('D, M d, Y • h:i:s A') ?></span>
-        </span>
+        <span class="datetime" id="currentDateTime"></span>
         
-        <!-- Status Toggle Button -->
-        <button id="statusToggle" class="status-toggle <?= $is_online ? '' : 'offline' ?>" 
-                title="Click to toggle online/offline status">
+        <button id="statusToggle" class="status-toggle <?= $is_online ? '' : 'offline' ?>" title="Toggle Online Status">
             <span class="status-dot <?= $is_online ? 'online' : 'offline' ?>" id="statusDot"></span>
             <span class="status-text" id="statusText"><?= $is_online ? 'Online' : 'Offline' ?></span>
             <span class="status-spinner"></span>
         </button>
         
-        <!-- Dark Mode Toggle -->
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode (Ctrl+D)">
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
         
-        <!-- Notifications -->
         <button class="icon-btn" id="notifBtn" title="Notifications">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot" id="notifDot" style="display: none;"></span>
         </button>
         
-        <!-- Profile Avatar -->
-        <a href="profile.php" class="avatar-link" title="View Profile">
+        <a href="profile.php" class="avatar-link" title="Profile">
             <?php if ($show_initial): ?>
                 <div class="avatar-placeholder avatar-color-<?= (abs(crc32($full_name)) % 7) + 1 ?>">
                     <?= $initial ?>
@@ -810,50 +706,11 @@ if (empty($page_title) || $page_title == '') {
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - FULL HEADER FUNCTIONALITY - FIXED DARK MODE -->
+<!-- JAVASCRIPT - DARK MODE, STATUS (UPDATES DATABASE), SEARCH, DATE/TIME -->
 <!-- ================================================================ -->
 <script>
 // ================================================================
-// TOAST NOTIFICATION - DEFINED FIRST BEFORE USE
-// ================================================================
-function showToast(title, message, type) {
-    var existingToast = document.querySelector('.toast-custom');
-    if (existingToast) {
-        existingToast.remove();
-    }
-    
-    var toast = document.createElement('div');
-    toast.className = 'toast-custom ' + type;
-    var icon = document.createElement('i');
-    icon.className = 'fas ' + (type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle');
-    icon.style.fontSize = '1.2rem';
-    
-    var content = document.createElement('div');
-    content.innerHTML = `
-        <p style="font-weight:600;font-size:0.9rem;margin:0;">${title}</p>
-        <p style="font-size:0.78rem;opacity:0.9;margin:0;">${message}</p>
-    `;
-    
-    toast.appendChild(icon);
-    toast.appendChild(content);
-    document.body.appendChild(toast);
-    
-    setTimeout(function() {
-        toast.classList.add('show');
-    }, 50);
-    
-    setTimeout(function() {
-        toast.classList.remove('show');
-        setTimeout(function() {
-            if (toast.parentNode) {
-                toast.remove();
-            }
-        }, 400);
-    }, 4000);
-}
-
-// ================================================================
-// DARK MODE - FIXED: Uses localStorage ONLY (syncs everywhere)
+// DARK MODE TOGGLE
 // ================================================================
 (function() {
     var darkModeToggle = document.getElementById('darkModeToggle');
@@ -861,233 +718,109 @@ function showToast(title, message, type) {
     var darkText = document.getElementById('darkText');
     var htmlElement = document.documentElement;
     
-    // ================================================================
-    // Get current dark mode state from localStorage
-    // ================================================================
-    function getDarkMode() {
-        return localStorage.getItem('darkMode') === 'true';
-    }
-    
-    // ================================================================
-    // Set dark mode (updates localStorage + dispatches event)
-    // ================================================================
-    function setDarkMode(isDark) {
-        // Update HTML data-theme
-        if (isDark) {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
-        } else {
-            htmlElement.removeAttribute('data-theme');
-            if (darkIcon) darkIcon.className = 'fas fa-moon';
-            if (darkText) darkText.textContent = 'Dark';
+    function getCookie(name) {
+        var value = "; " + document.cookie;
+        var parts = value.split("; " + name + "=");
+        if (parts.length === 2) {
+            return parts.pop().split(";").shift();
         }
-        
-        // Update localStorage
-        localStorage.setItem('darkMode', isDark ? 'true' : 'false');
-        
-        // Dispatch event for other components (dashboard, etc.)
-        document.dispatchEvent(new CustomEvent('darkModeChanged', { 
-            detail: { isDark: isDark } 
-        }));
-        
-        console.log('%c🌙 Dark mode ' + (isDark ? 'ENABLED ✅' : 'DISABLED'), 'font-size:12px; color:' + (isDark ? '#6EA8FE' : '#94A3B8'));
+        return null;
     }
     
-    // ================================================================
-    // Initialize dark mode on page load
-    // ================================================================
-    function initDarkMode() {
-        var isDark = getDarkMode();
-        setDarkMode(isDark);
-        console.log('🌙 Dark mode initialized: ' + (isDark ? 'ON ✅' : 'OFF'));
+    function setCookie(name, value, days) {
+        var expires = "";
+        if (days) {
+            var date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            expires = "; expires=" + date.toUTCString();
+        }
+        document.cookie = name + "=" + value + expires + "; path=/";
     }
     
-    // ================================================================
-    // Toggle dark mode when button is clicked
-    // ================================================================
+    var savedDarkMode = getCookie('dark_mode');
+    
+    if (savedDarkMode === 'true') {
+        htmlElement.setAttribute('data-theme', 'dark');
+        if (darkIcon) {
+            darkIcon.className = 'fas fa-sun';
+        }
+        if (darkText) {
+            darkText.textContent = 'Light';
+        }
+    }
+    
     if (darkModeToggle) {
-        // Remove existing listeners to avoid duplicates
-        var newToggle = darkModeToggle.cloneNode(true);
-        darkModeToggle.parentNode.replaceChild(newToggle, darkModeToggle);
-        var freshToggle = document.getElementById('darkModeToggle');
-        
-        freshToggle.addEventListener('click', function(e) {
+        darkModeToggle.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
             
             var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-            setDarkMode(!isDark);
             
-            // Show toast notification
-            showToast('🌙 Dark Mode', isDark ? 'Light mode activated' : 'Dark mode activated', 'info');
+            if (isDark) {
+                htmlElement.removeAttribute('data-theme');
+                if (darkIcon) {
+                    darkIcon.className = 'fas fa-moon';
+                }
+                if (darkText) {
+                    darkText.textContent = 'Dark';
+                }
+                setCookie('dark_mode', 'false', 365);
+            } else {
+                htmlElement.setAttribute('data-theme', 'dark');
+                if (darkIcon) {
+                    darkIcon.className = 'fas fa-sun';
+                }
+                if (darkText) {
+                    darkText.textContent = 'Light';
+                }
+                setCookie('dark_mode', 'true', 365);
+            }
         });
-        console.log('✅ Dark mode toggle button attached');
+    }
+})();
+
+// ================================================================
+// SIDEBAR TOGGLE
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    var sidebar = document.getElementById('sidebar');
+    var sidebarToggle = document.getElementById('sidebarToggle');
+    
+    if (sidebarToggle && sidebar) {
+        sidebarToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+        });
     }
     
-    // ================================================================
-    // Listen for dark mode changes from other pages/tabs
-    // ================================================================
-    window.addEventListener('storage', function(e) {
-        if (e.key === 'darkMode') {
-            var isDark = e.newValue === 'true';
-            setDarkMode(isDark);
-            console.log('🌙 Dark mode synced from another tab: ' + (isDark ? 'ON' : 'OFF'));
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (sidebar && sidebarToggle) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
         }
     });
-    
-    // ================================================================
-    // Initialize
-    // ================================================================
-    initDarkMode();
-})();
+});
 
 // ================================================================
-// SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
+// DATE & TIME
 // ================================================================
-(function() {
-    // Wait for DOM to be ready
-    function initSidebarToggle() {
-        var sidebar = document.getElementById('sidebar');
-        var sidebarToggle = document.getElementById('sidebarToggle');
-        var overlay = document.getElementById('sidebarOverlay');
-        
-        console.log('🔧 Sidebar toggle initialization...');
-        console.log('📱 Sidebar element:', sidebar);
-        console.log('🔘 Toggle button:', sidebarToggle);
-        
-        // Create overlay if not exists
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.id = 'sidebarOverlay';
-            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
-            document.body.appendChild(overlay);
-            console.log('✅ Sidebar overlay created');
-        }
-        
-        if (!sidebar) {
-            console.error('❌ Sidebar element not found!');
-            return;
-        }
-        
-        // Toggle function
-        function openSidebar() {
-            sidebar.classList.add('open');
-            overlay.style.display = 'block';
-            document.body.style.overflow = 'hidden';
-            console.log('🔓 Sidebar opened');
-        }
-        
-        function closeSidebar() {
-            sidebar.classList.remove('open');
-            overlay.style.display = 'none';
-            document.body.style.overflow = '';
-            console.log('🔒 Sidebar closed');
-        }
-        
-        function toggleSidebar() {
-            if (sidebar.classList.contains('open')) {
-                closeSidebar();
-            } else {
-                openSidebar();
-            }
-        }
-        
-        // ================================================================
-        // EVENT: Toggle button (hamburger icon)
-        // ================================================================
-        if (sidebarToggle) {
-            // Remove all existing listeners to avoid duplicates
-            var newToggle = sidebarToggle.cloneNode(true);
-            sidebarToggle.parentNode.replaceChild(newToggle, sidebarToggle);
-            var freshToggle = document.getElementById('sidebarToggle');
-            
-            freshToggle.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                console.log('🔘 Hamburger clicked!');
-                toggleSidebar();
-            });
-            console.log('✅ Toggle button event attached');
-        } else {
-            console.warn('⚠️ Toggle button not found - trying fallback');
-            // Try to find by class
-            var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
-            if (fallbackBtn) {
-                fallbackBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    toggleSidebar();
-                });
-                console.log('✅ Fallback toggle button attached');
-            }
-        }
-        
-        // ================================================================
-        // EVENT: Close sidebar when clicking overlay
-        // ================================================================
-        if (overlay) {
-            overlay.addEventListener('click', function(e) {
-                if (e.target === overlay) {
-                    closeSidebar();
-                }
-            });
-        }
-        
-        // ================================================================
-        // EVENT: Close sidebar with ESC key
-        // ================================================================
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-                closeSidebar();
-            }
-        });
-        
-        // ================================================================
-        // EVENT: Auto-close on window resize (desktop)
-        // ================================================================
-        window.addEventListener('resize', function() {
-            if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-                closeSidebar();
-            }
-        });
-        
-        console.log('✅ Sidebar toggle fully initialized!');
+function updateDateTime() {
+    var now = new Date();
+    var dateStr = now.toLocaleDateString('en-US', {
+        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+    });
+    var timeStr = now.toLocaleTimeString('en-US', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+    });
+    var el = document.getElementById('currentDateTime');
+    if (el) {
+        el.textContent = dateStr + ' • ' + timeStr;
     }
-    
-    // Run on DOM ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initSidebarToggle);
-    } else {
-        initSidebarToggle();
-    }
-})();
-
-// ================================================================
-// DATE & TIME - REAL TIME
-// ================================================================
-(function() {
-    var clockDisplay = document.getElementById('clockDisplay');
-    
-    function updateClock() {
-        if (!clockDisplay) return;
-        var now = new Date();
-        var options = {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: true
-        };
-        clockDisplay.textContent = now.toLocaleDateString('en-US', options);
-    }
-    
-    updateClock();
-    setInterval(updateClock, 1000);
-})();
+}
+updateDateTime();
+setInterval(updateDateTime, 1000);
 
 // ================================================================
 // ONLINE STATUS TOGGLE - UPDATES DATABASE
@@ -1099,15 +832,11 @@ document.addEventListener('DOMContentLoaded', function() {
     var avatarStatusRing = document.getElementById('avatarStatusRing');
     var isUpdating = false;
     
+    // Get doctor_id from PHP
     var doctorId = <?= json_encode($doctor_id) ?>;
     
     if (statusToggle) {
-        // Remove existing listeners to avoid duplicates
-        var newToggle = statusToggle.cloneNode(true);
-        statusToggle.parentNode.replaceChild(newToggle, statusToggle);
-        var freshToggle = document.getElementById('statusToggle');
-        
-        freshToggle.addEventListener('click', function() {
+        statusToggle.addEventListener('click', function() {
             if (isUpdating) return;
             
             var currentIsOnline = statusDot.classList.contains('online');
@@ -1130,16 +859,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
             
+            // Show loading state
             isUpdating = true;
-            freshToggle.classList.add('updating');
+            statusToggle.classList.add('updating');
             
+            // Send AJAX request to update status
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/dispensary_system/frontend/pages/doctor/update_doctor_status.php', true);
             xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
             xhr.onreadystatechange = function() {
                 if (xhr.readyState === 4) {
                     isUpdating = false;
-                    freshToggle.classList.remove('updating');
+                    statusToggle.classList.remove('updating');
                     
                     if (xhr.status === 200) {
                         try {
@@ -1209,12 +940,11 @@ document.addEventListener('DOMContentLoaded', function() {
             };
             xhr.send('status=' + newStatus + '&doctor_id=' + doctorId);
         });
-        console.log('✅ Status toggle button attached');
     }
 });
 
 // ================================================================
-// SEARCH FUNCTIONALITY
+// SEARCH
 // ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     var searchBtn = document.getElementById('searchBtn');
@@ -1233,26 +963,49 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (searchInput) {
         searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                performSearch();
-            }
-        });
-        
-        // Ctrl+K to focus search
-        document.addEventListener('keydown', function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-                e.preventDefault();
-                searchInput.focus();
-                searchInput.select();
-            }
-            if (e.key === 'Escape' && document.activeElement === searchInput) {
-                searchInput.value = '';
-                searchInput.blur();
-            }
+            if (e.key === 'Enter') performSearch();
         });
     }
 });
+
+// ================================================================
+// TOAST NOTIFICATION
+// ================================================================
+function showToast(title, message, type) {
+    var existingToast = document.querySelector('.toast-custom');
+    if (existingToast) {
+        existingToast.remove();
+    }
+    
+    var toast = document.createElement('div');
+    toast.className = 'toast-custom ' + type;
+    var icon = document.createElement('i');
+    icon.className = 'fas ' + (type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle');
+    icon.style.fontSize = '1.2rem';
+    
+    var content = document.createElement('div');
+    content.innerHTML = `
+        <p style="font-weight:600;font-size:0.9rem;margin:0;">${title}</p>
+        <p style="font-size:0.78rem;opacity:0.9;margin:0;">${message}</p>
+    `;
+    
+    toast.appendChild(icon);
+    toast.appendChild(content);
+    document.body.appendChild(toast);
+    
+    setTimeout(function() {
+        toast.classList.add('show');
+    }, 50);
+    
+    setTimeout(function() {
+        toast.classList.remove('show');
+        setTimeout(function() {
+            if (toast.parentNode) {
+                toast.remove();
+            }
+        }, 400);
+    }, 4000);
+}
 
 // ================================================================
 // KEYBOARD SHORTCUTS
@@ -1293,19 +1046,14 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// ================================================================
-// CONSOLE LOG
-// ================================================================
-console.log('%c👨‍⚕️ Braick - Doctor Header (FULLY FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👨‍⚕️ Braick - Doctor Header (WITH SEARCH BAR)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
 console.log('%c🟢 Status: <?= $is_online ? 'Online ✅' : 'Offline ❌' ?>', 'font-size:12px; color:#059669;');
 console.log('%c🆔 Doctor ID: <?= $doctor_id ?>', 'font-size:12px; color:#64748B;');
-console.log('%c👤 Doctor: <?= $full_name ?>', 'font-size:12px; color:#64748B;');
-console.log('%c🌙 Dark Mode uses localStorage ONLY (syncs everywhere)', 'font-size:12px; color:#6EA8FE;');
-console.log('%c✅ Dark mode works on ALL pages - no cookie needed!', 'font-size:12px; color:#34D399;');
-console.log('%c🔍 Search: Ctrl+K to focus', 'font-size:12px; color:#64748B;');
-console.log('%c🔄 Status: Ctrl+Shift+S to toggle', 'font-size:12px; color:#64748B;');
-console.log('%c📱 Hamburger button: Click ☰ to toggle sidebar', 'font-size:12px; color:#34D399;');
-console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
+console.log('%c👤 Doctor Name: <?= $full_name ?>', 'font-size:12px; color:#64748B;');
+console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:12px; color:#64748B;');
+console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
+console.log('%c🔍 Search: Ctrl+K to focus search', 'font-size:12px; color:#64748B;');
+console.log('%c🔄 Status: Ctrl+Shift+S to toggle online/offline', 'font-size:12px; color:#64748B;');
 </script>
 
 </body>
