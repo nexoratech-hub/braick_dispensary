@@ -9,6 +9,8 @@
 // - Table headers with BLUE background
 // - NO RESULT COLUMN - View button shows full result
 // - Enhanced action buttons with better CSS
+// - Print button REMOVED
+// - Buttons size REDUCED
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -58,7 +60,7 @@ require_once __DIR__ . '/../../../backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET LAB RESULTS FOR THIS DOCTOR - FIXED: Removed non-existent columns
+// GET LAB RESULTS FOR THIS DOCTOR
 // ================================================================
 $params = [$doctor_id];
 $search_condition = "";
@@ -91,7 +93,6 @@ switch ($filter) {
         break;
 }
 
-// FIXED: Removed non-existent columns and fixed subquery
 $sql = "
     SELECT 
         lt.id,
@@ -470,10 +471,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         .table-container thead th {
-            padding: 14px 16px;
+            padding: 12px 14px;
             text-align: left;
             font-weight: 700;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: #FFFFFF !important;
@@ -493,7 +494,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
            TABLE BODY
            ================================================================ */
         .table-container tbody td {
-            padding: 12px 16px;
+            padding: 10px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
@@ -524,9 +525,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
            ================================================================ */
         .status-badge {
             display: inline-block;
-            padding: 3px 12px;
+            padding: 2px 10px;
             border-radius: 20px;
-            font-size: 0.6rem;
+            font-size: 0.55rem;
             font-weight: 600;
             text-transform: uppercase;
             white-space: nowrap;
@@ -558,25 +559,26 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .patient-cell .patient-name {
             font-weight: 600;
             color: var(--text-primary);
+            font-size: 0.85rem;
         }
         
         .patient-cell .patient-id {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: var(--text-secondary);
             font-family: monospace;
         }
         
         .patient-cell .patient-details {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: var(--text-secondary);
         }
         
         /* ================================================================
-           ENHANCED ACTION BUTTONS
+           ENHANCED ACTION BUTTONS - REDUCED SIZE
            ================================================================ */
         .actions-cell {
             display: flex;
-            gap: 8px;
+            gap: 4px;
             flex-wrap: wrap;
             align-items: center;
         }
@@ -584,11 +586,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 6px 14px;
-            border-radius: 8px;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 6px;
             font-weight: 600;
-            font-size: 0.7rem;
+            font-size: 0.6rem;
             transition: all 0.3s ease;
             cursor: pointer;
             border: none;
@@ -617,62 +619,51 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             height: 300px;
         }
         
-        /* View Button */
+        .btn i {
+            font-size: 0.55rem;
+        }
+        
+        /* View Button - SMALL */
         .btn-view {
             background: var(--primary);
             color: white;
-            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 1px 4px rgba(11, 94, 215, 0.2);
         }
         .btn-view:hover {
             background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
         }
         .btn-view i {
             color: white;
         }
         
-        /* Print Button */
-        .btn-print {
-            background: #64748B;
-            color: white;
-            box-shadow: 0 2px 8px rgba(100, 116, 139, 0.25);
-        }
-        .btn-print:hover {
-            background: #475569;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(100, 116, 139, 0.35);
-        }
-        .btn-print i {
-            color: white;
-        }
-        
-        /* Consultation Button */
+        /* Consultation Button - SMALL */
         .btn-consult {
             background: var(--success);
             color: white;
-            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+            box-shadow: 0 1px 4px rgba(5, 150, 105, 0.2);
         }
         .btn-consult:hover {
             background: #047857;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
         }
         .btn-consult i {
             color: white;
         }
         
-        /* Waiting Status */
+        /* Waiting Status - SMALL */
         .waiting-badge {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            font-size: 0.65rem;
+            gap: 4px;
+            font-size: 0.55rem;
             font-weight: 500;
             color: var(--text-secondary);
             background: var(--gray-100);
-            padding: 4px 12px;
-            border-radius: 20px;
+            padding: 2px 8px;
+            border-radius: 16px;
             border: 1px solid var(--border-color);
         }
         
@@ -682,7 +673,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         .waiting-badge i {
-            font-size: 0.7rem;
+            font-size: 0.5rem;
         }
         
         .waiting-badge.waiting {
@@ -775,8 +766,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .main-content { margin-left: 0; padding: 16px; }
             .sidebar-toggle-btn { display: block; }
             .table-container table { font-size: 0.75rem; }
-            .table-container thead th, .table-container tbody td { padding: 8px 12px; }
-            .btn { padding: 4px 10px; font-size: 0.6rem; }
+            .table-container thead th, .table-container tbody td { padding: 8px 10px; }
+            .btn { padding: 2px 6px; font-size: 0.55rem; }
+            .btn i { font-size: 0.5rem; }
         }
         
         @media (max-width: 768px) {
@@ -786,21 +778,23 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .filter-tab { padding: 6px 12px; font-size: 0.7rem; }
             .table-container { border-radius: 10px; }
             .table-container table { font-size: 0.7rem; }
-            .table-container thead th, .table-container tbody td { padding: 6px 10px; }
-            .actions-cell { gap: 4px; }
-            .btn { padding: 3px 8px; font-size: 0.55rem; gap: 4px; }
-            .btn i { font-size: 0.55rem; }
+            .table-container thead th, .table-container tbody td { padding: 6px 8px; }
+            .actions-cell { gap: 3px; }
+            .btn { padding: 2px 6px; font-size: 0.5rem; gap: 3px; }
+            .btn i { font-size: 0.45rem; }
+            .waiting-badge { font-size: 0.5rem; padding: 2px 6px; gap: 3px; }
+            .waiting-badge i { font-size: 0.45rem; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .filter-tabs { flex-wrap: wrap; }
-            .filter-tab { flex: 1; justify-content: center; }
+            .filter-tab { flex: 1; justify-content: center; font-size: 0.6rem; padding: 4px 8px; }
             .table-container thead th, .table-container tbody td { padding: 4px 6px; font-size: 0.6rem; }
-            .actions-cell { flex-direction: column; gap: 4px; align-items: stretch; }
-            .btn { justify-content: center; padding: 4px 8px; font-size: 0.55rem; }
-            .btn i { font-size: 0.5rem; }
-            .waiting-badge { font-size: 0.5rem; padding: 2px 8px; }
+            .actions-cell { flex-direction: row; gap: 3px; flex-wrap: wrap; }
+            .btn { padding: 2px 5px; font-size: 0.45rem; gap: 2px; }
+            .btn i { font-size: 0.4rem; }
+            .waiting-badge { font-size: 0.45rem; padding: 1px 5px; }
         }
     </style>
 </head>
@@ -883,7 +877,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- LAB RESULTS TABLE - NO RESULT COLUMN -->
+    <!-- LAB RESULTS TABLE - NO PRINT BUTTON -->
     <!-- ================================================================ -->
     <div class="table-container" id="labResultsContainer">
         <?php if (count($lab_tests) > 0): ?>
@@ -905,7 +899,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     foreach ($lab_tests as $lab): 
                     ?>
                         <tr class="animate-fade-in-up" data-lab-id="<?= $lab['id'] ?>" data-status="<?= $lab['status'] ?>">
-                            <td><?= $counter++ ?></td>
+                            <td style="font-size:0.7rem;color:var(--text-secondary);"><?= $counter++ ?></td>
                             <td class="patient-cell">
                                 <div class="patient-name"><?= htmlspecialchars($lab['patient_name'] ?? 'N/A') ?></div>
                                 <div class="patient-id"><?= htmlspecialchars($lab['patient_code'] ?? 'N/A') ?></div>
@@ -915,8 +909,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 </div>
                             </td>
                             <td>
-                                <strong><?= htmlspecialchars($lab['test_name'] ?? 'N/A') ?></strong>
-                                <div style="font-size:0.65rem;color:var(--text-secondary);">
+                                <strong style="font-size:0.8rem;"><?= htmlspecialchars($lab['test_name'] ?? 'N/A') ?></strong>
+                                <div style="font-size:0.6rem;color:var(--text-secondary);">
                                     <?= htmlspecialchars($lab['visit_number'] ?? 'N/A') ?>
                                 </div>
                             </td>
@@ -925,20 +919,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                     <?= ucfirst(str_replace('_', ' ', $lab['status'] ?? 'Pending')) ?>
                                 </span>
                             </td>
-                            <td>
+                            <td style="font-size:0.7rem;">
                                 <?php if (!empty($lab['technician_name'])): ?>
                                     <?= htmlspecialchars($lab['technician_name']) ?>
                                 <?php else: ?>
                                     <span class="text-xs text-gray-400">—</span>
                                 <?php endif; ?>
                             </td>
-                            <td style="font-size:0.7rem;color:var(--text-secondary);">
+                            <td style="font-size:0.65rem;color:var(--text-secondary);">
                                 <?= date('M d, Y', strtotime($lab['created_at'])) ?>
-                                <div style="font-size:0.6rem;">
+                                <div style="font-size:0.55rem;">
                                     <?= date('h:i A', strtotime($lab['created_at'])) ?>
                                 </div>
                                 <?php if (!empty($lab['completed_at'])): ?>
-                                    <div style="font-size:0.6rem;color:var(--success);">
+                                    <div style="font-size:0.55rem;color:var(--success);">
                                         <i class="fas fa-check-circle"></i> <?= date('M d, h:i A', strtotime($lab['completed_at'])) ?>
                                     </div>
                                 <?php endif; ?>
@@ -949,9 +943,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <a href="view_lab_result.php?id=<?= $lab['id'] ?>" class="btn btn-view">
                                             <i class="fas fa-eye"></i> View
                                         </a>
-                                        <a href="print_lab_result.php?id=<?= $lab['id'] ?>" target="_blank" class="btn btn-print">
-                                            <i class="fas fa-print"></i> Print
-                                        </a>
+                                        <!-- PRINT BUTTON REMOVED -->
                                     <?php elseif ($lab['status'] === 'pending'): ?>
                                         <span class="waiting-badge waiting">
                                             <i class="fas fa-clock"></i> Waiting
@@ -1237,7 +1229,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c📋 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c🔵 Table headers with blue gradient background', 'font-size:13px; color:#0B5ED7;');
     console.log('%c❌ Result column removed - Use View button to see full result', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Enhanced action buttons with better CSS', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Enhanced action buttons - REDUCED SIZE', 'font-size:13px; color:#34D399;');
+    console.log('%c🖨️ Print button REMOVED', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>
