@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/view_bill_item.php
-// ADMIN - VIEW BILL ITEM DETAILS WITH ALL ITEMS TABLE
+// FILE: frontend/pages/admin/edit_cashier.php
+// ADMIN - EDIT CASHIER BRANCH
 // BRAICK DISPENSARY - GREEN THEME
 // ================================================================
 
@@ -26,87 +26,42 @@ $db = Database::getInstance()->getConnection();
 // ================================================================
 // GET PARAMETERS
 // ================================================================
-$item_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch_id'] ?? $_GET['branch'] ?? 'all';
+$cashier_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$selected_branch_id = $_GET['branch'] ?? $_GET['branch_id'] ?? 'all';
 
-if ($item_id <= 0) {
-    header('Location: bills.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
+if ($cashier_id <= 0) {
+    header('Location: cashiers.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
     exit;
 }
 
 // ================================================================
-// FETCH BILL ITEM DETAILS
+// FETCH CASHIER BRANCH DETAILS
 // ================================================================
 try {
     $stmt = $db->prepare("
         SELECT 
-            bi.*,
-            pb.bill_number,
-            pb.patient_id,
-            pb.total_amount as bill_total,
-            pb.status as bill_status,
-            pb.created_at as bill_created_at,
-            pb.paid_amount,
-            pb.balance,
-            pb.subtotal,
-            pb.discount_amount,
-            pb.discount_percent,
-            p.full_name as patient_name,
-            p.patient_id as patient_code,
-            p.phone as patient_phone,
-            u.full_name as created_by_name,
-            b.name as branch_name
-        FROM bill_items bi
-        LEFT JOIN patient_bills pb ON bi.bill_id = pb.id
-        LEFT JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        LEFT JOIN branches b ON bi.branch_id = b.id
-        WHERE bi.id = ?
+            b.*,
+            (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active') as active_cashiers,
+            (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier') as total_cashiers,
+            (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id) as total_bills,
+            (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
+            (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
+            (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE branch_id = b.id) as total_revenue
+        FROM branches b
+        WHERE b.id = ?
     ");
-    $stmt->execute([$item_id]);
-    $item = $stmt->fetch(PDO::FETCH_ASSOC);
+    $stmt->execute([$cashier_id]);
+    $cashier = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$item) {
-        header('Location: bills.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
+    if (!$cashier) {
+        header('Location: cashiers.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
         exit;
     }
 } catch (Exception $e) {
-    error_log("Error fetching bill item: " . $e->getMessage());
-    header('Location: bills.php?branch=' . urlencode($selected_branch_id) . '&error=database_error');
+    error_log("Error fetching cashier: " . $e->getMessage());
+    header('Location: cashiers.php?branch=' . urlencode($selected_branch_id) . '&error=database_error');
     exit;
 }
-
-// ================================================================
-// FETCH ALL ITEMS FOR THIS BILL
-// ================================================================
-$all_items = [];
-try {
-    $stmt = $db->prepare("
-        SELECT 
-            bi.*,
-            pb.bill_number
-        FROM bill_items bi
-        LEFT JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE bi.bill_id = ?
-        ORDER BY bi.created_at DESC
-    ");
-    $stmt->execute([$item['bill_id']]);
-    $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    error_log("Error fetching all bill items: " . $e->getMessage());
-    $all_items = [];
-}
-
-// ================================================================
-// CALCULATE TOTALS FOR ALL ITEMS
-// ================================================================
-$subtotal = 0;
-$total_items = count($all_items);
-foreach ($all_items as $it) {
-    $subtotal += ($it['total_price'] ?? 0);
-}
-$discount_amount = $item['discount_amount'] ?? 0;
-$grand_total = $subtotal - $discount_amount;
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -120,58 +75,112 @@ try {
 }
 
 // ================================================================
+// PROCESS FORM SUBMISSION
+// ================================================================
+$message = '';
+$message_type = '';
+$update_success = false;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_cashier') {
+    $name = trim($_POST['name'] ?? '');
+    $location = trim($_POST['location'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $status = $_POST['status'] ?? 'active';
+    
+    // Validation
+    $errors = [];
+    if (empty($name)) {
+        $errors[] = "Cashier branch name is required";
+    }
+    if (empty($location)) {
+        $errors[] = "Location is required";
+    }
+    if (!empty($email) && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errors[] = "Invalid email address";
+    }
+    
+    // Check if name already exists (excluding current branch)
+    if (!empty($name)) {
+        try {
+            $stmt = $db->prepare("SELECT id FROM branches WHERE name = ? AND id != ?");
+            $stmt->execute([$name, $cashier_id]);
+            if ($stmt->fetch()) {
+                $errors[] = "A branch with this name already exists";
+            }
+        } catch (Exception $e) {
+            // Skip duplicate check on error
+        }
+    }
+    
+    if (empty($errors)) {
+        try {
+            $stmt = $db->prepare("
+                UPDATE branches 
+                SET 
+                    name = ?,
+                    location = ?,
+                    phone = ?,
+                    email = ?,
+                    status = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$name, $location, $phone, $email, $status, $cashier_id]);
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                    VALUES (?, ?, 'cashier_updated', ?, NOW())
+                ");
+                $details = "Cashier branch updated: {$name} (ID: {$cashier_id})";
+                $stmt->execute([$_SESSION['user_id'], $cashier_id, $details]);
+            } catch (Exception $e) {
+                // Log error but don't stop
+            }
+            
+            $update_success = true;
+            $message = "✅ Cashier branch updated successfully!";
+            $message_type = 'success';
+            
+            // Refresh data
+            $stmt = $db->prepare("
+                SELECT 
+                    b.*,
+                    (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active') as active_cashiers,
+                    (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier') as total_cashiers,
+                    (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id) as total_bills,
+                    (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
+                    (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
+                    (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE branch_id = b.id) as total_revenue
+                FROM branches b
+                WHERE b.id = ?
+            ");
+            $stmt->execute([$cashier_id]);
+            $cashier = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+        } catch (Exception $e) {
+            $errors[] = "Database error: " . $e->getMessage();
+            error_log("Error updating cashier: " . $e->getMessage());
+        }
+    }
+    
+    if (!empty($errors)) {
+        $message = implode('<br>', $errors);
+        $message_type = 'error';
+    }
+}
+
+// ================================================================
 // STATUS BADGE CLASS
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
         'active' => 'success',
-        'inactive' => 'danger',
-        'pending' => 'warning',
-        'paid' => 'success',
-        'partial' => 'warning',
-        'cancelled' => 'danger',
-        'completed' => 'success'
+        'inactive' => 'danger'
     ];
     return $classes[$status] ?? 'secondary';
-}
-
-function getItemTypeLabel($type) {
-    $labels = [
-        'registration' => 'Registration',
-        'consultation' => 'Consultation',
-        'lab_test' => 'Lab Test',
-        'medication' => 'Medication',
-        'procedure' => 'Procedure',
-        'tool' => 'Tool/Supply',
-        'other' => 'Other'
-    ];
-    return $labels[$type] ?? ucfirst($type);
-}
-
-function getItemTypeIcon($type) {
-    $icons = [
-        'registration' => 'fa-file-medical',
-        'consultation' => 'fa-stethoscope',
-        'lab_test' => 'fa-flask',
-        'medication' => 'fa-pills',
-        'procedure' => 'fa-syringe',
-        'tool' => 'fa-tools',
-        'other' => 'fa-cube'
-    ];
-    return $icons[$type] ?? 'fa-cube';
-}
-
-function getItemTypeColor($type) {
-    $colors = [
-        'registration' => 'blue',
-        'consultation' => 'purple',
-        'lab_test' => 'orange',
-        'medication' => 'green',
-        'procedure' => 'red',
-        'tool' => 'teal',
-        'other' => 'gray'
-    ];
-    return $colors[$type] ?? 'gray';
 }
 
 // ================================================================
@@ -195,7 +204,7 @@ include_once '../../components/admin_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bill Item Details - Braick Dispensary</title>
+    <title>Edit Cashier - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -227,15 +236,6 @@ include_once '../../components/admin_sidebar.php';
             
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --orange: #F59E0B;
-            --orange-bg: #FFFBEB;
             
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -610,316 +610,204 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           DETAIL CARD - GREEN THEME
+           FORM CARD - GREEN THEME
            ================================================================ */
-        .detail-card {
+        .form-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            padding: 24px 28px;
+            padding: 32px 36px;
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 24px;
+            max-width: 800px;
+            margin: 0 auto;
+            box-shadow: var(--shadow-md);
         }
         
-        .detail-card:hover {
+        .form-card:hover {
             border-color: var(--primary);
-            box-shadow: var(--shadow-md);
+            box-shadow: var(--shadow-lg);
         }
         
-        .detail-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
+        .form-card .form-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 28px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid var(--border-color);
         }
         
-        .detail-value {
-            font-size: 0.95rem;
+        .form-card .form-header .form-icon {
+            width: 52px;
+            height: 52px;
+            background: var(--primary-gradient);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1.4rem;
+            flex-shrink: 0;
+            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.25);
+        }
+        
+        .form-card .form-header .form-title {
+            font-size: 1.2rem;
             font-weight: 600;
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           ITEM TYPE BADGE
-           ================================================================ */
-        .item-type-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 16px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-        
-        .item-type-badge.blue { background: #EFF6FF; color: #0B5ED7; }
-        .item-type-badge.purple { background: var(--purple-bg); color: var(--purple); }
-        .item-type-badge.orange { background: var(--orange-bg); color: var(--orange); }
-        .item-type-badge.green { background: var(--success-bg); color: var(--success); }
-        .item-type-badge.red { background: var(--danger-bg); color: var(--danger); }
-        .item-type-badge.teal { background: var(--teal-bg); color: var(--teal); }
-        .item-type-badge.gray { background: var(--gray-100); color: var(--gray-600); }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            color: white;
-            letter-spacing: 0.02em;
-            transition: all 0.3s ease;
-        }
-        
-        .badge:hover {
-            transform: scale(1.05);
-        }
-        
-        .badge-success { background: #059669; }
-        .badge-danger { background: #DC2626; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-info { background: #0B5ED7; }
-        .badge-secondary { background: #64748B; }
-        
-        [data-theme="dark"] .badge-warning { color: #1E293B; }
-        
-        /* ================================================================
-           TABLE CONTAINER - GREEN THEME
-           ================================================================ */
-        .table-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 24px;
-        }
-        
-        .table-container:hover {
-            box-shadow: var(--shadow-md);
-        }
-        
-        .table-container .card-header {
-            padding: 14px 20px;
-            background: var(--primary-gradient-strong);
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .table-container .card-header .card-title {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: white;
-            margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .table-container .card-header .card-title i {
-            color: rgba(255,255,255,0.8);
+        .form-card .form-header .form-subtitle {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
         }
         
         /* ================================================================
-           DATA TABLE
+           FORM ELEMENTS
            ================================================================ */
-        .data-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
+        .form-label {
             font-size: 0.78rem;
-        }
-        
-        .data-table thead th {
-            background: var(--bg-body);
-            color: var(--text-secondary);
-            font-weight: 700;
-            padding: 10px 14px;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: 2px solid var(--border-color);
-            text-align: left;
-        }
-        
-        [data-theme="dark"] .data-table thead th {
-            background: #0F172A;
-        }
-        
-        .data-table td {
-            padding: 8px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-            transition: background 0.2s ease;
-        }
-        
-        .data-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
-        
-        .data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        .data-table tbody tr:nth-child(even) {
-            background: var(--gray-50);
-        }
-        
-        [data-theme="dark"] .data-table tbody tr:nth-child(even) {
-            background: #1A3A2A;
-        }
-        
-        /* ================================================================
-           TABLE FOOTER
-           ================================================================ */
-        .data-table tfoot {
-            background: var(--primary-bg);
-            font-weight: 700;
-            border-top: 3px solid var(--primary);
-        }
-        
-        .data-table tfoot td {
-            padding: 10px 14px;
-            color: var(--text-primary);
-        }
-        
-        .data-table tfoot .total-label {
-            text-align: right;
-            color: var(--text-secondary);
             font-weight: 600;
-            text-transform: uppercase;
-            font-size: 0.7rem;
-            letter-spacing: 0.05em;
-        }
-        
-        .data-table tfoot .total-amount {
-            font-family: monospace;
-            font-size: 0.95rem;
-            font-weight: 700;
-        }
-        
-        .data-table tfoot .total-amount.green { color: var(--primary); }
-        .data-table tfoot .total-amount.red { color: var(--danger); }
-        .data-table tfoot .total-amount.blue { color: #0B5ED7; }
-        
-        /* ================================================================
-           AMOUNT DISPLAY
-           ================================================================ */
-        .amount-display {
-            font-size: 1.5rem;
-            font-weight: 700;
             color: var(--text-primary);
+            margin-bottom: 5px;
+            display: block;
         }
         
-        .amount-display.green { color: var(--primary); }
-        .amount-display.red { color: var(--danger); }
-        .amount-display.blue { color: #0B5ED7; }
-        .amount-display.purple { color: var(--purple); }
+        .form-label .required { color: var(--danger); margin-left: 2px; }
+        .form-label .label-icon { margin-right: 4px; color: var(--primary); }
         
-        /* ================================================================
-           QUICK ACTIONS
-           ================================================================ */
-        .quick-action {
-            display: block;
-            background: var(--bg-card);
+        .form-control {
+            width: 100%;
+            padding: 10px 16px;
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
-            padding: 16px;
-            text-align: center;
+            font-size: 0.85rem;
             transition: all 0.3s ease;
-            text-decoration: none;
+            outline: none;
+            background: var(--bg-card);
             color: var(--text-primary);
         }
         
-        .quick-action:hover {
+        .form-control:focus {
             border-color: var(--primary);
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-md);
+            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
         }
         
-        .quick-action .quick-icon {
-            font-size: 2rem;
-            display: block;
-            margin-bottom: 6px;
-        }
-        
-        .quick-action .quick-icon.green { color: var(--primary); }
-        .quick-action .quick-icon.blue { color: #0B5ED7; }
-        .quick-action .quick-icon.purple { color: var(--purple); }
-        
-        .quick-action .quick-label {
-            font-size: 0.8rem;
-            font-weight: 500;
-            color: var(--text-primary);
-        }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
+        .form-control::placeholder {
             color: var(--text-secondary);
+            opacity: 0.5;
         }
         
-        .footer .footer-brand {
+        select.form-control {
+            appearance: auto;
+            cursor: pointer;
+        }
+        
+        .form-row { margin-bottom: 20px; }
+        .form-row:last-child { margin-bottom: 0; }
+        
+        /* ================================================================
+           ALERT
+           ================================================================ */
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border: 2px solid transparent;
+        }
+        
+        .alert-success {
+            background: #D1FAE5;
+            color: #065F46;
+            border-color: #34D399;
+        }
+        
+        .alert-danger {
+            background: #FEE2E2;
+            color: #991B1B;
+            border-color: #F87171;
+        }
+        
+        .alert i {
+            font-size: 1.1rem;
+        }
+        
+        [data-theme="dark"] .alert-success {
+            background: #1A3A2A;
+            color: #34D399;
+            border-color: #059669;
+        }
+        
+        [data-theme="dark"] .alert-danger {
+            background: #3A1A1A;
+            color: #F87171;
+            border-color: #DC2626;
+        }
+        
+        /* ================================================================
+           BUTTONS - GREEN THEME
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 24px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+        }
+        
+        .btn-primary:hover {
+            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            border-color: var(--primary);
             color: var(--primary);
-            font-weight: 700;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
         }
         
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .detail-card { padding: 16px; }
-            .data-table { font-size: 0.65rem; }
-            .data-table thead th, .data-table td { padding: 6px 8px; }
+        .btn-danger:hover {
+            box-shadow: 0 6px 24px rgba(220, 38, 38, 0.35);
         }
         
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
-            .data-table { font-size: 0.55rem; }
-            .data-table thead th, .data-table td { padding: 4px 6px; }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
+        .form-actions {
+            display: flex;
+            gap: 12px;
+            padding-top: 20px;
+            margin-top: 20px;
+            border-top: 2px solid var(--border-color);
+            flex-wrap: wrap;
         }
         
         /* ================================================================
@@ -952,6 +840,60 @@ include_once '../../components/admin_sidebar.php';
         .toast-custom.warning { background: var(--warning); }
         
         /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand {
+            color: var(--primary);
+            font-weight: 700;
+        }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav .search-wrapper { max-width: 300px; }
+        }
+        
+        @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .form-card { padding: 16px; }
+            .form-actions { flex-direction: column; }
+            .form-actions .btn { width: 100%; justify-content: center; }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+            .page-header { flex-direction: column; align-items: flex-start !important; }
+        }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        /* ================================================================
            PRINT STYLES
            ================================================================ */
         @media print {
@@ -959,8 +901,7 @@ include_once '../../components/admin_sidebar.php';
             .search-wrapper, .page-header .btn-outline-light,
             .footer, #sidebarToggle { display: none !important; }
             .main-content { margin: 0; padding: 20px; }
-            .detail-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .table-container { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
+            .form-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
             .page-header {
                 background: #059669 !important;
                 -webkit-print-color-adjust: exact !important;
@@ -1032,282 +973,155 @@ include_once '../../components/admin_sidebar.php';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-receipt"></i>
-                Bill Item Details
+                <i class="fas fa-edit"></i>
+                Edit Cashier
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-file-invoice"></i>
-                <strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong>
+                <i class="fas fa-cash-register"></i>
+                <strong><?= htmlspecialchars($cashier['name']) ?></strong>
                 <span class="header-badge">
-                    <i class="fas fa-hashtag"></i>
-                    #<?= $item_id ?>
-                </span>
-                <span class="header-badge">
-                    <?php if ($item['payment_status'] === 'paid'): ?>
-                        <i class="fas fa-check-circle"></i> Paid
-                    <?php else: ?>
-                        <i class="fas fa-clock"></i> <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
-                    <?php endif; ?>
+                    <i class="fas fa-<?= ($cashier['status'] ?? 'active') === 'active' ? 'check-circle' : 'times-circle' ?>"></i>
+                    <?= ucfirst($cashier['status'] ?? 'Active') ?>
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-user-tie"></i>
+                    <?= ($cashier['total_cashiers'] ?? 0) ?> Cashiers
+                </span>
+                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
                     <i class="fas fa-money-bill-wave"></i>
-                    TSh <?= number_format($item['total_price'] ?? 0, 0) ?>
+                    TSh <?= number_format($cashier['total_revenue'] ?? 0, 0) ?> Revenue
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="view_bill.php?id=<?= $item['bill_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-file-invoice"></i> View Bill
+            <a href="view_cashier.php?id=<?= $cashier_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
+                <i class="fas fa-eye"></i> View
             </a>
-            <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+            <a href="cashiers.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- BILL ITEM DETAILS - GREEN THEME -->
-    <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up">
-        <!-- Item Type Badge -->
-        <div class="flex justify-between items-start mb-4 flex-wrap gap-4">
-            <div>
-                <span class="item-type-badge <?= getItemTypeColor($item['item_type'] ?? 'other') ?>">
-                    <i class="fas <?= getItemTypeIcon($item['item_type'] ?? 'other') ?>"></i>
-                    <?= getItemTypeLabel($item['item_type'] ?? 'other') ?>
-                </span>
-            </div>
-            <div>
-                <span class="badge badge-<?= getStatusBadge($item['payment_status'] ?? 'pending') ?>">
-                    <?php if ($item['payment_status'] === 'paid'): ?>
-                        <i class="fas fa-check-circle"></i> Paid
-                    <?php else: ?>
-                        <i class="fas fa-clock"></i> <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
-                    <?php endif; ?>
-                </span>
-            </div>
+    <!-- Message -->
+    <?php if ($message): ?>
+        <div class="alert alert-<?= $message_type === 'success' ? 'success' : 'danger' ?>" style="max-width:800px;margin:0 auto 16px;">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <div><?= $message ?></div>
         </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-                <p class="detail-label"><i class="fas fa-tag mr-1"></i> Item Name</p>
-                <p class="detail-value"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-cubes mr-1"></i> Quantity</p>
-                <p class="detail-value"><?= number_format($item['quantity'] ?? 0) ?></p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-money-bill-wave mr-1"></i> Unit Price</p>
-                <p class="detail-value">TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-calculator mr-1"></i> Total Price</p>
-                <p class="detail-value amount-display green">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-file-invoice mr-1"></i> Bill Number</p>
-                <p class="detail-value">
-                    <a href="view_bill.php?id=<?= $item['bill_id'] ?>&branch=<?= $selected_branch_id ?>" class="text-green-600 hover:underline">
-                        <?= htmlspecialchars($item['bill_number'] ?? 'N/A') ?>
-                    </a>
-                </p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-user mr-1"></i> Patient</p>
-                <p class="detail-value">
-                    <a href="view_patient.php?id=<?= $item['patient_id'] ?>&branch=<?= $selected_branch_id ?>" class="text-green-600 hover:underline">
-                        <?= htmlspecialchars($item['patient_name'] ?? 'N/A') ?>
-                    </a>
-                    <span class="text-xs text-gray-400 block"><?= htmlspecialchars($item['patient_code'] ?? '') ?></span>
-                </p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-user-plus mr-1"></i> Created By</p>
-                <p class="detail-value"><?= htmlspecialchars($item['created_by_name'] ?? 'N/A') ?></p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-store mr-1"></i> Branch</p>
-                <p class="detail-value"><?= htmlspecialchars($item['branch_name'] ?? 'N/A') ?></p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-clock mr-1"></i> Created At</p>
-                <p class="detail-value"><?= date('M d, Y h:i A', strtotime($item['created_at'] ?? 'now')) ?></p>
-            </div>
-        </div>
-
-        <?php if (!empty($item['description'])): ?>
-        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <p class="detail-label"><i class="fas fa-align-left mr-1"></i> Description</p>
-            <p class="detail-value"><?= htmlspecialchars($item['description']) ?></p>
-        </div>
-        <?php endif; ?>
-
-        <?php if (!empty($item['department']) || !empty($item['service_type'])): ?>
-        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <?php if (!empty($item['department'])): ?>
-            <div>
-                <p class="detail-label"><i class="fas fa-building mr-1"></i> Department</p>
-                <p class="detail-value"><?= htmlspecialchars($item['department']) ?></p>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($item['service_type'])): ?>
-            <div>
-                <p class="detail-label"><i class="fas fa-tag mr-1"></i> Service Type</p>
-                <p class="detail-value"><?= htmlspecialchars($item['service_type']) ?></p>
-            </div>
-            <?php endif; ?>
-        </div>
-        <?php endif; ?>
-    </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ALL BILL ITEMS TABLE - GREEN THEME -->
+    <!-- EDIT FORM - GREEN THEME -->
     <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.05s;">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-list"></i>
-                All Bill Items (<?= $total_items ?>)
-            </h3>
-            <span style="font-size:0.65rem;color:rgba(255,255,255,0.7);">
-                Bill #<?= htmlspecialchars($item['bill_number'] ?? 'N/A') ?>
-            </span>
-        </div>
-        <div class="overflow-x-auto">
-            <?php if (count($all_items) > 0): ?>
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Item Name</th>
-                            <th>Type</th>
-                            <th>Qty</th>
-                            <th>Unit Price</th>
-                            <th>Total</th>
-                            <th>Status</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php 
-                        $counter = 1;
-                        foreach ($all_items as $it): 
-                        ?>
-                            <tr>
-                                <td style="font-size:0.7rem;color:var(--text-secondary);"><?= $counter++ ?></td>
-                                <td class="font-medium"><?= htmlspecialchars($it['item_name'] ?? 'N/A') ?></td>
-                                <td>
-                                    <span class="item-type-badge <?= getItemTypeColor($it['item_type'] ?? 'other') ?>" style="font-size:0.55rem;padding:2px 10px;">
-                                        <i class="fas <?= getItemTypeIcon($it['item_type'] ?? 'other') ?>" style="font-size:0.5rem;"></i>
-                                        <?= getItemTypeLabel($it['item_type'] ?? 'other') ?>
-                                    </span>
-                                </td>
-                                <td><?= number_format($it['quantity'] ?? 0) ?></td>
-                                <td>TSh <?= number_format($it['unit_price'] ?? 0, 0) ?></td>
-                                <td class="font-semibold text-green-600">TSh <?= number_format($it['total_price'] ?? 0, 0) ?></td>
-                                <td>
-                                    <span class="badge badge-<?= getStatusBadge($it['payment_status'] ?? 'pending') ?>" style="font-size:0.5rem;padding:1px 8px;">
-                                        <?= ucfirst($it['payment_status'] ?? 'Pending') ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <a href="view_bill_item.php?id=<?= $it['id'] ?>&branch=<?= $selected_branch_id ?>" class="text-green-600 text-xs hover:underline <?= $it['id'] == $item_id ? 'font-bold text-green-800' : '' ?>">
-                                        <?= $it['id'] == $item_id ? '📌 View' : 'View' ?>
-                                    </a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                    <tfoot>
-                        <tr>
-                            <td colspan="5" class="total-label">Subtotal:</td>
-                            <td class="total-amount green">TSh <?= number_format($subtotal, 0) ?></td>
-                            <td colspan="2"></td>
-                        </tr>
-                        <?php if ($discount_amount > 0): ?>
-                        <tr style="background:var(--warning-bg);">
-                            <td colspan="5" class="total-label">Discount (<?= $item['discount_percent'] ?? 0 ?>%):</td>
-                            <td class="total-amount red">- TSh <?= number_format($discount_amount, 0) ?></td>
-                            <td colspan="2"></td>
-                        </tr>
-                        <?php endif; ?>
-                        <tr style="background:var(--success-bg);font-size:1rem;">
-                            <td colspan="5" class="total-label" style="font-weight:700;">Grand Total:</td>
-                            <td class="total-amount green" style="font-size:1.1rem;">TSh <?= number_format($grand_total, 0) ?></td>
-                            <td colspan="2"></td>
-                        </tr>
-                    </tfoot>
-                </table>
-            <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-file-invoice"></i>
-                    <p>No items found for this bill</p>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- BILL SUMMARY - GREEN THEME -->
-    <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.1s;">
-        <h3 class="text-sm font-bold text-primary mb-4">
-            <i class="fas fa-file-invoice"></i> Bill Summary
-        </h3>
-        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <div>
-                <p class="detail-label">Subtotal</p>
-                <p class="detail-value amount-display green">TSh <?= number_format($subtotal, 0) ?></p>
+    <div class="form-card animate-fade-in-up">
+        <div class="form-header">
+            <div class="form-icon">
+                <i class="fas fa-edit"></i>
             </div>
             <div>
-                <p class="detail-label">Discount</p>
-                <p class="detail-value amount-display red">- TSh <?= number_format($discount_amount, 0) ?></p>
-                <?php if (!empty($item['discount_percent'])): ?>
-                    <span class="text-xs text-gray-400">(<?= $item['discount_percent'] ?>%)</span>
-                <?php endif; ?>
-            </div>
-            <div>
-                <p class="detail-label">Grand Total</p>
-                <p class="detail-value amount-display green">TSh <?= number_format($grand_total, 0) ?></p>
-            </div>
-            <div>
-                <p class="detail-label">Paid Amount</p>
-                <p class="detail-value amount-display green">TSh <?= number_format($item['paid_amount'] ?? 0, 0) ?></p>
-            </div>
-            <div>
-                <p class="detail-label">Balance</p>
-                <p class="detail-value amount-display <?= ($item['balance'] ?? 0) > 0 ? 'red' : 'green' ?>">
-                    TSh <?= number_format($item['balance'] ?? 0, 0) ?>
-                </p>
+                <h3 class="form-title">Edit Cashier Details</h3>
+                <p class="form-subtitle">Update cashier branch information</p>
             </div>
         </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- QUICK ACTIONS - GREEN THEME -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up" style="animation-delay:0.15s;">
-        <?php if ($item['payment_status'] !== 'paid' && $item['payment_status'] !== 'cancelled'): ?>
-        <a href="add_payment.php?bill_item_id=<?= $item_id ?>&bill_id=<?= $item['bill_id'] ?>&branch=<?= $selected_branch_id ?>" 
-           class="quick-action">
-            <span class="quick-icon green"><i class="fas fa-money-bill-wave"></i></span>
-            <span class="quick-label">Record Payment</span>
-        </a>
-        <?php endif; ?>
         
-        <a href="edit_bill_item.php?id=<?= $item_id ?>&branch=<?= $selected_branch_id ?>" 
-           class="quick-action">
-            <span class="quick-icon blue"><i class="fas fa-edit"></i></span>
-            <span class="quick-label">Edit Item</span>
-        </a>
-        
-        <a href="view_bill.php?id=<?= $item['bill_id'] ?>&branch=<?= $selected_branch_id ?>" 
-           class="quick-action">
-            <span class="quick-icon purple"><i class="fas fa-file-invoice"></i></span>
-            <span class="quick-label">View Full Bill</span>
-        </a>
+        <form method="POST" action="" id="editForm">
+            <input type="hidden" name="action" value="update_cashier">
+            
+            <!-- Branch Name -->
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-cash-register label-icon"></i> Cashier Name <span class="required">*</span>
+                </label>
+                <input type="text" name="name" class="form-control" 
+                       value="<?= htmlspecialchars($cashier['name'] ?? '') ?>" 
+                       placeholder="e.g. Dodoma Cashier"
+                       required>
+            </div>
+            
+            <!-- Location -->
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-map-marker-alt label-icon"></i> Location <span class="required">*</span>
+                </label>
+                <input type="text" name="location" class="form-control" 
+                       value="<?= htmlspecialchars($cashier['location'] ?? '') ?>" 
+                       placeholder="e.g. Dodoma City, Tanzania"
+                       required>
+            </div>
+            
+            <!-- Phone -->
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-phone label-icon"></i> Phone Number
+                </label>
+                <input type="text" name="phone" class="form-control" 
+                       value="<?= htmlspecialchars($cashier['phone'] ?? '') ?>" 
+                       placeholder="e.g. +255 700 000 001">
+            </div>
+            
+            <!-- Email -->
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-envelope label-icon"></i> Email Address
+                </label>
+                <input type="email" name="email" class="form-control" 
+                       value="<?= htmlspecialchars($cashier['email'] ?? '') ?>" 
+                       placeholder="e.g. cashier@braick.com">
+            </div>
+            
+            <!-- Status -->
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-toggle-on label-icon"></i> Status <span class="required">*</span>
+                </label>
+                <select name="status" class="form-control" required>
+                    <option value="active" <?= ($cashier['status'] ?? 'active') === 'active' ? 'selected' : '' ?>>
+                        ✅ Active
+                    </option>
+                    <option value="inactive" <?= ($cashier['status'] ?? 'active') === 'inactive' ? 'selected' : '' ?>>
+                        ❌ Inactive
+                    </option>
+                </select>
+                <small class="text-gray-400 text-xs">Active cashier branches can process payments</small>
+            </div>
+            
+            <!-- Form Actions -->
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Update Cashier
+                </button>
+                <a href="view_cashier.php?id=<?= $cashier_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+                <button type="button" class="btn btn-danger" onclick="confirmDelete()" style="margin-left:auto;">
+                    <i class="fas fa-trash"></i> Delete Cashier
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- CASHIER STATS -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6" style="max-width:800px;margin:24px auto 0;">
+        <div class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);">
+            <p class="text-xs text-gray-400">Total Cashiers</p>
+            <p class="text-2xl font-bold text-green-600"><?= number_format($cashier['total_cashiers'] ?? 0) ?></p>
+        </div>
+        <div class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);">
+            <p class="text-xs text-gray-400">Total Bills</p>
+            <p class="text-2xl font-bold text-blue-600"><?= number_format($cashier['total_bills'] ?? 0) ?></p>
+        </div>
+        <div class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);">
+            <p class="text-xs text-gray-400">Pending Bills</p>
+            <p class="text-2xl font-bold text-yellow-600"><?= number_format($cashier['pending_bills'] ?? 0) ?></p>
+        </div>
+        <div class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);">
+            <p class="text-xs text-gray-400">Paid Bills</p>
+            <p class="text-2xl font-bold text-green-600"><?= number_format($cashier['paid_bills'] ?? 0) ?></p>
+        </div>
     </div>
 
     <!-- ================================================================ -->
@@ -1317,7 +1131,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Bill Item Details - <?= htmlspecialchars($item['item_name'] ?? 'Item') ?>
+            Edit Cashier - <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1410,6 +1224,7 @@ include_once '../../components/admin_sidebar.php';
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
+        url.searchParams.delete('branch_id');
         window.location.href = url.toString();
     }
 
@@ -1430,6 +1245,25 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
+    // ================================================================
+    // CONFIRM DELETE
+    // ================================================================
+    function confirmDelete() {
+        var confirmed = confirm(
+            '⚠️ Are you sure you want to delete this cashier branch?\n\n' +
+            'Cashier: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?>\n' +
+            'ID: #<?= $cashier_id ?>\n\n' +
+            'This action cannot be undone. All associated data will be affected.'
+        );
+        
+        if (confirmed) {
+            window.location.href = 'delete_cashier.php?id=<?= $cashier_id ?>&branch=<?= urlencode($selected_branch_id) ?>&confirm=yes';
+        }
+    }
+
+    // ================================================================
+    // TOAST
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1450,11 +1284,102 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c📄 Braick Dispensary - View Bill Item (GREEN THEME)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c📋 Item: <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?> (ID: <?= $item_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Amount: TSh <?= number_format($item['total_price'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Status: <?= ucfirst($item['payment_status'] ?? 'Pending') ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c📋 Total Items in Bill: <?= $total_items ?>', 'font-size:13px; color:#7C3AED;');
+    // ================================================================
+    // FORM VALIDATION (Client-side)
+    // ================================================================
+    document.getElementById('editForm')?.addEventListener('submit', function(e) {
+        var name = document.querySelector('input[name="name"]').value.trim();
+        var location = document.querySelector('input[name="location"]').value.trim();
+        var email = document.querySelector('input[name="email"]').value.trim();
+        var isValid = true;
+        
+        // Reset error states
+        document.querySelectorAll('.form-control').forEach(function(el) {
+            el.classList.remove('is-invalid');
+            el.classList.remove('is-valid');
+        });
+        
+        // Validate name
+        if (!name) {
+            document.querySelector('input[name="name"]').classList.add('is-invalid');
+            isValid = false;
+        } else {
+            document.querySelector('input[name="name"]').classList.add('is-valid');
+        }
+        
+        // Validate location
+        if (!location) {
+            document.querySelector('input[name="location"]').classList.add('is-invalid');
+            isValid = false;
+        } else {
+            document.querySelector('input[name="location"]').classList.add('is-valid');
+        }
+        
+        // Validate email (if provided)
+        if (email && !isValidEmail(email)) {
+            document.querySelector('input[name="email"]').classList.add('is-invalid');
+            isValid = false;
+        } else if (email) {
+            document.querySelector('input[name="email"]').classList.add('is-valid');
+        }
+        
+        if (!isValid) {
+            e.preventDefault();
+            // Scroll to first error
+            var firstError = document.querySelector('.is-invalid');
+            if (firstError) {
+                firstError.focus();
+            }
+            showToast('⚠️ Validation Error', 'Please fill in all required fields correctly', 'warning');
+        }
+    });
+    
+    function isValidEmail(email) {
+        var re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return re.test(email);
+    }
+    
+    // ================================================================
+    // REAL-TIME VALIDATION
+    // ================================================================
+    document.querySelector('input[name="name"]')?.addEventListener('blur', function() {
+        if (this.value.trim()) {
+            this.classList.remove('is-invalid');
+            this.classList.add('is-valid');
+        } else {
+            this.classList.remove('is-valid');
+            this.classList.add('is-invalid');
+        }
+    });
+    
+    document.querySelector('input[name="location"]')?.addEventListener('blur', function() {
+        if (this.value.trim()) {
+            this.classList.remove('is-invalid');
+            this.classList.add('is-valid');
+        } else {
+            this.classList.remove('is-valid');
+            this.classList.add('is-invalid');
+        }
+    });
+    
+    document.querySelector('input[name="email"]')?.addEventListener('blur', function() {
+        var val = this.value.trim();
+        if (val && !isValidEmail(val)) {
+            this.classList.remove('is-valid');
+            this.classList.add('is-invalid');
+        } else if (val) {
+            this.classList.remove('is-invalid');
+            this.classList.add('is-valid');
+        } else {
+            this.classList.remove('is-invalid');
+            this.classList.remove('is-valid');
+        }
+    });
+
+    console.log('%c💰 Braick Dispensary - Edit Cashier (GREEN THEME)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c🏢 Cashier: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Status: <?= ucfirst($cashier['status'] ?? 'Active') ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💰 Revenue: TSh <?= number_format($cashier['total_revenue'] ?? 0, 0) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c🟢 Green Theme Applied', 'font-size:13px; color:#059669;');
 </script>
 

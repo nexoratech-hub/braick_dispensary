@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_bill.php
 // ADMIN - VIEW BILL DETAILS
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - GREEN THEME
 // ================================================================
 
 session_start();
@@ -27,43 +27,49 @@ $db = Database::getInstance()->getConnection();
 // GET PARAMETERS
 // ================================================================
 $bill_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : ($_SESSION['branch_id'] ?? 1);
+$branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : ($_SESSION['branch_id'] ?? 1);
 
 if ($bill_id <= 0) {
-    header('Location: bills.php?branch_id=' . $branch_id . '&error=invalid_id');
+    header('Location: bills.php?branch=' . $branch_id . '&error=invalid_id');
     exit;
 }
 
 // ================================================================
 // FETCH BILL DETAILS
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        pb.*,
-        p.id as patient_id,
-        p.patient_id as patient_number,
-        p.full_name as patient_name,
-        p.phone as patient_phone,
-        p.email as patient_email,
-        p.address as patient_address,
-        p.gender as patient_gender,
-        u.full_name as created_by_name,
-        b.name as branch_name,
-        v.visit_number,
-        v.visit_date,
-        v.status as visit_status
-    FROM patient_bills pb
-    LEFT JOIN patients p ON pb.patient_id = p.id
-    LEFT JOIN users u ON pb.created_by = u.id
-    LEFT JOIN branches b ON pb.branch_id = b.id
-    LEFT JOIN visits v ON pb.visit_id = v.id
-    WHERE pb.id = ?
-");
-$stmt->execute([$bill_id]);
-$bill = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            pb.*,
+            p.id as patient_id,
+            p.patient_id as patient_number,
+            p.full_name as patient_name,
+            p.phone as patient_phone,
+            p.email as patient_email,
+            p.address as patient_address,
+            p.gender as patient_gender,
+            u.full_name as created_by_name,
+            b.name as branch_name,
+            v.visit_number,
+            v.visit_date,
+            v.status as visit_status
+        FROM patient_bills pb
+        LEFT JOIN patients p ON pb.patient_id = p.id
+        LEFT JOIN users u ON pb.created_by = u.id
+        LEFT JOIN branches b ON pb.branch_id = b.id
+        LEFT JOIN visits v ON pb.visit_id = v.id
+        WHERE pb.id = ?
+    ");
+    $stmt->execute([$bill_id]);
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if (!$bill) {
-    header('Location: bills.php?branch_id=' . $branch_id . '&error=notfound');
+    if (!$bill) {
+        header('Location: bills.php?branch=' . $branch_id . '&error=notfound');
+        exit;
+    }
+} catch (Exception $e) {
+    error_log("Error fetching bill: " . $e->getMessage());
+    header('Location: bills.php?branch=' . $branch_id . '&error=database_error');
     exit;
 }
 
@@ -194,19 +200,6 @@ function getItemTypeIcon($type) {
     return $icons[$type] ?? 'fa-circle';
 }
 
-function getItemTypeColor($type) {
-    $colors = [
-        'registration' => 'text-blue-600',
-        'consultation' => 'text-purple-600',
-        'lab_test' => 'text-cyan-600',
-        'medication' => 'text-green-600',
-        'procedure' => 'text-red-600',
-        'tool' => 'text-orange-600',
-        'other' => 'text-gray-600'
-    ];
-    return $colors[$type] ?? 'text-gray-600';
-}
-
 // ================================================================
 // LOGO PATH
 // ================================================================
@@ -238,15 +231,15 @@ include_once '../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BLUE THEME
+           ROOT VARIABLES - GREEN THEME
            ================================================================ */
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-hover: linear-gradient(135deg, #0A4CA8, #083C8A);
+            --primary: #059669;
+            --primary-dark: #047857;
+            --primary-light: #34D399;
+            --primary-bg: #D1FAE5;
+            --primary-gradient: linear-gradient(135deg, #059669, #047857);
+            --primary-gradient-hover: linear-gradient(135deg, #047857, #065F46);
             
             --success: #059669;
             --success-dark: #047857;
@@ -282,15 +275,15 @@ include_once '../../components/admin_sidebar.php';
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
             --shadow-xl: 0 20px 40px rgba(0,0,0,0.12);
             
-            --bg-body: #F0F4F8;
+            --bg-body: #F0FDF4;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
-            --border-color: #E2E8F0;
+            --border-color: #D1FAE5;
             --radius: 12px;
             --radius-lg: 18px;
-            --table-hover: #F8FAFC;
+            --table-hover: #ECFDF5;
         }
         
         [data-theme="dark"] {
@@ -300,15 +293,17 @@ include_once '../../components/admin_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
+            --primary: #34D399;
+            --primary-dark: #059669;
+            --primary-light: #6EE7B7;
+            --primary-bg: #1A3A2A;
+            --primary-gradient: linear-gradient(135deg, #059669, #047857);
+            --primary-gradient-hover: linear-gradient(135deg, #047857, #065F46);
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --shadow-xl: 0 20px 40px rgba(0,0,0,0.5);
-            --table-hover: #1E293B;
+            --table-hover: #1A3A2A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -358,7 +353,7 @@ include_once '../../components/admin_sidebar.php';
         
         .top-nav .search-wrapper:focus-within {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
         }
         
         .top-nav .search-wrapper input {
@@ -506,7 +501,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER - BLUE THEME
+           PAGE HEADER - GREEN THEME
            ================================================================ */
         .page-header {
             background: var(--primary-gradient);
@@ -518,7 +513,7 @@ include_once '../../components/admin_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 8px 32px rgba(5, 150, 105, 0.25);
             position: relative;
             overflow: hidden;
         }
@@ -637,7 +632,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           BILL SUMMARY CARDS
+           BILL SUMMARY CARDS - GREEN THEME
            ================================================================ */
         .stats-grid {
             display: grid;
@@ -704,19 +699,19 @@ include_once '../../components/admin_sidebar.php';
             transform: scale(1.05);
         }
         
-        .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-icon.green { background: #ECFDF5; color: #059669; }
+        .stat-icon.green { background: var(--primary-bg); color: var(--primary); }
         .stat-icon.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
         .stat-icon.teal { background: #ECFDF5; color: #0D9488; }
+        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
+        .stat-icon.blue { background: #EFF6FF; color: #0B5ED7; }
+        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
         
-        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
         [data-theme="dark"] .stat-icon.green { background: #1A3A2A; color: #34D399; }
         [data-theme="dark"] .stat-icon.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
         [data-theme="dark"] .stat-icon.teal { background: #1A3A2A; color: #2DD4BF; }
+        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
+        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
+        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
         
         .stat-label {
             font-size: 0.6rem;
@@ -735,12 +730,12 @@ include_once '../../components/admin_sidebar.php';
             line-height: 1.2;
         }
         
-        .stat-value.blue-text { color: var(--primary); }
-        .stat-value.green-text { color: #059669; }
+        .stat-value.green-text { color: var(--primary); }
         .stat-value.orange-text { color: #F59E0B; }
-        .stat-value.purple-text { color: #7C3AED; }
-        .stat-value.red-text { color: #DC2626; }
         .stat-value.teal-text { color: #0D9488; }
+        .stat-value.red-text { color: #DC2626; }
+        .stat-value.blue-text { color: #0B5ED7; }
+        .stat-value.purple-text { color: #7C3AED; }
         
         /* ================================================================
            BADGES
@@ -868,7 +863,7 @@ include_once '../../components/admin_sidebar.php';
         
         .card-header {
             padding: 16px 24px;
-            background: var(--bg-body);
+            background: var(--primary-gradient);
             border-bottom: 2px solid var(--border-color);
             display: flex;
             justify-content: space-between;
@@ -877,21 +872,22 @@ include_once '../../components/admin_sidebar.php';
             gap: 8px;
         }
         
-        [data-theme="dark"] .card-header {
-            background: #0F172A;
-        }
-        
-        .card-title {
+        .card-header .card-title {
             font-size: 0.9rem;
             font-weight: 600;
-            color: var(--text-primary);
+            color: white;
             margin: 0;
             display: flex;
             align-items: center;
         }
         
-        .card-title i {
+        .card-header .card-title i {
             margin-right: 8px;
+            color: rgba(255,255,255,0.8);
+        }
+        
+        .card-header .text-white\/70 {
+            color: rgba(255,255,255,0.7) !important;
         }
         
         /* ================================================================
@@ -916,7 +912,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           BUTTONS
+           BUTTONS - GREEN THEME
            ================================================================ */
         .btn {
             display: inline-flex;
@@ -940,7 +936,7 @@ include_once '../../components/admin_sidebar.php';
         .btn-primary:hover {
             background: var(--primary-gradient-hover);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
         .btn-sm {
@@ -1000,13 +996,13 @@ include_once '../../components/admin_sidebar.php';
             .card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
             .detail-card { box-shadow: none !important; border: 1px solid #ddd; }
             .data-table thead th {
-                background: #0B5ED7 !important;
+                background: #059669 !important;
                 color: white !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
             .page-header {
-                background: #0B5ED7 !important;
+                background: #059669 !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
@@ -1119,7 +1115,7 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- Page Header - GREEN THEME -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1142,16 +1138,12 @@ include_once '../../components/admin_sidebar.php';
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="visits.php?branch_id=<?= $branch_id ?>" class="btn-outline-light">
+            <a href="bills.php?branch=<?= $branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
-            <?php if (($bill['status'] ?? '') === 'pending' || ($bill['status'] ?? '') === 'partial'): ?>
-                <a href="add_payment.php?bill_id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn-outline-light" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);">
-                    <i class="fas fa-hand-holding-usd"></i> Add Payment
-                </a>
-            <?php endif; ?>
+            <!-- Add Payment Button Imetolewa -->
             <?php if (($bill['status'] ?? '') === 'paid'): ?>
-                <a href="print_receipt.php?bill_id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn-outline-light" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);" target="_blank">
+                <a href="print_receipt.php?bill_id=<?= $bill_id ?>&branch=<?= $branch_id ?>" class="btn-outline-light" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);" target="_blank">
                     <i class="fas fa-print"></i> Print Receipt
                 </a>
             <?php endif; ?>
@@ -1159,18 +1151,17 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- BILL SUMMARY CARDS -->
+    <!-- BILL SUMMARY CARDS - GREEN THEME -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <div class="stat-card">
-            <div class="stat-icon blue">
+            <div class="stat-icon green">
                 <i class="fas fa-file-invoice"></i>
             </div>
             <div class="stat-content">
                 <p class="stat-label">Total Bill</p>
-                <p class="stat-value blue-text">TSh <?= number_format($total_bill, 0) ?></p>
+                <p class="stat-value green-text">TSh <?= number_format($total_bill, 0) ?></p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
         
         <div class="stat-card">
@@ -1181,18 +1172,16 @@ include_once '../../components/admin_sidebar.php';
                 <p class="stat-label">Discount</p>
                 <p class="stat-value orange-text">TSh <?= number_format($discount_amount, 0) ?></p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon green">
+            <div class="stat-icon teal">
                 <i class="fas fa-check-circle"></i>
             </div>
             <div class="stat-content">
                 <p class="stat-label">Paid</p>
-                <p class="stat-value green-text">TSh <?= number_format($paid_amount, 0) ?></p>
+                <p class="stat-value teal-text">TSh <?= number_format($paid_amount, 0) ?></p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
         
         <div class="stat-card">
@@ -1204,9 +1193,8 @@ include_once '../../components/admin_sidebar.php';
                 <p class="stat-value <?= $balance > 0 ? 'red-text' : 'green-text' ?>">
                     TSh <?= number_format($balance, 0) ?>
                 </p>
-                <p class="stat-sub"><?= $balance > 0 ? 'Pending payment' : 'Fully paid' ?></p>
+                <p class="text-xs text-gray-400"><?= $balance > 0 ? 'Pending payment' : 'Fully paid' ?></p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
     </div>
 
@@ -1257,12 +1245,12 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list text-blue-600"></i>
+                <i class="fas fa-list"></i>
                 Bill Items
-                <span class="text-xs text-gray-500 ml-2">(<?= count($bill_items) ?> items)</span>
+                <span class="text-white/70 ml-2 text-xs">(<?= count($bill_items) ?> items)</span>
             </h3>
             <div class="flex gap-2">
-                <span class="text-xs text-gray-400">
+                <span class="text-white/70 text-xs">
                     <i class="far fa-clock"></i> Subtotal: TSh <?= number_format($subtotal, 0) ?>
                 </span>
             </div>
@@ -1304,7 +1292,7 @@ include_once '../../components/admin_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="view_bill_item.php?id=<?= $item['id'] ?>&branch_id=<?= $branch_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_bill_item.php?id=<?= $item['id'] ?>&branch=<?= $branch_id ?>" class="text-green-600 text-xs hover:underline">View</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1327,11 +1315,11 @@ include_once '../../components/admin_sidebar.php';
         <div class="card animate-fade-in-up" style="animation-delay:0.15s;">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-hand-holding-usd text-teal-600"></i>
+                    <i class="fas fa-hand-holding-usd"></i>
                     Payments (<?= count($payments) ?>)
                 </h3>
                 <div class="flex gap-2">
-                    <span class="text-xs text-gray-400">
+                    <span class="text-white/70 text-xs">
                         Total Paid: TSh <?= number_format($paid_amount, 0) ?>
                     </span>
                 </div>
@@ -1363,7 +1351,7 @@ include_once '../../components/admin_sidebar.php';
                                 <td><?= htmlspecialchars($payment['received_by_name'] ?? 'N/A') ?></td>
                                 <td class="text-xs"><?= date('M d, Y h:i A', strtotime($payment['received_at'] ?? 'now')) ?></td>
                                 <td>
-                                    <a href="view_receipt.php?id=<?= $payment['id'] ?>&branch_id=<?= $branch_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_receipt.php?id=<?= $payment['id'] ?>&branch=<?= $branch_id ?>" class="text-green-600 text-xs hover:underline">View</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1374,36 +1362,32 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ACTION BUTTONS -->
+    <!-- ACTION BUTTONS - GREEN THEME (Add Payment Imetolewa) -->
     <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.2s;">
         <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
             <i class="fas fa-bolt text-primary mr-2"></i> Quick Actions
         </h3>
         <div class="flex flex-wrap gap-3">
-            <?php if (($bill['status'] ?? '') === 'pending' || ($bill['status'] ?? '') === 'partial'): ?>
-                <a href="add_payment.php?bill_id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn btn-success">
-                    <i class="fas fa-hand-holding-usd"></i> Add Payment
-                </a>
-            <?php endif; ?>
+            <!-- Add Payment Button Imetolewa Kabisa -->
             
             <?php if (($bill['status'] ?? '') === 'pending'): ?>
-                <a href="edit_bill.php?id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn btn-primary">
+                <a href="edit_bill.php?id=<?= $bill_id ?>&branch=<?= $branch_id ?>" class="btn btn-primary">
                     <i class="fas fa-edit"></i> Edit Bill
                 </a>
             <?php endif; ?>
             
             <?php if (($bill['status'] ?? '') === 'paid'): ?>
-                <a href="print_receipt.php?bill_id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn btn-primary" target="_blank">
+                <a href="print_receipt.php?bill_id=<?= $bill_id ?>&branch=<?= $branch_id ?>" class="btn btn-primary" target="_blank">
                     <i class="fas fa-print"></i> Print Receipt
                 </a>
-                <a href="download_receipt.php?bill_id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn btn-primary" style="background: linear-gradient(135deg, #7C3AED, #6D28D9); border-color: #7C3AED;">
+                <a href="download_receipt.php?bill_id=<?= $bill_id ?>&branch=<?= $branch_id ?>" class="btn btn-primary" style="background: linear-gradient(135deg, #7C3AED, #6D28D9); border-color: #7C3AED;">
                     <i class="fas fa-download"></i> Download PDF
                 </a>
             <?php endif; ?>
             
-            <a href="visits.php?branch_id=<?= $branch_id ?>" class="btn btn-outline">
-                <i class="fas fa-arrow-left"></i> Back to Visits
+            <a href="bills.php?branch=<?= $branch_id ?>" class="btn btn-outline">
+                <i class="fas fa-arrow-left"></i> Back to Bills
             </a>
         </div>
     </div>
@@ -1490,7 +1474,7 @@ include_once '../../components/admin_sidebar.php';
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch_id=<?= $branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + <?= $branch_id ?>;
         }
     }
     
@@ -1504,7 +1488,7 @@ include_once '../../components/admin_sidebar.php';
     // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
-        url.searchParams.set('branch_id', branchId);
+        url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
 
@@ -1528,12 +1512,14 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c💰 Braick Dispensary - View Bill (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💰 Braick Dispensary - View Bill (GREEN THEME)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c💰 Total: TSh <?= number_format($total_bill, 0) ?>', 'font-size:13px; color:#0D9488;');
     console.log('%c💳 Paid: TSh <?= number_format($paid_amount, 0) ?> | Balance: TSh <?= number_format($balance, 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Items: <?= count($bill_items) ?>', 'font-size:13px; color:#F59E0B;');
+    console.log('%c🟢 GREEN THEME Applied', 'font-size:13px; color:#059669;');
+    console.log('%c❌ Add Payment buttons removed from Quick Actions and Header', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

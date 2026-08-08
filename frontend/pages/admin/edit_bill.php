@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_bill.php
 // ADMIN - EDIT BILL
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - GREEN THEME
 // ================================================================
 
 session_start();
@@ -27,48 +27,44 @@ $db = Database::getInstance()->getConnection();
 // GET PARAMETERS
 // ================================================================
 $bill_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : ($_SESSION['branch_id'] ?? 1);
+$selected_branch_id = $_GET['branch'] ?? $_GET['branch_id'] ?? 'all';
 
 if ($bill_id <= 0) {
-    header('Location: bills.php?branch_id=' . $branch_id . '&error=invalid_id');
+    header('Location: bills.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
     exit;
 }
 
 // ================================================================
 // FETCH BILL DETAILS
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        pb.*,
-        p.id as patient_id,
-        p.patient_id as patient_number,
-        p.full_name as patient_name,
-        p.phone as patient_phone,
-        p.email as patient_email,
-        u.full_name as created_by_name,
-        b.name as branch_name,
-        v.visit_number,
-        v.visit_date,
-        v.status as visit_status
-    FROM patient_bills pb
-    LEFT JOIN patients p ON pb.patient_id = p.id
-    LEFT JOIN users u ON pb.created_by = u.id
-    LEFT JOIN branches b ON pb.branch_id = b.id
-    LEFT JOIN visits v ON pb.visit_id = v.id
-    WHERE pb.id = ?
-");
-$stmt->execute([$bill_id]);
-$bill = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            pb.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            p.phone as patient_phone,
+            u.full_name as created_by_name,
+            b.name as branch_name,
+            (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id AND status != 'cancelled') as items_count
+        FROM patient_bills pb
+        LEFT JOIN patients p ON pb.patient_id = p.id
+        LEFT JOIN users u ON pb.created_by = u.id
+        LEFT JOIN branches b ON pb.branch_id = b.id
+        WHERE pb.id = ?
+    ");
+    $stmt->execute([$bill_id]);
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if (!$bill) {
-    header('Location: bills.php?branch_id=' . $branch_id . '&error=notfound');
+    if (!$bill) {
+        header('Location: bills.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
+        exit;
+    }
+} catch (Exception $e) {
+    error_log("Error fetching bill: " . $e->getMessage());
+    header('Location: bills.php?branch=' . urlencode($selected_branch_id) . '&error=database_error');
     exit;
 }
-
-// ================================================================
-// CHECK IF BILL CAN BE EDITED
-// ================================================================
-$can_edit = ($bill['status'] ?? '') === 'pending';
 
 // ================================================================
 // FETCH BILL ITEMS
@@ -78,10 +74,10 @@ try {
     $stmt = $db->prepare("
         SELECT 
             bi.*,
-            (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = bi.reference_id) as item_count
+            (SELECT full_name FROM users WHERE id = bi.reference_id) as referenced_by_name
         FROM bill_items bi
         WHERE bi.bill_id = ?
-        ORDER BY bi.created_at DESC
+        ORDER BY bi.created_at ASC
     ");
     $stmt->execute([$bill_id]);
     $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -90,32 +86,17 @@ try {
 }
 
 // ================================================================
-// FETCH PAYMENTS
+// GET ITEM TYPES
 // ================================================================
-$payments = [];
-try {
-    $stmt = $db->prepare("
-        SELECT 
-            p.*,
-            u.full_name as received_by_name
-        FROM payments p
-        LEFT JOIN users u ON p.received_by = u.id
-        WHERE p.bill_id = ?
-        ORDER BY p.received_at DESC
-    ");
-    $stmt->execute([$bill_id]);
-    $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $payments = [];
-}
-
-// ================================================================
-// CALCULATE SUMMARY
-// ================================================================
-$total_bill = $bill['total_amount'] ?? 0;
-$paid_amount = $bill['paid_amount'] ?? 0;
-$discount_amount = $bill['discount_amount'] ?? 0;
-$balance = $total_bill - $paid_amount - $discount_amount;
+$item_types = [
+    'registration' => 'Registration Fee',
+    'consultation' => 'Consultation Fee',
+    'lab_test' => 'Lab Test',
+    'medication' => 'Medication',
+    'procedure' => 'Procedure',
+    'tool' => 'Tool/Supply',
+    'other' => 'Other'
+];
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -129,67 +110,319 @@ try {
 }
 
 // ================================================================
+// PROCESS FORM SUBMISSION
+// ================================================================
+$message = '';
+$message_type = '';
+$update_success = false;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? '';
+    
+    // Update bill details
+    if ($action === 'update_bill') {
+        $discount_amount = isset($_POST['discount_amount']) ? floatval(str_replace(',', '', $_POST['discount_amount'])) : 0;
+        $status = $_POST['status'] ?? 'pending';
+        $notes = trim($_POST['notes'] ?? '');
+        
+        try {
+            $db->beginTransaction();
+            
+            // Calculate new totals
+            $subtotal = 0;
+            foreach ($bill_items as $item) {
+                if ($item['status'] !== 'cancelled') {
+                    $subtotal += (float)$item['total_price'];
+                }
+            }
+            
+            $grand_total = $subtotal - $discount_amount;
+            if ($grand_total < 0) $grand_total = 0;
+            
+            $paid_amount = (float)$bill['paid_amount'];
+            $balance = $grand_total - $paid_amount;
+            if ($balance < 0) $balance = 0;
+            
+            // Update bill
+            $stmt = $db->prepare("
+                UPDATE patient_bills 
+                SET 
+                    discount_amount = ?,
+                    discount_percent = ?,
+                    subtotal = ?,
+                    total_amount = ?,
+                    balance = ?,
+                    status = ?,
+                    notes = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $discount_amount,
+                0,
+                $subtotal,
+                $grand_total,
+                $balance,
+                $status,
+                $notes,
+                $bill_id
+            ]);
+            
+            $db->commit();
+            
+            $update_success = true;
+            $message = "✅ Bill updated successfully!";
+            $message_type = 'success';
+            
+            // Refresh bill data
+            $stmt = $db->prepare("
+                SELECT 
+                    pb.*,
+                    p.full_name as patient_name,
+                    p.patient_id as patient_code,
+                    p.phone as patient_phone,
+                    u.full_name as created_by_name,
+                    b.name as branch_name
+                FROM patient_bills pb
+                LEFT JOIN patients p ON pb.patient_id = p.id
+                LEFT JOIN users u ON pb.created_by = u.id
+                LEFT JOIN branches b ON pb.branch_id = b.id
+                WHERE pb.id = ?
+            ");
+            $stmt->execute([$bill_id]);
+            $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+        } catch (Exception $e) {
+            $db->rollBack();
+            $message = "❌ Error: " . $e->getMessage();
+            $message_type = 'error';
+            error_log("Update bill error: " . $e->getMessage());
+        }
+    }
+    
+    // Add item to bill
+    if ($action === 'add_item') {
+        $item_type = $_POST['item_type'] ?? 'other';
+        $item_name = trim($_POST['item_name'] ?? '');
+        $quantity = isset($_POST['quantity']) ? (int)$_POST['quantity'] : 1;
+        $unit_price = isset($_POST['unit_price']) ? floatval(str_replace(',', '', $_POST['unit_price'])) : 0;
+        $description = trim($_POST['description'] ?? '');
+        $service_type = trim($_POST['service_type'] ?? '');
+        $department = trim($_POST['department'] ?? '');
+        
+        if (empty($item_name)) {
+            $message = "❌ Item name is required";
+            $message_type = 'error';
+        } elseif ($quantity <= 0) {
+            $message = "❌ Quantity must be greater than 0";
+            $message_type = 'error';
+        } elseif ($unit_price < 0) {
+            $message = "❌ Unit price cannot be negative";
+            $message_type = 'error';
+        } else {
+            try {
+                $db->beginTransaction();
+                
+                $total_price = $quantity * $unit_price;
+                
+                $stmt = $db->prepare("
+                    INSERT INTO bill_items (
+                        bill_id, branch_id, item_type, item_name,
+                        quantity, unit_price, total_price,
+                        payment_status, is_paid, status,
+                        description, department, service_type,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, 'pending', ?, ?, ?, NOW())
+                ");
+                $stmt->execute([
+                    $bill_id,
+                    $selected_branch_id,
+                    $item_type,
+                    $item_name,
+                    $quantity,
+                    $unit_price,
+                    $total_price,
+                    $description,
+                    $department,
+                    $service_type
+                ]);
+                
+                // Update bill totals
+                $stmt = $db->prepare("
+                    UPDATE patient_bills 
+                    SET subtotal = subtotal + ?,
+                        total_amount = total_amount + ?,
+                        balance = balance + ?,
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt->execute([$total_price, $total_price, $total_price, $bill_id]);
+                
+                $db->commit();
+                
+                $message = "✅ Item added successfully!";
+                $message_type = 'success';
+                
+                // Refresh data
+                $stmt = $db->prepare("
+                    SELECT 
+                        pb.*,
+                        p.full_name as patient_name,
+                        p.patient_id as patient_code,
+                        p.phone as patient_phone,
+                        u.full_name as created_by_name,
+                        b.name as branch_name
+                    FROM patient_bills pb
+                    LEFT JOIN patients p ON pb.patient_id = p.id
+                    LEFT JOIN users u ON pb.created_by = u.id
+                    LEFT JOIN branches b ON pb.branch_id = b.id
+                    WHERE pb.id = ?
+                ");
+                $stmt->execute([$bill_id]);
+                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                // Refresh items
+                $stmt = $db->prepare("
+                    SELECT * FROM bill_items WHERE bill_id = ? ORDER BY created_at ASC
+                ");
+                $stmt->execute([$bill_id]);
+                $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+            } catch (Exception $e) {
+                $db->rollBack();
+                $message = "❌ Error adding item: " . $e->getMessage();
+                $message_type = 'error';
+                error_log("Add item error: " . $e->getMessage());
+            }
+        }
+    }
+    
+    // Delete item from bill
+    if ($action === 'delete_item') {
+        $item_id = isset($_POST['item_id']) ? (int)$_POST['item_id'] : 0;
+        
+        if ($item_id <= 0) {
+            $message = "❌ Invalid item";
+            $message_type = 'error';
+        } else {
+            try {
+                $db->beginTransaction();
+                
+                // Get item total
+                $stmt = $db->prepare("SELECT total_price FROM bill_items WHERE id = ? AND bill_id = ?");
+                $stmt->execute([$item_id, $bill_id]);
+                $item = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($item) {
+                    // Delete item
+                    $stmt = $db->prepare("DELETE FROM bill_items WHERE id = ? AND bill_id = ?");
+                    $stmt->execute([$item_id, $bill_id]);
+                    
+                    // Update bill totals
+                    $stmt = $db->prepare("
+                        UPDATE patient_bills 
+                        SET subtotal = subtotal - ?,
+                            total_amount = total_amount - ?,
+                            balance = balance - ?,
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$item['total_price'], $item['total_price'], $item['total_price'], $bill_id]);
+                }
+                
+                $db->commit();
+                
+                $message = "✅ Item deleted successfully!";
+                $message_type = 'success';
+                
+                // Refresh data
+                $stmt = $db->prepare("
+                    SELECT 
+                        pb.*,
+                        p.full_name as patient_name,
+                        p.patient_id as patient_code,
+                        p.phone as patient_phone,
+                        u.full_name as created_by_name,
+                        b.name as branch_name
+                    FROM patient_bills pb
+                    LEFT JOIN patients p ON pb.patient_id = p.id
+                    LEFT JOIN users u ON pb.created_by = u.id
+                    LEFT JOIN branches b ON pb.branch_id = b.id
+                    WHERE pb.id = ?
+                ");
+                $stmt->execute([$bill_id]);
+                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                // Refresh items
+                $stmt = $db->prepare("
+                    SELECT * FROM bill_items WHERE bill_id = ? ORDER BY created_at ASC
+                ");
+                $stmt->execute([$bill_id]);
+                $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+            } catch (Exception $e) {
+                $db->rollBack();
+                $message = "❌ Error deleting item: " . $e->getMessage();
+                $message_type = 'error';
+                error_log("Delete item error: " . $e->getMessage());
+            }
+        }
+    }
+}
+
+// ================================================================
 // STATUS BADGE CLASS
 // ================================================================
 function getStatusBadge($status) {
-    $status = $status ?? 'pending';
-    
     $classes = [
-        'pending' => 'warning',
-        'partial' => 'warning',
-        'paid' => 'success',
-        'cancelled' => 'danger',
         'active' => 'success',
         'inactive' => 'danger',
-        'dispensed' => 'success',
-        'confirmed' => 'info',
-        'scheduled' => 'info',
-        'completed' => 'success',
-        'online' => 'success',
-        'offline' => 'danger',
-        'new' => 'info',
-        'follow-up' => 'warning',
-        'emergency' => 'danger',
-        'unknown' => 'secondary'
+        'pending' => 'warning',
+        'paid' => 'success',
+        'partial' => 'warning',
+        'cancelled' => 'danger',
+        'completed' => 'success'
     ];
     return $classes[$status] ?? 'secondary';
 }
 
 function getStatusIcon($status) {
-    $status = $status ?? 'pending';
-    
     $icons = [
-        'pending' => 'fa-clock',
-        'partial' => 'fa-clock',
-        'paid' => 'fa-check-circle',
-        'cancelled' => 'fa-times-circle',
         'active' => 'fa-check-circle',
         'inactive' => 'fa-times-circle',
-        'dispensed' => 'fa-check-circle',
-        'confirmed' => 'fa-check-double',
-        'scheduled' => 'fa-calendar-check',
-        'completed' => 'fa-check-circle',
-        'online' => 'fa-circle',
-        'offline' => 'fa-circle',
-        'new' => 'fa-user-plus',
-        'follow-up' => 'fa-user-check',
-        'emergency' => 'fa-ambulance',
-        'unknown' => 'fa-circle'
+        'pending' => 'fa-clock',
+        'paid' => 'fa-check-circle',
+        'partial' => 'fa-clock',
+        'cancelled' => 'fa-times-circle',
+        'completed' => 'fa-check-circle'
     ];
     return $icons[$status] ?? 'fa-circle';
 }
 
 function getItemTypeColor($type) {
     $colors = [
-        'registration' => 'text-blue-600',
-        'consultation' => 'text-purple-600',
-        'lab_test' => 'text-cyan-600',
-        'medication' => 'text-green-600',
-        'procedure' => 'text-red-600',
-        'tool' => 'text-orange-600',
-        'other' => 'text-gray-600'
+        'registration' => 'blue',
+        'consultation' => 'purple',
+        'lab_test' => 'orange',
+        'medication' => 'green',
+        'procedure' => 'red',
+        'tool' => 'teal',
+        'other' => 'gray'
     ];
-    return $colors[$type] ?? 'text-gray-600';
+    return $colors[$type] ?? 'gray';
+}
+
+function getItemTypeLabel($type) {
+    $labels = [
+        'registration' => 'Registration',
+        'consultation' => 'Consultation',
+        'lab_test' => 'Lab Test',
+        'medication' => 'Medication',
+        'procedure' => 'Procedure',
+        'tool' => 'Tool/Supply',
+        'other' => 'Other'
+    ];
+    return $labels[$type] ?? ucfirst($type);
 }
 
 // ================================================================
@@ -223,15 +456,15 @@ include_once '../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BLUE THEME
+           ROOT VARIABLES - GREEN THEME
            ================================================================ */
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-hover: linear-gradient(135deg, #0A4CA8, #083C8A);
+            --primary: #059669;
+            --primary-dark: #047857;
+            --primary-light: #34D399;
+            --primary-bg: #D1FAE5;
+            --primary-gradient: linear-gradient(135deg, #059669, #047857);
+            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
             
             --success: #059669;
             --success-dark: #047857;
@@ -249,6 +482,12 @@ include_once '../../components/admin_sidebar.php';
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
             
+            --teal: #0D9488;
+            --teal-bg: #ECFDF5;
+            
+            --orange: #F59E0B;
+            --orange-bg: #FFFBEB;
+            
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -265,17 +504,16 @@ include_once '../../components/admin_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.12);
             
-            --bg-body: #F0F4F8;
+            --bg-body: #F0FDF4;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
-            --border-color: #E2E8F0;
+            --border-color: #D1FAE5;
             --radius: 12px;
             --radius-lg: 18px;
-            --table-hover: #F8FAFC;
+            --table-hover: #ECFDF5;
         }
         
         [data-theme="dark"] {
@@ -285,15 +523,16 @@ include_once '../../components/admin_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
+            --primary: #34D399;
+            --primary-dark: #059669;
+            --primary-light: #6EE7B7;
+            --primary-bg: #1A3A2A;
+            --primary-gradient: linear-gradient(135deg, #059669, #047857);
+            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.5);
-            --table-hover: #1E293B;
+            --table-hover: #1A3A2A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -343,7 +582,7 @@ include_once '../../components/admin_sidebar.php';
         
         .top-nav .search-wrapper:focus-within {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
         }
         
         .top-nav .search-wrapper input {
@@ -491,10 +730,10 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER - BLUE THEME
+           PAGE HEADER - GREEN THEME
            ================================================================ */
         .page-header {
-            background: var(--primary-gradient);
+            background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
             padding: 28px 36px;
             margin-bottom: 28px;
@@ -503,7 +742,7 @@ include_once '../../components/admin_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 8px 32px rgba(4, 120, 87, 0.35);
             position: relative;
             overflow: hidden;
         }
@@ -622,162 +861,127 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           ALERT - CANNOT EDIT
+           FORM CARD - GREEN THEME
            ================================================================ */
-        .alert {
-            padding: 14px 18px;
-            border-radius: var(--radius);
-            margin-bottom: 20px;
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            border: 2px solid;
-        }
-        
-        .alert-warning {
-            background: #FEF3C7;
-            border-color: #FBBF24;
-            color: #92400E;
-        }
-        
-        .alert-info {
-            background: #DBEAFE;
-            border-color: #60A5FA;
-            color: #1E40AF;
-        }
-        
-        .alert i {
-            font-size: 1.2rem;
-            margin-top: 2px;
-            flex-shrink: 0;
-        }
-        
-        .alert .alert-content {
-            flex: 1;
-        }
-        
-        .alert .alert-title {
-            font-weight: 600;
-            margin-bottom: 2px;
-        }
-        
-        [data-theme="dark"] .alert-warning {
-            background: #3D2E0A;
-            border-color: #D97706;
-            color: #FBBF24;
-        }
-        
-        [data-theme="dark"] .alert-info {
-            background: #1A2A4A;
-            border-color: #2563EB;
-            color: #60A5FA;
-        }
-        
-        /* ================================================================
-           BILL SUMMARY CARDS
-           ================================================================ */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        
-        .stat-card {
+        .form-card {
             background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 16px 18px;
+            border-radius: var(--radius-lg);
+            padding: 32px 36px;
             border: 2px solid var(--border-color);
-            display: flex;
-            align-items: center;
-            gap: 12px;
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            text-decoration: none;
-            color: inherit;
-            position: relative;
-            overflow: hidden;
+            max-width: 1200px;
+            margin: 0 auto;
+            box-shadow: var(--shadow-md);
         }
         
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--primary-gradient);
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-        
-        .stat-card:hover {
+        .form-card:hover {
             border-color: var(--primary);
-            transform: translateY(-4px);
             box-shadow: var(--shadow-lg);
         }
         
-        .stat-card:hover::before {
-            opacity: 1;
+        .form-card .form-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 28px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid var(--border-color);
         }
         
-        .stat-card .stat-content {
-            flex: 1;
-        }
-        
-        .stat-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
+        .form-card .form-header .form-icon {
+            width: 52px;
+            height: 52px;
+            background: var(--primary-gradient);
+            border-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            color: white;
+            font-size: 1.4rem;
             flex-shrink: 0;
-            transition: all 0.3s ease;
+            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.25);
         }
         
-        .stat-card:hover .stat-icon {
-            transform: scale(1.05);
-        }
-        
-        .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-icon.green { background: #ECFDF5; color: #059669; }
-        .stat-icon.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
-        .stat-icon.teal { background: #ECFDF5; color: #0D9488; }
-        
-        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .stat-icon.green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .stat-icon.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .stat-icon.teal { background: #1A3A2A; color: #2DD4BF; }
-        
-        .stat-label {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 0;
-        }
-        
-        .stat-value {
+        .form-card .form-header .form-title {
             font-size: 1.2rem;
-            font-weight: 700;
+            font-weight: 600;
             color: var(--text-primary);
-            margin: 0;
-            line-height: 1.2;
         }
         
-        .stat-value.blue-text { color: var(--primary); }
-        .stat-value.green-text { color: #059669; }
-        .stat-value.orange-text { color: #F59E0B; }
-        .stat-value.purple-text { color: #7C3AED; }
-        .stat-value.red-text { color: #DC2626; }
-        .stat-value.teal-text { color: #0D9488; }
+        .form-card .form-header .form-subtitle {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        
+        /* ================================================================
+           FORM ELEMENTS
+           ================================================================ */
+        .form-label {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+            display: block;
+        }
+        
+        .form-label .required { color: var(--danger); margin-left: 2px; }
+        .form-label .label-icon { margin-right: 4px; color: var(--primary); }
+        .form-label .label-badge {
+            font-weight: 400;
+            font-size: 0.6rem;
+            padding: 1px 10px;
+            border-radius: 12px;
+            background: var(--gray-100);
+            color: var(--text-secondary);
+            margin-left: 6px;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 10px 16px;
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            outline: none;
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+        
+        .form-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
+        }
+        
+        .form-control::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.5;
+        }
+        
+        .form-control:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        select.form-control {
+            appearance: auto;
+            cursor: pointer;
+        }
+        
+        textarea.form-control {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .form-row { margin-bottom: 20px; }
+        .form-row:last-child { margin-bottom: 0; }
         
         /* ================================================================
            BADGES
@@ -786,9 +990,9 @@ include_once '../../components/admin_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 4px 14px;
+            padding: 2px 10px;
             border-radius: 20px;
-            font-size: 0.7rem;
+            font-size: 0.6rem;
             font-weight: 600;
             color: white;
             letter-spacing: 0.02em;
@@ -800,140 +1004,75 @@ include_once '../../components/admin_sidebar.php';
         .badge-info { background: #0B5ED7; }
         .badge-secondary { background: #64748B; }
         .badge-purple { background: #7C3AED; }
+        .badge-teal { background: #0D9488; }
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
-        /* ================================================================
-           FORM CARD
-           ================================================================ */
-        .form-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s ease;
-            margin-bottom: 24px;
-        }
-        
-        .form-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .form-card-header {
-            padding: 16px 24px;
-            background: var(--primary-gradient);
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            display: flex;
-            justify-content: space-between;
+        .item-type-badge {
+            display: inline-flex;
             align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .form-card-header .form-title {
-            color: white;
-            font-size: 0.95rem;
+            gap: 4px;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
             font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
         }
         
-        .form-card-header .form-title i {
-            color: rgba(255,255,255,0.8);
-        }
+        .item-type-badge.blue { background: #EFF6FF; color: #0B5ED7; }
+        .item-type-badge.purple { background: #F5F3FF; color: #7C3AED; }
+        .item-type-badge.orange { background: #FFFBEB; color: #F59E0B; }
+        .item-type-badge.green { background: #D1FAE5; color: #059669; }
+        .item-type-badge.red { background: #FEE2E2; color: #DC2626; }
+        .item-type-badge.teal { background: #ECFDF5; color: #0D9488; }
+        .item-type-badge.gray { background: #F1F5F9; color: #64748B; }
         
-        .form-card-body {
-            padding: 24px 28px;
-        }
-        
-        .form-group {
-            margin-bottom: 18px;
-        }
-        
-        .form-group label {
-            display: block;
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 4px;
-        }
-        
-        .form-group .form-control {
-            width: 100%;
-            padding: 10px 14px;
-            font-size: 0.9rem;
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: all 0.3s ease;
-            outline: none;
-        }
-        
-        .form-group .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-        }
-        
-        .form-group .form-control::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .form-group .form-control:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-        
-        .form-actions {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-            margin-top: 8px;
-            padding-top: 20px;
-            border-top: 2px solid var(--border-color);
-        }
+        [data-theme="dark"] .item-type-badge.blue { background: #1E3A5F; color: #3B82F6; }
+        [data-theme="dark"] .item-type-badge.purple { background: #2D1B4E; color: #A78BFA; }
+        [data-theme="dark"] .item-type-badge.orange { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .item-type-badge.green { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .item-type-badge.red { background: #3A1A1A; color: #F87171; }
+        [data-theme="dark"] .item-type-badge.teal { background: #0F3D3D; color: #5EEAD4; }
+        [data-theme="dark"] .item-type-badge.gray { background: #334155; color: #94A3B8; }
         
         /* ================================================================
-           BUTTONS
+           BUTTONS - GREEN THEME
            ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
-            border-radius: 8px;
+            gap: 8px;
+            padding: 10px 24px;
+            border-radius: var(--radius);
             font-weight: 600;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             transition: all 0.3s ease;
             cursor: pointer;
             border: none;
             text-decoration: none;
         }
         
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
         .btn-primary {
             background: var(--primary-gradient);
             color: white;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
         }
         
         .btn-primary:hover {
-            background: var(--primary-gradient-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
         }
         
-        .btn-sm {
-            padding: 4px 10px;
-            font-size: 0.65rem;
-            border-radius: 6px;
+        .btn-success {
+            background: var(--success);
+            color: white;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+        }
+        
+        .btn-success:hover {
+            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
         }
         
         .btn-outline {
@@ -943,32 +1082,196 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .btn-outline:hover {
-            background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
         }
         
-        .btn-success {
-            background: #059669;
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: #047857;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
         .btn-danger {
-            background: #DC2626;
+            background: var(--danger);
             color: white;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
         }
         
         .btn-danger:hover {
-            background: #B91C1C;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+            box-shadow: 0 6px 24px rgba(220, 38, 38, 0.35);
         }
+        
+        .btn-sm {
+            padding: 5px 14px;
+            font-size: 0.75rem;
+            border-radius: 8px;
+        }
+        
+        .form-actions {
+            display: flex;
+            gap: 12px;
+            padding-top: 20px;
+            margin-top: 20px;
+            border-top: 2px solid var(--border-color);
+            flex-wrap: wrap;
+        }
+        
+        /* ================================================================
+           DATA TABLE - GREEN THEME
+           ================================================================ */
+        .table-container {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 2px solid var(--border-color);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 24px;
+        }
+        
+        .table-container .card-header {
+            padding: 14px 20px;
+            background: var(--primary-gradient-strong);
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .table-container .card-header .card-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: white;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .table-container .card-header .card-title i {
+            color: rgba(255,255,255,0.8);
+        }
+        
+        .table-container .card-header .card-badge {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.78rem;
+        }
+        
+        .data-table thead th {
+            background: var(--bg-body);
+            color: var(--text-secondary);
+            font-weight: 700;
+            padding: 10px 14px;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 2px solid var(--border-color);
+            text-align: left;
+        }
+        
+        [data-theme="dark"] .data-table thead th {
+            background: #0F172A;
+        }
+        
+        .data-table td {
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        
+        .data-table tbody tr:hover td {
+            background: var(--table-hover);
+        }
+        
+        .data-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .data-table tbody tr:nth-child(even) {
+            background: var(--gray-50);
+        }
+        
+        [data-theme="dark"] .data-table tbody tr:nth-child(even) {
+            background: #1A3A2A;
+        }
+        
+        /* ================================================================
+           ALERT
+           ================================================================ */
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border: 2px solid transparent;
+        }
+        
+        .alert-success {
+            background: #D1FAE5;
+            color: #065F46;
+            border-color: #34D399;
+        }
+        
+        .alert-danger {
+            background: #FEE2E2;
+            color: #991B1B;
+            border-color: #F87171;
+        }
+        
+        .alert i {
+            font-size: 1.1rem;
+        }
+        
+        [data-theme="dark"] .alert-success {
+            background: #1A3A2A;
+            color: #34D399;
+            border-color: #059669;
+        }
+        
+        [data-theme="dark"] .alert-danger {
+            background: #3A1A1A;
+            color: #F87171;
+            border-color: #DC2626;
+        }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        }
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
         
         /* ================================================================
            FOOTER
@@ -984,7 +1287,7 @@ include_once '../../components/admin_sidebar.php';
         
         .footer .footer-brand {
             color: var(--primary);
-            font-weight: 500;
+            font-weight: 700;
         }
         
         /* ================================================================
@@ -994,8 +1297,7 @@ include_once '../../components/admin_sidebar.php';
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .form-row { grid-template-columns: 1fr; }
+            .grid-2 { grid-template-columns: 1fr; gap: 14px; }
         }
         
         @media (max-width: 768px) {
@@ -1003,16 +1305,18 @@ include_once '../../components/admin_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .form-card-body { padding: 16px; }
+            .form-card { padding: 16px; }
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; justify-content: center; }
+            .data-table { font-size: 0.65rem; }
+            .data-table thead th, .data-table td { padding: 6px 8px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .data-table { font-size: 0.55rem; }
+            .data-table thead th, .data-table td { padding: 4px 6px; }
         }
         
         /* ================================================================
@@ -1028,13 +1332,25 @@ include_once '../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-        
-        .stat-card:hover .stat-icon {
-            animation: pulse 0.5s ease;
+        /* ================================================================
+           PRINT STYLES
+           ================================================================ */
+        @media print {
+            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
+            .search-wrapper, .page-header .btn-outline-light,
+            .footer, #sidebarToggle { display: none !important; }
+            .main-content { margin: 0; padding: 20px; }
+            .form-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
+            .table-container { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
+            .page-header {
+                background: #059669 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            .page-title, .page-subtitle, .header-badge, .role-badge-display {
+                color: white !important;
+            }
+            .badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         }
     </style>
 </head>
@@ -1060,8 +1376,9 @@ include_once '../../components/admin_sidebar.php';
     
     <div class="flex items-center gap-3">
         <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $branch_id == $b['id'] ? 'selected' : '' ?>>
+                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
                     🏥 <?= htmlspecialchars($b['name']) ?>
                 </option>
             <?php endforeach; ?>
@@ -1091,298 +1408,350 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER - GREEN THEME -->
+    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-edit"></i>
+                <i class="fas fa-file-invoice"></i>
                 Edit Bill
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-store-alt"></i>
-                <strong><?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?></strong>
+                <i class="fas fa-credit-card"></i>
+                <strong><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></strong>
                 <span class="header-badge">
-                    <i class="fas fa-hashtag"></i> <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
+                    <i class="fas fa-<?= isset($bill['status']) && $bill['status'] === 'paid' ? 'check-circle' : 'clock' ?>"></i>
+                    <?= ucfirst($bill['status'] ?? 'Pending') ?>
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-user"></i> <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>
+                    <i class="fas fa-user"></i>
+                    <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>
+                </span>
+                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                    <i class="fas fa-money-bill-wave"></i>
+                    TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="view_bill.php?id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-eye"></i> View Bill
+            <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+                <i class="fas fa-eye"></i> View
             </a>
-            <a href="bills.php?branch_id=<?= $branch_id ?>" class="btn-outline-light">
+            <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
+    <!-- Message -->
+    <?php if ($message): ?>
+        <div class="alert alert-<?= $message_type === 'success' ? 'success' : 'danger' ?>" style="max-width:1200px;margin:0 auto 16px;">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <div><?= $message ?></div>
+        </div>
+    <?php endif; ?>
+
     <!-- ================================================================ -->
-    <!-- BILL SUMMARY CARDS -->
+    <!-- BILL INFORMATION -->
     <!-- ================================================================ -->
-    <div class="stats-grid animate-fade-in-up">
-        <div class="stat-card">
-            <div class="stat-icon blue">
+    <div class="form-card animate-fade-in-up">
+        <div class="form-header">
+            <div class="form-icon">
                 <i class="fas fa-file-invoice"></i>
             </div>
-            <div class="stat-content">
-                <p class="stat-label">Total Bill</p>
-                <p class="stat-value blue-text">TSh <?= number_format($total_bill, 0) ?></p>
+            <div>
+                <h3 class="form-title">Bill Information</h3>
+                <p class="form-subtitle">Update bill details and manage items</p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
-        
-        <div class="stat-card">
-            <div class="stat-icon orange">
-                <i class="fas fa-tags"></i>
-            </div>
-            <div class="stat-content">
-                <p class="stat-label">Discount</p>
-                <p class="stat-value orange-text">TSh <?= number_format($discount_amount, 0) ?></p>
-            </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
-        </div>
-        
-        <div class="stat-card">
-            <div class="stat-icon green">
-                <i class="fas fa-check-circle"></i>
-            </div>
-            <div class="stat-content">
-                <p class="stat-label">Paid</p>
-                <p class="stat-value green-text">TSh <?= number_format($paid_amount, 0) ?></p>
-            </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
-        </div>
-        
-        <div class="stat-card">
-            <div class="stat-icon <?= $balance > 0 ? 'red' : 'green' ?>">
-                <i class="fas <?= $balance > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle' ?>"></i>
-            </div>
-            <div class="stat-content">
-                <p class="stat-label">Balance</p>
-                <p class="stat-value <?= $balance > 0 ? 'red-text' : 'green-text' ?>">
-                    TSh <?= number_format($balance, 0) ?>
-                </p>
-            </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
-        </div>
-    </div>
 
-    <!-- ================================================================ -->
-    <!-- EDIT FORM -->
-    <!-- ================================================================ -->
-    <div class="form-card animate-fade-in-up" style="animation-delay:0.05s;">
-        <div class="form-card-header">
-            <span class="form-title">
-                <i class="fas fa-pen"></i>
-                Edit Bill Information
-            </span>
-            <span class="badge badge-<?= getStatusBadge($bill['status'] ?? 'pending') ?>" style="font-size:0.6rem;padding:2px 12px;">
-                <i class="fas <?= getStatusIcon($bill['status'] ?? 'pending') ?>"></i>
-                <?= ucfirst($bill['status'] ?? 'Pending') ?>
-            </span>
-        </div>
-        <div class="form-card-body">
+        <!-- Bill Details Form -->
+        <form method="POST" action="" id="billForm">
+            <input type="hidden" name="action" value="update_bill">
             
-            <?php if (!$can_edit): ?>
-                <!-- Cannot Edit Alert -->
-                <div class="alert alert-warning">
-                    <i class="fas fa-lock"></i>
-                    <div class="alert-content">
-                        <div class="alert-title">⚠️ Bill Cannot Be Edited</div>
-                        <p>This bill has status <strong>"<?= ucfirst($bill['status'] ?? 'Pending') ?>"</strong> and cannot be modified. 
-                        Only bills with <strong>"Pending"</strong> status can be edited.</p>
+            <div class="grid-2">
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-file-invoice label-icon"></i> Bill Number
+                    </label>
+                    <input type="text" class="form-control" value="<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>" disabled>
+                </div>
+                
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-user label-icon"></i> Patient
+                    </label>
+                    <input type="text" class="form-control" value="<?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?> (<?= htmlspecialchars($bill['patient_code'] ?? 'N/A') ?>)" disabled>
+                </div>
+                
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-store label-icon"></i> Branch
+                    </label>
+                    <input type="text" class="form-control" value="<?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?>" disabled>
+                </div>
+                
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-user-plus label-icon"></i> Created By
+                    </label>
+                    <input type="text" class="form-control" value="<?= htmlspecialchars($bill['created_by_name'] ?? 'N/A') ?>" disabled>
+                </div>
+            </div>
+            
+            <div class="grid-2">
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-money-bill-wave label-icon"></i> Discount Amount
+                        <span class="label-badge">TSh</span>
+                    </label>
+                    <input type="text" name="discount_amount" class="form-control" 
+                           value="<?= number_format($bill['discount_amount'] ?? 0, 0) ?>" 
+                           placeholder="0" oninput="formatAmount(this)">
+                </div>
+                
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-info-circle label-icon"></i> Status <span class="required">*</span>
+                    </label>
+                    <select name="status" class="form-control" required>
+                        <option value="pending" <?= ($bill['status'] ?? 'pending') === 'pending' ? 'selected' : '' ?>>Pending</option>
+                        <option value="partial" <?= ($bill['status'] ?? 'pending') === 'partial' ? 'selected' : '' ?>>Partial</option>
+                        <option value="paid" <?= ($bill['status'] ?? 'pending') === 'paid' ? 'selected' : '' ?>>Paid</option>
+                        <option value="cancelled" <?= ($bill['status'] ?? 'pending') === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-sticky-note label-icon"></i> Notes
+                    <span class="label-badge">Optional</span>
+                </label>
+                <textarea name="notes" class="form-control" rows="2" 
+                          placeholder="Additional notes about this bill..."><?= htmlspecialchars($bill['notes'] ?? '') ?></textarea>
+            </div>
+            
+            <!-- Bill Summary -->
+            <div class="grid-2" style="margin-top:16px;padding-top:16px;border-top:2px solid var(--border-color);">
+                <div class="form-row">
+                    <label class="form-label">Subtotal</label>
+                    <div class="text-xl font-bold text-green-600">TSh <?= number_format($bill['subtotal'] ?? 0, 0) ?></div>
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Grand Total</label>
+                    <div class="text-xl font-bold text-blue-600">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></div>
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Paid Amount</label>
+                    <div class="text-xl font-bold text-purple-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></div>
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Balance</label>
+                    <div class="text-xl font-bold <?= ($bill['balance'] ?? 0) > 0 ? 'text-red-600' : 'text-green-600' ?>">
+                        TSh <?= number_format($bill['balance'] ?? 0, 0) ?>
                     </div>
                 </div>
-            <?php else: ?>
-                <!-- Editable Form -->
-                <form method="POST" action="update_bill.php" id="editBillForm">
-                    <input type="hidden" name="bill_id" value="<?= $bill_id ?>">
-                    <input type="hidden" name="branch_id" value="<?= $branch_id ?>">
-                    
-                    <!-- Bill Information -->
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Bill Number</label>
-                            <input type="text" class="form-control" value="<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>" disabled>
-                            <small class="text-xs text-gray-400">Bill number cannot be changed</small>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label>Patient</label>
-                            <input type="text" class="form-control" value="<?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?> (<?= htmlspecialchars($bill['patient_number'] ?? 'N/A') ?>)" disabled>
-                            <small class="text-xs text-gray-400">Patient cannot be changed</small>
-                        </div>
-                    </div>
-                    
-                    <!-- Discount -->
-                    <div class="form-group">
-                        <label for="discount_percent">Discount Percentage (%)</label>
-                        <input type="number" id="discount_percent" name="discount_percent" class="form-control" 
-                               placeholder="Enter discount percentage" min="0" max="100" step="0.01"
-                               value="<?= htmlspecialchars($bill['discount_percent'] ?? 0) ?>">
-                        <small class="text-xs text-gray-400">Enter discount percentage (0-100). Current discount: <?= number_format($bill['discount_percent'] ?? 0, 2) ?>%</small>
-                    </div>
-                    
-                    <!-- Status -->
-                    <div class="form-group">
-                        <label for="status">Bill Status</label>
-                        <select id="status" name="status" class="form-control">
-                            <option value="pending" <?= ($bill['status'] ?? '') === 'pending' ? 'selected' : '' ?>>Pending</option>
-                            <option value="partial" <?= ($bill['status'] ?? '') === 'partial' ? 'selected' : '' ?>>Partial</option>
-                            <option value="paid" <?= ($bill['status'] ?? '') === 'paid' ? 'selected' : '' ?>>Paid</option>
-                            <option value="cancelled" <?= ($bill['status'] ?? '') === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
-                        </select>
-                        <small class="text-xs text-gray-400">Change the bill status</small>
-                    </div>
-                    
-                    <!-- Notes -->
-                    <div class="form-group">
-                        <label for="notes">Notes</label>
-                        <textarea id="notes" name="notes" class="form-control" rows="3" 
-                                  placeholder="Add notes about this bill..."><?= htmlspecialchars($bill['notes'] ?? '') ?></textarea>
-                        <small class="text-xs text-gray-400">Optional notes or comments about this bill</small>
-                    </div>
-                    
-                    <!-- Form Actions -->
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-primary" id="saveBtn">
-                            <i class="fas fa-save"></i> Update Bill
-                        </button>
-                        <a href="view_bill.php?id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn btn-outline">
-                            <i class="fas fa-times"></i> Cancel
-                        </a>
-                        <button type="button" class="btn btn-danger" onclick="confirmCancel()" style="margin-left:auto;">
-                            <i class="fas fa-ban"></i> Cancel Bill
-                        </button>
-                    </div>
-                </form>
-            <?php endif; ?>
+            </div>
             
-        </div>
+            <!-- Form Actions -->
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Update Bill
+                </button>
+                <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+            </div>
+        </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- BILL ITEMS (Read Only) -->
+    <!-- BILL ITEMS TABLE -->
     <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
+    <div class="table-container animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list text-blue-600"></i>
+                <i class="fas fa-list"></i>
                 Bill Items
-                <span class="text-xs text-gray-500 ml-2">(<?= count($bill_items) ?> items)</span>
+                <span class="card-badge"><?= count($bill_items) ?></span>
             </h3>
-            <?php if ($can_edit): ?>
-                <a href="add_bill_item.php?bill_id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>" class="btn btn-sm btn-primary">
-                    <i class="fas fa-plus"></i> Add Item
-                </a>
-            <?php endif; ?>
         </div>
-        <div class="table-container">
-            <?php if (count($bill_items) > 0): ?>
+        <?php if (count($bill_items) > 0): ?>
+            <div class="overflow-x-auto">
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>#</th>
-                            <th>Item</th>
+                            <th style="width:40px;">#</th>
+                            <th>Item Name</th>
                             <th>Type</th>
-                            <th>Qty</th>
-                            <th>Unit Price</th>
-                            <th>Total</th>
+                            <th style="text-align:center;">Qty</th>
+                            <th style="text-align:right;">Unit Price</th>
+                            <th style="text-align:right;">Total</th>
                             <th>Status</th>
-                            <?php if ($can_edit): ?>
-                                <th>Action</th>
-                            <?php endif; ?>
+                            <th style="text-align:center;">Action</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php $counter = 1; ?>
-                        <?php foreach ($bill_items as $item): ?>
+                        <?php $counter = 1; foreach ($bill_items as $item): ?>
                             <tr>
-                                <td class="text-center text-gray-400"><?= $counter++ ?></td>
-                                <td class="font-medium"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></td>
+                                <td><?= $counter++ ?></td>
                                 <td>
-                                    <span class="badge badge-info" style="font-size:0.55rem;padding:2px 10px;">
-                                        <?= ucfirst(str_replace('_', ' ', $item['item_type'] ?? 'Other')) ?>
+                                    <strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong>
+                                    <?php if (!empty($item['description'])): ?>
+                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($item['description']) ?></div>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="item-type-badge <?= getItemTypeColor($item['item_type'] ?? 'other') ?>">
+                                        <?= getItemTypeLabel($item['item_type'] ?? 'other') ?>
                                     </span>
                                 </td>
-                                <td><?= number_format($item['quantity'] ?? 1) ?></td>
-                                <td>TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
-                                <td class="font-semibold">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
+                                <td style="text-align:center;"><?= number_format($item['quantity'] ?? 0) ?></td>
+                                <td style="text-align:right;font-family:monospace;">TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
+                                <td style="text-align:right;font-family:monospace;font-weight:700;color:var(--primary);">
+                                    TSh <?= number_format($item['total_price'] ?? 0, 0) ?>
+                                </td>
                                 <td>
-                                    <span class="badge badge-<?= getStatusBadge($item['payment_status'] ?? 'pending') ?>" style="font-size:0.55rem;padding:2px 10px;">
-                                        <i class="fas <?= getStatusIcon($item['payment_status'] ?? 'pending') ?>"></i>
+                                    <span class="badge badge-<?= ($item['payment_status'] ?? 'pending') === 'paid' ? 'success' : 'warning' ?>">
                                         <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
-                                <?php if ($can_edit): ?>
-                                    <td>
-                                        <a href="edit_bill_item.php?id=<?= $item['id'] ?>&branch_id=<?= $branch_id ?>" class="text-blue-600 text-xs hover:underline">Edit</a>
-                                        <span class="text-gray-300 mx-1">|</span>
-                                        <a href="delete_bill_item.php?id=<?= $item['id'] ?>&branch_id=<?= $branch_id ?>" class="text-red-600 text-xs hover:underline" onclick="return confirm('Delete this item?')">Delete</a>
-                                    </td>
-                                <?php endif; ?>
+                                <td style="text-align:center;">
+                                    <form method="POST" action="" style="display:inline;" onsubmit="return confirm('Delete this item?')">
+                                        <input type="hidden" name="action" value="delete_item">
+                                        <input type="hidden" name="item_id" value="<?= $item['id'] ?>">
+                                        <button type="submit" class="btn btn-danger btn-sm" style="padding:3px 10px;font-size:0.6rem;">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="5" class="total-label">Subtotal:</td>
+                            <td class="total-amount green">TSh <?= number_format($bill['subtotal'] ?? 0, 0) ?></td>
+                            <td colspan="2"></td>
+                        </tr>
+                        <?php if (($bill['discount_amount'] ?? 0) > 0): ?>
+                        <tr style="background:var(--warning-bg);">
+                            <td colspan="5" class="total-label">Discount:</td>
+                            <td class="total-amount" style="color:var(--warning);">- TSh <?= number_format($bill['discount_amount'] ?? 0, 0) ?></td>
+                            <td colspan="2"></td>
+                        </tr>
+                        <?php endif; ?>
+                        <tr style="background:var(--primary-bg);font-size:1rem;">
+                            <td colspan="5" class="total-label" style="font-weight:700;">Grand Total:</td>
+                            <td class="total-amount" style="color:var(--primary);font-size:1.1rem;font-weight:700;">
+                                TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>
+                            </td>
+                            <td colspan="2"></td>
+                        </tr>
+                    </tfoot>
                 </table>
-            <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-receipt"></i>
-                    <h4>No Bill Items</h4>
-                    <p>This bill has no items.</p>
-                </div>
-            <?php endif; ?>
-        </div>
+            </div>
+        <?php else: ?>
+            <div class="text-center py-6 text-gray-400">
+                <i class="fas fa-file-invoice text-2xl block mb-2"></i>
+                <p>No items found for this bill</p>
+            </div>
+        <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
-    <!-- PAYMENTS HISTORY (Read Only) -->
+    <!-- ADD ITEM FORM -->
     <!-- ================================================================ -->
-    <?php if (count($payments) > 0): ?>
-        <div class="card animate-fade-in-up" style="animation-delay:0.15s;">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-hand-holding-usd text-teal-600"></i>
-                    Payment History
-                    <span class="text-xs text-gray-500 ml-2">(<?= count($payments) ?> payments)</span>
-                </h3>
+    <div class="form-card animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="form-header">
+            <div class="form-icon">
+                <i class="fas fa-plus-circle"></i>
             </div>
-            <div class="table-container">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Receipt #</th>
-                            <th>Amount</th>
-                            <th>Method</th>
-                            <th>Received By</th>
-                            <th>Date</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($payments as $payment): ?>
-                            <tr>
-                                <td class="font-mono text-xs font-semibold">
-                                    <?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?>
-                                </td>
-                                <td class="font-semibold text-green-600">TSh <?= number_format($payment['amount'] ?? 0, 0) ?></td>
-                                <td>
-                                    <span class="badge badge-info" style="font-size:0.55rem;padding:2px 10px;">
-                                        <?= ucfirst($payment['payment_method'] ?? 'Cash') ?>
-                                    </span>
-                                </td>
-                                <td><?= htmlspecialchars($payment['received_by_name'] ?? 'N/A') ?></td>
-                                <td class="text-xs"><?= date('M d, Y h:i A', strtotime($payment['received_at'] ?? 'now')) ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+            <div>
+                <h3 class="form-title">Add Item to Bill</h3>
+                <p class="form-subtitle">Add a new item to this bill</p>
             </div>
         </div>
-    <?php endif; ?>
+        
+        <form method="POST" action="" id="addItemForm">
+            <input type="hidden" name="action" value="add_item">
+            
+            <div class="grid-2">
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-tag label-icon"></i> Item Type <span class="required">*</span>
+                    </label>
+                    <select name="item_type" class="form-control" required>
+                        <?php foreach ($item_types as $key => $label): ?>
+                            <option value="<?= $key ?>"><?= $label ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-cube label-icon"></i> Item Name <span class="required">*</span>
+                    </label>
+                    <input type="text" name="item_name" class="form-control" placeholder="e.g. Consultation Fee" required>
+                </div>
+            </div>
+            
+            <div class="grid-2">
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-calculator label-icon"></i> Quantity <span class="required">*</span>
+                    </label>
+                    <input type="number" name="quantity" class="form-control" value="1" min="1" required>
+                </div>
+                
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-money-bill-wave label-icon"></i> Unit Price <span class="required">*</span>
+                        <span class="label-badge">TSh</span>
+                    </label>
+                    <input type="text" name="unit_price" class="form-control" placeholder="0" value="0" oninput="formatAmount(this)" required>
+                </div>
+            </div>
+            
+            <div class="grid-2">
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-building label-icon"></i> Department
+                        <span class="label-badge">Optional</span>
+                    </label>
+                    <input type="text" name="department" class="form-control" placeholder="e.g. Medical, Laboratory">
+                </div>
+                
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-tag label-icon"></i> Service Type
+                        <span class="label-badge">Optional</span>
+                    </label>
+                    <input type="text" name="service_type" class="form-control" placeholder="e.g. Consultation, Test">
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-align-left label-icon"></i> Description
+                    <span class="label-badge">Optional</span>
+                </label>
+                <textarea name="description" class="form-control" rows="2" placeholder="Item description..."></textarea>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-success">
+                    <i class="fas fa-plus"></i> Add Item
+                </button>
+                <button type="reset" class="btn btn-outline">
+                    <i class="fas fa-undo"></i> Reset
+                </button>
+            </div>
+        </form>
+    </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -1445,9 +1814,6 @@ include_once '../../components/admin_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1460,13 +1826,11 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch_id=<?= $branch_id ?>';
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
         }
     }
     
@@ -1475,18 +1839,13 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
-        url.searchParams.set('branch_id', branchId);
+        url.searchParams.set('branch', branchId);
+        url.searchParams.delete('branch_id');
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1505,30 +1864,47 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // CANCEL BILL CONFIRMATION
+    // FORMAT AMOUNT
     // ================================================================
-    function confirmCancel() {
-        if (confirm('Are you sure you want to cancel this bill?\n\nThis will mark the bill as CANCELLED and cannot be undone.')) {
-            if (confirm('WARNING: Cancelling a bill will remove it from financial reports.\n\nAre you absolutely sure?')) {
-                window.location.href = 'cancel_bill.php?id=<?= $bill_id ?>&branch_id=<?= $branch_id ?>';
-            }
+    function formatAmount(input) {
+        var val = input.value.replace(/[^0-9.]/g, '');
+        var parts = val.split('.');
+        var whole = parts[0];
+        var decimal = parts.length > 1 ? '.' + parts[1].slice(0, 2) : '';
+        
+        if (whole.length > 0) {
+            whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         }
+        
+        input.value = whole + decimal;
     }
 
     // ================================================================
-    // FORM SUBMISSION - Loading State
+    // TOAST
     // ================================================================
-    document.getElementById('editBillForm')?.addEventListener('submit', function(e) {
-        var btn = document.getElementById('saveBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-    });
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
+        }, 3500);
+    }
 
-    console.log('%c💰 Braick Dispensary - Edit Bill (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📄 Braick Dispensary - Edit Bill (GREEN THEME)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?> (ID: <?= $bill_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📊 Status: <?= ucfirst($bill['status'] ?? 'Pending') ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✏️ Can Edit: <?= $can_edit ? 'Yes' : 'No' ?>', 'font-size:13px; color:#059669;');
+    console.log('%c💰 Total: TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🟢 Green Theme Applied', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
