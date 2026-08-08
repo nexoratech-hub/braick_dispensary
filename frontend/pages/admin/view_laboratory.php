@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/patients.php
-// ADMIN - VIEW ALL PATIENTS
+// FILE: frontend/pages/admin/view_laboratory.php
+// SUPER ADMIN - VIEW LABORATORY BRANCH DETAILS
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
@@ -24,140 +24,45 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET FILTERS
+// GET BRANCH ID
 // ================================================================
+$lab_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? 'all';
-$search = $_GET['search'] ?? '';
-$gender_filter = $_GET['gender'] ?? 'all';
-$doctor_filter = $_GET['doctor'] ?? 'all';
 
-// ================================================================
-// GET ERROR MESSAGE FROM URL
-// ================================================================
-$error = $_GET['error'] ?? '';
-$success = $_GET['success'] ?? '';
-$error_message = '';
-$success_message = '';
-$show_error = false;
-$show_success = false;
-
-if ($error === 'delete_failed') {
-    $error_message = '⚠️ Failed to delete patient. Please try again.';
-    $show_error = true;
-} elseif ($error === 'invalid_id') {
-    $error_message = '⚠️ Invalid patient ID provided.';
-    $show_error = true;
-} elseif ($error === 'notfound') {
-    $error_message = '⚠️ Patient not found.';
-    $show_error = true;
-}
-
-if ($success === 'deleted') {
-    $success_message = '✅ Patient deleted successfully!';
-    $show_success = true;
+if ($lab_id <= 0) {
+    header('Location: laboratories.php?branch=' . $selected_branch_id . '&error=invalid_id');
+    exit;
 }
 
 // ================================================================
-// HANDLE DELETE PATIENT
+// FETCH LABORATORY DETAILS
 // ================================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_patient') {
-    $patient_id = isset($_POST['patient_id']) ? (int)$_POST['patient_id'] : 0;
-    $return_branch = isset($_POST['branch']) ? $_POST['branch'] : 'all';
-    
-    if ($patient_id > 0) {
-        try {
-            $db->beginTransaction();
-            
-            // Check if patient has any visits
-            $stmt = $db->prepare("SELECT COUNT(*) as visit_count FROM visits WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            $visit_count = $stmt->fetch(PDO::FETCH_ASSOC)['visit_count'] ?? 0;
-            
-            if ($visit_count > 0) {
-                // Soft delete - just update status or mark as inactive
-                // Since there's no status column in patients table, we'll just log it
-                // and not actually delete if there are visits
-                $error_message = '⚠️ Cannot delete patient with existing visits. Please archive instead.';
-                $show_error = true;
-                $db->rollBack();
-            } else {
-                // Delete patient (no visits, safe to delete)
-                $stmt = $db->prepare("DELETE FROM patients WHERE id = ?");
-                $stmt->execute([$patient_id]);
-                
-                // Log activity
-                $user_id = $_SESSION['user_id'] ?? 1;
-                $details = "Patient deleted (ID: {$patient_id})";
-                try {
-                    $stmt = $db->prepare("
-                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
-                        VALUES (?, ?, 'patient_deleted', ?, NOW())
-                    ");
-                    $stmt->execute([$user_id, 1, $details]);
-                } catch (Exception $log_error) {
-                    // Ignore logging errors
-                }
-                
-                $db->commit();
-                header('Location: patients.php?branch=' . urlencode($return_branch) . '&success=deleted');
-                exit;
-            }
-        } catch (Exception $e) {
-            $db->rollBack();
-            $error_message = '❌ Error: ' . $e->getMessage();
-            $show_error = true;
-        }
-    }
-}
-
-// ================================================================
-// BUILD QUERY FOR PATIENTS
-// ================================================================
-$sql = "
+$stmt = $db->prepare("
     SELECT 
-        p.*,
-        u.full_name as doctor_name,
-        u.id as doctor_id,
-        u.is_online as doctor_online,
-        b.name as branch_name,
-        (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as visit_count,
-        (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status != 'completed' AND status != 'cancelled') as active_visit_count,
-        (SELECT visit_number FROM visits WHERE patient_id = p.id ORDER BY created_at DESC LIMIT 1) as last_visit_number
-    FROM patients p
-    LEFT JOIN users u ON p.assigned_doctor_id = u.id
-    LEFT JOIN branches b ON p.branch_id = b.id
-    WHERE 1=1
-";
+        b.*,
+        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'laboratory' AND status = 'active') as active_technicians,
+        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'laboratory') as total_technicians,
+        (SELECT COUNT(*) FROM lab_tests_catalog WHERE branch_id = b.id AND is_active = 1) as total_tests,
+        (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id AND status = 'pending') as pending_tests,
+        (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id AND status = 'in_progress') as in_progress_tests,
+        (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id AND status = 'completed') as completed_tests,
+        (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id AND status = 'cancelled') as cancelled_tests,
+        (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id) as total_tests_done,
+        (SELECT COALESCE(SUM(total_price), 0) FROM bill_items WHERE branch_id = b.id AND item_type = 'lab_test' AND payment_status = 'paid') as lab_revenue,
+        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'pending') as pending_requests,
+        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'accepted') as accepted_requests,
+        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'in_progress') as in_progress_requests,
+        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'completed') as completed_requests,
+        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id) as total_requests
+    FROM branches b
+    WHERE b.id = ?
+");
+$stmt->execute([$lab_id]);
+$laboratory = $stmt->fetch(PDO::FETCH_ASSOC);
 
-// Apply filters
-if ($selected_branch_id !== 'all') {
-    $sql .= " AND p.branch_id = " . (int)$selected_branch_id;
-}
-
-if (!empty($search)) {
-    $sql .= " AND (p.full_name LIKE '%" . $db->quote($search) . "%' OR p.patient_id LIKE '%" . $db->quote($search) . "%' OR p.phone LIKE '%" . $db->quote($search) . "%')";
-}
-
-if ($gender_filter !== 'all') {
-    $sql .= " AND p.gender = '" . $db->quote($gender_filter) . "'";
-}
-
-if ($doctor_filter !== 'all') {
-    if ($doctor_filter === 'none') {
-        $sql .= " AND p.assigned_doctor_id IS NULL";
-    } else {
-        $sql .= " AND p.assigned_doctor_id = " . (int)$doctor_filter;
-    }
-}
-
-$sql .= " ORDER BY p.created_at DESC";
-
-$patients = [];
-try {
-    $stmt = $db->query($sql);
-    $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $patients = [];
+if (!$laboratory) {
+    header('Location: laboratories.php?branch=' . $selected_branch_id . '&error=notfound');
+    exit;
 }
 
 // ================================================================
@@ -168,30 +73,94 @@ $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER 
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET DOCTORS FOR FILTER
+// GET TECHNICIANS FOR THIS BRANCH
 // ================================================================
-$doctors = [];
-$stmt = $db->query("SELECT id, full_name FROM users WHERE role = 'doctor' AND status = 'active' ORDER BY full_name");
-$doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$technicians = [];
+try {
+    $stmt = $db->prepare("
+        SELECT id, full_name, email, phone, status, created_at 
+        FROM users 
+        WHERE branch_id = ? AND role = 'laboratory'
+        ORDER BY full_name
+    ");
+    $stmt->execute([$lab_id]);
+    $technicians = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $technicians = [];
+}
 
 // ================================================================
-// CALCULATE TOTALS
+// GET RECENT LAB TESTS FOR THIS BRANCH
 // ================================================================
-$total_patients = count($patients);
-$male_count = 0;
-$female_count = 0;
-$other_count = 0;
-$with_doctor = 0;
-$without_doctor = 0;
+$recent_tests = [];
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            lt.id,
+            lt.test_name,
+            lt.status,
+            lt.created_at,
+            lt.completed_at,
+            lt.test_price,
+            p.full_name as patient_name,
+            u.full_name as doctor_name,
+            v.visit_number
+        FROM lab_tests lt
+        LEFT JOIN visits v ON lt.visit_id = v.id
+        LEFT JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON lt.doctor_id = u.id
+        WHERE lt.branch_id = ?
+        ORDER BY lt.created_at DESC
+        LIMIT 10
+    ");
+    $stmt->execute([$lab_id]);
+    $recent_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $recent_tests = [];
+}
 
-foreach ($patients as $p) {
-    $gender = $p['gender'] ?? '';
-    if ($gender === 'Male') $male_count++;
-    elseif ($gender === 'Female') $female_count++;
-    else $other_count++;
-    
-    if (!empty($p['assigned_doctor_id'])) $with_doctor++;
-    else $without_doctor++;
+// ================================================================
+// GET RECENT LAB REQUESTS
+// ================================================================
+$recent_requests = [];
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            lr.id,
+            lr.request_number,
+            lr.status,
+            lr.requested_at,
+            p.full_name as patient_name,
+            u.full_name as doctor_name,
+            (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as total_items
+        FROM lab_requests lr
+        LEFT JOIN patients p ON lr.patient_id = p.id
+        LEFT JOIN users u ON lr.doctor_id = u.id
+        WHERE lr.branch_id = ?
+        ORDER BY lr.requested_at DESC
+        LIMIT 10
+    ");
+    $stmt->execute([$lab_id]);
+    $recent_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $recent_requests = [];
+}
+
+// ================================================================
+// GET RECENT ACTIVITIES
+// ================================================================
+$recent_activities = [];
+try {
+    $stmt = $db->prepare("
+        SELECT * FROM activity_logs 
+        WHERE branch_id = ? AND (action LIKE '%lab%' OR action LIKE '%test%' OR action LIKE '%laboratory%')
+        ORDER BY created_at DESC 
+        LIMIT 10
+    ");
+    $stmt->execute([$lab_id]);
+    $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $recent_activities = [];
 }
 
 // ================================================================
@@ -202,12 +171,28 @@ function getStatusBadge($status) {
         'active' => 'success',
         'inactive' => 'danger',
         'pending' => 'warning',
+        'in_progress' => 'info',
         'completed' => 'success',
         'cancelled' => 'danger',
+        'accepted' => 'primary',
         'paid' => 'success',
         'partial' => 'warning'
     ];
     return $classes[$status] ?? 'secondary';
+}
+
+function getStatusIcon($status) {
+    $icons = [
+        'active' => 'fa-check-circle',
+        'inactive' => 'fa-times-circle',
+        'pending' => 'fa-clock',
+        'in_progress' => 'fa-spinner fa-spin',
+        'completed' => 'fa-check-circle',
+        'cancelled' => 'fa-times-circle',
+        'accepted' => 'fa-check-double',
+        'paid' => 'fa-check-circle'
+    ];
+    return $icons[$status] ?? 'fa-circle';
 }
 
 // ================================================================
@@ -231,7 +216,7 @@ include_once '../../components/admin_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Patients - Braick Dispensary</title>
+    <title>View Laboratory - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -253,10 +238,12 @@ include_once '../../components/admin_sidebar.php';
             
             --success: #059669;
             --success-dark: #047857;
+            --success-light: #34D399;
             --success-bg: #D1FAE5;
             
             --danger: #DC2626;
             --danger-dark: #B91C1C;
+            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
             
             --warning: #D97706;
@@ -638,48 +625,34 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           ALERT / MESSAGE
+           DETAILS CARD
            ================================================================ */
-        .alert {
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            animation: fadeInUp 0.5s ease forwards;
+        .detail-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 24px 28px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
         }
         
-        .alert-danger {
-            background: var(--danger-bg);
-            border: 2px solid var(--danger);
-            color: var(--danger-dark);
+        .detail-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
         }
         
-        .alert-success {
-            background: var(--success-bg);
-            border: 2px solid var(--success);
-            color: var(--success-dark);
+        .detail-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
         }
         
-        .alert i {
-            font-size: 1.2rem;
-        }
-        
-        .alert .alert-close {
-            margin-left: auto;
-            background: none;
-            border: none;
-            font-size: 1.2rem;
-            cursor: pointer;
-            color: inherit;
-            opacity: 0.6;
-            transition: opacity 0.3s;
-            padding: 0 4px;
-        }
-        
-        .alert .alert-close:hover {
-            opacity: 1;
+        .detail-value {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
         }
         
         /* ================================================================
@@ -814,76 +787,6 @@ include_once '../../components/admin_sidebar.php';
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
         /* ================================================================
-           FILTERS
-           ================================================================ */
-        .filter-bar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 20px;
-            align-items: center;
-            background: var(--bg-card);
-            padding: 16px 20px;
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .filter-bar select, .filter-bar input {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 8px 14px;
-            font-size: 0.8rem;
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s;
-            min-width: 150px;
-        }
-        
-        .filter-bar select:focus, .filter-bar input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-        }
-        
-        .filter-bar .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 18px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-gradient-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        /* ================================================================
            DATA TABLE
            ================================================================ */
         .data-table {
@@ -976,223 +879,70 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           ACTION BUTTONS - NEW
+           BUTTONS
            ================================================================ */
-        .action-buttons {
-            display: flex;
-            gap: 4px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        
-        .action-btn {
+        .btn {
             display: inline-flex;
             align-items: center;
-            justify-content: center;
-            gap: 4px;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 0.65rem;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 8px;
             font-weight: 600;
+            font-size: 0.8rem;
             transition: all 0.3s ease;
             cursor: pointer;
             border: none;
             text-decoration: none;
-            min-width: 32px;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 2px solid var(--border-color);
         }
         
-        .action-btn:hover {
+        .btn:hover {
             transform: translateY(-2px);
             box-shadow: var(--shadow-md);
         }
         
-        .action-btn-view {
-            background: var(--primary-bg);
-            color: var(--primary);
-            border: 1.5px solid var(--primary);
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 0.65rem;
+            border-radius: 6px;
         }
         
-        .action-btn-view:hover {
-            background: var(--primary);
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+            border-color: var(--primary);
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-gradient-hover);
+            border-color: var(--primary-dark);
             color: white;
         }
         
-        .action-btn-edit {
-            background: #ECFDF5;
-            color: #059669;
-            border: 1.5px solid #059669;
-        }
-        
-        .action-btn-edit:hover {
-            background: #059669;
-            color: white;
-        }
-        
-        .action-btn-delete {
-            background: var(--danger-bg);
-            color: var(--danger);
-            border: 1.5px solid var(--danger);
-        }
-        
-        .action-btn-delete:hover {
-            background: var(--danger);
-            color: white;
-        }
-        
-        .action-btn i {
-            font-size: 0.7rem;
-        }
-        
-        [data-theme="dark"] .action-btn-view {
-            background: #1E3A5F;
-            color: #60A5FA;
-            border-color: #3B82F6;
-        }
-        
-        [data-theme="dark"] .action-btn-view:hover {
-            background: #3B82F6;
-            color: white;
-        }
-        
-        [data-theme="dark"] .action-btn-edit {
-            background: #1A3A2A;
-            color: #34D399;
-            border-color: #34D399;
-        }
-        
-        [data-theme="dark"] .action-btn-edit:hover {
-            background: #34D399;
-            color: white;
-        }
-        
-        [data-theme="dark"] .action-btn-delete {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: #F87171;
-        }
-        
-        [data-theme="dark"] .action-btn-delete:hover {
-            background: #F87171;
-            color: white;
-        }
-        
-        /* ================================================================
-           DELETE MODAL
-           ================================================================ */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            backdrop-filter: blur(4px);
-            z-index: 1000;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .modal-overlay.active {
-            display: flex;
-        }
-        
-        .modal-box {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            max-width: 450px;
-            width: 90%;
-            padding: 32px;
-            box-shadow: var(--shadow-xl);
-            animation: fadeInUp 0.3s ease;
-        }
-        
-        .modal-box .modal-icon {
-            width: 64px;
-            height: 64px;
-            border-radius: 50%;
-            background: var(--danger-bg);
-            color: var(--danger);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 2rem;
-            margin: 0 auto 16px;
-        }
-        
-        .modal-box h3 {
-            text-align: center;
-            font-size: 1.2rem;
-            margin-bottom: 8px;
-        }
-        
-        .modal-box p {
-            text-align: center;
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            margin-bottom: 20px;
-        }
-        
-        .modal-box .modal-actions {
-            display: flex;
-            gap: 12px;
-            justify-content: center;
-        }
-        
-        .modal-box .modal-actions .btn {
-            padding: 10px 24px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .modal-box .modal-actions .btn-cancel {
-            background: var(--bg-body);
+        .btn-outline {
+            background: transparent;
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
         }
         
-        .modal-box .modal-actions .btn-cancel:hover {
+        .btn-outline:hover {
+            background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
         }
         
-        .modal-box .modal-actions .btn-danger {
-            background: var(--danger);
-            color: white;
+        .stat-card .stat-arrow {
+            opacity: 0;
+            transition: all 0.3s ease;
+            color: var(--primary);
+            font-size: 0.8rem;
         }
         
-        .modal-box .modal-actions .btn-danger:hover {
-            background: var(--danger-dark);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-        }
-        
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: var(--text-secondary);
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px dashed var(--border-color);
-        }
-        
-        .empty-state i {
-            font-size: 3.5rem;
-            color: var(--border-color);
-            margin-bottom: 16px;
-        }
-        
-        .empty-state h3 {
-            font-size: 1.2rem;
-            color: var(--text-primary);
-            margin-bottom: 8px;
+        .stat-card:hover .stat-arrow {
+            opacity: 1;
+            transform: translateX(4px);
         }
         
         /* ================================================================
@@ -1219,6 +969,7 @@ include_once '../../components/admin_sidebar.php';
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
+            .stats-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
         }
         
         @media (max-width: 768px) {
@@ -1227,19 +978,13 @@ include_once '../../components/admin_sidebar.php';
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .stats-grid { grid-template-columns: 1fr 1fr; }
-            .filter-bar { flex-direction: column; align-items: stretch; }
-            .filter-bar select, .filter-bar input { width: 100%; min-width: unset; }
-            .data-table { font-size: 0.7rem; }
-            .data-table thead th, .data-table td { padding: 6px 8px; }
-            .action-btn { padding: 2px 6px; font-size: 0.55rem; }
-            .action-btn i { font-size: 0.6rem; }
+            .detail-card { padding: 16px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
-            .action-buttons { gap: 2px; }
         }
         
         /* ================================================================
@@ -1270,9 +1015,10 @@ include_once '../../components/admin_sidebar.php';
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle, .filter-bar { display: none !important; }
+            .footer, #sidebarToggle { display: none !important; }
             .main-content { margin: 0; padding: 20px; }
             .card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
+            .detail-card { box-shadow: none !important; border: 1px solid #ddd; }
             .data-table thead th {
                 background: #0B5ED7 !important;
                 color: white !important;
@@ -1284,12 +1030,10 @@ include_once '../../components/admin_sidebar.php';
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
-            .page-title, .page-subtitle, .role-badge-display, .header-badge {
+            .page-title, .page-subtitle, .header-badge, .role-badge-display {
                 color: white !important;
             }
             .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; }
-            .alert { display: none !important; }
-            .action-btn { border: 1px solid #ddd !important; background: transparent !important; color: #333 !important; }
         }
     </style>
 </head>
@@ -1306,7 +1050,7 @@ include_once '../../components/admin_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patients..." value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -1351,280 +1095,344 @@ include_once '../../components/admin_sidebar.php';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-users"></i>
-                Patients
+                <i class="fas fa-microscope"></i>
+                Laboratory Details
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-user-injured"></i>
-                <strong><?= $total_patients ?></strong> total patients
+                <i class="fas fa-store-alt"></i>
+                <strong><?= htmlspecialchars($laboratory['name']) ?></strong>
+                <span class="header-badge">
+                    <i class="fas fa-<?= $laboratory['status'] === 'active' ? 'check-circle' : 'times-circle' ?>"></i>
+                    <?= ucfirst($laboratory['status']) ?>
+                </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-mars"></i> <?= $male_count ?> Male
+                    <i class="fas fa-flask"></i> <?= $laboratory['total_tests'] ?? 0 ?> Tests
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-venus"></i> <?= $female_count ?> Female
-                </span>
-                <span class="header-badge" style="background:rgba(11,94,215,0.2);border-color:rgba(11,94,215,0.3);color:#60A5FA;">
-                    <i class="fas fa-user-md"></i> <?= $with_doctor ?> With Doctor
-                </span>
-                <span class="header-badge" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);color:#F87171;">
-                    <i class="fas fa-user-slash"></i> <?= $without_doctor ?> No Doctor
+                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($laboratory['lab_revenue'] ?? 0, 0) ?>
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="add_patient.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
-                <i class="fas fa-plus"></i> Add Patient
+            <a href="edit_laboratory.php?id=<?= $laboratory['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+                <i class="fas fa-edit"></i> Edit
+            </a>
+            <a href="laboratories.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- MESSAGES -->
+    <!-- LABORATORY INFO CARD -->
     <!-- ================================================================ -->
-    <?php if ($show_error && !empty($error_message)): ?>
-        <div class="alert alert-danger animate-fade-in-up">
-            <i class="fas fa-exclamation-circle"></i>
-            <?= $error_message ?>
-            <button class="alert-close" onclick="this.parentElement.style.display='none'">
-                <i class="fas fa-times"></i>
-            </button>
+    <div class="detail-card animate-fade-in-up">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+                <p class="detail-label"><i class="fas fa-map-marker-alt mr-1"></i> Location</p>
+                <p class="detail-value"><?= htmlspecialchars($laboratory['location'] ?? 'N/A') ?></p>
+            </div>
+            <div>
+                <p class="detail-label"><i class="fas fa-phone mr-1"></i> Phone</p>
+                <p class="detail-value"><?= htmlspecialchars($laboratory['phone'] ?? 'N/A') ?></p>
+            </div>
+            <div>
+                <p class="detail-label"><i class="fas fa-envelope mr-1"></i> Email</p>
+                <p class="detail-value"><?= htmlspecialchars($laboratory['email'] ?? 'N/A') ?></p>
+            </div>
+            <div>
+                <p class="detail-label"><i class="fas fa-calendar-plus mr-1"></i> Created</p>
+                <p class="detail-value"><?= date('M d, Y h:i A', strtotime($laboratory['created_at'] ?? 'now')) ?></p>
+            </div>
+            <div>
+                <p class="detail-label"><i class="fas fa-clock mr-1"></i> Last Updated</p>
+                <p class="detail-value"><?= date('M d, Y h:i A', strtotime($laboratory['updated_at'] ?? 'now')) ?></p>
+            </div>
+            <div>
+                <p class="detail-label"><i class="fas fa-user-md mr-1"></i> Technicians</p>
+                <p class="detail-value"><?= $laboratory['active_technicians'] ?? 0 ?> Active / <?= $laboratory['total_technicians'] ?? 0 ?> Total</p>
+            </div>
         </div>
-    <?php endif; ?>
-
-    <?php if ($show_success && !empty($success_message)): ?>
-        <div class="alert alert-success animate-fade-in-up">
-            <i class="fas fa-check-circle"></i>
-            <?= $success_message ?>
-            <button class="alert-close" onclick="this.parentElement.style.display='none'">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-    <?php endif; ?>
+    </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
+    <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
-    <div class="stats-grid animate-fade-in-up">
-        <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="stat-card">
+    <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
+        
+        <!-- Card 1: Total Tests -->
+        <a href="lab_tests.php?branch=<?= $laboratory['id'] ?>" class="stat-card">
             <div class="stat-icon blue">
-                <i class="fas fa-users"></i>
+                <i class="fas fa-flask"></i>
             </div>
             <div>
-                <p class="stat-label">Total Patients</p>
-                <p class="stat-value blue-text"><?= number_format($total_patients) ?></p>
+                <p class="stat-label">Total Tests</p>
+                <p class="stat-value blue-text"><?= number_format($laboratory['total_tests_done'] ?? 0) ?></p>
+                <p class="stat-sub"><?= $laboratory['pending_tests'] ?? 0 ?> pending</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
-        <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>&gender=Male" class="stat-card">
+        <!-- Card 2: Completed Tests -->
+        <a href="lab_tests.php?branch=<?= $laboratory['id'] ?>&status=completed" class="stat-card">
             <div class="stat-icon green">
-                <i class="fas fa-mars"></i>
+                <i class="fas fa-check-circle"></i>
             </div>
             <div>
-                <p class="stat-label">Male</p>
-                <p class="stat-value green-text"><?= number_format($male_count) ?></p>
+                <p class="stat-label">Completed</p>
+                <p class="stat-value green-text"><?= number_format($laboratory['completed_tests'] ?? 0) ?></p>
+                <p class="stat-sub">Tests finalized</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
-        <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>&gender=Female" class="stat-card">
-            <div class="stat-icon pink">
-                <i class="fas fa-venus"></i>
+        <!-- Card 3: In Progress -->
+        <a href="lab_tests.php?branch=<?= $laboratory['id'] ?>&status=in_progress" class="stat-card">
+            <div class="stat-icon orange">
+                <i class="fas fa-spinner fa-spin"></i>
             </div>
             <div>
-                <p class="stat-label">Female</p>
-                <p class="stat-value" style="color:#EC4899;"><?= number_format($female_count) ?></p>
+                <p class="stat-label">In Progress</p>
+                <p class="stat-value orange-text"><?= number_format($laboratory['in_progress_tests'] ?? 0) ?></p>
+                <p class="stat-sub">Tests running</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
-        <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>&doctor=none" class="stat-card">
-            <div class="stat-icon red">
-                <i class="fas fa-user-slash"></i>
+        <!-- Card 4: Revenue -->
+        <a href="reports.php?branch=<?= $laboratory['id'] ?>&type=lab" class="stat-card">
+            <div class="stat-icon green">
+                <i class="fas fa-money-bill-wave"></i>
             </div>
             <div>
-                <p class="stat-label">No Doctor</p>
-                <p class="stat-value red-text"><?= number_format($without_doctor) ?></p>
-                <p class="stat-sub">Patients unassigned</p>
+                <p class="stat-label">Revenue</p>
+                <p class="stat-value green-text">TSh <?= number_format($laboratory['lab_revenue'] ?? 0, 0) ?></p>
+                <p class="stat-sub">Lab fees collected</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
-        <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="stat-card">
+        <!-- Card 5: Lab Requests -->
+        <a href="lab_requests.php?branch=<?= $laboratory['id'] ?>" class="stat-card">
             <div class="stat-icon purple">
-                <i class="fas fa-user-md"></i>
+                <i class="fas fa-clipboard-list"></i>
             </div>
             <div>
-                <p class="stat-label">With Doctor</p>
-                <p class="stat-value purple-text"><?= number_format($with_doctor) ?></p>
-                <p class="stat-sub">Patients assigned</p>
+                <p class="stat-label">Requests</p>
+                <p class="stat-value purple-text"><?= number_format($laboratory['total_requests'] ?? 0) ?></p>
+                <p class="stat-sub"><?= $laboratory['pending_requests'] ?? 0 ?> pending</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
-        <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="stat-card">
+        <!-- Card 6: Test Catalog -->
+        <a href="lab_test_catalog.php?branch=<?= $laboratory['id'] ?>" class="stat-card">
             <div class="stat-icon teal">
-                <i class="fas fa-clock"></i>
+                <i class="fas fa-book"></i>
             </div>
             <div>
-                <p class="stat-label">Active Visits</p>
-                <p class="stat-value teal-text">
-                    <?php 
-                        $active_visits = 0;
-                        foreach ($patients as $p) {
-                            $active_visits += $p['active_visit_count'] ?? 0;
-                        }
-                        echo number_format($active_visits);
-                    ?>
-                </p>
-                <p class="stat-sub">Ongoing consultations</p>
+                <p class="stat-label">Test Catalog</p>
+                <p class="stat-value teal-text"><?= number_format($laboratory['total_tests'] ?? 0) ?></p>
+                <p class="stat-sub">Available tests</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
+        
     </div>
 
     <!-- ================================================================ -->
-    <!-- FILTERS -->
-    <!-- ================================================================ -->
-    <div class="filter-bar animate-fade-in-up" style="animation-delay:0.05s;">
-        <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
-            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-            
-            <select name="gender" onchange="this.form.submit()" class="flex-1 min-w-[130px]">
-                <option value="all" <?= $gender_filter === 'all' ? 'selected' : '' ?>>All Genders</option>
-                <option value="Male" <?= $gender_filter === 'Male' ? 'selected' : '' ?>>Male</option>
-                <option value="Female" <?= $gender_filter === 'Female' ? 'selected' : '' ?>>Female</option>
-                <option value="Other" <?= $gender_filter === 'Other' ? 'selected' : '' ?>>Other</option>
-            </select>
-            
-            <select name="doctor" onchange="this.form.submit()" class="flex-1 min-w-[150px]">
-                <option value="all" <?= $doctor_filter === 'all' ? 'selected' : '' ?>>All Doctors</option>
-                <option value="none" <?= $doctor_filter === 'none' ? 'selected' : '' ?>>No Doctor Assigned</option>
-                <?php foreach ($doctors as $d): ?>
-                    <option value="<?= $d['id'] ?>" <?= $doctor_filter == $d['id'] ? 'selected' : '' ?>>
-                        Dr. <?= htmlspecialchars($d['full_name']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            
-            <input type="text" name="search" placeholder="Search by name, ID or phone..." value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[200px]">
-            
-            <button type="submit" class="btn btn-primary">
-                <i class="fas fa-search"></i> Filter
-            </button>
-            
-            <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">
-                <i class="fas fa-times"></i> Clear
-            </a>
-        </form>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PATIENTS TABLE -->
+    <!-- TECHNICIANS LIST -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list"></i>
-                Patients List
-                <span class="text-xs text-gray-400 font-normal">(<?= $total_patients ?> records)</span>
+                <i class="fas fa-user-md text-blue-600"></i>
+                Lab Technicians (<?= count($technicians) ?>)
             </h3>
-            <a href="add_patient.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-sm btn-primary">
-                <i class="fas fa-plus"></i> Add Patient
+            <a href="add_employee.php?branch=<?= $laboratory['id'] ?>&role=laboratory" class="btn btn-sm btn-primary">
+                <i class="fas fa-plus"></i> Add Technician
             </a>
         </div>
         <div class="overflow-x-auto">
-            <?php if (count($patients) > 0): ?>
+            <?php if (count($technicians) > 0): ?>
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Patient ID</th>
-                            <th>Full Name</th>
-                            <th>Gender</th>
+                            <th>Name</th>
+                            <th>Email</th>
                             <th>Phone</th>
-                            <th>Doctor</th>
-                            <th>Visits</th>
-                            <th>Created</th>
-                            <th>Actions</th>
+                            <th>Status</th>
+                            <th>Action</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($patients as $patient): ?>
+                        <?php foreach ($technicians as $tech): ?>
                             <tr>
-                                <td class="font-mono text-xs font-medium"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
-                                <td class="font-medium"><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></td>
+                                <td class="font-medium"><?= htmlspecialchars($tech['full_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($tech['email'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($tech['phone'] ?? 'N/A') ?></td>
                                 <td>
-                                    <?php 
-                                        $gender = $patient['gender'] ?? '';
-                                        if ($gender === 'Male') {
-                                            echo '<span class="text-blue-600"><i class="fas fa-mars"></i> Male</span>';
-                                        } elseif ($gender === 'Female') {
-                                            echo '<span class="text-pink-600"><i class="fas fa-venus"></i> Female</span>';
-                                        } else {
-                                            echo '<span class="text-gray-400">N/A</span>';
-                                        }
-                                    ?>
-                                </td>
-                                <td><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></td>
-                                <td>
-                                    <?php if (!empty($patient['doctor_name'])): ?>
-                                        <span class="text-sm">
-                                            Dr. <?= htmlspecialchars($patient['doctor_name']) ?>
-                                            <?php if ($patient['doctor_online'] ?? false): ?>
-                                                <span class="text-success text-xs">🟢</span>
-                                            <?php else: ?>
-                                                <span class="text-gray-400 text-xs">🔴</span>
-                                            <?php endif; ?>
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="text-gray-400 text-xs">Not assigned</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span class="text-sm">
-                                        <?= $patient['visit_count'] ?? 0 ?>
-                                        <?php if (($patient['active_visit_count'] ?? 0) > 0): ?>
-                                            <span class="text-warning text-xs">(<?= $patient['active_visit_count'] ?> active)</span>
-                                        <?php endif; ?>
+                                    <span class="badge badge-<?= $tech['status'] === 'active' ? 'success' : 'danger' ?>" style="font-size:0.6rem;padding:2px 10px;">
+                                        <?= ucfirst($tech['status'] ?? 'N/A') ?>
                                     </span>
                                 </td>
-                                <td class="text-xs text-gray-500"><?= date('M d, Y', strtotime($patient['created_at'] ?? 'now')) ?></td>
                                 <td>
-                                    <div class="action-buttons">
-                                        <!-- View Button -->
-                                        <a href="view_patient.php?id=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                                           class="action-btn action-btn-view" title="View Patient">
-                                            <i class="fas fa-eye"></i> View
-                                        </a>
-                                        
-                                        <!-- Edit Button -->
-                                        <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                                           class="action-btn action-btn-edit" title="Edit Patient">
-                                            <i class="fas fa-edit"></i> Edit
-                                        </a>
-                                        
-                                        <!-- Delete Button -->
-                                        <button type="button" 
-                                                class="action-btn action-btn-delete" 
-                                                title="Delete Patient"
-                                                onclick="openDeleteModal(<?= $patient['id'] ?>, '<?= addslashes($patient['full_name']) ?>', '<?= urlencode($selected_branch_id) ?>')">
-                                            <i class="fas fa-trash-alt"></i> Delete
-                                        </button>
-                                    </div>
+                                    <a href="view_employee.php?id=<?= $tech['id'] ?>&branch=<?= $laboratory['id'] ?>" class="text-blue-600 text-xs hover:underline">View</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-users"></i>
-                    <h3>No Patients Found</h3>
-                    <p class="text-gray-400"><?= !empty($search) || $gender_filter !== 'all' || $doctor_filter !== 'all' ? 'No results match your search criteria.' : 'No patients have been registered yet.' ?></p>
-                    <?php if (!empty($search) || $gender_filter !== 'all' || $doctor_filter !== 'all'): ?>
-                        <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary mt-4">
-                            <i class="fas fa-times"></i> Clear Filters
-                        </a>
-                    <?php else: ?>
-                        <a href="add_patient.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary mt-4">
-                            <i class="fas fa-plus"></i> Add Patient
-                        </a>
-                    <?php endif; ?>
+                <div class="text-center py-6 text-gray-400">
+                    <i class="fas fa-user-md text-2xl block mb-2"></i>
+                    <p>No technicians assigned to this laboratory</p>
+                    <a href="add_employee.php?branch=<?= $laboratory['id'] ?>&role=laboratory" class="btn btn-sm btn-primary mt-2">
+                        <i class="fas fa-plus"></i> Add Technician
+                    </a>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- RECENT LAB TESTS -->
+    <!-- ================================================================ -->
+    <div class="card animate-fade-in-up" style="animation-delay:0.15s;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-flask text-purple-600"></i>
+                Recent Lab Tests
+            </h3>
+            <a href="lab_tests.php?branch=<?= $laboratory['id'] ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+        </div>
+        <div class="overflow-x-auto">
+            <?php if (count($recent_tests) > 0): ?>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Test</th>
+                            <th>Patient</th>
+                            <th>Doctor</th>
+                            <th>Status</th>
+                            <th>Price</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($recent_tests as $test): ?>
+                            <tr>
+                                <td class="font-medium"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="badge badge-<?= getStatusBadge($test['status'] ?? 'pending') ?>" style="font-size:0.6rem;padding:2px 10px;">
+                                        <i class="fas <?= getStatusIcon($test['status'] ?? 'pending') ?>"></i>
+                                        <?= ucfirst(str_replace('_', ' ', $test['status'] ?? 'Pending')) ?>
+                                    </span>
+                                </td>
+                                <td>TSh <?= number_format($test['test_price'] ?? 0, 0) ?></td>
+                                <td>
+                                    <a href="view_lab_test.php?id=<?= $test['id'] ?>&branch=<?= $laboratory['id'] ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php else: ?>
+                <div class="text-center py-6 text-gray-400">
+                    <i class="fas fa-flask text-2xl block mb-2"></i>
+                    <p>No lab tests found</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- RECENT LAB REQUESTS -->
+    <!-- ================================================================ -->
+    <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-clipboard-list text-indigo-600"></i>
+                Recent Lab Requests
+            </h3>
+            <a href="lab_requests.php?branch=<?= $laboratory['id'] ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+        </div>
+        <div class="overflow-x-auto">
+            <?php if (count($recent_requests) > 0): ?>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Request #</th>
+                            <th>Patient</th>
+                            <th>Doctor</th>
+                            <th>Items</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($recent_requests as $request): ?>
+                            <tr>
+                                <td class="font-mono text-xs"><?= htmlspecialchars($request['request_number'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($request['patient_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($request['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= number_format($request['total_items'] ?? 0) ?></td>
+                                <td>
+                                    <span class="badge badge-<?= getStatusBadge($request['status'] ?? 'pending') ?>" style="font-size:0.6rem;padding:2px 10px;">
+                                        <i class="fas <?= getStatusIcon($request['status'] ?? 'pending') ?>"></i>
+                                        <?= ucfirst(str_replace('_', ' ', $request['status'] ?? 'Pending')) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <a href="view_lab_request.php?id=<?= $request['id'] ?>&branch=<?= $laboratory['id'] ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php else: ?>
+                <div class="text-center py-6 text-gray-400">
+                    <i class="fas fa-clipboard-list text-2xl block mb-2"></i>
+                    <p>No lab requests found</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- RECENT ACTIVITIES -->
+    <!-- ================================================================ -->
+    <div class="card animate-fade-in-up" style="animation-delay:0.25s;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-clock text-gray-500"></i>
+                Recent Activities
+            </h3>
+            <a href="system_logs.php?branch=<?= $laboratory['id'] ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+        </div>
+        <div class="max-h-60 overflow-y-auto">
+            <?php if (count($recent_activities) > 0): ?>
+                <?php foreach ($recent_activities as $activity): ?>
+                    <div class="flex items-start gap-3 p-3 border-b border-gray-100 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition">
+                        <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 text-white">
+                            <i class="fas fa-circle text-[6px]"></i>
+                        </div>
+                        <div>
+                            <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($activity['action'] ?? 'Action') ?></p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400"><?= htmlspecialchars($activity['details'] ?? '') ?></p>
+                            <p class="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                                <?= isset($activity['created_at']) ? date('M d, Y h:i A', strtotime($activity['created_at'])) : 'Just now' ?>
+                            </p>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            <?php else: ?>
+                <div class="text-center py-6 text-gray-400">
+                    <i class="fas fa-clock text-2xl block mb-2"></i>
+                    <p>No activities found</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1637,7 +1445,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Patients - <?= $total_patients ?> records
+            Laboratory Details - <?= htmlspecialchars($laboratory['name']) ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1646,32 +1454,6 @@ include_once '../../components/admin_sidebar.php';
     </footer>
 
 </main>
-
-<!-- ================================================================ -->
-<!-- DELETE CONFIRMATION MODAL -->
-<!-- ================================================================ -->
-<div class="modal-overlay" id="deleteModal">
-    <div class="modal-box">
-        <div class="modal-icon">
-            <i class="fas fa-exclamation-triangle"></i>
-        </div>
-        <h3>Confirm Delete</h3>
-        <p id="deleteMessage">Are you sure you want to delete this patient? This action cannot be undone.</p>
-        <form method="POST" action="" id="deleteForm">
-            <input type="hidden" name="action" value="delete_patient">
-            <input type="hidden" name="patient_id" id="deletePatientId" value="">
-            <input type="hidden" name="branch" id="deleteBranch" value="">
-            <div class="modal-actions">
-                <button type="button" class="btn btn-cancel" onclick="closeDeleteModal()">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-                <button type="submit" class="btn btn-danger">
-                    <i class="fas fa-trash-alt"></i> Delete Patient
-                </button>
-            </div>
-        </form>
-    </div>
-</div>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
@@ -1717,6 +1499,9 @@ include_once '../../components/admin_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1729,15 +1514,15 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SEARCH
+    // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
-        var url = new URL(window.location.href);
         if (query.length > 0) {
-            url.searchParams.set('search', query);
-        } else {
-            url.searchParams.delete('search');
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
         }
-        window.location.href = url.toString();
     }
     
     searchBtn?.addEventListener('click', performSearch);
@@ -1745,14 +1530,18 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
+    // ================================================================
+    // BRANCH SWITCHER
+    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
-        url.searchParams.delete('error');
-        url.searchParams.delete('success');
         window.location.href = url.toString();
     }
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1770,43 +1559,12 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // DELETE MODAL
-    // ================================================================
-    function openDeleteModal(patientId, patientName, branch) {
-        document.getElementById('deletePatientId').value = patientId;
-        document.getElementById('deleteBranch').value = branch;
-        document.getElementById('deleteMessage').innerHTML = 
-            'Are you sure you want to delete <strong>' + patientName + '</strong>?<br><br>' +
-            '<span style="color: var(--danger); font-weight: 600;">⚠️ This action cannot be undone.</span>';
-        document.getElementById('deleteModal').classList.add('active');
-        document.body.style.overflow = 'hidden';
-    }
-    
-    function closeDeleteModal() {
-        document.getElementById('deleteModal').classList.remove('active');
-        document.body.style.overflow = '';
-    }
-    
-    // Close modal on overlay click
-    document.getElementById('deleteModal')?.addEventListener('click', function(e) {
-        if (e.target === this) {
-            closeDeleteModal();
-        }
-    });
-    
-    // Close modal on ESC key
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            closeDeleteModal();
-        }
-    });
-
-    console.log('%c👤 Braick Dispensary - Patients (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Total Patients: <?= $total_patients ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👨 Male: <?= $male_count ?> | 👩 Female: <?= $female_count ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c👨‍⚕️ With Doctor: <?= $with_doctor ?> | Without Doctor: <?= $without_doctor ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔵 View, Edit, Delete buttons added', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔬 Braick Dispensary - View Laboratory (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Laboratory: <?= htmlspecialchars($laboratory['name']) ?> (ID: <?= $laboratory['id'] ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🧪 Total Tests: <?= number_format($laboratory['total_tests_done'] ?? 0) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📋 Completed: <?= number_format($laboratory['completed_tests'] ?? 0) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c⏳ In Progress: <?= number_format($laboratory['in_progress_tests'] ?? 0) ?>', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💰 Revenue: TSh <?= number_format($laboratory['lab_revenue'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

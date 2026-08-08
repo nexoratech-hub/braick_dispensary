@@ -1,7 +1,7 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/lab_tests.php
-// ADMIN - VIEW ALL LAB TESTS
+// FILE: frontend/pages/admin/view_lab_result.php
+// ADMIN - VIEW LAB RESULT DETAILS
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
@@ -24,115 +24,95 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET FILTERS
+// GET PARAMETERS
 // ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
-$search = $_GET['search'] ?? '';
-$status_filter = $_GET['status'] ?? 'all';
-$date_from = $_GET['date_from'] ?? '';
-$date_to = $_GET['date_to'] ?? '';
-$patient_search = $_GET['patient'] ?? '';
+$lab_test_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$selected_branch_id = $_GET['branch'] ?? $_GET['branch_id'] ?? 'all';
 
-// ================================================================
-// GET ERROR MESSAGE FROM URL
-// ================================================================
-$error = $_GET['error'] ?? '';
-$error_message = '';
-$show_error = false;
-
-if ($error === 'invalid_id') {
-    $error_message = '⚠️ Invalid test ID provided.';
-    $show_error = true;
-} elseif ($error === 'notfound') {
-    $error_message = '⚠️ Test not found.';
-    $show_error = true;
-} elseif ($error === 'database_error') {
-    $error_message = '⚠️ Database error occurred. Please try again.';
-    $show_error = true;
+if ($lab_test_id <= 0) {
+    header('Location: lab_tests.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
+    exit;
 }
 
 // ================================================================
-// BUILD QUERY FOR LAB TESTS
+// FETCH LAB TEST DETAILS
 // ================================================================
-$sql = "
-    SELECT 
-        lt.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_code,
-        u.full_name as doctor_name,
-        u2.full_name as technician_name,
-        v.visit_number,
-        v.visit_type,
-        v.id as visit_id,
-        b.name as branch_name
-    FROM lab_tests lt
-    LEFT JOIN visits v ON lt.visit_id = v.id
-    LEFT JOIN patients p ON v.patient_id = p.id
-    LEFT JOIN users u ON lt.doctor_id = u.id
-    LEFT JOIN users u2 ON lt.lab_technician_id = u2.id
-    LEFT JOIN branches b ON lt.branch_id = b.id
-    WHERE 1=1
-";
-
-// Apply filters
-if ($selected_branch_id !== 'all') {
-    $sql .= " AND lt.branch_id = " . (int)$selected_branch_id;
-}
-
-if ($status_filter !== 'all') {
-    $sql .= " AND lt.status = '" . $db->quote($status_filter) . "'";
-}
-
-if (!empty($search)) {
-    $sql .= " AND (lt.test_name LIKE '%" . $db->quote($search) . "%' OR p.full_name LIKE '%" . $db->quote($search) . "%')";
-}
-
-if (!empty($patient_search)) {
-    $sql .= " AND p.full_name LIKE '%" . $db->quote($patient_search) . "%'";
-}
-
-if (!empty($date_from)) {
-    $sql .= " AND DATE(lt.created_at) >= '" . $db->quote($date_from) . "'";
-}
-
-if (!empty($date_to)) {
-    $sql .= " AND DATE(lt.created_at) <= '" . $db->quote($date_to) . "'";
-}
-
-$sql .= " ORDER BY lt.created_at DESC";
-
-$lab_tests = [];
 try {
-    $stmt = $db->query($sql);
-    $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $db->prepare("
+        SELECT 
+            lt.id,
+            lt.test_name,
+            lt.status,
+            lt.results,
+            lt.reference_range,
+            lt.interpretation,
+            lt.notes as lab_notes,
+            lt.created_at,
+            lt.completed_at,
+            lt.updated_at,
+            lt.test_price,
+            lt.lab_technician_id,
+            lt.formatted_result,
+            p.id as patient_id,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            p.phone as patient_phone,
+            p.gender as patient_gender,
+            p.date_of_birth,
+            p.blood_group,
+            p.allergies,
+            p.address,
+            u.full_name as doctor_name,
+            u.specialty as doctor_specialty,
+            u2.full_name as technician_name,
+            v.visit_number,
+            v.visit_type,
+            v.id as visit_id,
+            v.symptoms,
+            v.complaint,
+            v.diagnosis,
+            v.treatment,
+            b.name as branch_name
+        FROM lab_tests lt
+        LEFT JOIN visits v ON lt.visit_id = v.id
+        LEFT JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON lt.doctor_id = u.id
+        LEFT JOIN users u2 ON lt.lab_technician_id = u2.id
+        LEFT JOIN branches b ON lt.branch_id = b.id
+        WHERE lt.id = ?
+    ");
+    $stmt->execute([$lab_test_id]);
+    $lab_test = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$lab_test) {
+        header('Location: lab_tests.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
+        exit;
+    }
 } catch (Exception $e) {
-    $lab_tests = [];
+    error_log("Error fetching lab test: " . $e->getMessage());
+    header('Location: lab_tests.php?branch=' . urlencode($selected_branch_id) . '&error=database_error');
+    exit;
+}
+
+// ================================================================
+// CALCULATE AGE
+// ================================================================
+$age = null;
+if (!empty($lab_test['date_of_birth'])) {
+    $birthDate = new DateTime($lab_test['date_of_birth']);
+    $today = new DateTime('today');
+    $age = $birthDate->diff($today)->y;
 }
 
 // ================================================================
 // GET BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// CALCULATE TOTALS
-// ================================================================
-$total_tests = count($lab_tests);
-$pending_tests = 0;
-$in_progress_tests = 0;
-$completed_tests = 0;
-$cancelled_tests = 0;
-$total_revenue = 0;
-
-foreach ($lab_tests as $test) {
-    $status = $test['status'] ?? 'pending';
-    if ($status === 'pending') $pending_tests++;
-    elseif ($status === 'in_progress') $in_progress_tests++;
-    elseif ($status === 'completed') $completed_tests++;
-    elseif ($status === 'cancelled') $cancelled_tests++;
-    $total_revenue += floatval($test['test_price'] ?? 0);
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
 }
 
 // ================================================================
@@ -146,16 +126,6 @@ function getStatusBadge($status) {
         'cancelled' => 'danger'
     ];
     return $classes[$status] ?? 'secondary';
-}
-
-function getStatusIcon($status) {
-    $icons = [
-        'pending' => 'fa-clock',
-        'in_progress' => 'fa-spinner fa-spin',
-        'completed' => 'fa-check-circle',
-        'cancelled' => 'fa-times-circle'
-    ];
-    return $icons[$status] ?? 'fa-circle';
 }
 
 // ================================================================
@@ -179,7 +149,7 @@ include_once '../../components/admin_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lab Tests - Braick Dispensary</title>
+    <title>Lab Result - <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -189,7 +159,7 @@ include_once '../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BLUE THEME
+           ROOT VARIABLES - BOLDER BLUE THEME
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -197,14 +167,16 @@ include_once '../../components/admin_sidebar.php';
             --primary-light: #3B82F6;
             --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-hover: linear-gradient(135deg, #0A4CA8, #083C8A);
+            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #073B8A);
             
             --success: #059669;
             --success-dark: #047857;
+            --success-light: #34D399;
             --success-bg: #D1FAE5;
             
             --danger: #DC2626;
             --danger-dark: #B91C1C;
+            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
             
             --warning: #D97706;
@@ -212,6 +184,9 @@ include_once '../../components/admin_sidebar.php';
             
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
+            
+            --teal: #0D9488;
+            --teal-bg: #ECFDF5;
             
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -229,7 +204,6 @@ include_once '../../components/admin_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.12);
             
             --bg-body: #F0F4F8;
             --bg-card: #FFFFFF;
@@ -253,10 +227,11 @@ include_once '../../components/admin_sidebar.php';
             --primary-dark: #2563EB;
             --primary-light: #60A5FA;
             --primary-bg: #1E3A5F;
+            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
+            --primary-gradient-strong: linear-gradient(135deg, #1D4ED8, #1E40AF);
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.5);
             --table-hover: #1E293B;
         }
         
@@ -455,10 +430,10 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER - BLUE THEME
+           PAGE HEADER - BOLDER BLUE THEME
            ================================================================ */
         .page-header {
-            background: var(--primary-gradient);
+            background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
             padding: 28px 36px;
             margin-bottom: 28px;
@@ -467,7 +442,7 @@ include_once '../../components/admin_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
             position: relative;
             overflow: hidden;
         }
@@ -586,155 +561,75 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           ALERT / ERROR MESSAGE
+           INFO BOX
            ================================================================ */
-        .alert {
-            padding: 14px 20px;
+        .info-box {
+            background: var(--primary-bg);
             border-radius: var(--radius);
-            margin-bottom: 16px;
+            padding: 16px 20px;
+            border-left: 4px solid var(--primary);
+            margin-bottom: 20px;
+        }
+        
+        .info-box .info-item {
             display: flex;
-            align-items: center;
-            gap: 12px;
-            animation: fadeInUp 0.5s ease forwards;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 0.85rem;
+            flex-wrap: wrap;
+            gap: 4px;
         }
         
-        .alert-danger {
-            background: var(--danger-bg);
-            border: 2px solid var(--danger);
-            color: var(--danger-dark);
+        .info-box .info-item .label {
+            color: var(--text-secondary);
+            font-weight: 500;
         }
         
-        .alert-success {
-            background: var(--success-bg);
-            border: 2px solid var(--success);
-            color: var(--success-dark);
+        .info-box .info-item .value {
+            font-weight: 600;
+            color: var(--text-primary);
         }
         
-        .alert i {
-            font-size: 1.2rem;
+        .info-box .info-item .value .text-blue-600 {
+            color: var(--primary) !important;
         }
         
-        .alert .alert-close {
-            margin-left: auto;
-            background: none;
-            border: none;
-            font-size: 1.2rem;
-            cursor: pointer;
-            color: inherit;
-            opacity: 0.6;
-            transition: opacity 0.3s;
-            padding: 0 4px;
-        }
-        
-        .alert .alert-close:hover {
-            opacity: 1;
+        .info-box .info-item .value .text-gray-400 {
+            color: var(--text-secondary) !important;
         }
         
         /* ================================================================
-           STATS CARDS - BLUE THEME
+           RESULT CARD
            ================================================================ */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 16px;
+        .result-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 24px 28px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
             margin-bottom: 24px;
         }
         
-        .stat-card {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 18px 20px;
-            border: 2px solid var(--border-color);
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            text-decoration: none;
-            color: inherit;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .stat-card::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--primary-gradient);
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-        
-        .stat-card:hover {
+        .result-card:hover {
             border-color: var(--primary);
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-lg);
+            box-shadow: var(--shadow-md);
         }
         
-        .stat-card:hover::after {
-            opacity: 1;
-        }
-        
-        .stat-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            flex-shrink: 0;
-        }
-        
-        .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-icon.green { background: #ECFDF5; color: #059669; }
-        .stat-icon.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
-        .stat-icon.teal { background: #ECFDF5; color: #0D9488; }
-        .stat-icon.pink { background: #FDF2F8; color: #EC4899; }
-        .stat-icon.indigo { background: #EEF2FF; color: #4F46E5; }
-        
-        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .stat-icon.green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .stat-icon.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .stat-icon.teal { background: #1A3A2A; color: #2DD4BF; }
-        [data-theme="dark"] .stat-icon.pink { background: #3A1A2A; color: #F472B6; }
-        [data-theme="dark"] .stat-icon.indigo { background: #1A1A3A; color: #818CF8; }
-        
-        .stat-label {
-            font-size: 0.65rem;
+        .result-card .result-label {
+            font-size: 0.7rem;
             color: var(--text-secondary);
-            font-weight: 600;
+            font-weight: 500;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 0;
+            letter-spacing: 0.04em;
         }
         
-        .stat-value {
-            font-size: 1.3rem;
-            font-weight: 700;
+        .result-card .result-value {
+            font-size: 0.95rem;
+            font-weight: 600;
             color: var(--text-primary);
-            margin: 0;
-            line-height: 1.2;
-        }
-        
-        .stat-value.blue-text { color: var(--primary); }
-        .stat-value.green-text { color: #059669; }
-        .stat-value.orange-text { color: #F59E0B; }
-        .stat-value.purple-text { color: #7C3AED; }
-        .stat-value.red-text { color: #DC2626; }
-        .stat-value.teal-text { color: #0D9488; }
-        
-        .stat-sub {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
+            white-space: pre-wrap;
+            line-height: 1.6;
         }
         
         /* ================================================================
@@ -744,9 +639,9 @@ include_once '../../components/admin_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 4px 14px;
+            padding: 2px 10px;
             border-radius: 20px;
-            font-size: 0.7rem;
+            font-size: 0.6rem;
             font-weight: 600;
             color: white;
             letter-spacing: 0.02em;
@@ -757,66 +652,49 @@ include_once '../../components/admin_sidebar.php';
         .badge-warning { background: #D97706; color: #1E293B; }
         .badge-info { background: #0B5ED7; }
         .badge-secondary { background: #64748B; }
-        .badge-primary { background: var(--primary); }
+        .badge-purple { background: #7C3AED; }
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
         /* ================================================================
-           FILTERS
+           BUTTONS
            ================================================================ */
-        .filter-bar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 20px;
-            align-items: center;
-            background: var(--bg-card);
-            padding: 16px 20px;
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .filter-bar select, .filter-bar input {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 8px 14px;
-            font-size: 0.8rem;
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s;
-            min-width: 150px;
-        }
-        
-        .filter-bar select:focus, .filter-bar input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-        }
-        
-        .filter-bar .btn {
+        .btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 8px 18px;
-            border-radius: 8px;
+            gap: 8px;
+            padding: 10px 24px;
+            border-radius: var(--radius);
             font-weight: 600;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             transition: all 0.3s ease;
             cursor: pointer;
             border: none;
             text-decoration: none;
         }
         
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
         .btn-primary {
             background: var(--primary-gradient);
             color: white;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
         }
         
         .btn-primary:hover {
-            background: var(--primary-gradient-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+        }
+        
+        .btn-success:hover {
+            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
         }
         
         .btn-outline {
@@ -826,126 +704,47 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .btn-outline:hover {
-            background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
         }
         
-        /* ================================================================
-           DATA TABLE
-           ================================================================ */
-        .data-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            font-size: 0.8rem;
-        }
-        
-        .data-table thead th {
-            background: var(--primary-gradient);
-            color: white;
-            font-weight: 600;
-            padding: 10px 12px;
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: none;
-            white-space: nowrap;
-        }
-        
-        .data-table thead th:first-child {
-            border-radius: 8px 0 0 0;
-        }
-        
-        .data-table thead th:last-child {
-            border-radius: 0 8px 0 0;
-        }
-        
-        .data-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-            transition: background 0.2s ease;
-        }
-        
-        .data-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
-        
-        .data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        /* ================================================================
-           CARD
-           ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-            margin-bottom: 24px;
-        }
-        
-        .card:hover {
-            box-shadow: var(--shadow-md);
-        }
-        
-        .card-header {
-            padding: 16px 24px;
-            background: var(--bg-body);
-            border-bottom: 2px solid var(--border-color);
+        .btn-actions {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
+            gap: 12px;
+            padding-top: 20px;
+            margin-top: 20px;
+            border-top: 2px solid var(--border-color);
             flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        [data-theme="dark"] .card-header {
-            background: #0F172A;
-        }
-        
-        .card-title {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .card-title i {
-            color: var(--primary);
         }
         
         /* ================================================================
-           EMPTY STATE
+           TOAST
            ================================================================ */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: var(--text-secondary);
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 2px dashed var(--border-color);
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
         }
-        
-        .empty-state i {
-            font-size: 3.5rem;
-            color: var(--border-color);
-            margin-bottom: 16px;
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
         }
-        
-        .empty-state h3 {
-            font-size: 1.2rem;
-            color: var(--text-primary);
-            margin-bottom: 8px;
-        }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
         
         /* ================================================================
            FOOTER
@@ -961,7 +760,7 @@ include_once '../../components/admin_sidebar.php';
         
         .footer .footer-brand {
             color: var(--primary);
-            font-weight: 600;
+            font-weight: 700;
         }
         
         /* ================================================================
@@ -978,16 +777,14 @@ include_once '../../components/admin_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .filter-bar { flex-direction: column; align-items: stretch; }
-            .filter-bar select, .filter-bar input { width: 100%; min-width: unset; }
-            .data-table { font-size: 0.7rem; }
-            .data-table thead th, .data-table td { padding: 6px 8px; }
+            .info-box .info-item { flex-direction: column; }
+            .result-card { padding: 16px; }
+            .btn-actions { flex-direction: column; }
+            .btn-actions .btn { width: 100%; justify-content: center; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
         }
         
@@ -1004,40 +801,25 @@ include_once '../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-        
-        .stat-card:hover .stat-icon {
-            animation: pulse 0.5s ease;
-        }
-        
         /* ================================================================
            PRINT STYLES
            ================================================================ */
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle, .filter-bar { display: none !important; }
+            .footer, #sidebarToggle { display: none !important; }
             .main-content { margin: 0; padding: 20px; }
-            .card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .data-table thead th {
-                background: #0B5ED7 !important;
-                color: white !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
+            .result-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
+            .info-box { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
             .page-header {
                 background: #0B5ED7 !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
-            .page-title, .page-subtitle, .role-badge-display, .header-badge {
+            .page-title, .page-subtitle, .header-badge, .role-badge-display {
                 color: white !important;
             }
-            .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; }
-            .alert { display: none !important; }
+            .badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         }
     </style>
 </head>
@@ -1054,7 +836,7 @@ include_once '../../components/admin_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search tests or patients..." value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -1095,255 +877,220 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-flask"></i>
-                Lab Tests
+                Lab Result Details
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-vial"></i>
-                <strong><?= $total_tests ?></strong> total tests
+                <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
+                <span class="header-badge">
+                    <i class="fas fa-<?= isset($lab_test['status']) && $lab_test['status'] === 'completed' ? 'check-circle' : 'clock' ?>"></i>
+                    <?= ucfirst($lab_test['status'] ?? 'Pending') ?>
+                </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-check-circle"></i> <?= $completed_tests ?> Completed
+                    <i class="fas fa-user"></i>
+                    <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-spinner fa-spin"></i> <?= $in_progress_tests ?> In Progress
-                </span>
-                <span class="header-badge" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);color:#F87171;">
-                    <i class="fas fa-clock"></i> <?= $pending_tests ?> Pending
-                </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue, 0) ?>
+                    <i class="fas fa-money-bill-wave"></i>
+                    TSh <?= number_format($lab_test['test_price'] ?? 0, 0) ?>
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="add_lab_test.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
-                <i class="fas fa-plus"></i> Add Test
+            <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
+                <i class="fas fa-edit"></i> Edit
+            </a>
+            <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- ERROR MESSAGE -->
+    <!-- TEST INFORMATION -->
     <!-- ================================================================ -->
-    <?php if ($show_error && !empty($error_message)): ?>
-        <div class="alert alert-danger animate-fade-in-up">
-            <i class="fas fa-exclamation-circle"></i>
-            <?= $error_message ?>
-            <button class="alert-close" onclick="this.parentElement.style.display='none'">
-                <i class="fas fa-times"></i>
-            </button>
+    <div class="info-box" style="max-width:900px;margin:0 auto 20px;">
+        <div class="info-item">
+            <span class="label">Test ID</span>
+            <span class="value">#<?= $lab_test_id ?></span>
         </div>
+        <div class="info-item">
+            <span class="label">Patient</span>
+            <span class="value">
+                <?php if (!empty($lab_test['patient_id']) && !empty($lab_test['patient_name'])): ?>
+                    <a href="view_patient.php?id=<?= $lab_test['patient_id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-blue-600 hover:underline">
+                        <?= htmlspecialchars($lab_test['patient_name']) ?>
+                    </a>
+                    <?php if (!empty($lab_test['patient_code'])): ?>
+                        (<?= htmlspecialchars($lab_test['patient_code']) ?>)
+                    <?php endif; ?>
+                <?php else: ?>
+                    <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>
+                <?php endif; ?>
+            </span>
+        </div>
+        <div class="info-item">
+            <span class="label">Visit</span>
+            <span class="value">
+                <?php if (!empty($lab_test['visit_number']) && !empty($lab_test['visit_id'])): ?>
+                    <a href="view_visit.php?id=<?= $lab_test['visit_id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-blue-600 hover:underline">
+                        <?= htmlspecialchars($lab_test['visit_number']) ?>
+                    </a>
+                <?php else: ?>
+                    <?= htmlspecialchars($lab_test['visit_number'] ?? 'N/A') ?>
+                <?php endif; ?>
+            </span>
+        </div>
+        <div class="info-item">
+            <span class="label">Doctor</span>
+            <span class="value">
+                <?php if (!empty($lab_test['doctor_name'])): ?>
+                    Dr. <?= htmlspecialchars($lab_test['doctor_name']) ?>
+                <?php else: ?>
+                    <span class="text-gray-400">Not assigned</span>
+                <?php endif; ?>
+            </span>
+        </div>
+        <div class="info-item">
+            <span class="label">Technician</span>
+            <span class="value">
+                <?php if (!empty($lab_test['technician_name'])): ?>
+                    <?= htmlspecialchars($lab_test['technician_name']) ?>
+                <?php else: ?>
+                    <span class="text-gray-400">Not assigned</span>
+                <?php endif; ?>
+            </span>
+        </div>
+        <div class="info-item">
+            <span class="label">Status</span>
+            <span class="value">
+                <span class="badge badge-<?= getStatusBadge($lab_test['status'] ?? 'pending') ?>">
+                    <?= ucfirst($lab_test['status'] ?? 'Pending') ?>
+                </span>
+            </span>
+        </div>
+        <div class="info-item">
+            <span class="label">Price</span>
+            <span class="value">TSh <?= number_format($lab_test['test_price'] ?? 0, 0) ?></span>
+        </div>
+        <div class="info-item">
+            <span class="label">Created</span>
+            <span class="value"><?= date('M d, Y h:i A', strtotime($lab_test['created_at'] ?? 'now')) ?></span>
+        </div>
+        <?php if (!empty($lab_test['completed_at'])): ?>
+        <div class="info-item">
+            <span class="label">Completed</span>
+            <span class="value" style="color:var(--success);"><?= date('M d, Y h:i A', strtotime($lab_test['completed_at'])) ?></span>
+        </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- REFERENCE RANGE -->
+    <!-- ================================================================ -->
+    <?php if (!empty($lab_test['reference_range'])): ?>
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.05s;">
+        <div class="result-label"><i class="fas fa-chart-bar"></i> Reference Range</div>
+        <div class="result-value"><?= htmlspecialchars($lab_test['reference_range']) ?></div>
+    </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
+    <!-- RESULTS -->
     <!-- ================================================================ -->
-    <div class="stats-grid animate-fade-in-up">
-        <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="stat-card">
-            <div class="stat-icon blue">
-                <i class="fas fa-flask"></i>
-            </div>
-            <div>
-                <p class="stat-label">Total Tests</p>
-                <p class="stat-value blue-text"><?= number_format($total_tests) ?></p>
-            </div>
-        </a>
-        
-        <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=completed" class="stat-card">
-            <div class="stat-icon green">
-                <i class="fas fa-check-circle"></i>
-            </div>
-            <div>
-                <p class="stat-label">Completed</p>
-                <p class="stat-value green-text"><?= number_format($completed_tests) ?></p>
-                <p class="stat-sub">Tests finalized</p>
-            </div>
-        </a>
-        
-        <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=in_progress" class="stat-card">
-            <div class="stat-icon orange">
-                <i class="fas fa-spinner fa-spin"></i>
-            </div>
-            <div>
-                <p class="stat-label">In Progress</p>
-                <p class="stat-value orange-text"><?= number_format($in_progress_tests) ?></p>
-                <p class="stat-sub">Tests running</p>
-            </div>
-        </a>
-        
-        <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=pending" class="stat-card">
-            <div class="stat-icon red">
-                <i class="fas fa-clock"></i>
-            </div>
-            <div>
-                <p class="stat-label">Pending</p>
-                <p class="stat-value red-text"><?= number_format($pending_tests) ?></p>
-                <p class="stat-sub">Tests waiting</p>
-            </div>
-        </a>
-        
-        <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=cancelled" class="stat-card">
-            <div class="stat-icon purple">
-                <i class="fas fa-times-circle"></i>
-            </div>
-            <div>
-                <p class="stat-label">Cancelled</p>
-                <p class="stat-value purple-text"><?= number_format($cancelled_tests) ?></p>
-                <p class="stat-sub">Cancelled tests</p>
-            </div>
-        </a>
-        
-        <a href="reports.php?branch=<?= urlencode($selected_branch_id) ?>&type=lab" class="stat-card">
-            <div class="stat-icon teal">
-                <i class="fas fa-money-bill-wave"></i>
-            </div>
-            <div>
-                <p class="stat-label">Total Revenue</p>
-                <p class="stat-value teal-text">TSh <?= number_format($total_revenue, 0) ?></p>
-                <p class="stat-sub">Lab fees total</p>
-            </div>
-        </a>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- FILTERS -->
-    <!-- ================================================================ -->
-    <div class="filter-bar animate-fade-in-up" style="animation-delay:0.05s;">
-        <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
-            <select name="branch" onchange="this.form.submit()" class="flex-1 min-w-[150px]">
-                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>All Branches</option>
-                <?php foreach ($branches as $b): ?>
-                    <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($b['name']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            
-            <select name="status" onchange="this.form.submit()" class="flex-1 min-w-[150px]">
-                <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Status</option>
-                <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Pending</option>
-                <option value="in_progress" <?= $status_filter === 'in_progress' ? 'selected' : '' ?>>In Progress</option>
-                <option value="completed" <?= $status_filter === 'completed' ? 'selected' : '' ?>>Completed</option>
-                <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
-            </select>
-            
-            <input type="text" name="search" placeholder="Search by test or patient..." value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[200px]">
-            
-            <button type="submit" class="btn btn-primary">
-                <i class="fas fa-search"></i> Filter
-            </button>
-            
-            <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">
-                <i class="fas fa-times"></i> Clear
-            </a>
-        </form>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- LAB TESTS TABLE -->
-    <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-list"></i>
-                Lab Tests List
-                <span class="text-xs text-gray-400 font-normal">(<?= $total_tests ?> records)</span>
-            </h3>
-            <a href="add_lab_test.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-sm btn-primary">
-                <i class="fas fa-plus"></i> Add New Test
-            </a>
-        </div>
-        <div class="overflow-x-auto">
-            <?php if (count($lab_tests) > 0): ?>
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Test Name</th>
-                            <th>Patient</th>
-                            <th>Doctor</th>
-                            <th>Technician</th>
-                            <th>Status</th>
-                            <th>Price</th>
-                            <th>Created</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($lab_tests as $test): ?>
-                            <tr>
-                                <td class="font-medium text-sm"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
-                                <td>
-                                    <?php if (!empty($test['patient_id']) && !empty($test['patient_name'])): ?>
-                                        <a href="view_patient.php?id=<?= $test['patient_id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-blue-600 hover:underline">
-                                            <?= htmlspecialchars($test['patient_name']) ?>
-                                        </a>
-                                    <?php else: ?>
-                                        <?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if (!empty($test['doctor_name'])): ?>
-                                        Dr. <?= htmlspecialchars($test['doctor_name']) ?>
-                                    <?php else: ?>
-                                        <span class="text-gray-400 text-xs">Not assigned</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if (!empty($test['technician_name'])): ?>
-                                        <?= htmlspecialchars($test['technician_name']) ?>
-                                    <?php else: ?>
-                                        <span class="text-gray-400 text-xs">Not assigned</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span class="badge badge-<?= getStatusBadge($test['status'] ?? 'pending') ?>" style="font-size:0.6rem;padding:2px 10px;">
-                                        <i class="fas <?= getStatusIcon($test['status'] ?? 'pending') ?>"></i>
-                                        <?= ucfirst(str_replace('_', ' ', $test['status'] ?? 'Pending')) ?>
-                                    </span>
-                                </td>
-                                <td class="font-medium">TSh <?= number_format($test['test_price'] ?? 0, 0) ?></td>
-                                <td class="text-xs text-gray-500"><?= date('M d, Y', strtotime($test['created_at'] ?? 'now')) ?></td>
-                                <td>
-                                    <div class="flex gap-1">
-                                        <a href="view_lab_result.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-blue-600 text-xs hover:underline" title="View">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <a href="edit_lab_test.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-green-600 text-xs hover:underline" title="Edit">
-                                            <i class="fas fa-edit"></i>
-                                        </a>
-                                        <?php if (isset($test['status']) && $test['status'] !== 'completed' && $test['status'] !== 'cancelled'): ?>
-                                            <button onclick="markComplete(<?= $test['id'] ?>)" class="text-success text-xs hover:underline" title="Mark Complete">
-                                                <i class="fas fa-check-circle"></i>
-                                            </button>
-                                        <?php endif; ?>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="result-label"><i class="fas fa-file-medical-alt"></i> Results</div>
+        <div class="result-value">
+            <?php if (!empty($lab_test['formatted_result'])): ?>
+                <?= $lab_test['formatted_result'] ?>
+            <?php elseif (!empty($lab_test['results'])): ?>
+                <?= nl2br(htmlspecialchars($lab_test['results'])) ?>
             <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-flask"></i>
-                    <h3>No Lab Tests Found</h3>
-                    <p class="text-gray-400"><?= !empty($search) ? 'No results match your search criteria.' : 'No lab tests have been created yet.' ?></p>
-                    <?php if (!empty($search) || $status_filter !== 'all'): ?>
-                        <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary mt-4">
-                            <i class="fas fa-times"></i> Clear Filters
-                        </a>
-                    <?php else: ?>
-                        <a href="add_lab_test.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary mt-4">
-                            <i class="fas fa-plus"></i> Add Lab Test
-                        </a>
-                    <?php endif; ?>
-                </div>
+                <span class="text-gray-400">No results available yet</span>
             <?php endif; ?>
         </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- INTERPRETATION -->
+    <!-- ================================================================ -->
+    <?php if (!empty($lab_test['interpretation'])): ?>
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.15s;border-color:var(--primary);background:var(--primary-bg);">
+        <div class="result-label" style="color:var(--primary);"><i class="fas fa-stethoscope"></i> Interpretation</div>
+        <div class="result-value" style="color:var(--primary);"><?= nl2br(htmlspecialchars($lab_test['interpretation'])) ?></div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- NOTES -->
+    <!-- ================================================================ -->
+    <?php if (!empty($lab_test['lab_notes'])): ?>
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.2s;">
+        <div class="result-label"><i class="fas fa-sticky-note"></i> Notes</div>
+        <div class="result-value" style="font-style:italic;color:var(--text-secondary);"><?= nl2br(htmlspecialchars($lab_test['lab_notes'])) ?></div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- CLINICAL INFORMATION -->
+    <!-- ================================================================ -->
+    <?php if (!empty($lab_test['symptoms']) || !empty($lab_test['complaint']) || !empty($lab_test['diagnosis']) || !empty($lab_test['treatment'])): ?>
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.25s;">
+        <h3 class="text-sm font-bold text-primary mb-4">
+            <i class="fas fa-notes-medical"></i> Clinical Information
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <?php if (!empty($lab_test['symptoms'])): ?>
+            <div>
+                <div class="result-label"><i class="fas fa-exclamation-triangle"></i> Symptoms</div>
+                <div class="result-value"><?= htmlspecialchars($lab_test['symptoms']) ?></div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($lab_test['complaint'])): ?>
+            <div>
+                <div class="result-label"><i class="fas fa-comment-medical"></i> Complaint</div>
+                <div class="result-value"><?= htmlspecialchars($lab_test['complaint']) ?></div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($lab_test['diagnosis'])): ?>
+            <div>
+                <div class="result-label"><i class="fas fa-stethoscope"></i> Diagnosis</div>
+                <div class="result-value"><?= htmlspecialchars($lab_test['diagnosis']) ?></div>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($lab_test['treatment'])): ?>
+            <div>
+                <div class="result-label"><i class="fas fa-prescription"></i> Treatment</div>
+                <div class="result-value"><?= htmlspecialchars($lab_test['treatment']) ?></div>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- ACTION BUTTONS -->
+    <!-- ================================================================ -->
+    <div class="btn-actions" style="max-width:900px;margin:0 auto;">
+        <?php if (isset($lab_test['status']) && $lab_test['status'] !== 'completed' && $lab_test['status'] !== 'cancelled'): ?>
+            <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-success">
+                <i class="fas fa-check-circle"></i> Mark as Completed
+            </a>
+        <?php endif; ?>
+        <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary">
+            <i class="fas fa-edit"></i> Edit Test
+        </a>
+        <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">
+            <i class="fas fa-arrow-left"></i> Back to List
+        </a>
     </div>
 
     <!-- ================================================================ -->
@@ -1353,7 +1100,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Lab Tests - <?= $total_tests ?> tests
+            Lab Result - <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1364,9 +1111,9 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST / MODAL -->
+<!-- TOAST -->
 <!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;position:fixed;bottom:24px;right:24px;padding:14px 20px;border-radius:12px;z-index:999;max-width:400px;transform:translateY(100px);opacity:0;transition:all 0.4s cubic-bezier(0.4,0,0.2,1);display:flex;align-items:center;gap:12px;color:white;box-shadow:0 10px 40px rgba(0,0,0,0.15);">
+<div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
         <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
@@ -1432,13 +1179,10 @@ include_once '../../components/admin_sidebar.php';
 
     function performSearch() {
         var query = searchInput.value.trim();
-        var url = new URL(window.location.href);
         if (query.length > 0) {
-            url.searchParams.set('search', query);
-        } else {
-            url.searchParams.delete('search');
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
         }
-        window.location.href = url.toString();
     }
     
     searchBtn?.addEventListener('click', performSearch);
@@ -1449,6 +1193,7 @@ include_once '../../components/admin_sidebar.php';
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
+        url.searchParams.delete('branch_id');
         window.location.href = url.toString();
     }
 
@@ -1468,33 +1213,6 @@ include_once '../../components/admin_sidebar.php';
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // MARK AS COMPLETE
-    // ================================================================
-    function markComplete(testId) {
-        if (confirm('Mark this lab test as COMPLETED?')) {
-            var branch = '<?= urlencode($selected_branch_id) ?>';
-            var form = document.createElement('form');
-            form.method = 'POST';
-            form.action = 'edit_lab_test.php?id=' + testId + '&branch=' + branch;
-            
-            var input1 = document.createElement('input');
-            input1.type = 'hidden';
-            input1.name = 'action';
-            input1.value = 'update_lab_test';
-            form.appendChild(input1);
-            
-            var input2 = document.createElement('input');
-            input2.type = 'hidden';
-            input2.name = 'status';
-            input2.value = 'completed';
-            form.appendChild(input2);
-            
-            document.body.appendChild(form);
-            form.submit();
-        }
-    }
 
     // ================================================================
     // TOAST
@@ -1519,12 +1237,11 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c🧪 Braick Dispensary - Lab Tests (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Total Tests: <?= $total_tests ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Completed: <?= $completed_tests ?>', 'font-size:13px; color:#059669;');
-    console.log('%c⏳ In Progress: <?= $in_progress_tests ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c⏰ Pending: <?= $pending_tests ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c🧪 Braick Dispensary - View Lab Result', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> (ID: <?= $lab_test_id ?>)', 'font-size:13px; color:#7C3AED;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Status: <?= ucfirst($lab_test['status'] ?? 'Pending') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🔵 Blue Theme Applied', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
