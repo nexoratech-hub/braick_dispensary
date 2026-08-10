@@ -4,6 +4,7 @@
 // SUPER ADMIN DASHBOARD - MODERN DESIGN
 // NO AUTO REFRESH - MANUAL REFRESH ONLY
 // SOLID COLORS - NO GRADIENTS
+// REVENUE FROM: patient_bills + otc_sales ONLY
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -72,38 +73,86 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
-// FETCH STATISTICS
 // ================================================================
+// TOTAL REVENUE - FROM patient_bills + otc_sales ONLY
+// ================================================================
+// ================================================================
+
 $today = date('Y-m-d');
 
-// 1. Total Revenue (pharmacy_sales + prescriptions)
-$filter = getBranchFilter($db, $selected_branch_id, 'pharmacy_sales');
-$stmt = $db->query("SELECT COALESCE(SUM(total), 0) as revenue FROM pharmacy_sales WHERE payment_status = 'paid' $filter");
-$total_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
-
-// Prescription revenue
+// Build branch filter for patient_bills
+$branch_filter_pb = "";
 if ($selected_branch_id !== 'all') {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(pb.total_amount), 0) as revenue 
-        FROM patient_bills pb
-        WHERE pb.status = 'paid' 
-        AND pb.bill_number LIKE 'BILL-PRES-%' 
-        AND pb.branch_id = ?
-    ");
-    $stmt->execute([(int)$selected_branch_id]);
-    $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
-} else {
-    $stmt = $db->query("
-        SELECT COALESCE(SUM(total_amount), 0) as revenue 
-        FROM patient_bills 
-        WHERE status = 'paid' 
-        AND bill_number LIKE 'BILL-PRES-%'
-    ");
-    $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
+    $branch_filter_pb = " AND branch_id = " . (int)$selected_branch_id;
 }
-$total_revenue += $prescription_revenue;
 
-// 2. Total Prescriptions with amounts
+// Build branch filter for otc_sales
+$branch_filter = "";
+if ($selected_branch_id !== 'all') {
+    $branch_filter = " AND branch_id = " . (int)$selected_branch_id;
+}
+
+// ================================================================
+// 1. PATIENT BILLS REVENUE (ALL PAID BILLS)
+// ================================================================
+$stmt = $db->query("
+    SELECT COALESCE(SUM(total_amount), 0) as total 
+    FROM patient_bills 
+    WHERE status = 'paid'
+    $branch_filter_pb
+");
+$patient_bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// ================================================================
+// 2. OTC REVENUE (OTC Sales - Paid)
+// ================================================================
+$stmt = $db->query("
+    SELECT COALESCE(SUM(net_amount), 0) as total 
+    FROM otc_sales 
+    WHERE payment_status = 'paid'
+    $branch_filter
+");
+$otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// ================================================================
+// 3. TOTAL REVENUE = patient_bills + otc_sales
+// ================================================================
+$total_revenue = $patient_bills_revenue + $otc_revenue;
+
+// ================================================================
+// 4. OTC DETAILS FOR DISPLAY
+// ================================================================
+$stmt = $db->query("
+    SELECT COUNT(*) as count, 
+           COALESCE(SUM(net_amount), 0) as total_paid,
+           COALESCE(SUM(total_amount), 0) as total_all
+    FROM otc_sales 
+    WHERE payment_status = 'paid'
+    $branch_filter
+");
+$otc_details = $stmt->fetch(PDO::FETCH_ASSOC);
+$otc_count = $otc_details['count'] ?? 0;
+$otc_total_paid = $otc_details['total_paid'] ?? 0;
+
+// ================================================================
+// 5. PATIENT BILLS DETAILS
+// ================================================================
+$stmt = $db->query("
+    SELECT COUNT(*) as count, 
+           COALESCE(SUM(total_amount), 0) as total_paid
+    FROM patient_bills 
+    WHERE status = 'paid'
+    $branch_filter_pb
+");
+$pb_details = $stmt->fetch(PDO::FETCH_ASSOC);
+$pb_count = $pb_details['count'] ?? 0;
+$pb_total_paid = $pb_details['total_paid'] ?? 0;
+
+// ================================================================
+// OTHER STATISTICS
+// ================================================================
+
+// Total Prescriptions Count
 if ($selected_branch_id !== 'all') {
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
@@ -114,16 +163,6 @@ if ($selected_branch_id !== 'all') {
     ");
     $stmt->execute([(int)$selected_branch_id]);
     $total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(pb.total_amount), 0) as total_amount 
-        FROM patient_bills pb
-        WHERE pb.status = 'paid' 
-        AND pb.bill_number LIKE 'BILL-PRES-%' 
-        AND pb.branch_id = ?
-    ");
-    $stmt->execute([(int)$selected_branch_id]);
-    $total_prescription_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 } else {
     $stmt = $db->query("
         SELECT COUNT(*) as count 
@@ -131,64 +170,76 @@ if ($selected_branch_id !== 'all') {
         WHERE status != 'cancelled'
     ");
     $total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    $stmt = $db->query("
-        SELECT COALESCE(SUM(total_amount), 0) as total_amount 
-        FROM patient_bills 
-        WHERE status = 'paid' 
-        AND bill_number LIKE 'BILL-PRES-%'
-    ");
-    $total_prescription_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 }
 
-// 3. OTC Sales with amounts
-$filter = getBranchFilter($db, $selected_branch_id, 'otc_sales');
-$stmt = $db->query("SELECT COUNT(*) as count, COALESCE(SUM(net_amount), 0) as total_amount FROM otc_sales WHERE payment_status = 'paid' $filter");
-$otc_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_otc_sales = $otc_data['count'] ?? 0;
-$total_otc_amount = $otc_data['total_amount'] ?? 0;
+// OTC Sales Count
+$stmt = $db->query("
+    SELECT COUNT(*) as count 
+    FROM otc_sales 
+    WHERE payment_status = 'paid'
+    $branch_filter
+");
+$total_otc_sales = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 4. Total Patients
-$filter = getBranchFilter($db, $selected_branch_id, 'patients');
-$stmt = $db->query("SELECT COUNT(*) as count FROM patients WHERE 1=1 $filter");
+// Total Patients
+$stmt = $db->query("
+    SELECT COUNT(*) as count 
+    FROM patients 
+    WHERE 1=1 
+    $branch_filter
+");
 $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 5. Expired Medicines
-$filter = getBranchFilter($db, $selected_branch_id, 'medications_inventory');
+// Expired Medicines
 $today_date = date('Y-m-d');
-$stmt = $db->query("SELECT 
-    SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL THEN 1 ELSE 0 END) as expired,
-    SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL THEN 1 ELSE 0 END) as expiring_soon
-    FROM medications_inventory WHERE status = 'active' $filter");
+$stmt = $db->query("
+    SELECT 
+        SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL THEN 1 ELSE 0 END) as expired,
+        SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL THEN 1 ELSE 0 END) as expiring_soon
+    FROM medications_inventory 
+    WHERE status = 'active' 
+    $branch_filter
+");
 $expiry_data = $stmt->fetch(PDO::FETCH_ASSOC);
 $total_expired = $expiry_data['expired'] ?? 0;
 $expiring_soon = $expiry_data['expiring_soon'] ?? 0;
 
-// 6. Low Stock
-$filter = getBranchFilter($db, $selected_branch_id, 'medications_inventory');
-$stmt = $db->query("SELECT 
-    SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END) as out_of_stock,
-    SUM(CASE WHEN quantity > 0 AND quantity <= reorder_level THEN 1 ELSE 0 END) as low_stock
-    FROM medications_inventory WHERE status = 'active' $filter");
+// Low Stock
+$stmt = $db->query("
+    SELECT 
+        SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END) as out_of_stock,
+        SUM(CASE WHEN quantity > 0 AND quantity <= reorder_level THEN 1 ELSE 0 END) as low_stock
+    FROM medications_inventory 
+    WHERE status = 'active' 
+    $branch_filter
+");
 $stock_data = $stmt->fetch(PDO::FETCH_ASSOC);
 $out_of_stock = $stock_data['out_of_stock'] ?? 0;
 $total_low_stock = ($out_of_stock + ($stock_data['low_stock'] ?? 0));
 
-// 7. Total Employees
-$filter = getBranchFilter($db, $selected_branch_id, 'users');
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active' $filter");
+// Total Employees
+$stmt = $db->query("
+    SELECT COUNT(*) as count 
+    FROM users 
+    WHERE role != 'admin' AND status = 'active' 
+    $branch_filter
+");
 $total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 8. Total Branches
+// Total Branches
 $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
 $total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 9. Pending Lab Tests
-$filter = getBranchFilter($db, $selected_branch_id, 'lab_tests');
-$stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending' $filter");
+// Pending Lab Tests
+$stmt = $db->query("
+    SELECT COUNT(*) as count 
+    FROM lab_tests 
+    WHERE status = 'pending' 
+    $branch_filter
+");
 $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 10. Pending Prescriptions
+// Pending Prescriptions
 if ($selected_branch_id !== 'all') {
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
@@ -208,15 +259,24 @@ if ($selected_branch_id !== 'all') {
     $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
 
-// 11. Today's Appointments
-$filter = getBranchFilter($db, $selected_branch_id, 'appointments');
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE DATE(appointment_date) = ? AND status IN ('scheduled', 'confirmed') $filter");
+// Today's Appointments
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM appointments 
+    WHERE DATE(appointment_date) = ? 
+    AND status IN ('scheduled', 'confirmed') 
+    $branch_filter
+");
 $stmt->execute([$today]);
 $today_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 12. Today's Patients
-$filter = getBranchFilter($db, $selected_branch_id, 'patients');
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE DATE(created_at) = ? $filter");
+// Today's Patients
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM patients 
+    WHERE DATE(created_at) = ? 
+    $branch_filter
+");
 $stmt->execute([$today]);
 $today_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
@@ -269,19 +329,40 @@ try {
 }
 
 // ================================================================
-// CHART DATA - Last 7 Days Revenue
+// CHART DATA - Last 7 Days Revenue (from patient_bills + otc_sales)
 // ================================================================
 $chart_labels = [];
 $chart_values = [];
-$filter = getBranchFilter($db, $selected_branch_id, 'pharmacy_sales');
+
 for ($i = 6; $i >= 0; $i--) {
     $date = date('Y-m-d', strtotime("-$i days"));
     $chart_labels[] = date('D', strtotime($date));
     
-    $stmt = $db->prepare("SELECT COALESCE(SUM(total), 0) as revenue FROM pharmacy_sales WHERE DATE(sale_date) = ? AND payment_status = 'paid' $filter");
+    $daily_total = 0;
+    
+    // 1. From patient_bills (paid bills)
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(total_amount), 0) as total 
+        FROM patient_bills 
+        WHERE DATE(created_at) = ? 
+        AND status = 'paid'
+        $branch_filter_pb
+    ");
     $stmt->execute([$date]);
-    $rev = $stmt->fetch(PDO::FETCH_ASSOC);
-    $chart_values[] = (float)$rev['revenue'];
+    $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    
+    // 2. From otc_sales (paid)
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(net_amount), 0) as total 
+        FROM otc_sales 
+        WHERE DATE(created_at) = ? 
+        AND payment_status = 'paid'
+        $branch_filter
+    ");
+    $stmt->execute([$date]);
+    $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    
+    $chart_values[] = (float)$daily_total;
 }
 
 // ================================================================
@@ -400,6 +481,7 @@ include_once '../../components/admin_sidebar.php';
                         <div>
                             <p class="stat-label">Total Revenue</p>
                             <p class="stat-number" id="totalRevenue">TSh <?= number_format($total_revenue) ?></p>
+                            <p class="stat-sub-amount">Patient Bills + OTC Sales</p>
                         </div>
                         <p class="stat-trend"><i class="fas fa-arrow-up"></i> All time</p>
                     </div>
@@ -411,20 +493,20 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </a>
         
-        <!-- 2. Total Prescriptions - SOLID GREEN -->
-        <a href="../pharmacy/dashboard.php?branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
+        <!-- 2. Patient Bills - SOLID GREEN -->
+        <a href="bills.php?branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
             <div class="stat-card solid-green">
                 <div class="flex items-start justify-between h-full">
                     <div class="flex flex-col justify-between h-full">
                         <div>
-                            <p class="stat-label">Prescriptions</p>
-                            <p class="stat-number" id="totalPrescriptions"><?= number_format($total_prescriptions) ?></p>
-                            <p class="stat-sub-amount">TSh <span id="prescriptionAmount"><?= number_format($total_prescription_amount) ?></span></p>
+                            <p class="stat-label">Patient Bills</p>
+                            <p class="stat-number" id="patientBillsRevenue">TSh <?= number_format($patient_bills_revenue) ?></p>
+                            <p class="stat-sub-amount"><?= $pb_count ?> paid bills</p>
                         </div>
-                        <p class="stat-trend"><i class="fas fa-prescription"></i> Total sales</p>
+                        <p class="stat-trend"><i class="fas fa-file-invoice"></i> All bills</p>
                     </div>
                     <div class="stat-icon">
-                        <i class="fas fa-prescription-bottle"></i>
+                        <i class="fas fa-file-invoice"></i>
                     </div>
                 </div>
                 <i class="fas fa-arrow-right stat-arrow"></i>
@@ -438,8 +520,8 @@ include_once '../../components/admin_sidebar.php';
                     <div class="flex flex-col justify-between h-full">
                         <div>
                             <p class="stat-label">OTC Sales</p>
-                            <p class="stat-number" id="totalOtcSales"><?= number_format($total_otc_sales) ?></p>
-                            <p class="stat-sub-amount">TSh <span id="otcAmount"><?= number_format($total_otc_amount) ?></span></p>
+                            <p class="stat-number" id="otcRevenue">TSh <?= number_format($otc_revenue) ?></p>
+                            <p class="stat-sub-amount"><?= $otc_count ?> transactions</p>
                         </div>
                         <p class="stat-trend"><i class="fas fa-cash-register"></i> Over the counter</p>
                     </div>
@@ -459,8 +541,9 @@ include_once '../../components/admin_sidebar.php';
                         <div>
                             <p class="stat-label">Total Patients</p>
                             <p class="stat-number" id="totalPatients"><?= number_format($total_patients) ?></p>
+                            <p class="stat-sub-amount">Registered patients</p>
                         </div>
-                        <p class="stat-trend"><i class="fas fa-users"></i> Registered</p>
+                        <p class="stat-trend"><i class="fas fa-users"></i> All time</p>
                     </div>
                     <div class="stat-icon">
                         <i class="fas fa-users"></i>
@@ -477,7 +560,27 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
         
-        <!-- 5. Expired Medicines - SOLID RED -->
+        <!-- 5. Low Stock - SOLID ORANGE -->
+        <a href="inventory.php?filter=low_stock&branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
+            <div class="stat-card solid-orange">
+                <div class="flex items-start justify-between h-full">
+                    <div class="flex flex-col justify-between h-full">
+                        <div>
+                            <p class="stat-label">Stock Alerts</p>
+                            <p class="stat-number" id="lowStock"><?= number_format($total_low_stock) ?></p>
+                            <p class="stat-sub-amount"><?= $out_of_stock ?> out of stock</p>
+                        </div>
+                        <p class="stat-trend"><i class="fas fa-pills"></i> Needs restock</p>
+                    </div>
+                    <div class="stat-icon">
+                        <i class="fas fa-exclamation-triangle"></i>
+                    </div>
+                </div>
+                <i class="fas fa-arrow-right stat-arrow"></i>
+            </div>
+        </a>
+        
+        <!-- 6. Expired Medicines - SOLID RED -->
         <a href="inventory.php?filter=expired&branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
             <div class="stat-card solid-red">
                 <div class="flex items-start justify-between h-full">
@@ -485,32 +588,12 @@ include_once '../../components/admin_sidebar.php';
                         <div>
                             <p class="stat-label">Expired Medicines</p>
                             <p class="stat-number" id="expiredMedicines"><?= number_format($total_expired) ?></p>
-                            <p class="stat-sub-amount"><i class="fas fa-clock"></i> <span id="expiringSoon"><?= number_format($expiring_soon) ?></span> expiring soon</p>
+                            <p class="stat-sub-amount"><i class="fas fa-clock"></i> <?= $expiring_soon ?> expiring soon</p>
                         </div>
                         <p class="stat-trend"><i class="fas fa-exclamation-circle"></i> Needs disposal</p>
                     </div>
                     <div class="stat-icon">
-                        <i class="fas fa-exclamation-circle"></i>
-                    </div>
-                </div>
-                <i class="fas fa-arrow-right stat-arrow"></i>
-            </div>
-        </a>
-        
-        <!-- 6. Low Stock - SOLID ORANGE -->
-        <a href="inventory.php?filter=low_stock&branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
-            <div class="stat-card solid-orange">
-                <div class="flex items-start justify-between h-full">
-                    <div class="flex flex-col justify-between h-full">
-                        <div>
-                            <p class="stat-label">Low Stock</p>
-                            <p class="stat-number" id="lowStock"><?= number_format($total_low_stock) ?></p>
-                            <p class="stat-sub-amount"><i class="fas fa-times-circle"></i> <span id="outOfStock"><?= number_format($out_of_stock) ?></span> out of stock</p>
-                        </div>
-                        <p class="stat-trend"><i class="fas fa-pills"></i> Needs restock</p>
-                    </div>
-                    <div class="stat-icon">
-                        <i class="fas fa-pills"></i>
+                        <i class="fas fa-skull"></i>
                     </div>
                 </div>
                 <i class="fas fa-arrow-right stat-arrow"></i>
@@ -525,8 +608,9 @@ include_once '../../components/admin_sidebar.php';
                         <div>
                             <p class="stat-label">Total Employees</p>
                             <p class="stat-number" id="totalEmployees"><?= number_format($total_employees) ?></p>
+                            <p class="stat-sub-amount">Active staff</p>
                         </div>
-                        <p class="stat-trend"><i class="fas fa-user-tie"></i> Active staff</p>
+                        <p class="stat-trend"><i class="fas fa-user-tie"></i> All staff</p>
                     </div>
                     <div class="stat-icon">
                         <i class="fas fa-user-tie"></i>
@@ -536,21 +620,27 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </a>
         
-        <!-- 8. Reports & Analytics - SOLID CYAN -->
-        <a href="reports.php?branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
+        <!-- 8. Pending Tasks - SOLID CYAN -->
+        <a href="pending_tasks.php?branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
             <div class="stat-card solid-cyan">
                 <div class="flex items-start justify-between h-full">
                     <div class="flex flex-col justify-between h-full">
                         <div>
-                            <p class="stat-label">Reports & Analytics</p>
+                            <p class="stat-label">Pending Tasks</p>
                             <p class="stat-number" style="font-size: 2rem;">
-                                <i class="fas fa-chart-line"></i>
+                                <?php 
+                                    $pending_total = ($pending_lab_tests ?? 0) + ($pending_prescriptions ?? 0);
+                                    echo number_format($pending_total);
+                                ?>
+                            </p>
+                            <p class="stat-sub-amount">
+                                Lab: <?= $pending_lab_tests ?? 0 ?> · Prescription: <?= $pending_prescriptions ?? 0 ?>
                             </p>
                         </div>
-                        <p class="stat-trend"><i class="fas fa-arrow-right"></i> View Reports</p>
+                        <p class="stat-trend"><i class="fas fa-tasks"></i> Needs attention</p>
                     </div>
                     <div class="stat-icon">
-                        <i class="fas fa-chart-bar"></i>
+                        <i class="fas fa-tasks"></i>
                     </div>
                 </div>
                 <i class="fas fa-arrow-right stat-arrow"></i>
@@ -999,9 +1089,6 @@ include_once '../../components/admin_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1014,9 +1101,6 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
@@ -1030,43 +1114,12 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        if (!toast) return;
-        
-        toast.className = 'toast-custom ' + (type || 'info');
-        toastTitle.textContent = title || 'Notification';
-        toastMessage.textContent = message || '';
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() { 
-                if (toast) toast.style.display = 'none'; 
-            }, 400);
-        }, 3000);
-    }
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1169,11 +1222,11 @@ include_once '../../components/admin_sidebar.php';
 
     console.log('%c🏥 Braick Dispensary - Super Admin Dashboard v3.0', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👋 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 8 Main Cards (Solid Colors) + 4 Quick Stats', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📈 Chart Height: 120px', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Revenue from: patient_bills + otc_sales ONLY', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c   Patient Bills: TSh <?= number_format($patient_bills_revenue) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c   OTC Sales: TSh <?= number_format($otc_revenue) ?>', 'font-size:12px; color:#0A4CA8;');
     console.log('%c🔄 No Auto Refresh - Manual Refresh Only', 'font-size:13px; color:#EF4444;');
-    console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Branch Filter: ' + (<?= json_encode($selected_branch_id) ?> === 'all' ? 'All Branches' : '<?= htmlspecialchars($branch_name) ?>'), 'font-size:13px; color:#059669;');
 </script>
 
 </body>

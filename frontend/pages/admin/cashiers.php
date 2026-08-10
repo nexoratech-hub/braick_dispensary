@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/cashiers.php
 // SUPER ADMIN - VIEW ALL CASHIERS
 // BRAICK DISPENSARY - GREEN THEME
+// TOTAL REVENUE FROM: patient_bills + otc_sales ONLY
 // ================================================================
 
 session_start();
@@ -31,7 +32,7 @@ $search = $_GET['search'] ?? '';
 $status_filter = $_GET['status'] ?? 'all';
 
 // ================================================================
-// BUILD QUERY WITH FILTERS
+// BUILD QUERY WITH FILTERS - FIXED REVENUE
 // ================================================================
 $query = "
     SELECT 
@@ -42,10 +43,14 @@ $query = "
         (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
         (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
         (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'partial') as partial_bills,
-        (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE branch_id = b.id) as total_revenue,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM prescription_sales WHERE branch_id = b.id AND payment_status = 'paid') as prescribe_revenue,
+        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'cancelled') as cancelled_bills,
+        -- ================================================================
+        -- TOTAL REVENUE: patient_bills (paid) + otc_sales (paid)
+        -- ================================================================
+        (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as patient_bills_revenue,
         (SELECT COALESCE(SUM(net_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid') as otc_revenue,
-        (SELECT COALESCE(SUM(test_price), 0) FROM lab_tests WHERE branch_id = b.id AND status = 'completed') as lab_revenue
+        ((SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') + 
+         (SELECT COALESCE(SUM(net_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid')) as total_revenue
     FROM branches b
     WHERE 1=1
 ";
@@ -98,7 +103,10 @@ $total_bills = 0;
 $total_pending = 0;
 $total_paid = 0;
 $total_partial = 0;
+$total_cancelled = 0;
 $total_revenue = 0;
+$total_patient_bills_revenue = 0;
+$total_otc_revenue = 0;
 
 foreach ($cashiers as $c) {
     $total_cashiers_count += ($c['total_cashiers'] ?? 0);
@@ -106,6 +114,9 @@ foreach ($cashiers as $c) {
     $total_pending += ($c['pending_bills'] ?? 0);
     $total_paid += ($c['paid_bills'] ?? 0);
     $total_partial += ($c['partial_bills'] ?? 0);
+    $total_cancelled += ($c['cancelled_bills'] ?? 0);
+    $total_patient_bills_revenue += ($c['patient_bills_revenue'] ?? 0);
+    $total_otc_revenue += ($c['otc_revenue'] ?? 0);
     $total_revenue += ($c['total_revenue'] ?? 0);
 }
 
@@ -746,7 +757,7 @@ include_once '../../components/admin_sidebar.php';
            ================================================================ */
         .cashier-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
             gap: 20px;
         }
         
@@ -967,6 +978,29 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(4, 120, 87, 0.35);
         }
         
+        /* Revenue breakdown in card */
+        .revenue-breakdown {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            padding: 6px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 6px;
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+        }
+        
+        .revenue-breakdown .item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .revenue-breakdown .item .label { font-weight: 500; }
+        .revenue-breakdown .item .amount { font-weight: 700; }
+        .revenue-breakdown .item .amount.blue { color: #0B5ED7; }
+        .revenue-breakdown .item .amount.green { color: var(--primary); }
+        
         /* ================================================================
            EMPTY STATE
            ================================================================ */
@@ -1016,6 +1050,7 @@ include_once '../../components/admin_sidebar.php';
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
+            .cashier-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
         }
         
         @media (max-width: 768px) {
@@ -1145,6 +1180,13 @@ include_once '../../components/admin_sidebar.php';
                 <span class="header-badge" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.3);color:#A78BFA;">
                     <i class="fas fa-user-tie"></i> <?= number_format($total_cashiers_count) ?> Cashiers
                 </span>
+                <!-- Revenue Breakdown -->
+                <span class="header-badge" style="background:rgba(11,94,215,0.2);border-color:rgba(11,94,215,0.3);color:#6EA8FE;">
+                    <i class="fas fa-file-invoice"></i> Bills: TSh <?= number_format($total_patient_bills_revenue, 0) ?>
+                </span>
+                <span class="header-badge" style="background:rgba(245,158,11,0.2);border-color:rgba(245,158,11,0.3);color:#FBBF24;">
+                    <i class="fas fa-cash-register"></i> OTC: TSh <?= number_format($total_otc_revenue, 0) ?>
+                </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
@@ -1200,6 +1242,24 @@ include_once '../../components/admin_sidebar.php';
                 <div>
                     <p class="stat-label">Total Revenue</p>
                     <p class="stat-number teal">TSh <?= number_format($total_revenue, 0) ?></p>
+                </div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="flex items-center gap-3">
+                <div class="stat-icon-small blue"><i class="fas fa-file-invoice"></i></div>
+                <div>
+                    <p class="stat-label">Patient Bills</p>
+                    <p class="stat-number blue">TSh <?= number_format($total_patient_bills_revenue, 0) ?></p>
+                </div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="flex items-center gap-3">
+                <div class="stat-icon-small orange"><i class="fas fa-cash-register"></i></div>
+                <div>
+                    <p class="stat-label">OTC Revenue</p>
+                    <p class="stat-number orange">TSh <?= number_format($total_otc_revenue, 0) ?></p>
                 </div>
             </div>
         </div>
@@ -1273,6 +1333,22 @@ include_once '../../components/admin_sidebar.php';
                             <i class="fas fa-calendar-plus"></i>
                             Created: <?= date('M d, Y', strtotime($cashier['created_at'] ?? 'now')) ?>
                         </div>
+                        
+                        <!-- Revenue Breakdown -->
+                        <div class="revenue-breakdown">
+                            <span class="item">
+                                <span class="label">Bills:</span>
+                                <span class="amount blue">TSh <?= number_format($cashier['patient_bills_revenue'] ?? 0, 0) ?></span>
+                            </span>
+                            <span class="item">
+                                <span class="label">OTC:</span>
+                                <span class="amount green">TSh <?= number_format($cashier['otc_revenue'] ?? 0, 0) ?></span>
+                            </span>
+                            <span class="item" style="font-weight:700;color:var(--primary);">
+                                <span class="label">Total:</span>
+                                <span style="color:#0D9488;">TSh <?= number_format($cashier['total_revenue'] ?? 0, 0) ?></span>
+                            </span>
+                        </div>
                     </div>
                     
                     <div class="card-stats">
@@ -1312,6 +1388,11 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 </div>
             <?php endforeach; ?>
+        </div>
+        
+        <!-- Total count -->
+        <div class="text-center text-sm text-gray-500 dark:text-gray-400 py-3">
+            Showing <strong><?= count($cashiers) ?></strong> cashier branch<?= count($cashiers) > 1 ? 'es' : '' ?>
         </div>
     <?php else: ?>
         <div class="empty-state animate-fade-in-up" style="animation-delay:0.1s;">
@@ -1437,8 +1518,9 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c💰 Braick Dispensary - Cashiers (GREEN THEME)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Total Cashiers: <?= $total_cashiers ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c⏳ Pending: <?= number_format($total_pending) ?> | ✅ Paid: <?= number_format($total_paid) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?> (FROM: patient_bills + otc_sales)', 'font-size:13px; color:#0D9488;');
+    console.log('%c   Patient Bills: TSh <?= number_format($total_patient_bills_revenue, 0) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   OTC Sales: TSh <?= number_format($total_otc_revenue, 0) ?>', 'font-size:12px; color:#F59E0B;');
     console.log('%c🟢 Green Theme Applied', 'font-size:13px; color:#059669;');
 </script>
 
