@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/add_branch.php
 // SUPER ADMIN - ADD NEW BRANCH
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - FIXED
 // ================================================================
 
 session_start();
@@ -30,15 +30,23 @@ $errors = [];
 $success = false;
 $form_data = [];
 
+// Get branch columns
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM branches");
+    $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $columns = ['id', 'name', 'location', 'phone', 'email', 'logo', 'status', 'created_at', 'updated_at'];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Get form data
     $form_data = [
         'name' => trim($_POST['name'] ?? ''),
         'location' => trim($_POST['location'] ?? ''),
-        'contact_phone' => trim($_POST['contact_phone'] ?? ''),
-        'contact_email' => trim($_POST['contact_email'] ?? ''),
+        'phone' => trim($_POST['phone'] ?? ''),
+        'email' => trim($_POST['email'] ?? ''),
         'status' => $_POST['status'] ?? 'active',
-        'description' => trim($_POST['description'] ?? '')
+        'logo' => trim($_POST['logo'] ?? '')
     ];
 
     // Validate
@@ -50,8 +58,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors['location'] = 'Location is required';
     }
 
-    if (!empty($form_data['contact_email']) && !filter_var($form_data['contact_email'], FILTER_VALIDATE_EMAIL)) {
-        $errors['contact_email'] = 'Please enter a valid email address';
+    if (!empty($form_data['email']) && !filter_var($form_data['email'], FILTER_VALIDATE_EMAIL)) {
+        $errors['email'] = 'Please enter a valid email address';
     }
 
     // Check if branch name already exists
@@ -63,39 +71,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    // Check if email already exists
+    if (empty($errors['email']) && !empty($form_data['email'])) {
+        $stmt = $db->prepare("SELECT id FROM branches WHERE email = ?");
+        $stmt->execute([$form_data['email']]);
+        if ($stmt->fetch()) {
+            $errors['email'] = 'A branch with this email already exists';
+        }
+    }
+
     // If no errors, insert
     if (empty($errors)) {
         try {
-            $stmt = $db->prepare("
-                INSERT INTO branches (
-                    name, 
-                    location, 
-                    contact_phone, 
-                    contact_email, 
-                    status, 
-                    description,
-                    created_at,
-                    updated_at
-                ) VALUES (
-                    :name,
-                    :location,
-                    :contact_phone,
-                    :contact_email,
-                    :status,
-                    :description,
-                    NOW(),
-                    NOW()
-                )
-            ");
+            // Build insert query dynamically based on available columns
+            $insert_fields = [];
+            $placeholders = [];
+            $params = [];
 
-            $stmt->execute([
-                ':name' => $form_data['name'],
-                ':location' => $form_data['location'],
-                ':contact_phone' => $form_data['contact_phone'],
-                ':contact_email' => $form_data['contact_email'],
-                ':status' => $form_data['status'],
-                ':description' => $form_data['description']
-            ]);
+            // Always include these fields
+            $fields_to_insert = ['name', 'location', 'phone', 'email', 'status', 'created_at', 'updated_at'];
+            
+            foreach ($fields_to_insert as $field) {
+                if (in_array($field, $columns) && $field !== 'id' && $field !== 'created_at' && $field !== 'updated_at') {
+                    $insert_fields[] = $field;
+                    $placeholders[] = ":$field";
+                    $params[":$field"] = $form_data[$field] ?? null;
+                }
+            }
+
+            // Add created_at and updated_at
+            $insert_fields[] = 'created_at';
+            $placeholders[] = 'NOW()';
+            $insert_fields[] = 'updated_at';
+            $placeholders[] = 'NOW()';
+
+            $sql = "INSERT INTO branches (" . implode(", ", $insert_fields) . ") VALUES (" . implode(", ", $placeholders) . ")";
+            
+            $stmt = $db->prepare($sql);
+            
+            // Execute with parameters
+            $stmt->execute($params);
 
             $branch_id = $db->lastInsertId();
             $success = true;
@@ -103,8 +118,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Clear form data on success
             $form_data = [];
             
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                    VALUES (?, ?, 'branch_added', ?, NOW())
+                ");
+                $details = "New branch created: " . $form_data['name'] . " (ID: $branch_id)";
+                $stmt->execute([$_SESSION['user_id'], $branch_id, $details]);
+            } catch (Exception $log_error) {
+                // Ignore logging errors
+            }
+            
         } catch (PDOException $e) {
-            $errors['general'] = 'Failed to create branch. Please try again.';
+            $errors['general'] = 'Failed to create branch: ' . $e->getMessage();
             error_log('Add branch error: ' . $e->getMessage());
         }
     }
@@ -195,7 +222,7 @@ include_once '../../components/admin_sidebar.php';
     <?php if ($success): ?>
         <div class="alert alert-success mb-5">
             <i class="fas fa-check-circle"></i>
-            <span>Branch created successfully! <a href="branches.php?branch=all" class="alert-link">View all branches</a></span>
+            <span>✅ Branch created successfully! <a href="branches.php?branch=all" class="alert-link">View all branches</a></span>
             <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
         </div>
     <?php endif; ?>
@@ -212,7 +239,7 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ADD BRANCH FORM -->
+    <!-- ADD BRANCH FORM - FIXED -->
     <!-- ================================================================ -->
     <div class="form-card">
         <div class="form-card-header">
@@ -234,7 +261,7 @@ include_once '../../components/admin_sidebar.php';
                         id="name" 
                         name="name" 
                         class="form-control" 
-                        placeholder="Enter branch name"
+                        placeholder="Enter branch name (e.g. Dodoma)"
                         value="<?= htmlspecialchars($form_data['name'] ?? '') ?>"
                         required
                     >
@@ -262,37 +289,39 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
 
-            <!-- Row 2: Contact Phone & Contact Email -->
+            <!-- Row 2: Phone & Email - FIXED column names -->
             <div class="form-row">
                 <div class="form-group">
-                    <label for="contact_phone" class="form-label">
-                        <i class="fas fa-phone"></i> Contact Phone
+                    <label for="phone" class="form-label">
+                        <i class="fas fa-phone"></i> Phone Number
                     </label>
                     <input 
                         type="tel" 
-                        id="contact_phone" 
-                        name="contact_phone" 
+                        id="phone" 
+                        name="phone" 
                         class="form-control" 
-                        placeholder="Enter phone number"
-                        value="<?= htmlspecialchars($form_data['contact_phone'] ?? '') ?>"
+                        placeholder="Enter phone number (e.g. +255 700 000 000)"
+                        value="<?= htmlspecialchars($form_data['phone'] ?? '') ?>"
                     >
+                    <span class="form-help">Contact phone number for the branch</span>
                 </div>
 
-                <div class="form-group <?= isset($errors['contact_email']) ? 'has-error' : '' ?>">
-                    <label for="contact_email" class="form-label">
-                        <i class="fas fa-envelope"></i> Contact Email
+                <div class="form-group <?= isset($errors['email']) ? 'has-error' : '' ?>">
+                    <label for="email" class="form-label">
+                        <i class="fas fa-envelope"></i> Email Address
                     </label>
                     <input 
                         type="email" 
-                        id="contact_email" 
-                        name="contact_email" 
+                        id="email" 
+                        name="email" 
                         class="form-control" 
                         placeholder="Enter email address"
-                        value="<?= htmlspecialchars($form_data['contact_email'] ?? '') ?>"
+                        value="<?= htmlspecialchars($form_data['email'] ?? '') ?>"
                     >
-                    <?php if (isset($errors['contact_email'])): ?>
-                        <span class="form-error"><?= htmlspecialchars($errors['contact_email']) ?></span>
+                    <?php if (isset($errors['email'])): ?>
+                        <span class="form-error"><?= htmlspecialchars($errors['email']) ?></span>
                     <?php endif; ?>
+                    <span class="form-help">Contact email for the branch</span>
                 </div>
             </div>
 
@@ -303,26 +332,28 @@ include_once '../../components/admin_sidebar.php';
                         <i class="fas fa-toggle-on"></i> Status
                     </label>
                     <select id="status" name="status" class="form-control">
-                        <option value="active" <?= (isset($form_data['status']) && $form_data['status'] === 'active') ? 'selected' : '' ?>>Active</option>
-                        <option value="inactive" <?= (isset($form_data['status']) && $form_data['status'] === 'inactive') ? 'selected' : '' ?>>Inactive</option>
+                        <option value="active" <?= (isset($form_data['status']) && $form_data['status'] === 'active') ? 'selected' : '' ?>>🟢 Active</option>
+                        <option value="inactive" <?= (isset($form_data['status']) && $form_data['status'] === 'inactive') ? 'selected' : '' ?>>🔴 Inactive</option>
                     </select>
                     <span class="form-help">Active branches are visible and operational</span>
                 </div>
             </div>
 
-            <!-- Row 4: Description (full width) -->
+            <!-- Row 4: Logo URL (full width) - Optional -->
             <div class="form-row single">
                 <div class="form-group">
-                    <label for="description" class="form-label">
-                        <i class="fas fa-align-left"></i> Description
+                    <label for="logo" class="form-label">
+                        <i class="fas fa-image"></i> Logo URL (Optional)
                     </label>
-                    <textarea 
-                        id="description" 
-                        name="description" 
+                    <input 
+                        type="text" 
+                        id="logo" 
+                        name="logo" 
                         class="form-control" 
-                        rows="4" 
-                        placeholder="Enter a brief description of the branch (optional)"
-                    ><?= htmlspecialchars($form_data['description'] ?? '') ?></textarea>
+                        placeholder="Enter logo image URL (optional)"
+                        value="<?= htmlspecialchars($form_data['logo'] ?? '') ?>"
+                    >
+                    <span class="form-help">Upload a logo image or enter a URL</span>
                 </div>
             </div>
 
@@ -1014,7 +1045,7 @@ include_once '../../components/admin_sidebar.php';
     document.getElementById('branchForm')?.addEventListener('submit', function(e) {
         var name = document.getElementById('name').value.trim();
         var location = document.getElementById('location').value.trim();
-        var email = document.getElementById('contact_email').value.trim();
+        var email = document.getElementById('email').value.trim();
         var isValid = true;
 
         // Clear previous errors
@@ -1035,7 +1066,7 @@ include_once '../../components/admin_sidebar.php';
 
         // Validate email
         if (email && !isValidEmail(email)) {
-            showError('contact_email', 'Please enter a valid email address');
+            showError('email', 'Please enter a valid email address');
             isValid = false;
         }
 
@@ -1078,8 +1109,9 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏢 Braick Dispensary - Add New Branch', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📝 Fill in the form to create a new branch', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Braick Dispensary - Add New Branch (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📝 Fixed: Using correct column names (phone, email, not contact_phone, contact_email)', 'font-size:13px; color:#059669;');
+    console.log('%c📝 No description column - removed', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

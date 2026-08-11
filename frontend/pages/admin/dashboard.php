@@ -5,6 +5,7 @@
 // NO AUTO REFRESH - MANUAL REFRESH ONLY
 // SOLID COLORS - NO GRADIENTS
 // REVENUE FROM: patient_bills + otc_sales ONLY
+// CHART HEIGHT: 150px (FIXED)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -73,9 +74,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
-// ================================================================
 // TOTAL REVENUE - FROM patient_bills + otc_sales ONLY
-// ================================================================
 // ================================================================
 
 $today = date('Y-m-d');
@@ -443,7 +442,7 @@ include_once '../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-4">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-home mr-2"></i> Super Admin Dashboard
@@ -471,7 +470,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- ROW 1: 4 MAIN CARDS - SOLID COLORS - SAME HEIGHT -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         
         <!-- 1. Total Revenue - SOLID BLUE -->
         <a href="reports.php?type=revenue&branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
@@ -558,7 +557,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- ROW 2: 4 CARDS - SOLID COLORS - SAME HEIGHT -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         
         <!-- 5. Low Stock - SOLID ORANGE -->
         <a href="inventory.php?filter=low_stock&branch=<?= $selected_branch_id ?>" style="text-decoration: none; display: block; height: 100%;">
@@ -627,7 +626,7 @@ include_once '../../components/admin_sidebar.php';
                     <div class="flex flex-col justify-between h-full">
                         <div>
                             <p class="stat-label">Pending Tasks</p>
-                            <p class="stat-number" style="font-size: 2rem;">
+                            <p class="stat-number" style="font-size: 1.8rem;">
                                 <?php 
                                     $pending_total = ($pending_lab_tests ?? 0) + ($pending_prescriptions ?? 0);
                                     echo number_format($pending_total);
@@ -652,7 +651,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- QUICK STATS - ROW 3 -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         
         <div class="quick-stat-card">
             <div class="qs-icon blue">
@@ -697,31 +696,33 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- CHART - Revenue -->
+    <!-- CHART - Revenue - REDUCED HEIGHT -->
     <!-- ================================================================ -->
-    <div class="card mb-5">
-        <div class="card-header">
-            <h3 class="card-title">
+    <div class="card mb-4">
+        <div class="card-header py-2">
+            <h3 class="card-title text-sm">
                 <i class="fas fa-chart-line title-blue mr-2"></i> Revenue Overview (Last 7 Days)
                 <span class="text-xs text-gray-400 font-normal">TSh <?= number_format(array_sum($chart_values)) ?> total</span>
             </h3>
         </div>
-        <canvas id="revenueChart" height="120"></canvas>
+        <div style="height: 150px; padding: 8px 12px;">
+            <canvas id="revenueChart"></canvas>
+        </div>
     </div>
 
     <!-- ================================================================ -->
     <!-- RECENT PATIENTS & ACTIVITIES -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
         
         <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
+            <div class="card-header py-2">
+                <h3 class="card-title text-sm">
                     <i class="fas fa-user-injured title-blue mr-2"></i> Recent Patients
                 </h3>
                 <a href="patients.php?branch=<?= $selected_branch_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
             </div>
-            <div class="overflow-x-auto max-h-60 overflow-y-auto">
+            <div class="overflow-x-auto max-h-50 overflow-y-auto">
                 <table class="data-table">
                     <thead>
                         <tr>
@@ -747,7 +748,7 @@ include_once '../../components/admin_sidebar.php';
                                 </tr>
                             <?php endforeach; ?>
                         <?php else: ?>
-                            <tr><td colspan="5" class="text-center text-gray-400 text-sm py-3">No patients found</td></tr>
+                            <tr><td colspan="5" class="text-center text-gray-400 text-sm py-2">No patients found</td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -755,22 +756,22 @@ include_once '../../components/admin_sidebar.php';
         </div>
         
         <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
+            <div class="card-header py-2">
+                <h3 class="card-title text-sm">
                     <i class="fas fa-clock title-green mr-2"></i> Recent Activities
                 </h3>
                 <a href="system_logs.php" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
             </div>
-            <div class="space-y-2 max-h-60 overflow-y-auto">
+            <div class="space-y-1 max-h-50 overflow-y-auto px-2">
                 <?php foreach ($recent_activities as $activity): ?>
-                    <div class="flex items-start gap-3 p-2 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition">
-                        <div class="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5 text-white">
-                            <i class="fas fa-circle text-[6px]"></i>
+                    <div class="flex items-start gap-2 p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition">
+                        <div class="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5 text-white text-xs">
+                            <i class="fas fa-circle text-[5px]"></i>
                         </div>
                         <div>
-                            <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($activity['action'] ?? 'Action') ?></p>
-                            <p class="text-xs text-gray-500 dark:text-gray-400"><?= htmlspecialchars($activity['details'] ?? '') ?></p>
-                            <p class="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                            <p class="font-medium text-xs text-gray-800 dark:text-gray-200"><?= htmlspecialchars($activity['action'] ?? 'Action') ?></p>
+                            <p class="text-[10px] text-gray-500 dark:text-gray-400"><?= htmlspecialchars($activity['details'] ?? '') ?></p>
+                            <p class="text-[9px] text-gray-400 dark:text-gray-500 mt-0.5">
                                 <?= isset($activity['created_at']) ? time_ago($activity['created_at']) : 'Just now' ?>
                             </p>
                         </div>
@@ -785,32 +786,20 @@ include_once '../../components/admin_sidebar.php';
     <!-- QUICK REPORTS -->
     <!-- ================================================================ -->
     <div class="card">
-        <div class="card-header">
-            <h3 class="card-title">
+        <div class="card-header py-2">
+            <h3 class="card-title text-sm">
                 <i class="fas fa-file-alt title-blue mr-2"></i> Quick Reports
             </h3>
         </div>
-        <div class="flex flex-wrap gap-2">
-            <a href="reports.php?type=daily&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                <i class="fas fa-calendar-day"></i> Daily
-            </a>
-            <a href="reports.php?type=weekly&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                <i class="fas fa-calendar-week"></i> Weekly
-            </a>
-            <a href="reports.php?type=monthly&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                <i class="fas fa-calendar-alt"></i> Monthly
-            </a>
-            <a href="reports.php?type=revenue&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                <i class="fas fa-money-bill-wave"></i> Revenue
-            </a>
-            <a href="reports.php?type=medicine&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                <i class="fas fa-pills"></i> Medicine
-            </a>
-            <a href="reports.php?type=laboratory&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                <i class="fas fa-flask"></i> Laboratory
-            </a>
+        <div class="flex flex-wrap gap-1.5 px-1 pb-2">
+            <a href="reports.php?type=daily&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Daily</a>
+            <a href="reports.php?type=weekly&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Weekly</a>
+            <a href="reports.php?type=monthly&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Monthly</a>
+            <a href="reports.php?type=revenue&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Revenue</a>
+            <a href="reports.php?type=medicine&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Medicine</a>
+            <a href="reports.php?type=laboratory&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Laboratory</a>
             <div class="flex-1"></div>
-            <button onclick="window.print()" class="btn btn-outline btn-sm">
+            <button onclick="window.print()" class="btn btn-outline btn-sm text-xs">
                 <i class="fas fa-print"></i> Print
             </button>
         </div>
@@ -819,14 +808,14 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer">
+    <footer class="footer mt-4 py-2 text-center text-xs text-gray-500 border-t border-gray-200 dark:border-gray-700">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="footer-brand font-semibold text-blue-600">Braick Dispensary</span> Management System
+            <span class="mx-2">|</span>
             Super Admin Dashboard v3.0
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -846,13 +835,13 @@ include_once '../../components/admin_sidebar.php';
 
 <style>
     /* ================================================================
-       CUSTOM STYLES FOR DASHBOARD
+       CUSTOM STYLES FOR DASHBOARD - COMPACT VERSION
        ================================================================ */
     
-    /* Stat Cards - SOLID COLORS - SAME HEIGHT */
+    /* Stat Cards - SOLID COLORS - SAME HEIGHT - COMPACT */
     .stat-card {
-        border-radius: 16px;
-        padding: 22px 24px;
+        border-radius: 14px;
+        padding: 16px 18px;
         border: none;
         transition: all 0.3s ease;
         color: white;
@@ -860,13 +849,13 @@ include_once '../../components/admin_sidebar.php';
         display: block;
         position: relative;
         overflow: hidden;
-        min-height: 150px;
+        min-height: 110px;
         height: 100%;
         cursor: pointer;
     }
     
     .stat-card:hover {
-        transform: translateY(-4px);
+        transform: translateY(-3px);
         box-shadow: 0 8px 25px rgba(0,0,0,0.15);
     }
     
@@ -895,55 +884,55 @@ include_once '../../components/admin_sidebar.php';
     .stat-card.solid-cyan:hover { background: #0891B2; box-shadow: 0 8px 25px rgba(8, 145, 178, 0.35); }
     
     .stat-card .stat-icon {
-        width: 48px;
-        height: 48px;
-        border-radius: 12px;
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.3rem;
+        font-size: 1.1rem;
         background: rgba(255,255,255,0.2);
         color: white;
         flex-shrink: 0;
     }
     
     .stat-card .stat-number {
-        font-size: 2rem;
+        font-size: 1.5rem;
         font-weight: 700;
         color: white;
         line-height: 1.2;
     }
     
     .stat-card .stat-label {
-        font-size: 0.85rem;
+        font-size: 0.7rem;
         color: rgba(255,255,255,0.9);
         font-weight: 500;
-        margin-bottom: 4px;
+        margin-bottom: 2px;
     }
     
     .stat-card .stat-trend {
-        font-size: 0.7rem;
+        font-size: 0.6rem;
         font-weight: 500;
-        padding: 4px 12px;
+        padding: 2px 10px;
         border-radius: 20px;
         background: rgba(255,255,255,0.15);
         color: white;
         display: inline-block;
-        margin-top: 6px;
+        margin-top: 4px;
     }
     
     .stat-card .stat-sub-amount {
-        font-size: 0.75rem;
+        font-size: 0.65rem;
         color: rgba(255,255,255,0.8);
-        margin-top: 2px;
+        margin-top: 1px;
     }
     
     .stat-card .stat-arrow {
         position: absolute;
-        right: 18px;
-        bottom: 18px;
+        right: 14px;
+        bottom: 14px;
         color: rgba(255,255,255,0.4);
-        font-size: 1rem;
+        font-size: 0.8rem;
         transition: all 0.3s ease;
     }
     
@@ -952,16 +941,16 @@ include_once '../../components/admin_sidebar.php';
         color: rgba(255,255,255,0.9);
     }
     
-    /* Quick Stat Cards */
+    /* Quick Stat Cards - COMPACT */
     .quick-stat-card {
         background: var(--bg-card);
-        border-radius: 12px;
-        padding: 14px 18px;
+        border-radius: 10px;
+        padding: 10px 14px;
         border: 1px solid var(--border-color);
         transition: all 0.3s ease;
         display: flex;
         align-items: center;
-        gap: 14px;
+        gap: 10px;
     }
     
     .quick-stat-card:hover {
@@ -971,13 +960,13 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .quick-stat-card .qs-icon {
-        width: 44px;
-        height: 44px;
-        border-radius: 10px;
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.1rem;
+        font-size: 0.9rem;
         flex-shrink: 0;
     }
     
@@ -992,13 +981,13 @@ include_once '../../components/admin_sidebar.php';
     [data-theme="dark"] .quick-stat-card .qs-icon.red { background: #3A1A1A; color: #F87171; }
     
     .quick-stat-card .qs-label {
-        font-size: 0.7rem;
+        font-size: 0.6rem;
         color: var(--text-muted);
         font-weight: 500;
     }
     
     .quick-stat-card .qs-value {
-        font-size: 1.2rem;
+        font-size: 1rem;
         font-weight: 700;
         color: var(--text-primary);
         line-height: 1.2;
@@ -1014,34 +1003,298 @@ include_once '../../components/admin_sidebar.php';
     [data-theme="dark"] .quick-stat-card .qs-value.purple-text { color: #A78BFA; }
     [data-theme="dark"] .quick-stat-card .qs-value.red-text { color: #F87171; }
     
+    /* Card - COMPACT */
+    .card {
+        background: var(--bg-card);
+        border-radius: 12px;
+        border: 1px solid var(--border-color);
+        overflow: hidden;
+        transition: all 0.3s ease;
+        box-shadow: var(--shadow-sm);
+    }
+    
+    .card:hover {
+        box-shadow: var(--shadow-md);
+    }
+    
+    .card-header {
+        padding: 8px 14px;
+        background: var(--bg-body);
+        border-bottom: 1px solid var(--border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    
+    [data-theme="dark"] .card-header {
+        background: #0F172A;
+    }
+    
+    .card-title {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin: 0;
+        display: flex;
+        align-items: center;
+    }
+    
+    .card-title i {
+        margin-right: 6px;
+    }
+    
+    /* Data Table - COMPACT */
+    .data-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 0.75rem;
+    }
+    
+    .data-table thead th {
+        background: var(--primary-gradient);
+        color: white;
+        font-weight: 600;
+        padding: 6px 10px;
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: none;
+        white-space: nowrap;
+    }
+    
+    .data-table thead th:first-child {
+        border-radius: 6px 0 0 0;
+    }
+    
+    .data-table thead th:last-child {
+        border-radius: 0 6px 0 0;
+    }
+    
+    .data-table td {
+        padding: 5px 10px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+        transition: background 0.2s ease;
+    }
+    
+    .data-table tbody tr:hover td {
+        background: var(--table-hover);
+    }
+    
+    .data-table tbody tr:last-child td {
+        border-bottom: none;
+    }
+    
+    .max-h-50 {
+        max-height: 160px;
+    }
+    
     /* Page Header */
     .page-header .date-badge {
         background: var(--bg-card);
         color: var(--text-primary);
-        padding: 4px 14px;
+        padding: 2px 10px;
         border-radius: 20px;
-        font-size: 0.7rem;
+        font-size: 0.65rem;
         font-weight: 500;
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
         border: 1px solid var(--border-color);
+    }
+    
+    .page-header .page-title {
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin: 0;
+        display: flex;
+        align-items: center;
+    }
+    
+    .page-header .page-title i {
+        color: #0B5ED7;
+    }
+    
+    .page-header .page-subtitle {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        margin: 2px 0 0 0;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    
+    /* Buttons */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.7rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    
+    .btn-sm {
+        padding: 3px 10px;
+        font-size: 0.65rem;
+        border-radius: 4px;
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 1.5px solid var(--border-color);
+    }
+    
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: var(--primary);
+        color: var(--primary);
+    }
+    
+    .btn-blue {
+        background: #0B5ED7;
+        color: white;
+    }
+    
+    .btn-blue:hover {
+        background: #0A4CA8;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .footer {
+        margin-top: 16px;
+        padding: 8px 0;
+        border-top: 1px solid var(--border-color);
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand {
+        color: var(--primary);
+        font-weight: 600;
     }
     
     /* Responsive */
     @media (max-width: 768px) {
         .stat-card {
-            padding: 18px 16px;
-            min-height: 120px;
+            padding: 12px 14px;
+            min-height: 90px;
         }
         .stat-card .stat-number {
-            font-size: 1.5rem;
+            font-size: 1.2rem;
         }
         .stat-card .stat-icon {
-            width: 40px;
-            height: 40px;
+            width: 32px;
+            height: 32px;
+            font-size: 0.9rem;
+        }
+        .card-header {
+            padding: 6px 10px;
+        }
+        .data-table {
+            font-size: 0.65rem;
+        }
+        .data-table thead th, .data-table td {
+            padding: 4px 6px;
+        }
+        .page-title {
+            font-size: 1.1rem;
+        }
+        .page-subtitle {
+            font-size: 0.7rem;
+        }
+        .max-h-50 {
+            max-height: 120px;
+        }
+        .quick-stat-card {
+            padding: 8px 10px;
+        }
+        .quick-stat-card .qs-icon {
+            width: 28px;
+            height: 28px;
+            font-size: 0.7rem;
+        }
+        .quick-stat-card .qs-value {
+            font-size: 0.85rem;
+        }
+    }
+    
+    @media (max-width: 480px) {
+        .stat-card {
+            padding: 8px 10px;
+            min-height: 70px;
+        }
+        .stat-card .stat-number {
             font-size: 1rem;
         }
+        .stat-card .stat-icon {
+            width: 26px;
+            height: 26px;
+            font-size: 0.7rem;
+        }
+        .stat-card .stat-label {
+            font-size: 0.55rem;
+        }
+        .stat-card .stat-sub-amount {
+            font-size: 0.5rem;
+        }
+        .card-title {
+            font-size: 0.7rem;
+        }
+        .data-table {
+            font-size: 0.55rem;
+        }
+        .data-table thead th, .data-table td {
+            padding: 3px 4px;
+        }
+        .page-title {
+            font-size: 0.9rem;
+        }
+        .page-subtitle {
+            font-size: 0.6rem;
+        }
+        .btn {
+            font-size: 0.6rem;
+            padding: 3px 8px;
+        }
+        .quick-stat-card {
+            padding: 6px 8px;
+        }
+        .quick-stat-card .qs-icon {
+            width: 22px;
+            height: 22px;
+            font-size: 0.6rem;
+        }
+        .quick-stat-card .qs-value {
+            font-size: 0.7rem;
+        }
+        .quick-stat-card .qs-label {
+            font-size: 0.5rem;
+        }
+    }
+    
+    @media print {
+        .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; }
+        .card { border: 1px solid #ddd !important; box-shadow: none !important; }
+        .page-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        .page-title, .page-subtitle { color: white !important; }
+        .stat-card .stat-number, .stat-card .stat-label, .stat-card .stat-sub-amount { color: white !important; }
+        .stat-card.solid-blue, .stat-card.solid-green, .stat-card.solid-dark-blue, .stat-card.solid-teal,
+        .stat-card.solid-red, .stat-card.solid-orange, .stat-card.solid-purple, .stat-card.solid-cyan { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     }
 </style>
 
@@ -1138,7 +1391,7 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // REVENUE CHART
+    // REVENUE CHART - REDUCED HEIGHT
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var ctx = document.getElementById('revenueChart')?.getContext('2d');
@@ -1160,10 +1413,10 @@ include_once '../../components/admin_sidebar.php';
                             tension: 0.4,
                             pointBackgroundColor: '#0B5ED7',
                             pointBorderColor: '#ffffff',
-                            pointBorderWidth: 2,
-                            pointRadius: 5,
-                            pointHoverRadius: 7,
-                            borderWidth: 3
+                            pointBorderWidth: 1.5,
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            borderWidth: 2
                         }]
                     },
                     options: {
@@ -1173,9 +1426,9 @@ include_once '../../components/admin_sidebar.php';
                             legend: { 
                                 display: true,
                                 labels: {
-                                    font: { size: 11, weight: '600' },
-                                    boxWidth: 12,
-                                    padding: 15,
+                                    font: { size: 9, weight: '600' },
+                                    boxWidth: 10,
+                                    padding: 8,
                                     color: '#64748B'
                                 }
                             },
@@ -1194,13 +1447,13 @@ include_once '../../components/admin_sidebar.php';
                                     callback: function(value) {
                                         return 'TSh ' + value.toLocaleString();
                                     },
-                                    font: { size: 10 }
+                                    font: { size: 8 }
                                 },
                                 grid: { color: 'rgba(0,0,0,0.05)' }
                             },
                             x: { 
                                 grid: { display: false },
-                                ticks: { font: { size: 10 } }
+                                ticks: { font: { size: 8 } }
                             }
                         },
                         interaction: { intersect: false, mode: 'index' }
@@ -1220,12 +1473,13 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    console.log('%c🏥 Braick Dispensary - Super Admin Dashboard v3.0', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Super Admin Dashboard v3.0 (COMPACT)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👋 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Revenue from: patient_bills + otc_sales ONLY', 'font-size:13px; color:#0B5ED7;');
     console.log('%c   Patient Bills: TSh <?= number_format($patient_bills_revenue) ?>', 'font-size:12px; color:#059669;');
     console.log('%c   OTC Sales: TSh <?= number_format($otc_revenue) ?>', 'font-size:12px; color:#0A4CA8;');
+    console.log('%c📊 Chart Height: 150px (REDUCED)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔄 No Auto Refresh - Manual Refresh Only', 'font-size:13px; color:#EF4444;');
 </script>
 

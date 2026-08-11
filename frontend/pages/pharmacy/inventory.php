@@ -7,6 +7,8 @@
 // 1. Out of stock items removed from main inventory
 // 2. Low Stock card includes out of stock
 // 3. No separate Out of Stock card
+// 4. PRICE FROM 1 TSh (not 100)
+// 5. Auto-assign to user's branch
 // ================================================================
 
 session_start();
@@ -83,7 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     // ================================================================
-    // ADD MEDICINE
+    // ADD MEDICINE - FIXED: Price from 1 TSh, Auto branch
     // ================================================================
     if ($action === 'add_medicine') {
         $medication_name = trim($_POST['medication_name'] ?? '');
@@ -112,6 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($quantity < 0) {
             $errors[] = 'Quantity cannot be negative';
         }
+        // ✅ FIXED: Selling price can be as low as 1 TSh
         if ($selling_price < 0) {
             $errors[] = 'Selling price cannot be negative';
         }
@@ -121,6 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if (empty($errors)) {
             try {
+                // ✅ AUTO-ASSIGN TO USER'S BRANCH
                 $stmt = $db->prepare("
                     INSERT INTO medications_inventory (
                         medication_name, category, unit, quantity, reorder_level,
@@ -131,10 +135,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([
                     $medication_name, $category, $unit, $quantity, $reorder_level,
                     $unit_cost, $selling_price, $supplier, $expiry_date, $batch_number,
-                    $user_branch_id, $status
+                    $user_branch_id, $status  // ✅ Auto-assign to user's branch
                 ]);
                 
-                $message = "✅ Medicine added successfully! Batch: <strong>$batch_number</strong>";
+                $message = "✅ Medicine added successfully to <strong>" . htmlspecialchars($user_branch_name) . "</strong>! Batch: <strong>$batch_number</strong>";
                 $message_type = 'success';
                 
                 $_SESSION['inventory_message'] = $message;
@@ -346,9 +350,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
     }
     
-    /* ================================================================
-       STATS GRID
-       ================================================================ */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -428,9 +429,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         margin-top: 4px;
     }
     
-    /* ================================================================
-       CARD
-       ================================================================ */
     .card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -470,9 +468,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--primary);
     }
     
-    /* ================================================================
-       FILTERS
-       ================================================================ */
     .filter-group {
         display: flex;
         flex-wrap: wrap;
@@ -519,9 +514,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: white;
     }
     
-    /* ================================================================
-       SEARCH FORM
-       ================================================================ */
     .search-form {
         display: flex;
         gap: 8px;
@@ -585,9 +577,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--danger);
     }
     
-    /* ================================================================
-       BUTTONS
-       ================================================================ */
     .btn-add {
         background: var(--success);
         color: white;
@@ -643,9 +632,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         align-items: center;
     }
     
-    /* ================================================================
-       TABLE WITH SCROLL
-       ================================================================ */
     .table-scroll-wrapper {
         position: relative;
         overflow: hidden;
@@ -761,9 +747,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         background: var(--bg-body);
     }
     
-    /* ================================================================
-       DATA TABLE
-       ================================================================ */
     .data-table {
         width: 100%;
         min-width: 1100px;
@@ -819,24 +802,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         white-space: nowrap;
     }
     
-    /* Column widths */
-    .data-table .col-sno { min-width: 40px; width: 40px; text-align: center; }
-    .data-table .col-name { min-width: 180px; }
-    .data-table .col-category { min-width: 120px; }
-    .data-table .col-qty { min-width: 60px; text-align: center; }
-    .data-table .col-reorder { min-width: 80px; text-align: center; }
-    .data-table .col-stock { min-width: 120px; }
-    .data-table .col-price { min-width: 100px; }
-    .data-table .col-expiry { min-width: 120px; }
-    .data-table .col-days { min-width: 80px; text-align: center; }
-    .data-table .col-batch { min-width: 150px; }
-    .data-table .col-supplier { min-width: 120px; }
-    .data-table .col-status { min-width: 80px; text-align: center; }
-    .data-table .col-actions { min-width: 80px; text-align: center; }
+    .col-sno { min-width: 40px; width: 40px; text-align: center; }
+    .col-name { min-width: 180px; }
+    .col-category { min-width: 120px; }
+    .col-qty { min-width: 60px; text-align: center; }
+    .col-reorder { min-width: 80px; text-align: center; }
+    .col-stock { min-width: 120px; }
+    .col-price { min-width: 100px; }
+    .col-expiry { min-width: 120px; }
+    .col-days { min-width: 80px; text-align: center; }
+    .col-batch { min-width: 150px; }
+    .col-supplier { min-width: 120px; }
+    .col-status { min-width: 80px; text-align: center; }
+    .col-actions { min-width: 80px; text-align: center; }
     
-    /* ================================================================
-       BADGES
-       ================================================================ */
     .status-badge {
         padding: 3px 10px;
         border-radius: 12px;
@@ -983,9 +962,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: #6EA8FE;
     }
     
-    /* ================================================================
-       ACTION BUTTONS - ONLY VIEW REMAINS
-       ================================================================ */
     .action-btn {
         padding: 4px 10px;
         border-radius: 6px;
@@ -1010,9 +986,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         transform: scale(1.05);
     }
     
-    /* ================================================================
-       MESSAGE
-       ================================================================ */
     .message-box {
         padding: 14px 20px;
         border-radius: 12px;
@@ -1057,9 +1030,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         border-color: #F87171;
     }
     
-    /* ================================================================
-       EMPTY STATE
-       ================================================================ */
     .empty-state {
         text-align: center;
         padding: 50px 20px;
@@ -1083,9 +1053,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         margin-top: 4px;
     }
     
-    /* ================================================================
-       VIEW MODAL
-       ================================================================ */
     .view-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -1123,9 +1090,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         background: #1E293B;
     }
     
-    /* ================================================================
-       ADD MODAL
-       ================================================================ */
     .modal-overlay {
         display: none;
         position: fixed;
@@ -1203,9 +1167,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         transform: rotate(90deg);
     }
     
-    /* ================================================================
-       FORM
-       ================================================================ */
     .form-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -1391,9 +1352,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: var(--danger);
     }
     
-    /* ================================================================
-       ANIMATIONS
-       ================================================================ */
     .animate-fade-in-up {
         animation: fadeInUp 0.5s ease forwards;
         opacity: 0;
@@ -1409,9 +1367,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         to { opacity: 1; transform: translateY(0); }
     }
     
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
     @media (max-width: 992px) {
         .stats-grid {
             grid-template-columns: repeat(2, 1fr);
@@ -1588,7 +1543,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - OUT OF STOCK REMOVED -->
+    <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <a href="inventory.php" class="stat-card blue">
@@ -1618,7 +1573,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
         </a>
         
-        <!-- ✅ New Card: Show in stock only (quantity > 0) -->
         <?php 
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM medications_inventory WHERE branch_id = ? AND quantity > 0 AND status = 'active'");
             $stmt->execute([$user_branch_id]);
@@ -1749,7 +1703,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             <?php $counter = 1; ?>
                             <?php foreach ($inventory as $item): ?>
                                 <?php
-                                    // Stock status
                                     $stock_status = 'ok';
                                     $stock_label = 'In Stock';
                                     if ($item['quantity'] <= 0) {
@@ -1760,7 +1713,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         $stock_label = 'Low Stock';
                                     }
                                     
-                                    // Expiry status
                                     $expiry_status = 'valid';
                                     $days_remaining = '-';
                                     $days_class = 'good';
@@ -1968,7 +1920,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 
                 <div class="view-item full-width">
                     <div class="view-label">Branch</div>
-                    <div class="view-value"><?= htmlspecialchars($user_branch_name) ?></div>
+                    <div class="view-value">
+                        <span class="branch-tag" style="background:var(--primary-light);color:var(--primary);padding:2px 12px;border-radius:12px;font-size:0.75rem;">
+                            <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                        </span>
+                    </div>
                 </div>
             </div>
             
@@ -1982,7 +1938,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ADD MEDICINE MODAL -->
+    <!-- ADD MEDICINE MODAL - FIXED: Price from 1 TSh -->
     <!-- ================================================================ -->
     <div class="modal-overlay" id="addModal">
         <div class="modal-content">
@@ -2001,6 +1957,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         <label class="form-label">Medicine Name <span class="required">*</span></label>
                         <input type="text" name="medication_name" class="form-control" 
                                placeholder="Enter medicine name" required>
+                        <div class="help-text">e.g. Paracetamol 500mg, Amoxicillin 250mg</div>
                     </div>
                     
                     <div class="form-row">
@@ -2055,13 +2012,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     <div class="form-row">
                         <label class="form-label">Buying Price (TSh)</label>
                         <input type="number" name="unit_cost" class="form-control" 
-                               placeholder="0" step="100" min="0">
+                               placeholder="0" step="1" min="0">
+                        <div class="help-text">Cost price per unit (minimum TSh 1)</div>
                     </div>
                     
                     <div class="form-row">
                         <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
                         <input type="number" name="selling_price" class="form-control" 
-                               placeholder="0" step="100" min="0" required>
+                               placeholder="1" step="1" min="1" value="1" required>
+                        <div class="help-text">Selling price per unit (minimum TSh 1)</div>
                     </div>
                     
                     <div class="form-row">
@@ -2142,9 +2101,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // CATEGORY INPUT TOGGLE
-    // ================================================================
     function toggleCategoryInput() {
         var select = document.getElementById('categorySelect');
         var manual = document.getElementById('categoryManual');
@@ -2169,9 +2125,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
     
-    // ================================================================
-    // BATCH NUMBER GENERATION
-    // ================================================================
     function generateBatchNumber() {
         var now = new Date();
         var dateStr = now.getFullYear() + 
@@ -2182,44 +2135,22 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         document.getElementById('batchNumberInput').value = batch;
     }
     
-    // ================================================================
-    // TABLE SCROLL FUNCTIONS
-    // ================================================================
-    var tableWrap = document.getElementById('tableWrap');
-    var scrollPositionText = document.getElementById('scrollPositionText');
-    
     function updateScrollButtons() {
+        var tableWrap = document.getElementById('tableWrap');
         if (!tableWrap) return;
         
         var scrollLeft = tableWrap.scrollLeft;
         var maxScroll = tableWrap.scrollWidth - tableWrap.clientWidth;
-        var scrollPercent = maxScroll > 0 ? (scrollLeft / maxScroll) * 100 : 0;
         
         var leftBtn = document.querySelector('.scroll-btn.left');
         var rightBtn = document.querySelector('.scroll-btn.right');
         
-        if (leftBtn) {
-            leftBtn.disabled = scrollLeft <= 10;
-        }
-        if (rightBtn) {
-            rightBtn.disabled = scrollLeft >= maxScroll - 10;
-        }
-        
-        if (scrollPositionText) {
-            if (maxScroll <= 10) {
-                scrollPositionText.textContent = 'All columns visible ✓';
-            } else if (scrollLeft <= 10) {
-                scrollPositionText.textContent = '👉 Scroll right to see more columns';
-            } else if (scrollLeft >= maxScroll - 10) {
-                scrollPositionText.textContent = '👈 Scroll left to see more columns';
-            } else {
-                var percent = Math.round(scrollPercent);
-                scrollPositionText.textContent = 'Viewing ' + percent + '% of table';
-            }
-        }
+        if (leftBtn) leftBtn.disabled = scrollLeft <= 10;
+        if (rightBtn) rightBtn.disabled = scrollLeft >= maxScroll - 10;
     }
     
     function scrollTable(direction) {
+        var tableWrap = document.getElementById('tableWrap');
         if (!tableWrap) return;
         var scrollAmount = tableWrap.clientWidth * 0.7;
         if (direction === 'left') {
@@ -2230,16 +2161,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         setTimeout(updateScrollButtons, 100);
     }
     
-    // Initialize
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(updateScrollButtons, 500);
     });
     
     window.addEventListener('resize', updateScrollButtons);
     
-    // ================================================================
-    // MODAL FUNCTIONS
-    // ================================================================
     function openAddModal() {
         document.getElementById('addModal').classList.add('show');
         document.body.style.overflow = 'hidden';
@@ -2260,9 +2187,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         });
     });
     
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -2283,9 +2207,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }, 3500);
     }
     
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -2313,9 +2234,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
     
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -2335,9 +2253,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
     
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -2354,9 +2269,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
     
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') {
             return;
@@ -2391,9 +2303,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     console.log('%c📦 In Stock: <?= $in_stock_count ?>', 'font-size:13px; color:#34D399;');
     console.log('%c📦 Out of Stock: <?= $out_of_stock ?> (hidden from main list)', 'font-size:13px; color:#DC2626;');
     console.log('%c📅 Expiring Soon: <?= $expiring_soon ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Out of stock removed from main inventory', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Low Stock card includes out of stock', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Click "Out of Stock" filter to view them', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ Price from TSh 1 (not 100)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Auto-assigned to branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
