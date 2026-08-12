@@ -2,10 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/pending_prescriptions.php
 // PHARMACY - PENDING PRESCRIPTIONS
-// ================================================================
-// FIXED: AJAX auto-update - checks status every 3 seconds
-// FIXED: Auto-dispense updates without page refresh
-// FIXED: Status shows real-time updates
+// FIXED: Price retrieval now uses latest active stock with quantity > 0
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -283,9 +280,14 @@ try {
             try {
                 $db->beginTransaction();
                 
+                // ✅ FIXED: Get price from stock with quantity > 0, order by latest
                 $stmt = $db->prepare("
                     SELECT selling_price FROM medications_inventory 
-                    WHERE medication_name = ? AND branch_id = ? AND status = 'active'
+                    WHERE medication_name = ? 
+                    AND branch_id = ? 
+                    AND status = 'active'
+                    AND quantity > 0
+                    ORDER BY created_at DESC
                     LIMIT 1
                 ");
                 $stmt->execute([$item['medication'], $user_branch_id]);
@@ -325,6 +327,8 @@ try {
                     UPDATE medications_inventory 
                     SET quantity = quantity - ? 
                     WHERE medication_name = ? AND branch_id = ? AND status = 'active'
+                    ORDER BY created_at ASC
+                    LIMIT 1
                 ");
                 $stmt->execute([$item['quantity'], $item['medication'], $user_branch_id]);
                 
@@ -334,7 +338,7 @@ try {
                 ");
                 $stmt->execute([
                     $user_id,
-                    "Prescription #" . $item['prescription_number'] . " auto-dispensed after payment (Bill: " . $item['bill_number'] . ")"
+                    "Prescription #" . $item['prescription_number'] . " auto-dispensed after payment (Bill: " . $item['bill_number'] . ") - Price: $unit_price, Qty: " . $item['quantity']
                 ]);
                 
                 $db->commit();
@@ -377,9 +381,14 @@ try {
                 $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($prescription) {
+                    // ✅ FIXED: Get price from stock with quantity > 0, order by latest
                     $stmt = $db->prepare("
                         SELECT selling_price FROM medications_inventory 
-                        WHERE medication_name = ? AND branch_id = ? AND status = 'active'
+                        WHERE medication_name = ? 
+                        AND branch_id = ? 
+                        AND status = 'active'
+                        AND quantity > 0
+                        ORDER BY created_at DESC
                         LIMIT 1
                     ");
                     $stmt->execute([$prescription['medication'], $user_branch_id]);
@@ -463,7 +472,7 @@ try {
                         ");
                         $stmt->execute([
                             $user_id,
-                            "Prescription #" . $prescription['prescription_number'] . " confirmed - Bill #" . $bill_number
+                            "Prescription #" . $prescription['prescription_number'] . " confirmed - Bill #" . $bill_number . " - Price: $unit_price, Qty: $quantity"
                         ]);
                         
                         $db->commit();
@@ -1784,17 +1793,14 @@ include_once '../../components/pharmacy_sidebar.php';
         if (totalCount) totalCount.textContent = data.total_count;
         if (totalCountBadge) totalCountBadge.textContent = data.total_count;
         if (rowCount) {
-            // Count rows in tbody
             var rows = tbody ? tbody.querySelectorAll('tr').length : 0;
             rowCount.textContent = rows;
         }
         if (updateTimeDisplay) updateTimeDisplay.textContent = 'Last update: ' + timeStr;
         
-        // Update live badge
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = timeStr;
         
-        // Show toast if prescriptions were auto-dispensed
         if (data.auto_dispensed_count && data.auto_dispensed_count > 0) {
             showToast('💊 Auto-Dispensed', data.auto_dispensed_count + ' prescription(s) dispensed automatically!', 'success');
         }
@@ -1802,11 +1808,9 @@ include_once '../../components/pharmacy_sidebar.php';
 
     function startAutoUpdate() {
         if (updateInterval) clearInterval(updateInterval);
-        // Initial fetch after 1 second
         setTimeout(function() {
             fetchPrescriptionsStatus();
         }, 1000);
-        // Then every 3 seconds
         updateInterval = setInterval(fetchPrescriptionsStatus, 3000);
         console.log('%c🔄 Prescription auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
@@ -1848,7 +1852,6 @@ include_once '../../components/pharmacy_sidebar.php';
     // INIT
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Start auto-update after 2 seconds
         setTimeout(function() {
             startAutoUpdate();
         }, 2000);
@@ -1869,7 +1872,8 @@ include_once '../../components/pharmacy_sidebar.php';
     console.log('%c✅ Confirmed: <?= $status_counts['confirmed'] ?? 0 ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c💊 Dispensed: <?= $status_counts['dispensed'] ?? 0 ?>', 'font-size:12px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds - NO REFRESH NEEDED!', 'font-size:12px; color:#34D399;');
-    console.log('%c💊 Status updates automatically when dispensed', 'font-size:12px; color:#34D399;');
+    console.log('%c💰 Price Fix: Now uses latest stock with quantity > 0', 'font-size:12px; color:#059669;');
+    console.log('%c📦 Stock Update: Deducts from oldest stock first (FIFO)', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

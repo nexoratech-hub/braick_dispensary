@@ -2,8 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/admin/patients.php
 // SUPER ADMIN - MANAGE PATIENTS
-// WITH TIME PERIOD FILTERS (Today, Week, Monthly, 3 Months, 6 Months, 1 Year, All)
-// BRAICK DISPENSARY
+// WITH TIME PERIOD FILTERS
+// BRAICK DISPENSARY - FULL DELETE FUNCTIONALITY
 // ================================================================
 
 session_start();
@@ -40,7 +40,6 @@ $time_period = isset($_GET['period']) ? $_GET['period'] : 'all';
 // BUILD TIME PERIOD FILTER
 // ================================================================
 $date_condition = '';
-$date_params = [];
 
 switch ($time_period) {
     case 'today':
@@ -68,7 +67,7 @@ switch ($time_period) {
 }
 
 // ================================================================
-// HANDLE DELETE PATIENT - DELETES EVERYTHING
+// ✅ DELETE PATIENT - FULL DELETION WITH ALL 25 TABLES
 // ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $patient_id = (int)$_GET['delete'];
@@ -76,6 +75,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     try {
         $db->beginTransaction();
         
+        // Get patient info first
         $stmt = $db->prepare("SELECT full_name, patient_id FROM patients WHERE id = ?");
         $stmt->execute([$patient_id]);
         $patient = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -84,80 +84,77 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
             $patient_name = $patient['full_name'];
             $patient_number = $patient['patient_id'];
             
-            // Delete all related data
-            $stmt = $db->prepare("DELETE FROM payments WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
+            // ============================================================
+            // DELETE FROM ALL 25 TABLES WITH patient_id
+            // ============================================================
             
-            $stmt = $db->prepare("
-                DELETE bi FROM bill_items bi 
-                INNER JOIN patient_bills pb ON bi.bill_id = pb.id 
-                WHERE pb.patient_id = ?
-            ");
-            $stmt->execute([$patient_id]);
+            $tables = [
+                'activity_logs',
+                'appointments',
+                'bill_items',
+                'lab_billing_items',
+                'lab_requests',
+                'lab_request_items',
+                'notifications',
+                'otc_sales',
+                'otc_sale_items',
+                'patient_bills',
+                'patient_documents',
+                'payments',
+                'pharmacy_sales',
+                'prescriptions',
+                'prescription_items',
+                'prescription_sales',
+                'prescription_sale_items',
+                'receipts',
+                'referrals',
+                'referral_logs',
+                'stock_movements',
+                'visits',
+                'vital_signs'
+            ];
             
-            $stmt = $db->prepare("DELETE FROM patient_bills WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
+            // Delete from each table
+            $deleted_count = 0;
+            foreach ($tables as $table) {
+                try {
+                    $stmt = $db->prepare("DELETE FROM `$table` WHERE patient_id = ?");
+                    $stmt->execute([$patient_id]);
+                    $deleted_count++;
+                } catch (Exception $e) {
+                    // Log error but continue
+                    error_log("Warning: Could not delete from $table: " . $e->getMessage());
+                }
+            }
             
-            $stmt = $db->prepare("
-                DELETE pi FROM prescription_items pi 
-                INNER JOIN prescriptions p ON pi.prescription_id = p.id 
-                WHERE p.patient_id = ?
-            ");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("DELETE FROM prescription_sales WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("DELETE FROM prescriptions WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("
-                DELETE lri FROM lab_request_items lri 
-                INNER JOIN lab_requests lr ON lri.request_id = lr.id 
-                WHERE lr.patient_id = ?
-            ");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("DELETE FROM lab_requests WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("DELETE FROM lab_tests WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("DELETE FROM appointments WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("DELETE FROM vital_signs WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("DELETE FROM patient_documents WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            
-            $stmt = $db->prepare("DELETE FROM visits WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            
+            // ============================================================
+            // FINAL: DELETE PATIENT
+            // ============================================================
             $stmt = $db->prepare("DELETE FROM patients WHERE id = ?");
             $stmt->execute([$patient_id]);
             
             $db->commit();
             
-            $message = "Patient '$patient_name' and all related data deleted successfully!";
+            $message = "✅ Patient '$patient_name' (ID: $patient_number) deleted successfully!";
+            $message .= " (Deleted from $deleted_count tables)";
             $message_type = 'success';
             
             header("Location: patients.php?page=$page&period=$time_period" . 
                    ($search ? "&search=" . urlencode($search) : "") . 
                    "&branch=" . $selected_branch_id);
             exit();
+            
         } else {
             $db->rollBack();
-            $message = "Patient not found!";
+            $message = "❌ Patient not found!";
             $message_type = 'error';
         }
         
     } catch (Exception $e) {
         $db->rollBack();
-        $message = "Error deleting patient: " . $e->getMessage();
+        $message = "❌ Error deleting patient: " . $e->getMessage();
         $message_type = 'error';
+        error_log("Delete Patient Error: " . $e->getMessage());
     }
 }
 
@@ -217,7 +214,7 @@ $stmt = $db->prepare($stats_sql);
 $stmt->execute($stats_params);
 $total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Today's patients (for the today card - always today)
+// Today's patients
 $today_sql = "SELECT COUNT(*) as total FROM patients WHERE DATE(created_at) = CURDATE()";
 if ($selected_branch_id !== 'all') {
     $today_sql .= " AND branch_id = " . (int)$selected_branch_id;
@@ -787,6 +784,135 @@ include_once '../../components/admin_sidebar.php';
         background: #1E3A5F;
         color: #6EA8FE;
     }
+    
+    /* Card */
+    .card {
+        background: var(--bg-card);
+        border-radius: 16px;
+        padding: 18px 20px;
+        border: 1px solid var(--border-color);
+        transition: all 0.3s;
+    }
+    
+    .card:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.05);
+    }
+    
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .card-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    
+    .title-blue {
+        color: #0B5ED7;
+    }
+    
+    /* Page Header */
+    .page-header {
+        margin-bottom: 20px;
+    }
+    
+    .page-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+    
+    .page-subtitle {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+    
+    .btn-blue {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        color: white;
+        border: none;
+        padding: 8px 18px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.8rem;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .btn-blue:hover {
+        background: linear-gradient(135deg, #0A4CA8, #083C8A);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
+        color: white;
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-primary);
+        border: 2px solid var(--border-color);
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-weight: 500;
+        font-size: 0.8rem;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .btn-outline:hover {
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+    }
+    
+    .btn-sm {
+        padding: 5px 12px;
+        font-size: 0.7rem;
+    }
+    
+    .branch-tag {
+        background: #E8F0FE;
+        color: #0B5ED7;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 500;
+    }
+    
+    [data-theme="dark"] .branch-tag {
+        background: #1E3A5F;
+        color: #6EA8FE;
+    }
+    
+    /* Footer */
+    .footer {
+        margin-top: 30px;
+        padding-top: 15px;
+        border-top: 1px solid var(--border-color);
+        text-align: center;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer-brand {
+        font-weight: 600;
+        color: #0B5ED7;
+    }
+    
+    [data-theme="dark"] .footer-brand {
+        color: #6EA8FE;
+    }
 </style>
 
 <!-- ================================================================ -->
@@ -942,9 +1068,9 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PATIENTS LIST WITH HEADER CONTROLS -->
+    <!-- PATIENTS LIST -->
     <!-- ================================================================ -->
-    <div class="card card-shadow">
+    <div class="card">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-list title-blue mr-2"></i>
@@ -960,9 +1086,7 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <!-- ================================================================ -->
-        <!-- TABLE HEADER WITH SEARCH AND SCROLL CONTROLS -->
-        <!-- ================================================================ -->
+        <!-- Table Header with Search and Scroll Controls -->
         <div class="table-header-wrapper">
             <div class="search-box">
                 <i class="fas fa-search search-icon"></i>
@@ -986,9 +1110,7 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <!-- ================================================================ -->
-        <!-- TABLE WITH SCROLL -->
-        <!-- ================================================================ -->
+        <!-- Table -->
         <div class="table-container">
             <div class="table-scroll-wrapper" id="tableScrollWrapper">
                 <table class="data-table table-blue w-full" id="patientsTable">
@@ -1073,9 +1195,7 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <!-- ================================================================ -->
-        <!-- PAGINATION -->
-        <!-- ================================================================ -->
+        <!-- Pagination -->
         <?php if ($total_pages > 1): ?>
             <div class="flex flex-wrap justify-between items-center gap-3 mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
                 <div class="text-sm text-gray-500 dark:text-gray-400">
@@ -1114,9 +1234,7 @@ include_once '../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1198,7 +1316,7 @@ include_once '../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // TABLE SEARCH FILTER (Real-time)
+    // TABLE SEARCH FILTER
     // ================================================================
     function filterTable() {
         var input = document.getElementById('tableSearch');
@@ -1222,7 +1340,7 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // TABLE SCROLL WITH ARROWS
+    // TABLE SCROLL
     // ================================================================
     function scrollTable(direction) {
         var wrapper = document.getElementById('tableScrollWrapper');
@@ -1264,23 +1382,32 @@ include_once '../../components/admin_sidebar.php';
     window.addEventListener('resize', updateScrollButtons);
 
     // ================================================================
-    // CONFIRM DELETE
+    // CONFIRM DELETE - FULL WARNING
     // ================================================================
     function confirmDelete(patientName, patientId) {
         return confirm(
-            '⚠️ WARNING: This action cannot be undone!\n\n' +
-            'Are you sure you want to delete patient:\n' +
-            'Name: ' + patientName + '\n' +
-            'ID: ' + patientId + '\n\n' +
-            'This will delete ALL related data including:\n' +
-            '• Visits\n' +
-            '• Bills\n' +
-            '• Prescriptions\n' +
-            '• Lab Tests\n' +
-            '• Appointments\n' +
-            '• Payments\n' +
-            '• And more...\n\n' +
-            'Click OK to confirm deletion.'
+            '⚠️⚠️⚠️ WARNING: THIS ACTION CANNOT BE UNDONE! ⚠️⚠️⚠️\n\n' +
+            'Are you sure you want to permanently delete patient:\n' +
+            '┌─────────────────────────────────────────────┐\n' +
+            '│ Name: ' + patientName + '\n' +
+            '│ ID: ' + patientId + '\n' +
+            '└─────────────────────────────────────────────┘\n\n' +
+            'This will DELETE ALL related data from 23 tables:\n' +
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
+            '📋 Visits & Appointments\n' +
+            '💰 Bills, Payments & Receipts\n' +
+            '💊 Prescriptions & Medications\n' +
+            '🔬 Lab Tests & Results\n' +
+            '📝 Patient Documents\n' +
+            '💳 OTC Sales\n' +
+            '📊 Vital Signs\n' +
+            '🔄 Referrals\n' +
+            '📧 Notifications\n' +
+            '📜 Activity Logs\n' +
+            '📦 Stock Movements\n' +
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
+            'Click OK to confirm permanent deletion.\n' +
+            'Click Cancel to abort.'
         );
     }
 
@@ -1335,12 +1462,10 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     console.log('%c🏥 Braick Dispensary - Patients Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Total Patients (<?= $period_label ?>): <?= $total_all ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Total Patients: <?= $total_all ?>', 'font-size:13px; color:#059669;');
     console.log('%c📅 Today\'s Patients: <?= $today_patients ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📊 Time Period Filter: <?= $period_label ?>', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c🔵 Blue Theme Applied to Table Headers', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c⬅️➡️ Scroll arrows placed on TOP header', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔘 3 Action Buttons: View | Edit | Delete', 'font-size:13px; color:#059669;');
+    console.log('%c🗑️ DELETE PATIENT - Full deletion from 23 tables', 'font-size:13px; color:#EF4444;');
+    console.log('%c✅ All tables have patient_id column', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

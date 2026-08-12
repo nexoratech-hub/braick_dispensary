@@ -3,7 +3,7 @@
 // FILE: frontend/pages/admin/cashiers.php
 // SUPER ADMIN - VIEW ALL CASHIERS
 // BRAICK DISPENSARY - GREEN THEME
-// TOTAL REVENUE FROM: patient_bills + otc_sales ONLY
+// TOTAL REVENUE FROM: patient_bills (valid patients) + otc_sales (ALL)
 // ================================================================
 
 session_start();
@@ -32,25 +32,62 @@ $search = $_GET['search'] ?? '';
 $status_filter = $_GET['status'] ?? 'all';
 
 // ================================================================
-// BUILD QUERY WITH FILTERS - FIXED REVENUE
+// ✅ REKEBISHWA: BUILD QUERY - EXCLUDE DELETED PATIENTS, KEEP ALL OTC
 // ================================================================
 $query = "
     SELECT 
         b.*,
         (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active') as active_cashiers,
         (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier') as total_cashiers,
-        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id) as total_bills,
-        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
-        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
-        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'partial') as partial_bills,
-        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'cancelled') as cancelled_bills,
-        -- ================================================================
-        -- TOTAL REVENUE: patient_bills (paid) + otc_sales (paid)
-        -- ================================================================
-        (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as patient_bills_revenue,
-        (SELECT COALESCE(SUM(net_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid') as otc_revenue,
-        ((SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') + 
-         (SELECT COALESCE(SUM(net_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid')) as total_revenue
+        -- ============================================================
+        -- BILLS: Only from patient_bills with valid patients
+        -- ============================================================
+        (SELECT COUNT(*) 
+         FROM patient_bills pb
+         INNER JOIN patients p ON pb.patient_id = p.id
+         WHERE pb.branch_id = b.id) as total_bills,
+        (SELECT COUNT(*) 
+         FROM patient_bills pb
+         INNER JOIN patients p ON pb.patient_id = p.id
+         WHERE pb.branch_id = b.id AND pb.status = 'pending') as pending_bills,
+        (SELECT COUNT(*) 
+         FROM patient_bills pb
+         INNER JOIN patients p ON pb.patient_id = p.id
+         WHERE pb.branch_id = b.id AND pb.status = 'paid') as paid_bills,
+        (SELECT COUNT(*) 
+         FROM patient_bills pb
+         INNER JOIN patients p ON pb.patient_id = p.id
+         WHERE pb.branch_id = b.id AND pb.status = 'partial') as partial_bills,
+        (SELECT COUNT(*) 
+         FROM patient_bills pb
+         INNER JOIN patients p ON pb.patient_id = p.id
+         WHERE pb.branch_id = b.id AND pb.status = 'cancelled') as cancelled_bills,
+        -- ============================================================
+        -- PATIENT BILLS REVENUE: Only from valid patients
+        -- ============================================================
+        (SELECT COALESCE(SUM(pb.total_amount), 0) 
+         FROM patient_bills pb
+         INNER JOIN patients p ON pb.patient_id = p.id
+         WHERE pb.branch_id = b.id AND pb.status = 'paid') as patient_bills_revenue,
+        -- ============================================================
+        -- ✅ OTC REVENUE: ALL otc_sales (walk-in customers) - NO JOIN
+        -- ============================================================
+        (SELECT COALESCE(SUM(os.net_amount), 0) 
+         FROM otc_sales os
+         WHERE os.branch_id = b.id AND os.payment_status = 'paid') as otc_revenue,
+        -- ============================================================
+        -- TOTAL REVENUE
+        -- ============================================================
+        (
+            (SELECT COALESCE(SUM(pb.total_amount), 0) 
+             FROM patient_bills pb
+             INNER JOIN patients p ON pb.patient_id = p.id
+             WHERE pb.branch_id = b.id AND pb.status = 'paid') 
+            + 
+            (SELECT COALESCE(SUM(os.net_amount), 0) 
+             FROM otc_sales os
+             WHERE os.branch_id = b.id AND os.payment_status = 'paid')
+        ) as total_revenue
     FROM branches b
     WHERE 1=1
 ";
@@ -1517,10 +1554,12 @@ include_once '../../components/admin_sidebar.php';
 
     console.log('%c💰 Braick Dispensary - Cashiers (GREEN THEME)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Total Cashiers: <?= $total_cashiers ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?> (FROM: patient_bills + otc_sales)', 'font-size:13px; color:#0D9488;');
-    console.log('%c   Patient Bills: TSh <?= number_format($total_patient_bills_revenue, 0) ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c   OTC Sales: TSh <?= number_format($total_otc_revenue, 0) ?>', 'font-size:12px; color:#F59E0B;');
+    console.log('%c📋 Total Bills: <?= number_format($total_bills) ?> (Only from valid patients)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c   Patient Bills: TSh <?= number_format($total_patient_bills_revenue, 0) ?> (Valid patients only)', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   OTC Sales: TSh <?= number_format($total_otc_revenue, 0) ?> (ALL OTC - walk-in customers)', 'font-size:12px; color:#F59E0B;');
+    console.log('%c✅ FIXED: Bills from deleted patients are EXCLUDED', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ FIXED: OTC Sales are INCLUDED (walk-in customers)', 'font-size:13px; color:#059669;');
     console.log('%c🟢 Green Theme Applied', 'font-size:13px; color:#059669;');
 </script>
 

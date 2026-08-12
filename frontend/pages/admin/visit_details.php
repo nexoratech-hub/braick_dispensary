@@ -80,7 +80,9 @@ $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?"
 $stmt->execute([$patient_id]);
 $total_patient_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Get bill for this visit
+// ================================================================
+// ✅ REKEBISHWA: GET UNIQUE BILLS - NO DUPLICATES
+// ================================================================
 $stmt = $db->prepare("
     SELECT pb.*,
            CASE 
@@ -92,22 +94,78 @@ $stmt = $db->prepare("
            END as status_color
     FROM patient_bills pb
     WHERE pb.visit_id = ?
-    ORDER BY pb.created_at DESC
-    LIMIT 1
+    ORDER BY pb.created_at ASC
 ");
 $stmt->execute([$visit_id]);
-$visit_bill = $stmt->fetch(PDO::FETCH_ASSOC);
+$raw_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get bill items
-$bill_items = [];
-if ($visit_bill) {
+// ✅ FILTER DUPLICATE BILLS - Keep only one per bill_number
+$unique_bills = [];
+$seen_bill_numbers = [];
+foreach ($raw_bills as $bill) {
+    $bill_number = $bill['bill_number'];
+    if (!in_array($bill_number, $seen_bill_numbers)) {
+        $unique_bills[] = $bill;
+        $seen_bill_numbers[] = $bill_number;
+    }
+}
+$visit_bills = $unique_bills;
+
+// ✅ LOG DUPLICATES FOR DEBUGGING
+if (count($raw_bills) != count($unique_bills)) {
+    error_log("⚠️ Duplicate bills found for visit ID: {$visit_id}. Total: " . count($raw_bills) . ", Unique: " . count($unique_bills));
+}
+
+// ================================================================
+// ✅ REKEBISHWA: GET UNIQUE BILL ITEMS
+// ================================================================
+$all_bill_items = [];
+$total_bill_amount = 0;
+$total_paid_amount = 0;
+$total_balance = 0;
+$bill_statuses = [];
+
+foreach ($visit_bills as $bill) {
+    $bill_id = $bill['id'];
+    $total_bill_amount += $bill['total_amount'] ?? 0;
+    $total_paid_amount += $bill['paid_amount'] ?? 0;
+    $total_balance += $bill['balance'] ?? 0;
+    $bill_statuses[] = $bill['status'];
+    
+    // ✅ GET UNIQUE BILL ITEMS - Group by unique item combination
     $stmt = $db->prepare("
-        SELECT * FROM bill_items 
-        WHERE bill_id = ? 
-        ORDER BY created_at ASC
+        SELECT 
+            bi.*
+        FROM bill_items bi
+        WHERE bi.bill_id = ?
+        GROUP BY bi.item_name, bi.item_type, bi.unit_price, bi.quantity
+        ORDER BY bi.created_at ASC
     ");
-    $stmt->execute([$visit_bill['id']]);
-    $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt->execute([$bill_id]);
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $all_bill_items[$bill_id] = $items;
+}
+
+// Determine overall payment status
+$overall_status = 'pending';
+if (count($visit_bills) > 0) {
+    if (in_array('cancelled', $bill_statuses) && count($visit_bills) == 1 && $bill_statuses[0] == 'cancelled') {
+        $overall_status = 'cancelled';
+    } elseif (in_array('pending', $bill_statuses)) {
+        $overall_status = 'pending';
+    } elseif (in_array('partial', $bill_statuses)) {
+        $overall_status = 'partial';
+    } elseif (array_diff($bill_statuses, ['paid', 'cancelled']) === []) {
+        $has_paid = in_array('paid', $bill_statuses);
+        $has_cancelled = in_array('cancelled', $bill_statuses);
+        if ($has_paid && !$has_cancelled) {
+            $overall_status = 'paid';
+        } elseif ($has_paid && $has_cancelled) {
+            $overall_status = 'partial';
+        } else {
+            $overall_status = 'cancelled';
+        }
+    }
 }
 
 // Get lab tests for this visit
@@ -279,6 +337,7 @@ include_once '../../components/admin_sidebar.php';
     .stat-card-mini .stat-number.orange { color: #F59E0B; }
     .stat-card-mini .stat-number.purple { color: #7B2FBE; }
     .stat-card-mini .stat-number.red { color: #EF4444; }
+    .stat-card-mini .stat-number.blue { color: #0B5ED7; }
     
     .stat-card-mini .stat-label {
         font-size: 0.7rem;
@@ -518,6 +577,56 @@ include_once '../../components/admin_sidebar.php';
     [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
     [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
     
+    /* Bill Card Styles */
+    .bill-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 16px 18px;
+        transition: all 0.3s ease;
+        position: relative;
+    }
+    
+    .bill-card:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 4px 15px rgba(11, 94, 215, 0.08);
+    }
+    
+    .bill-card .bill-number {
+        font-weight: 700;
+        font-size: 0.95rem;
+        color: var(--text-primary);
+    }
+    
+    .bill-card .bill-number i {
+        color: #0B5ED7;
+        margin-right: 6px;
+    }
+    
+    .bill-card .bill-meta {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    /* Duplicate Warning */
+    .duplicate-warning {
+        background: #FEF3C7;
+        border: 1px solid #F59E0B;
+        color: #92400E;
+        padding: 8px 14px;
+        border-radius: 8px;
+        font-size: 0.75rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    [data-theme="dark"] .duplicate-warning {
+        background: #3A2A1A;
+        border-color: #F59E0B;
+        color: #FBBF24;
+    }
+    
     /* Responsive */
     @media (max-width: 640px) {
         .visit-header {
@@ -654,9 +763,9 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
+    <!-- ✅ STATISTICS CARDS - WITH UNIQUE BILLS COUNT -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-5">
         
         <div class="stat-card-mini">
             <div class="stat-icon">📋</div>
@@ -665,21 +774,27 @@ include_once '../../components/admin_sidebar.php';
         </div>
         
         <div class="stat-card-mini">
+            <div class="stat-icon">🧾</div>
+            <p class="stat-number blue"><?= count($visit_bills) ?></p>
+            <p class="stat-label">Total Bills</p>
+        </div>
+        
+        <div class="stat-card-mini">
             <div class="stat-icon">💰</div>
-            <p class="stat-number green"><?= $visit_bill ? number_format($visit_bill['total_amount'] ?? 0) : '0' ?></p>
-            <p class="stat-label">Bill Amount</p>
+            <p class="stat-number green">TSh <?= number_format($total_bill_amount) ?></p>
+            <p class="stat-label">Total Amount</p>
         </div>
         
         <div class="stat-card-mini">
-            <div class="stat-icon">🔬</div>
-            <p class="stat-number orange"><?= count($visit_lab_tests) ?></p>
-            <p class="stat-label">Lab Tests</p>
+            <div class="stat-icon">✅</div>
+            <p class="stat-number green">TSh <?= number_format($total_paid_amount) ?></p>
+            <p class="stat-label">Total Paid</p>
         </div>
         
         <div class="stat-card-mini">
-            <div class="stat-icon">💊</div>
-            <p class="stat-number purple"><?= count($visit_prescriptions) ?></p>
-            <p class="stat-label">Prescriptions</p>
+            <div class="stat-icon">📊</div>
+            <p class="stat-number orange">TSh <?= number_format($total_balance) ?></p>
+            <p class="stat-label">Total Balance</p>
         </div>
         
     </div>
@@ -911,10 +1026,6 @@ include_once '../../components/admin_sidebar.php';
         
         <p class="text-xs text-gray-400 mt-2">
             <i class="fas fa-user"></i> Recorded by: <?= htmlspecialchars($vital_signs['recorded_by_name'] ?? 'N/A') ?>
-            <?php if ($vital_signs['visit_number']): ?>
-                <span class="mx-2">|</span>
-                <i class="fas fa-stethoscope"></i> Visit: <?= htmlspecialchars($vital_signs['visit_number']) ?>
-            <?php endif; ?>
         </p>
     </div>
     <?php else: ?>
@@ -933,69 +1044,154 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- BILL & BILL ITEMS -->
+    <!-- ✅ REKEBISHWA: ALL UNIQUE BILLS - NO DUPLICATES -->
     <!-- ================================================================ -->
-    <?php if ($visit_bill): ?>
+    <?php if (count($visit_bills) > 0): ?>
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-file-invoice title-blue mr-2"></i> Bill Details
-                <span class="badge-count">(<?= $visit_bill['bill_number'] ?>)</span>
+                <i class="fas fa-file-invoice title-blue mr-2"></i> All Bills (<?= count($visit_bills) ?>)
+                <span class="badge-count">| Total: TSh <?= number_format($total_bill_amount) ?></span>
             </h3>
-            <a href="bill_details.php?id=<?= $visit_bill['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
-                <i class="fas fa-external-link-alt"></i> View Bill
-            </a>
-        </div>
-        
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-            <div class="text-center p-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                <p class="text-xs text-gray-500">Total Amount</p>
-                <p class="font-bold text-lg text-blue-600">TSh <?= number_format($visit_bill['total_amount'] ?? 0) ?></p>
-            </div>
-            <div class="text-center p-2 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                <p class="text-xs text-gray-500">Paid Amount</p>
-                <p class="font-bold text-lg text-green-600">TSh <?= number_format($visit_bill['paid_amount'] ?? 0) ?></p>
-            </div>
-            <div class="text-center p-2 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
-                <p class="text-xs text-gray-500">Balance</p>
-                <p class="font-bold text-lg text-orange-600">TSh <?= number_format($visit_bill['balance'] ?? 0) ?></p>
-            </div>
-            <div class="text-center p-2 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                <p class="text-xs text-gray-500">Status</p>
-                <span class="status-badge <?= $visit_bill['status_color'] ?? 'secondary' ?>" style="font-size:0.8rem;">
-                    <?= ucfirst($visit_bill['status'] ?? 'N/A') ?>
+            <div class="flex items-center gap-2 flex-wrap">
+                <?php 
+                // Check for duplicates in raw data
+                if (count($raw_bills) != count($unique_bills)): 
+                ?>
+                    <div class="duplicate-warning">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        Duplicate bills detected! Showing unique bills only.
+                    </div>
+                <?php endif; ?>
+                <span class="status-badge <?= 
+                    $overall_status === 'paid' ? 'success' : 
+                    ($overall_status === 'partial' ? 'info' : 
+                    ($overall_status === 'cancelled' ? 'danger' : 'warning')) 
+                ?>" style="font-size:0.75rem;">
+                    Overall: <?= ucfirst($overall_status) ?>
                 </span>
             </div>
         </div>
         
-        <?php if (count($bill_items) > 0): ?>
-        <div class="overflow-x-auto">
-            <table class="data-table table-blue w-full">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Item Name</th>
-                        <th>Type</th>
-                        <th>Qty</th>
-                        <th>Unit Price</th>
-                        <th>Total</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php $i = 1; foreach ($bill_items as $item): ?>
-                        <tr>
-                            <td><?= $i++ ?></td>
-                            <td><?= htmlspecialchars($item['item_name']) ?></td>
-                            <td><span class="badge badge-info"><?= ucfirst($item['item_type'] ?? 'N/A') ?></span></td>
-                            <td><?= $item['quantity'] ?? 1 ?></td>
-                            <td>TSh <?= number_format($item['unit_price'] ?? 0) ?></td>
-                            <td class="font-bold">TSh <?= number_format($item['total_price'] ?? 0) ?></td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
+        <!-- Summary Row -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div class="text-center p-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                <p class="text-xs text-gray-500">Total Bills</p>
+                <p class="font-bold text-lg text-blue-600"><?= count($visit_bills) ?></p>
+            </div>
+            <div class="text-center p-2 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                <p class="text-xs text-gray-500">Total Amount</p>
+                <p class="font-bold text-lg text-green-600">TSh <?= number_format($total_bill_amount) ?></p>
+            </div>
+            <div class="text-center p-2 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg">
+                <p class="text-xs text-gray-500">Total Paid</p>
+                <p class="font-bold text-lg text-indigo-600">TSh <?= number_format($total_paid_amount) ?></p>
+            </div>
+            <div class="text-center p-2 bg-orange-50 dark:bg-orange-900/20 rounded-lg">
+                <p class="text-xs text-gray-500">Total Balance</p>
+                <p class="font-bold text-lg text-orange-600">TSh <?= number_format($total_balance) ?></p>
+            </div>
         </div>
-        <?php endif; ?>
+        
+        <!-- Individual Bills -->
+        <?php foreach ($visit_bills as $index => $bill): ?>
+            <div class="bill-card <?= $bill['status'] === 'cancelled' ? 'opacity-60' : '' ?> mb-3">
+                <div class="flex flex-wrap justify-between items-start gap-2">
+                    <div class="flex-1">
+                        <p class="bill-number">
+                            <i class="fas fa-receipt"></i> <?= htmlspecialchars($bill['bill_number']) ?>
+                            <span class="badge-count ml-2">#<?= $index + 1 ?></span>
+                            <?php if ($bill['prescription_id']): ?>
+                                <span class="badge badge-info ml-2" style="font-size:0.6rem;">
+                                    <i class="fas fa-prescription"></i> Prescription
+                                </span>
+                            <?php endif; ?>
+                        </p>
+                        <p class="bill-meta">
+                            <i class="fas fa-calendar-alt"></i> <?= date('M d, Y h:i A', strtotime($bill['created_at'])) ?>
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-sm font-bold text-blue-600 dark:text-blue-400">
+                            TSh <?= number_format($bill['total_amount'] ?? 0) ?>
+                        </span>
+                        <span class="status-badge <?= $bill['status_color'] ?? 'secondary' ?>" style="font-size:0.65rem;">
+                            <?= ucfirst($bill['status'] ?? 'N/A') ?>
+                        </span>
+                        <a href="bill_details.php?id=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
+                            <i class="fas fa-eye"></i>
+                        </a>
+                    </div>
+                </div>
+                
+                <!-- Bill Items -->
+                <?php if (isset($all_bill_items[$bill['id']]) && count($all_bill_items[$bill['id']]) > 0): ?>
+                    <div class="mt-2 overflow-x-auto">
+                        <table class="data-table table-blue w-full" style="font-size:0.7rem;">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Item Name</th>
+                                    <th>Type</th>
+                                    <th>Qty</th>
+                                    <th>Unit Price</th>
+                                    <th>Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php $i = 1; foreach ($all_bill_items[$bill['id']] as $item): ?>
+                                    <tr <?= $item['payment_status'] === 'cancelled' ? 'style="opacity:0.5;"' : '' ?>>
+                                        <td><?= $i++ ?></td>
+                                        <td><?= htmlspecialchars($item['item_name']) ?></td>
+                                        <td>
+                                            <span class="badge <?= 
+                                                $item['item_type'] === 'medication' ? 'badge-purple' : 
+                                                ($item['item_type'] === 'lab_test' ? 'badge-orange' : 
+                                                ($item['item_type'] === 'consultation' ? 'badge-blue' : 
+                                                ($item['item_type'] === 'procedure' ? 'badge-red' : 
+                                                ($item['item_type'] === 'tool' ? 'badge-teal' : 'badge-info')))) 
+                                            ?>">
+                                                <?= ucfirst(str_replace('_', ' ', $item['item_type'] ?? 'N/A')) ?>
+                                            </span>
+                                        </td>
+                                        <td><?= $item['quantity'] ?? 1 ?></td>
+                                        <td>TSh <?= number_format($item['unit_price'] ?? 0) ?></td>
+                                        <td class="font-bold">TSh <?= number_format($item['total_price'] ?? 0) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Bill Summary -->
+                    <div class="flex flex-wrap justify-end gap-3 mt-2 text-xs">
+                        <span class="text-gray-500">Subtotal: TSh <?= number_format($bill['total_amount'] ?? 0) ?></span>
+                        <?php if (($bill['discount_amount'] ?? 0) > 0): ?>
+                            <span class="text-green-600">Discount: TSh <?= number_format($bill['discount_amount'] ?? 0) ?></span>
+                        <?php endif; ?>
+                        <span class="font-bold text-blue-600">Paid: TSh <?= number_format($bill['paid_amount'] ?? 0) ?></span>
+                        <?php if (($bill['balance'] ?? 0) > 0): ?>
+                            <span class="font-bold text-orange-600">Balance: TSh <?= number_format($bill['balance'] ?? 0) ?></span>
+                        <?php endif; ?>
+                    </div>
+                <?php else: ?>
+                    <p class="text-xs text-gray-400 mt-2">No items in this bill</p>
+                <?php endif; ?>
+            </div>
+        <?php endforeach; ?>
+    </div>
+    <?php else: ?>
+    <!-- No Bills -->
+    <div class="card mb-5">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-file-invoice title-blue mr-2"></i> Bills
+            </h3>
+        </div>
+        <div class="text-center py-6 text-gray-400">
+            <i class="fas fa-receipt text-3xl block mb-2"></i>
+            <p>No bills created for this visit</p>
+        </div>
     </div>
     <?php endif; ?>
 
@@ -1006,8 +1202,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-flask title-orange mr-2"></i> Lab Tests
-                <span class="badge-count">(<?= count($visit_lab_tests) ?> tests)</span>
+                <i class="fas fa-flask title-orange mr-2"></i> Lab Tests (<?= count($visit_lab_tests) ?> tests)
             </h3>
         </div>
         <div class="overflow-x-auto">
@@ -1054,8 +1249,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-prescription title-purple mr-2"></i> Prescriptions
-                <span class="badge-count">(<?= count($visit_prescriptions) ?> prescriptions)</span>
+                <i class="fas fa-prescription title-purple mr-2"></i> Prescriptions (<?= count($visit_prescriptions) ?>)
             </h3>
         </div>
         <?php foreach ($visit_prescriptions as $prescription): ?>
@@ -1257,8 +1451,11 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🏥 Braick Dispensary - Visit Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name']) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c❤️ Vital Signs: Modern cards design (6 parameters)', 'font-size:13px; color:#EC4899;');
-    console.log('%c📊 Status: <?= ucfirst($visit['status'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🧾 Total Bills: <?= count($visit_bills) ?> (Unique)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Total Amount: TSh <?= number_format($total_bill_amount) ?>', 'font-size:13px; color:#059669;');
+    <?php if (count($raw_bills) != count($unique_bills)): ?>
+    console.log('%c⚠️ Duplicate bills detected! Raw: <?= count($raw_bills) ?>, Unique: <?= count($unique_bills) ?>', 'font-size:13px; color:#F59E0B;');
+    <?php endif; ?>
 </script>
 
 </body>
