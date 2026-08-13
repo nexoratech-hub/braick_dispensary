@@ -8,32 +8,48 @@
 session_start();
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT RECEPTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
 // ================================================================
-// PATH SAHIHI
+// GET SESSION DATA
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'Receptionist';
+$branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'reception';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = $_SESSION['is_admin'] ?? false;
+
+$user_branch_id = $branch_id;
 $visit_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $message = '';
 $message_type = '';
 
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
+    
+    // ================================================================
+    // GET UNREAD NOTIFICATIONS COUNT
+    // ================================================================
+    $unread_notifications = 0;
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    } catch (Exception $e) {
+        $unread_notifications = 0;
+    }
     
     // ================================================================
     // GET VISIT DETAILS WITH PATIENT AND DOCTOR INFO
@@ -218,7 +234,13 @@ try {
     $total_balance = 0;
     $total_discount = 0;
     $bill_status = 'pending';
+    $unread_notifications = 0;
 }
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -233,8 +255,8 @@ include_once '../../components/reception_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Visit - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -1178,8 +1200,8 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $logo_path ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= substr($full_name, 0, 1) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1872,6 +1894,8 @@ include_once '../../components/reception_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             View Visit Details
             <span class="text-gray-300 mx-2">|</span>
+            Logged in as: <strong><?= htmlspecialchars($full_name) ?></strong>
+            <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp"><?= date('h:i:s A') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
@@ -1972,11 +1996,13 @@ include_once '../../components/reception_sidebar.php';
     });
 
     console.log('%c📋 Braick - View Visit Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📝 Visit ID: <?= $visit_id ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Bills: <?= count($bills) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💵 Total Amount: TSh <?= number_format($total_bill_amount, 2) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ Total Paid: TSh <?= number_format($total_paid_amount, 2) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

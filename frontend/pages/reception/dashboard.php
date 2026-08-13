@@ -1,41 +1,61 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/dashboard.php
-// RECEPTION DASHBOARD - WITH REAL-TIME AUTO-UPDATE
-// USING GLOBAL_STATS.JS (3 SECONDS)
-// WITH CLICKABLE STAT CARDS - NAVIGATE TO RELEVANT PAGES
+// RECEPTION DASHBOARD - WITH PROPER LOGIN SESSION
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
 }
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'reception';
+$branch_id = $_SESSION['branch_id'] ?? 1;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // PATH SAHIHI
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
 $unread_notifications = 0;
 
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
     $today = date('Y-m-d');
     
     // ================================================================
@@ -56,7 +76,7 @@ try {
         WHERE role = 'doctor' AND status = 'active' AND branch_id = ?
         ORDER BY is_online DESC, full_name
     ");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $doctors = $stmt->fetchAll();
     
     $online_doctors_count = 0;
@@ -81,10 +101,11 @@ try {
         $stmt = $db->prepare("
             SELECT action, details, created_at 
             FROM activity_logs 
+            WHERE branch_id = ? OR branch_id IS NULL
             ORDER BY created_at DESC 
             LIMIT 5
         ");
-        $stmt->execute();
+        $stmt->execute([$branch_id]);
         $recent_activities = $stmt->fetchAll();
     } catch (Exception $e) {
         $recent_activities = [];
@@ -102,7 +123,7 @@ try {
         ORDER BY a.appointment_date
         LIMIT 10
     ");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $today_appointments_list = $stmt->fetchAll();
     
     // ================================================================
@@ -114,7 +135,7 @@ try {
         ORDER BY created_at DESC 
         LIMIT 8
     ");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $recent_patients = $stmt->fetchAll();
     
 } catch (Exception $e) {
@@ -144,34 +165,61 @@ $stats = [
 ];
 
 try {
+    $db = Database::getInstance()->getConnection();
+    
     // Get stats from database for initial load
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $stats['total_patients'] = $stmt->fetch()['count'] ?? 0;
     
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $stats['total_visits'] = $stmt->fetch()['count'] ?? 0;
     
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $stats['total_appointments'] = $stmt->fetch()['count'] ?? 0;
     
     $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = ?");
-    $stmt->execute([$selected_branch_id, $today]);
+    $stmt->execute([$branch_id, $today]);
     $stats['today_patients'] = $stmt->fetch()['count'] ?? 0;
     
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = ?");
-    $stmt->execute([$selected_branch_id, $today]);
+    $stmt->execute([$branch_id, $today]);
     $stats['today_visits'] = $stmt->fetch()['count'] ?? 0;
     
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $stats['pending_appointments'] = $stmt->fetch()['count'] ?? 0;
     
 } catch (Exception $e) {
     // Keep default values
 }
+
+// ================================================================
+// TIME AGO FUNCTION
+// ================================================================
+function time_ago($timestamp) {
+    if (empty($timestamp)) return 'Just now';
+    $time = strtotime($timestamp);
+    $now = time();
+    $diff = $now - $time;
+    
+    if ($diff < 60) return 'Just now';
+    if ($diff < 3600) return floor($diff / 60) . 'm ago';
+    if ($diff < 86400) return floor($diff / 3600) . 'h ago';
+    if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+    return date('M d, Y', $time);
+}
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -186,8 +234,8 @@ include_once '../../components/reception_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Reception Dashboard - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -410,6 +458,37 @@ include_once '../../components/reception_sidebar.php';
         
         .dark-toggle-btn i { font-size: 0.9rem; }
         
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        [data-theme="dark"] .branch-badge-display {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        .role-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--primary-bg);
+            color: var(--primary);
+            text-transform: uppercase;
+        }
+        
+        [data-theme="dark"] .role-badge-display {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+        
         /* ================================================================
            MAIN CONTENT
            ================================================================ */
@@ -483,18 +562,6 @@ include_once '../../components/reception_sidebar.php';
             font-weight: 600;
         }
         
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
         .page-header .header-badge {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -551,7 +618,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           STAT CARDS - BEAUTIFUL DESIGN
+           STAT CARDS
            ================================================================ */
         .stat-card {
             border-radius: 16px;
@@ -576,7 +643,6 @@ include_once '../../components/reception_sidebar.php';
             transform: scale(0.97);
         }
         
-        /* Card Colors */
         .stat-card.blue { 
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8); 
         }
@@ -602,7 +668,6 @@ include_once '../../components/reception_sidebar.php';
             background: linear-gradient(135deg, #4F46E5, #4338CA); 
         }
         
-        /* Card Decoration */
         .stat-card .card-decoration {
             position: absolute;
             top: -30px;
@@ -611,17 +676,6 @@ include_once '../../components/reception_sidebar.php';
             height: 100px;
             border-radius: 50%;
             background: rgba(255,255,255,0.05);
-            pointer-events: none;
-        }
-        
-        .stat-card .card-decoration-2 {
-            position: absolute;
-            bottom: -40px;
-            right: 20px;
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            background: rgba(255,255,255,0.03);
             pointer-events: none;
         }
         
@@ -841,12 +895,6 @@ include_once '../../components/reception_sidebar.php';
             color: var(--text-primary);
         }
         
-        .quick-action:hover .icon.blue { color: white; }
-        .quick-action:hover .icon.green { color: white; }
-        .quick-action:hover .icon.purple { color: white; }
-        .quick-action:hover .icon.orange { color: white; }
-        .quick-action:hover .icon.red { color: white; }
-        
         .quick-action.blue:hover { background: var(--primary); border-color: var(--primary); }
         .quick-action.green:hover { background: var(--success); border-color: var(--success); }
         .quick-action.purple:hover { background: #7C3AED; border-color: #7C3AED; }
@@ -854,6 +902,7 @@ include_once '../../components/reception_sidebar.php';
         .quick-action.red:hover { background: var(--danger); border-color: var(--danger); }
         
         .quick-action:hover .label { color: white; }
+        .quick-action:hover .icon { color: white; }
         
         /* ================================================================
            SCROLL CONTAINERS
@@ -875,40 +924,6 @@ include_once '../../components/reception_sidebar.php';
         .scroll-container::-webkit-scrollbar-thumb {
             background: var(--primary);
             border-radius: 4px;
-        }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .role-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
         }
         
         /* ================================================================
@@ -1022,9 +1037,6 @@ include_once '../../components/reception_sidebar.php';
             .stat-card { padding: 12px 14px; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1033,11 +1045,6 @@ include_once '../../components/reception_sidebar.php';
         .animate-fade-in-up {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
         }
         
         .online-dot {
@@ -1100,8 +1107,8 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1126,7 +1133,7 @@ include_once '../../components/reception_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-user"></i>
-                Welcome back, <strong><?= htmlspecialchars($user_full_name) ?></strong>!
+                Welcome back, <strong><?= htmlspecialchars($full_name) ?></strong>!
                 
                 <span class="header-badge">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
@@ -1149,103 +1156,87 @@ include_once '../../components/reception_sidebar.php';
             <a href="new_appointment.php" class="btn-outline-light">
                 <i class="fas fa-calendar-plus"></i> New Appointment
             </a>
-            <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
+            <button onclick="location.reload()" class="btn-outline-light">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - CLICKABLE & BEAUTIFUL -->
+    <!-- STATS CARDS -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mb-5">
         
-        <!-- Card 1: Online Doctors -> online_doctors.php -->
-        <a href="online_doctors.php" class="stat-card blue" id="onlineDoctorsCard">
+        <a href="online_doctors.php" class="stat-card blue">
             <span class="card-decoration"></span>
             <span class="card-decoration-2"></span>
             <span class="stat-icon">🟢</span>
             <div class="stat-number" id="onlineDoctorsStat"><?= $online_doctors_count ?></div>
             <div class="stat-label">Online Doctors</div>
-            <div class="stat-update" id="onlineDoctorsStatTime">Updated now</div>
             <span class="stat-badge"><?= $total_doctors ?> Total</span>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 2: Total Patients -> patients.php -->
-        <a href="patients.php" class="stat-card purple" id="totalPatientsCard">
+        <a href="patients.php" class="stat-card purple">
             <span class="card-decoration"></span>
             <span class="card-decoration-2"></span>
             <span class="stat-icon">👥</span>
-            <div class="stat-number" id="totalPatients"><?= number_format($stats['total_patients']) ?></div>
+            <div class="stat-number"><?= number_format($stats['total_patients']) ?></div>
             <div class="stat-label">Total Patients</div>
-            <div class="stat-update" id="totalPatientsUpdate">Updated now</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 3: Total Visits -> visits.php -->
-        <a href="visits.php" class="stat-card green" id="totalVisitsCard">
+        <a href="visits.php" class="stat-card green">
             <span class="card-decoration"></span>
             <span class="card-decoration-2"></span>
             <span class="stat-icon">🏥</span>
-            <div class="stat-number" id="totalVisits"><?= number_format($stats['total_visits']) ?></div>
+            <div class="stat-number"><?= number_format($stats['total_visits']) ?></div>
             <div class="stat-label">Total Visits</div>
-            <div class="stat-update" id="totalVisitsUpdate">Updated now</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 4: Total Appointments -> appointments.php -->
-        <a href="appointments.php" class="stat-card indigo" id="totalAppointmentsCard">
+        <a href="appointments.php" class="stat-card indigo">
             <span class="card-decoration"></span>
             <span class="card-decoration-2"></span>
             <span class="stat-icon">📅</span>
-            <div class="stat-number" id="totalAppointments"><?= number_format($stats['total_appointments']) ?></div>
+            <div class="stat-number"><?= number_format($stats['total_appointments']) ?></div>
             <div class="stat-label">Total Appointments</div>
-            <div class="stat-update" id="totalAppointmentsUpdate">Updated now</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 5: Today's Patients -> visits.php?filter=today -->
-        <a href="visits.php?filter=today" class="stat-card orange" id="todayPatientsCard">
+        <a href="visits.php?filter=today" class="stat-card orange">
             <span class="card-decoration"></span>
             <span class="card-decoration-2"></span>
             <span class="stat-icon">👤</span>
-            <div class="stat-number" id="todayPatientsTotal"><?= $stats['today_patients'] ?></div>
+            <div class="stat-number"><?= $stats['today_patients'] ?></div>
             <div class="stat-label">Today's Patients</div>
-            <div class="stat-update" id="todayPatientsUpdate">Updated now</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 6: Today's Visits -> visits.php?filter=today -->
-        <a href="visits.php?filter=today" class="stat-card teal" id="todayVisitsCard">
+        <a href="visits.php?filter=today" class="stat-card teal">
             <span class="card-decoration"></span>
             <span class="card-decoration-2"></span>
             <span class="stat-icon">🩺</span>
-            <div class="stat-number" id="todayVisitsTotal"><?= $stats['today_visits'] ?></div>
+            <div class="stat-number"><?= $stats['today_visits'] ?></div>
             <div class="stat-label">Today's Visits</div>
-            <div class="stat-update" id="todayVisitsUpdate">Updated now</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 7: Today's Appointments -> appointments.php?filter=today -->
-        <a href="appointments.php?filter=today" class="stat-card pink" id="todayAppointmentsCard">
+        <a href="appointments.php?filter=today" class="stat-card pink">
             <span class="card-decoration"></span>
             <span class="card-decoration-2"></span>
             <span class="stat-icon">📋</span>
-            <div class="stat-number" id="todayAppointmentsTotal"><?= $stats['today_appointments'] ?></div>
+            <div class="stat-number"><?= $stats['today_appointments'] ?></div>
             <div class="stat-label">Today's Appointments</div>
-            <div class="stat-update" id="todayAppointmentsUpdate">Updated now</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- Card 8: Pending Appointments -> appointments.php?status=pending -->
-        <a href="appointments.php?status=pending" class="stat-card red" id="pendingAppointmentsCard">
+        <a href="appointments.php?status=pending" class="stat-card red">
             <span class="card-decoration"></span>
             <span class="card-decoration-2"></span>
             <span class="stat-icon">⏳</span>
-            <div class="stat-number" id="pendingAppointments"><?= $stats['pending_appointments'] ?></div>
+            <div class="stat-number"><?= $stats['pending_appointments'] ?></div>
             <div class="stat-label">Pending Appointments</div>
-            <div class="stat-update" id="pendingAppointmentsUpdate">Updated now</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1256,17 +1247,16 @@ include_once '../../components/reception_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
         
-        <!-- Today's Appointments -->
         <div class="card lg:col-span-2">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-calendar-check title-blue mr-2"></i> Today's Appointments
-                    <span class="text-sm font-normal text-gray-400" id="appointmentsCount">(<?= count($today_appointments_list) ?>)</span>
+                    <span class="text-sm font-normal text-gray-400">(<?= count($today_appointments_list) ?>)</span>
                 </h3>
                 <a href="appointments.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
-            <div class="scroll-container" id="appointmentsList">
+            <div class="scroll-container">
                 <?php if (count($today_appointments_list) > 0): ?>
                     <?php foreach ($today_appointments_list as $appt): ?>
                         <div class="appointment-item">
@@ -1289,26 +1279,25 @@ include_once '../../components/reception_sidebar.php';
             </div>
         </div>
         
-        <!-- Online Doctors -->
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-user-md title-green mr-2"></i> Online Doctors
-                    <span class="text-sm font-normal text-gray-400" id="onlineDoctorsCount">(<?= count($online_doctors_list) ?> online)</span>
+                    <span class="text-sm font-normal text-gray-400">(<?= count($online_doctors_list) ?> online)</span>
                 </h3>
                 <a href="online_doctors.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
-            <div class="scroll-container" id="onlineDoctorsList">
+            <div class="scroll-container">
                 <?php if (count($online_doctors_list) > 0): ?>
                     <?php foreach ($online_doctors_list as $doc): ?>
-                        <div class="flex items-center justify-between p-2 bg-gray-50 rounded-lg hover:bg-primary-bg transition mb-1">
+                        <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800/50 rounded-lg hover:bg-primary-bg transition mb-1">
                             <div class="flex items-center gap-3">
                                 <div class="w-8 h-8 bg-primary rounded-full flex items-center justify-center text-white text-sm font-bold">
                                     <?= strtoupper(substr($doc['full_name'], 0, 1)) ?>
                                 </div>
                                 <div>
-                                    <p class="font-medium text-sm text-gray-800"><?= htmlspecialchars($doc['full_name']) ?></p>
+                                    <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($doc['full_name']) ?></p>
                                     <p class="text-xs text-gray-500"><?= htmlspecialchars($doc['specialty'] ?? 'General Practitioner') ?></p>
                                 </div>
                             </div>
@@ -1331,7 +1320,6 @@ include_once '../../components/reception_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
         
-        <!-- Recent Patients -->
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">
@@ -1340,16 +1328,16 @@ include_once '../../components/reception_sidebar.php';
                 <a href="patients.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
-            <div class="scroll-container" id="recentPatientsList">
+            <div class="scroll-container">
                 <?php if (count($recent_patients) > 0): ?>
                     <?php foreach ($recent_patients as $patient): ?>
-                        <div class="flex items-center justify-between p-2 border-b border-gray-100 hover:bg-gray-50 rounded-lg transition">
+                        <div class="flex items-center justify-between p-2 border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-lg transition">
                             <div class="flex items-center gap-3">
                                 <div class="patient-avatar-sm" style="background: <?= '#' . substr(md5($patient['full_name']), 0, 6) ?>;">
                                     <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
                                 </div>
                                 <div>
-                                    <p class="font-medium text-sm text-gray-800"><?= htmlspecialchars($patient['full_name']) ?></p>
+                                    <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($patient['full_name']) ?></p>
                                     <p class="text-xs text-gray-500">
                                         <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?> • 
                                         <?= htmlspecialchars($patient['phone'] ?? 'No phone') ?>
@@ -1371,7 +1359,6 @@ include_once '../../components/reception_sidebar.php';
             </div>
         </div>
         
-        <!-- Recent Activities -->
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">
@@ -1380,7 +1367,7 @@ include_once '../../components/reception_sidebar.php';
                 <a href="activities.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
-            <div class="scroll-container" id="recentActivities">
+            <div class="scroll-container">
                 <?php if (count($recent_activities) > 0): ?>
                     <?php foreach ($recent_activities as $activity): ?>
                         <div class="activity-item">
@@ -1436,11 +1423,11 @@ include_once '../../components/reception_sidebar.php';
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             Reception Dashboard
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1459,59 +1446,52 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- GLOBAL STATS AUTO-UPDATE -->
-<!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/global_stats.js"></script>
-
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
+    // SIDEBAR TOGGLE (Mobile)
     // ================================================================
     var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
+    var toggleBtn = document.getElementById('sidebarToggle');
     
-    sidebarToggle?.addEventListener('click', function() {
+    toggleBtn?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (!sidebar.contains(e.target) && e.target !== toggleBtn) {
                 sidebar.classList.remove('open');
             }
+        }
+    });
+
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    var darkToggle = document.getElementById('darkModeToggle');
+    var darkIcon = document.getElementById('darkIcon');
+    var darkText = document.getElementById('darkText');
+    var html = document.documentElement;
+    
+    if (localStorage.getItem('darkMode') === 'true') {
+        html.setAttribute('data-theme', 'dark');
+        darkIcon.className = 'fas fa-sun';
+        darkText.textContent = 'Light';
+    }
+    
+    darkToggle?.addEventListener('click', function() {
+        if (html.getAttribute('data-theme') === 'dark') {
+            html.removeAttribute('data-theme');
+            darkIcon.className = 'fas fa-moon';
+            darkText.textContent = 'Dark';
+            localStorage.setItem('darkMode', 'false');
+        } else {
+            html.setAttribute('data-theme', 'dark');
+            darkIcon.className = 'fas fa-sun';
+            darkText.textContent = 'Light';
+            localStorage.setItem('darkMode', 'true');
         }
     });
 
@@ -1535,19 +1515,17 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     // SEARCH
     // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
+    document.getElementById('searchBtn')?.addEventListener('click', function() {
+        var q = document.getElementById('searchInput').value.trim();
+        if (q.length > 0) {
+            window.location.href = 'search.php?q=' + encodeURIComponent(q);
         }
-    }
+    });
     
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
+    document.getElementById('searchInput')?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            document.getElementById('searchBtn').click();
+        }
     });
 
     // ================================================================
@@ -1573,60 +1551,10 @@ include_once '../../components/reception_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
-    function manualRefresh() {
-        var btn = document.getElementById('refreshBtn');
-        btn.innerHTML = '<span class="spinner"></span> Loading...';
-        btn.disabled = true;
-        
-        setTimeout(function() {
-            window.location.reload();
-        }, 1000);
-        
-        setTimeout(function() {
-            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
-            btn.disabled = false;
-            showToast('✅ Refreshed', 'Dashboard data updated manually', 'success');
-        }, 2000);
-    }
-
-    // ================================================================
-    // TIME AGO FUNCTION
-    // ================================================================
-    function time_ago(timestamp) {
-        if (!timestamp) return 'N/A';
-        var now = new Date();
-        var past = new Date(timestamp);
-        var diff = Math.floor((now - past) / 1000);
-        if (diff < 60) return 'Just now';
-        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-        if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
-        return past.toLocaleDateString();
-    }
-
-    // ================================================================
-    // MONITOR GLOBAL STATS UPDATES
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        // Check if GlobalStats is loaded
-        var checkGlobalStats = setInterval(function() {
-            if (window.GlobalStats) {
-                console.log('%c📊 Global Stats System Connected', 'font-size:14px; font-weight:bold; color:#34D399;');
-                console.log('%c🔄 Auto-update every ' + window.GlobalStats.config.updateInterval / 1000 + ' seconds', 'font-size:12px; color:#64748B;');
-                clearInterval(checkGlobalStats);
-            }
-        }, 500);
-    });
-
     console.log('%c🏥 Braick - Reception Dashboard', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👋 Welcome, <?= htmlspecialchars($user_full_name) ?>!', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Auto-update every 3 seconds via global_stats.js', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click any stat card to navigate to relevant page', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Online Doctors card goes to online_doctors.php', 'font-size:13px; color:#059669;');
+    console.log('%c👋 Welcome, <?= htmlspecialchars($full_name) ?>!', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Using proper session login', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -6,25 +6,47 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Reception
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 11;
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_role = $_SESSION['role'] ?? 'reception';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // GET BILL ID
@@ -37,12 +59,16 @@ if ($bill_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE CONFIG
+// INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
 $bill = null;
@@ -126,9 +152,9 @@ try {
 // ================================================================
 try {
     $stmt = $db->prepare("
-        SELECT * FROM payment_history 
+        SELECT * FROM payments 
         WHERE bill_id = ?
-        ORDER BY created_at DESC
+        ORDER BY received_at DESC
     ");
     $stmt->execute([$bill_id]);
     $payment_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -215,10 +241,11 @@ function getUserColor($name) {
 // ================================================================
 // PROFILE PICTURE
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -244,7 +271,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Bill - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -934,7 +961,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                 <td><?= $index + 1 ?></td>
                                 <td style="font-weight:600;color:var(--success);">TSh <?= number_format($payment['amount'] ?? 0, 0) ?></td>
                                 <td><?= ucfirst($payment['payment_method'] ?? 'Cash') ?></td>
-                                <td><?= date('d/m/Y h:i A', strtotime($payment['created_at'] ?? 'now')) ?></td>
+                                <td><?= date('d/m/Y h:i A', strtotime($payment['received_at'] ?? 'now')) ?></td>
                                 <td><?= htmlspecialchars($payment['received_by'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($payment['reference_number'] ?? '—') ?></td>
                             </tr>
@@ -1070,6 +1097,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total: TSh <?= number_format($total_amount, 0) ?> | Paid: TSh <?= number_format($paid_amount, 0) ?> | Balance: TSh <?= number_format($balance, 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Items: <?= $total_items ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

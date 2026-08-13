@@ -5,27 +5,62 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// IF NO SESSION, USE RECEPTION.ROSE (ID: 6) AS DEFAULT
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Not logged in',
+        'redirect' => '../login.php'
+    ]);
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Access denied',
+        'redirect' => '../' . $_SESSION['role'] . '/dashboard.php'
+    ]);
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_role = $_SESSION['role'] ?? 'reception';
 
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Database connection failed: ' . $e->getMessage()
+    ]);
+    exit;
+}
 
 // ================================================================
 // TODAY'S DATE
@@ -152,7 +187,8 @@ $today_appointments_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // 14. Recent Patients
 $stmt = $db->prepare("
-    SELECT * FROM patients 
+    SELECT id, full_name, patient_id, phone, created_at 
+    FROM patients 
     WHERE branch_id = ?
     ORDER BY created_at DESC 
     LIMIT 8
@@ -162,12 +198,14 @@ $recent_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // 15. Recent Activities
 try {
-    $stmt = $db->query("
+    $stmt = $db->prepare("
         SELECT action, details, created_at 
         FROM activity_logs 
+        WHERE branch_id = ? OR branch_id IS NULL
         ORDER BY created_at DESC 
         LIMIT 5
     ");
+    $stmt->execute([$user_branch_id]);
     $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $recent_activities = [];

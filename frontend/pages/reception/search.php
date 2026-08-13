@@ -5,35 +5,60 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-$_SESSION['user_id'] = 6;
-$_SESSION['full_name'] = 'Rose Mwangi';
-$_SESSION['role'] = 'reception';
-$_SESSION['branch_id'] = 1;
-$_SESSION['branch_name'] = 'Dodoma';
-$_SESSION['username'] = 'reception.rose';
-$_SESSION['is_admin'] = false;
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'reception';
+$branch_id = $_SESSION['branch_id'] ?? 1;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // PATH SAHIHI
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $query = isset($_GET['q']) ? trim($_GET['q']) : '';
-
 $results = [];
 $total_results = 0;
 
 if (!empty($query)) {
     try {
-        $db = getDB();
+        $db = Database::getInstance()->getConnection();
         
         $stmt = $db->prepare("
             SELECT * FROM patients 
@@ -43,7 +68,7 @@ if (!empty($query)) {
             LIMIT 50
         ");
         $search_term = "%$query%";
-        $stmt->execute([$selected_branch_id, $search_term, $search_term, $search_term, $search_term]);
+        $stmt->execute([$branch_id, $search_term, $search_term, $search_term, $search_term]);
         $results = $stmt->fetchAll();
         $total_results = count($results);
         
@@ -52,6 +77,30 @@ if (!empty($query)) {
         $total_results = 0;
     }
 }
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    if (isset($_SESSION['user_id'])) {
+        $db = Database::getInstance()->getConnection();
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$_SESSION['user_id']]);
+        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    }
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -162,8 +211,8 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -394,6 +443,8 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c🔍 Braick - Search Patients (Branch Filtered)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Results: <?= $total_results ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -10,24 +10,30 @@
 session_start();
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT RECEPTION
 // ================================================================
-$_SESSION['user_id'] = 6;
-$_SESSION['full_name'] = 'Rose Mwangi';
-$_SESSION['role'] = 'reception';
-$_SESSION['branch_id'] = 1;
-$_SESSION['branch_name'] = 'Dodoma';
-$_SESSION['username'] = 'reception.rose';
-$_SESSION['is_admin'] = false;
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
 
 // ================================================================
-// PATH SAHIHI
+// GET SESSION DATA
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'Receptionist';
+$branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'reception';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+$user_branch_id = $branch_id;
+$selected_branch_id = $branch_id;
 $status_filter = $_GET['status'] ?? '';
 $date_filter = $_GET['date'] ?? '';
 $period_filter = $_GET['period'] ?? '';
@@ -65,7 +71,7 @@ if (!empty($period_filter)) {
 }
 
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
     
     // ================================================================
     // GET APPOINTMENTS WITH PATIENT APPOINTMENT COUNT
@@ -156,6 +162,11 @@ try {
     $stmt->execute([$selected_branch_id]);
     $total_doctors = $stmt->fetch()['total'] ?? 0;
     
+    // Get unread notifications count
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch()['count'] ?? 0;
+    
 } catch (Exception $e) {
     $appointments = [];
     $status_counts = [];
@@ -163,6 +174,7 @@ try {
     $total_appointments_all = 0;
     $online_doctors = 0;
     $total_doctors = 0;
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -179,6 +191,11 @@ $period_labels = [
 ];
 
 // ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/reception_header.php';
@@ -191,8 +208,8 @@ include_once '../../components/reception_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Appointments - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -1044,8 +1061,8 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $logo_path ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= substr($full_name, 0, 1) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1280,6 +1297,8 @@ include_once '../../components/reception_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Appointments
+            <span class="text-gray-300 mx-2">|</span>
+            Logged in as: <strong><?= htmlspecialchars($full_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1523,11 +1542,13 @@ include_once '../../components/reception_sidebar.php';
     // CONSOLE
     // ================================================================
     console.log('%c📅 Braick - Appointments List', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Total Appointments: <?= $total_appointments_all ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Showing <?= $total_records ?> appointments', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📆 Period: <?= $period_labels[$period_filter] ?? 'All' ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

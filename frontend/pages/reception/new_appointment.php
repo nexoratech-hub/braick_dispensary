@@ -6,45 +6,68 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
 }
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'reception';
+$branch_id = $_SESSION['branch_id'] ?? 1;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // PATH SAHIHI
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 $message = '';
 $message_type = '';
 
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
     
     // Get patients in this branch
     $stmt = $db->prepare("SELECT id, full_name, patient_id FROM patients WHERE branch_id = ? ORDER BY full_name");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $patients = $stmt->fetchAll();
     
     // Get doctors in this branch with status
     $stmt = $db->prepare("SELECT id, full_name, specialty, is_online, profile_pic FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ? ORDER BY is_online DESC, full_name");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$branch_id]);
     $doctors = $stmt->fetchAll();
     
     // Get online doctors count
@@ -133,7 +156,7 @@ try {
                     INSERT INTO appointments (patient_id, doctor_id, appointment_date, purpose, status, branch_id, created_by, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
-                $stmt->execute([$patient_id, $doctor_id, $datetime, $purpose, $status, $selected_branch_id, $_SESSION['user_id']]);
+                $stmt->execute([$patient_id, $doctor_id, $datetime, $purpose, $status, $branch_id, $_SESSION['user_id']]);
                 $appointment_id = $db->lastInsertId();
                 
                 // ================================================================
@@ -158,7 +181,7 @@ try {
                         $patient_id,
                         $appointment_id,
                         $_SESSION['user_id'],
-                        $selected_branch_id,
+                        $branch_id,
                         $temperature ?: null,
                         $bp_systolic ?: null,
                         $bp_diastolic ?: null,
@@ -172,8 +195,8 @@ try {
                 
                 // Log activity
                 try {
-                    $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'appointment_created', ?, NOW())");
-                    $stmt->execute([$_SESSION['user_id'], "New appointment created for patient ID: $patient_id with doctor ID: $doctor_id"]);
+                    $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'appointment_created', ?, NOW())");
+                    $stmt->execute([$_SESSION['user_id'], $branch_id, "New appointment created for patient ID: $patient_id with doctor ID: $doctor_id"]);
                 } catch (Exception $e) {}
                 
                 $db->commit();
@@ -211,6 +234,29 @@ try {
 }
 
 // ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    if (isset($_SESSION['user_id'])) {
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$_SESSION['user_id']]);
+        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    }
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/reception_header.php';
@@ -223,8 +269,8 @@ include_once '../../components/reception_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>New Appointment - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -1019,7 +1065,6 @@ include_once '../../components/reception_sidebar.php';
             flex: 1;
         }
 
-        /* Time select styling - can type or select */
         .time-select-group {
             display: flex;
             gap: 8px;
@@ -1085,7 +1130,6 @@ include_once '../../components/reception_sidebar.php';
             }
         }
 
-        /* Doctor status info - simple count only */
         .doctor-status-info {
             background: var(--bg-body);
             border-radius: 10px;
@@ -1153,8 +1197,8 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1279,7 +1323,6 @@ include_once '../../components/reception_sidebar.php';
                             <span class="text-green-500" id="onlineDoctorsText">(<?= $online_doctors ?> online)</span>
                         </p>
                         
-                        <!-- DOCTOR STATUS INFO - Simple counts only -->
                         <div class="doctor-status-info" id="doctorStatusInfo">
                             <span class="online-doctors">
                                 <i class="fas fa-circle status-icon" style="color:#059669;font-size:0.5rem;"></i>
@@ -1297,7 +1340,7 @@ include_once '../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- ROW 2: Date + Time (12 HOUR FORMAT with manual input) -->
+            <!-- ROW 2: Date + Time -->
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
@@ -1312,7 +1355,6 @@ include_once '../../components/reception_sidebar.php';
                         <i class="fas fa-clock label-icon"></i> Time <span class="required">*</span>
                     </label>
                     <div class="time-select-group">
-                        <!-- Hour Input (1-12) - Can type or select -->
                         <input type="number" name="appointment_hour" 
                                class="time-input" id="hourInput" 
                                value="09" min="1" max="12" 
@@ -1321,14 +1363,12 @@ include_once '../../components/reception_sidebar.php';
                         
                         <span class="time-separator">:</span>
                         
-                        <!-- Minute Input (00-59) - Can type or select -->
                         <input type="number" name="appointment_minute" 
                                class="time-input" id="minuteInput" 
                                value="00" min="0" max="59" 
                                placeholder="MM" required>
                         <span class="time-label">Min</span>
                         
-                        <!-- AM/PM Select -->
                         <select name="appointment_ampm" class="form-control ampm-select" id="ampmSelect" required>
                             <option value="AM" selected>AM</option>
                             <option value="PM">PM</option>
@@ -1336,7 +1376,7 @@ include_once '../../components/reception_sidebar.php';
                     </div>
                     <p class="text-xs text-gray-400 mt-1">
                         <i class="fas fa-info-circle mr-1"></i> 
-                        Enter hour (1-12) and minutes (00-59) or use the dropdowns
+                        Enter hour (1-12) and minutes (00-59)
                     </p>
                 </div>
             </div>
@@ -1366,7 +1406,7 @@ include_once '../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- ROW 4: Purpose (Full Width) -->
+            <!-- ROW 4: Purpose -->
             <div class="form-row grid-full">
                 <label class="form-label">
                     <i class="fas fa-notes-medical label-icon"></i> Purpose
@@ -1379,7 +1419,7 @@ include_once '../../components/reception_sidebar.php';
                 <div class="vital-title">
                     <i class="fas fa-heartbeat"></i>
                     6 Vital Signs
-                    <span class="text-sm font-normal text-gray-400">(Record patient vital signs - any value accepted)</span>
+                    <span class="text-sm font-normal text-gray-400">(Record patient vital signs)</span>
                     <?php if ($patient_id > 0 && $latest_vital_signs): ?>
                         <span class="text-xs text-green-500 ml-auto">
                             <i class="fas fa-check-circle"></i> Last recorded: <?= date('d/m/Y H:i', strtotime($latest_vital_signs['recorded_at'])) ?>
@@ -1444,7 +1484,7 @@ include_once '../../components/reception_sidebar.php';
                         <span class="vital-unit">cm</span>
                     </div>
                     
-                    <!-- 6. BMI (Auto-calculated) -->
+                    <!-- 6. BMI -->
                     <div class="vital-sign-item bmi-item">
                         <label class="vital-label">📊 BMI</label>
                         <input type="number" name="bmi" class="vital-input" 
@@ -1595,7 +1635,7 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // DATE & TIME - 12 HOUR FORMAT
+    // DATE & TIME
     // ================================================================
     function updateDateTime() {
         var now = new Date();
@@ -1619,7 +1659,7 @@ include_once '../../components/reception_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // TIME INPUT VALIDATION - Manual entry
+    // TIME INPUT VALIDATION
     // ================================================================
     var hourInput = document.getElementById('hourInput');
     var minuteInput = document.getElementById('minuteInput');
@@ -1759,11 +1799,11 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // AJAX AUTO-UPDATE DOCTOR STATUS USING get_online_doctors.php
+    // AJAX AUTO-UPDATE DOCTOR STATUS
     // ================================================================
     var updateInterval = null;
     var isUpdating = false;
-    var currentBranchId = <?= json_encode($selected_branch_id) ?>;
+    var currentBranchId = <?= json_encode($branch_id) ?>;
     var retryCount = 0;
     var maxRetries = 5;
     var doctorSelect = document.getElementById('doctorSelect');
@@ -1786,18 +1826,15 @@ include_once '../../components/reception_sidebar.php';
         var onlineCount = 0;
         var offlineCount = 0;
         
-        // Clear all options
         while (doctorSelect.options.length > 0) {
             doctorSelect.remove(0);
         }
         
-        // Add placeholder option
         var placeholder = document.createElement('option');
         placeholder.value = '';
         placeholder.textContent = '-- Select Doctor --';
         doctorSelect.appendChild(placeholder);
         
-        // Add each doctor and count online/offline
         doctorsData.forEach(function(doctor) {
             var option = document.createElement('option');
             option.value = doctor.id;
@@ -1826,7 +1863,6 @@ include_once '../../components/reception_sidebar.php';
             doctorSelect.appendChild(option);
         });
         
-        // Try to restore previous selection
         var found = false;
         for (var i = 0; i < doctorSelect.options.length; i++) {
             if (doctorSelect.options[i].value == currentValue) {
@@ -1836,7 +1872,6 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        // If not found or no selection, select first online doctor
         if (!found || !currentValue) {
             for (var i = 0; i < doctorSelect.options.length; i++) {
                 var opt = doctorSelect.options[i];
@@ -1847,11 +1882,9 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        // Update status text and counts
         updateDoctorStatusText();
         updateDoctorStatusCounts(onlineCount, offlineCount);
         
-        // Log update
         updateCount++;
         console.log('✅ Dropdown updated (' + updateCount + ' times) - ' + doctorsData.length + ' doctors loaded');
         console.log('   Online: ' + onlineCount + ', Offline: ' + offlineCount);
@@ -1909,13 +1942,10 @@ include_once '../../components/reception_sidebar.php';
             if (data.success) {
                 console.log('✅ API response: ' + data.total_doctors + ' doctors, ' + data.online_count + ' online');
                 
-                // Update the dropdown with new data
                 updateDoctorDropdown(data.doctors);
                 
-                // Update online count
                 var onlineCount = data.online_count || 0;
                 
-                // Update UI elements
                 var onlineCountEl = document.getElementById('onlineDoctorCount');
                 if (onlineCountEl) onlineCountEl.textContent = onlineCount;
                 
@@ -1928,7 +1958,6 @@ include_once '../../components/reception_sidebar.php';
                 var totalDoctorsStat = document.getElementById('totalDoctorsStat');
                 if (totalDoctorsStat) totalDoctorsStat.textContent = data.total_doctors || 0;
                 
-                // Update badge
                 var timeStr = getCurrentTime();
                 var updateBadge = document.getElementById('updateBadge');
                 if (updateBadge) {
@@ -1965,7 +1994,7 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // LISTEN FOR DOCTOR SELECTION CHANGES
+    // DOCTOR SELECTION CHANGE
     // ================================================================
     if (doctorSelect) {
         doctorSelect.addEventListener('change', function() {
@@ -1981,11 +2010,9 @@ include_once '../../components/reception_sidebar.php';
             clearInterval(updateInterval);
             updateInterval = null;
         }
-        // Initial update after 1 second
         setTimeout(function() {
             fetchDoctorStatus();
         }, 1000);
-        // Set interval
         updateInterval = setInterval(fetchDoctorStatus, 3000);
         console.log('✅ Auto-update timer started (every 3 seconds)');
     }
@@ -2011,7 +2038,6 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         calculateBMI();
-        // Initialize doctor status text
         setTimeout(function() {
             updateDoctorStatusText();
             startAutoUpdate();
@@ -2022,7 +2048,7 @@ include_once '../../components/reception_sidebar.php';
     });
 
     console.log('%c📅 Braick - New Appointment with 6 Vital Signs', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= $_SESSION['full_name'] ?? 'Rose Mwangi' ?> (<?= $_SESSION['role'] ?? 'reception' ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($full_name) ?> (<?= htmlspecialchars($role) ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Patients: <?= count($patients) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (<?= $online_doctors ?> online)', 'font-size:13px; color:#64748B;');
@@ -2030,7 +2056,6 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c🔄 Auto-update: Every 3 seconds (Doctor status via AJAX)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Dropdown updates WITHOUT page refresh', 'font-size:13px; color:#059669;');
     console.log('%c🕐 Time format: 12-hour (Manual input or select)', 'font-size:13px; color:#64748B;');
-    console.log('%c📡 API URL: /dispensary_system/frontend/api/get_online_doctors.php', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

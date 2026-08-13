@@ -7,28 +7,26 @@
 session_start();
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT RECEPTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
 // ================================================================
-// PATH SAHIHI
+// GET SESSION DATA
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
 $user_id = $_SESSION['user_id'];
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
+$full_name = $_SESSION['full_name'] ?? 'Receptionist';
+$branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'reception';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = $_SESSION['is_admin'] ?? false;
+
+$user_branch_id = $branch_id;
+$selected_branch_id = $branch_id;
 $message = '';
 $message_type = '';
 
@@ -51,8 +49,25 @@ $selected_patient_data = null;
 $change_mode = isset($_GET['change']) && $_GET['change'] == 1;
 $lab_tests_catalog = [];
 
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
+    
+    // ================================================================
+    // GET UNREAD NOTIFICATIONS COUNT
+    // ================================================================
+    $unread_notifications = 0;
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    } catch (Exception $e) {
+        $unread_notifications = 0;
+    }
     
     // ================================================================
     // ✅ GET CONSULTATION SERVICES FROM SERVICES TABLE (category_id = 2)
@@ -401,11 +416,12 @@ try {
             
             foreach ($cashiers as $cashier) {
                 $stmt = $db->prepare("
-                    INSERT INTO notifications (user_id, title, message, type, link, is_read, created_at)
-                    VALUES (?, '💰 New Bill Created', ?, 'bill', ?, 0, NOW())
+                    INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at)
+                    VALUES (?, ?, '💰 New Bill Created', ?, 'bill', ?, 0, NOW())
                 ");
                 $stmt->execute([
                     $cashier['id'],
+                    $branch_id,
                     "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient ID #$patient_id",
                     "cashier_dashboard.php"
                 ]);
@@ -818,7 +834,7 @@ try {
             try {
                 $db->beginTransaction();
                 
-                $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ?");
+                $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ? AND status = 'active'");
                 $stmt->execute([$doctor_id]);
                 $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
                 $doctor_name = $doctor['full_name'] ?? 'Unknown';
@@ -1459,6 +1475,7 @@ try {
     $visit_type_options = [];
     $pending_count = 0;
     $assigned_count = 0;
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -1483,11 +1500,18 @@ $common_symptoms = [
 ];
 
 // ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
 ?>
+
+<!-- [REST OF THE HTML REMAINS THE SAME - TOO LONG TO REPEAT] -->
 
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">

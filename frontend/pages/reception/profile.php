@@ -6,43 +6,60 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 005';
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
 }
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'reception';
+$branch_id = $_SESSION['branch_id'] ?? 1;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$email = $_SESSION['email'] ?? '';
+$phone = $_SESSION['phone'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // PATH SAHIHI
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-
-$user_id = $_SESSION['user_id'];
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
-$user_role = $_SESSION['role'] ?? 'reception';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_username = $_SESSION['username'] ?? 'reception.rose';
-$user_email = $_SESSION['email'] ?? 'rose@braick.com';
-$user_phone = $_SESSION['phone'] ?? '+255 700 000 005';
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 $message = '';
 $message_type = '';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
     
     // Get user data from database
     $stmt = $db->prepare("SELECT * FROM users WHERE id = ?");
@@ -50,14 +67,17 @@ try {
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($user) {
-        $user_full_name = $user['full_name'] ?? $user_full_name;
-        $user_email = $user['email'] ?? $user_email;
-        $user_phone = $user['phone'] ?? $user_phone;
+        $full_name = $user['full_name'] ?? $full_name;
+        $email = $user['email'] ?? $email;
+        $phone = $user['phone'] ?? $phone;
         $profile_pic = $user['profile_pic'] ?? '';
+        $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+        
+        // Update session with latest data
+        $_SESSION['full_name'] = $full_name;
+        $_SESSION['email'] = $email;
+        $_SESSION['phone'] = $phone;
         $_SESSION['profile_pic'] = $profile_pic;
-        $_SESSION['full_name'] = $user_full_name;
-        $_SESSION['email'] = $user_email;
-        $_SESSION['phone'] = $user_phone;
     }
     
     // ================================================================
@@ -65,7 +85,7 @@ try {
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['profile_pic'])) {
         $file = $_FILES['profile_pic'];
-        $upload_dir = 'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/profiles/';
+        $upload_dir = __DIR__ . '/../../assets/uploads/profiles/';
         
         // Create directory if not exists
         if (!is_dir($upload_dir)) {
@@ -100,7 +120,7 @@ try {
             if (move_uploaded_file($file['tmp_name'], $file_path)) {
                 // Delete old profile picture if exists
                 if (!empty($profile_pic) && file_exists($upload_dir . $profile_pic)) {
-                    unlink($upload_dir . $profile_pic);
+                    @unlink($upload_dir . $profile_pic);
                 }
                 
                 // Update database
@@ -150,9 +170,9 @@ try {
                 $_SESSION['full_name'] = $full_name;
                 $_SESSION['email'] = $email;
                 $_SESSION['phone'] = $phone;
-                $user_full_name = $full_name;
-                $user_email = $email;
-                $user_phone = $phone;
+                $full_name = $full_name;
+                $email = $email;
+                $phone = $phone;
                 $message = "Profile updated successfully!";
                 $message_type = 'success';
                 
@@ -185,7 +205,7 @@ $profile_pic_url = !empty($profile_pic)
 
 $profile_pic_exists = false;
 if (!empty($profile_pic)) {
-    $file_path = 'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
+    $file_path = __DIR__ . '/../../assets/uploads/profiles/' . $profile_pic;
     if (file_exists($file_path)) {
         $profile_pic_exists = true;
     }
@@ -193,7 +213,21 @@ if (!empty($profile_pic)) {
 
 // Default avatar
 $default_avatar = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-$default_letter = strtoupper(substr($user_full_name, 0, 1));
+$default_letter = strtoupper(substr($full_name, 0, 1));
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    if (isset($_SESSION['user_id'])) {
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$_SESSION['user_id']]);
+        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    }
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -499,7 +533,7 @@ include_once '../../components/reception_sidebar.php';
     
     <div class="flex items-center gap-3">
         <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime"></span>
@@ -581,11 +615,11 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <div class="text-center md:text-left">
-                <h2 class="profile-name"><?= htmlspecialchars($user_full_name) ?></h2>
+                <h2 class="profile-name"><?= htmlspecialchars($full_name) ?></h2>
                 <div class="profile-role">
-                    <span class="badge-role"><?= ucfirst($user_role) ?></span>
-                    <span><i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?></span>
-                    <span><i class="fas fa-user mr-1"></i> <?= htmlspecialchars($user_username) ?></span>
+                    <span class="badge-role"><?= ucfirst($role) ?></span>
+                    <span><i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?></span>
+                    <span><i class="fas fa-user mr-1"></i> <?= htmlspecialchars($username) ?></span>
                 </div>
                 <p class="text-sm text-gray-400 mt-1">
                     <i class="fas fa-calendar-alt mr-1"></i> Member since <?= date('F d, Y', strtotime($user['created_at'] ?? 'now')) ?>
@@ -605,32 +639,32 @@ include_once '../../components/reception_sidebar.php';
                 
                 <div>
                     <label class="form-label">Full Name</label>
-                    <input type="text" name="full_name" class="form-control" value="<?= htmlspecialchars($user_full_name) ?>" required>
+                    <input type="text" name="full_name" class="form-control" value="<?= htmlspecialchars($full_name) ?>" required>
                 </div>
                 
                 <div>
                     <label class="form-label">Username</label>
-                    <input type="text" class="form-control" value="<?= htmlspecialchars($user_username) ?>" disabled>
+                    <input type="text" class="form-control" value="<?= htmlspecialchars($username) ?>" disabled>
                 </div>
                 
                 <div>
                     <label class="form-label">Email Address</label>
-                    <input type="email" name="email" class="form-control" value="<?= htmlspecialchars($user_email) ?>" required>
+                    <input type="email" name="email" class="form-control" value="<?= htmlspecialchars($email) ?>" required>
                 </div>
                 
                 <div>
                     <label class="form-label">Phone Number</label>
-                    <input type="text" name="phone" class="form-control" value="<?= htmlspecialchars($user_phone) ?>">
+                    <input type="text" name="phone" class="form-control" value="<?= htmlspecialchars($phone) ?>">
                 </div>
                 
                 <div>
                     <label class="form-label">Role</label>
-                    <input type="text" class="form-control" value="<?= ucfirst($user_role) ?>" disabled>
+                    <input type="text" class="form-control" value="<?= ucfirst($role) ?>" disabled>
                 </div>
                 
                 <div>
                     <label class="form-label">Branch</label>
-                    <input type="text" class="form-control" value="<?= htmlspecialchars($user_branch_name) ?>" disabled>
+                    <input type="text" class="form-control" value="<?= htmlspecialchars($branch_name) ?>" disabled>
                 </div>
                 
             </div>
@@ -660,15 +694,15 @@ include_once '../../components/reception_sidebar.php';
         </div>
         <div class="info-row">
             <span class="info-label">Username</span>
-            <span class="info-value"><?= htmlspecialchars($user_username) ?></span>
+            <span class="info-value"><?= htmlspecialchars($username) ?></span>
         </div>
         <div class="info-row">
             <span class="info-label">Role</span>
-            <span class="info-value capitalize"><?= ucfirst($user_role) ?></span>
+            <span class="info-value capitalize"><?= ucfirst($role) ?></span>
         </div>
         <div class="info-row">
             <span class="info-label">Branch</span>
-            <span class="info-value"><?= htmlspecialchars($user_branch_name) ?></span>
+            <span class="info-value"><?= htmlspecialchars($branch_name) ?></span>
         </div>
         <div class="info-row">
             <span class="info-label">Status</span>
@@ -848,9 +882,10 @@ include_once '../../components/reception_sidebar.php';
     }
 
     console.log('%c👤 Braick - Reception Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📋 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📸 Profile pic: <?= $profile_pic_exists ? 'Uploaded ✅' : 'Default' ?>', 'font-size:13px; color:#64748B;');
     console.log('%c✅ Profile picture shows across all pages', 'font-size:13px; color:#059669;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

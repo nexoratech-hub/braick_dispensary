@@ -5,29 +5,55 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// PATH SAHIHI
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'reception';
+$branch_id = $_SESSION['branch_id'] ?? 1;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 $visit_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$error = '';
 
 if ($visit_id <= 0) {
     header('Location: visits.php');
@@ -35,15 +61,40 @@ if ($visit_id <= 0) {
 }
 
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
+    
+    // ================================================================
+    // GET UNREAD NOTIFICATIONS COUNT
+    // ================================================================
+    $unread_notifications = 0;
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    } catch (Exception $e) {
+        $unread_notifications = 0;
+    }
     
     // ================================================================
     // GET VISIT DETAILS
     // ================================================================
     $stmt = $db->prepare("
         SELECT v.*, 
-               p.full_name as patient_name, p.patient_id, p.phone, p.email, p.address, p.gender, p.date_of_birth,
-               u.full_name as doctor_name, u.specialty, u.phone as doctor_phone,
+               p.id as patient_id,
+               p.full_name as patient_name, 
+               p.patient_id as patient_number, 
+               p.phone, 
+               p.email, 
+               p.address, 
+               p.gender, 
+               p.date_of_birth,
+               p.blood_group,
+               p.allergies,
+               p.marital_status,
+               u.id as doctor_id,
+               u.full_name as doctor_name, 
+               u.specialty, 
+               u.phone as doctor_phone,
                b.name as branch_name
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
@@ -51,60 +102,106 @@ try {
         LEFT JOIN branches b ON v.branch_id = b.id
         WHERE v.id = ? AND v.branch_id = ?
     ");
-    $stmt->execute([$visit_id, $user_branch_id]);
+    $stmt->execute([$visit_id, $branch_id]);
     $visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$visit) {
-        header('Location: visits.php');
-        exit;
+        $error = "Visit not found or you don't have permission to view it.";
     }
     
     // ================================================================
     // GET PRESCRIPTIONS FOR THIS VISIT
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT * FROM prescriptions 
-        WHERE visit_id = ? 
-        ORDER BY created_at DESC
-    ");
-    $stmt->execute([$visit_id]);
-    $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $prescriptions = [];
+    if ($visit) {
+        $stmt = $db->prepare("
+            SELECT * FROM prescriptions 
+            WHERE visit_id = ? 
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$visit_id]);
+        $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
     
     // ================================================================
     // GET LAB TESTS FOR THIS VISIT
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT * FROM lab_tests 
-        WHERE visit_id = ? 
-        ORDER BY created_at DESC
-    ");
-    $stmt->execute([$visit_id]);
-    $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $lab_tests = [];
+    if ($visit) {
+        $stmt = $db->prepare("
+            SELECT * FROM lab_tests 
+            WHERE visit_id = ? 
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$visit_id]);
+        $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+    
+    // ================================================================
+    // GET BILLS FOR THIS VISIT
+    // ================================================================
+    $bills = [];
+    $total_amount = 0;
+    $total_paid = 0;
+    $total_balance = 0;
+    if ($visit) {
+        $stmt = $db->prepare("
+            SELECT * FROM patient_bills 
+            WHERE visit_id = ? 
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$visit_id]);
+        $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($bills as $bill) {
+            $total_amount += $bill['total_amount'] ?? 0;
+            $total_paid += $bill['paid_amount'] ?? 0;
+            $total_balance += $bill['balance'] ?? 0;
+        }
+    }
     
     // ================================================================
     // GET TIMELINE (activities related to this visit)
     // ================================================================
-    try {
-        $stmt = $db->prepare("
-            SELECT action, details, created_at 
-            FROM activity_logs 
-            WHERE details LIKE ? 
-            ORDER BY created_at DESC
-            LIMIT 10
-        ");
-        $search = '%visit ID: ' . $visit_id . '%';
-        $stmt->execute([$search]);
-        $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Exception $e) {
-        $activities = [];
+    $activities = [];
+    if ($visit) {
+        try {
+            $stmt = $db->prepare("
+                SELECT action, details, created_at 
+                FROM activity_logs 
+                WHERE details LIKE ? OR action = 'visit_created'
+                ORDER BY created_at DESC
+                LIMIT 15
+            ");
+            $search = '%' . $visit['visit_number'] . '%';
+            $stmt->execute([$search]);
+            $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            $activities = [];
+        }
     }
     
 } catch (Exception $e) {
+    $error = "Database error: " . $e->getMessage();
     $visit = null;
     $prescriptions = [];
     $lab_tests = [];
     $activities = [];
+    $bills = [];
+    $total_amount = 0;
+    $total_paid = 0;
+    $total_balance = 0;
+    $unread_notifications = 0;
 }
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -158,6 +255,8 @@ include_once '../../components/reception_sidebar.php';
     .status-badge-visit.completed { background: #D1FAE5; color: #059669; }
     .status-badge-visit.cancelled { background: #FEE2E2; color: #DC2626; }
     .status-badge-visit.scheduled { background: #E8F0FE; color: #0B5ED7; }
+    .status-badge-visit.paid { background: #D1FAE5; color: #059669; }
+    .status-badge-visit.partial { background: #FEF3C7; color: #D97706; }
     
     [data-theme="dark"] .status-badge-visit.pending { background: #3D2E0A; color: #FBBF24; }
     [data-theme="dark"] .status-badge-visit.assigned { background: #1E3A5F; color: #6EA8FE; }
@@ -165,6 +264,8 @@ include_once '../../components/reception_sidebar.php';
     [data-theme="dark"] .status-badge-visit.completed { background: #1A3A2A; color: #34D399; }
     [data-theme="dark"] .status-badge-visit.cancelled { background: #3A1A1A; color: #F87171; }
     [data-theme="dark"] .status-badge-visit.scheduled { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .status-badge-visit.paid { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .status-badge-visit.partial { background: #3D2E0A; color: #FBBF24; }
     
     .card {
         background: var(--bg-card);
@@ -193,6 +294,7 @@ include_once '../../components/reception_sidebar.php';
     .card-title .title-blue { color: #0B5ED7; }
     .card-title .title-green { color: #059669; }
     .card-title .title-purple { color: #7C3AED; }
+    .card-title .title-orange { color: #D97706; }
     
     .timeline-item {
         display: flex;
@@ -343,6 +445,63 @@ include_once '../../components/reception_sidebar.php';
         background: var(--primary);
         border-radius: 4px;
     }
+    
+    .error-box {
+        background: var(--danger-bg);
+        border: 2px solid var(--danger);
+        border-radius: 12px;
+        padding: 20px 24px;
+        text-align: center;
+        max-width: 600px;
+        margin: 40px auto;
+    }
+    .error-box i {
+        font-size: 3rem;
+        color: var(--danger);
+        display: block;
+        margin-bottom: 12px;
+    }
+    .error-box h3 {
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: var(--danger-dark);
+    }
+    .error-box p {
+        color: var(--text-secondary);
+        margin: 8px 0 16px;
+    }
+    
+    .bill-summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-top: 8px;
+    }
+    .bill-item {
+        background: var(--bg-body);
+        border-radius: 10px;
+        padding: 10px 14px;
+        text-align: center;
+        border: 1px solid var(--border-color);
+    }
+    .bill-item .bill-amount {
+        font-size: 1.1rem;
+        font-weight: 700;
+    }
+    .bill-item .bill-amount.total { color: var(--primary); }
+    .bill-item .bill-amount.paid { color: var(--success); }
+    .bill-item .bill-amount.balance { color: var(--danger); }
+    .bill-item .bill-label {
+        font-size: 0.6rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        font-weight: 500;
+    }
+    .bill-item .bill-amount.balance.zero { color: var(--success); }
+    
+    [data-theme="dark"] .bill-item {
+        background: #1E293B;
+    }
 </style>
 
 <!-- ================================================================ -->
@@ -368,7 +527,13 @@ include_once '../../components/reception_sidebar.php';
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
-        <span class="datetime" id="currentDateTime"></span>
+        <!-- ============================================================ -->
+        <!-- DATE & TIME - WITH ID FOR JAVASCRIPT -->
+        <!-- ============================================================ -->
+        <span class="datetime" id="currentDateTime">
+            <i class="fas fa-clock mr-1" style="color: var(--primary-light);"></i>
+            <?= date('D, M d, Y h:i:s A') ?>
+        </span>
         
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
@@ -381,8 +546,8 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -392,7 +557,16 @@ include_once '../../components/reception_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <?php if ($visit): ?>
+    <?php if ($error): ?>
+        <div class="error-box">
+            <i class="fas fa-exclamation-circle"></i>
+            <h3>❌ Error</h3>
+            <p><?= htmlspecialchars($error) ?></p>
+            <a href="visits.php" class="btn btn-blue">
+                <i class="fas fa-arrow-left"></i> Back to Visits
+            </a>
+        </div>
+    <?php elseif ($visit): ?>
     
     <!-- Page Header -->
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
@@ -409,14 +583,16 @@ include_once '../../components/reception_sidebar.php';
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($visit['patient_name']) ?>
                 </span>
+                <?php if ($visit['is_completed'] == 1): ?>
+                    <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
+                        <i class="fas fa-check-circle mr-1"></i> Completed
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap">
             <a href="visits.php" class="btn btn-outline btn-sm">
                 <i class="fas fa-arrow-left"></i> Back
-            </a>
-            <a href="view_patient.php?id=<?= $visit['patient_id'] ?>" class="btn btn-blue btn-sm">
-                <i class="fas fa-user"></i> View Patient
             </a>
             <?php if ($visit['status'] !== 'completed' && $visit['status'] !== 'cancelled'): ?>
                 <a href="visit_status.php?id=<?= $visit['id'] ?>&status=completed&redirect=visit_details.php?id=<?= $visit['id'] ?>" class="btn btn-green btn-sm">
@@ -455,7 +631,7 @@ include_once '../../components/reception_sidebar.php';
                 </div>
                 <div>
                     <p class="detail-label">Date & Time</p>
-                    <p class="detail-value"><?= isset($visit['created_at']) ? date('F d, Y h:i A', strtotime($visit['created_at'])) : 'N/A' ?></p>
+                    <p class="detail-value"><?= isset($visit['visit_date']) ? date('F d, Y h:i A', strtotime($visit['visit_date'])) : 'N/A' ?></p>
                 </div>
                 <div class="col-span-2">
                     <p class="detail-label">Branch</p>
@@ -465,6 +641,12 @@ include_once '../../components/reception_sidebar.php';
                     <div class="col-span-2">
                         <p class="detail-label">Symptoms</p>
                         <p class="detail-value"><?= nl2br(htmlspecialchars($visit['symptoms'])) ?></p>
+                    </div>
+                <?php endif; ?>
+                <?php if (!empty($visit['complaint'])): ?>
+                    <div class="col-span-2">
+                        <p class="detail-label">Complaint</p>
+                        <p class="detail-value"><?= nl2br(htmlspecialchars($visit['complaint'])) ?></p>
                     </div>
                 <?php endif; ?>
                 <?php if (!empty($visit['notes'])): ?>
@@ -479,10 +661,22 @@ include_once '../../components/reception_sidebar.php';
                         <p class="detail-value"><?= nl2br(htmlspecialchars($visit['diagnosis'])) ?></p>
                     </div>
                 <?php endif; ?>
+                <?php if (!empty($visit['treatment'])): ?>
+                    <div class="col-span-2">
+                        <p class="detail-label">Treatment</p>
+                        <p class="detail-value"><?= nl2br(htmlspecialchars($visit['treatment'])) ?></p>
+                    </div>
+                <?php endif; ?>
+                <?php if ($visit['follow_up_date']): ?>
+                    <div class="col-span-2">
+                        <p class="detail-label">Follow-up Date</p>
+                        <p class="detail-value"><?= date('F d, Y', strtotime($visit['follow_up_date'])) ?></p>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
         
-        <!-- Patient Info -->
+        <!-- Patient Info - NO BUTTONS -->
         <div class="detail-card">
             <h3 class="text-lg font-semibold text-gray-800 mb-4">
                 <i class="fas fa-user text-primary mr-2"></i> Patient
@@ -493,7 +687,7 @@ include_once '../../components/reception_sidebar.php';
                 </div>
                 <div>
                     <p class="font-semibold text-gray-800"><?= htmlspecialchars($visit['patient_name']) ?></p>
-                    <p class="text-xs text-gray-500"><?= htmlspecialchars($visit['patient_id'] ?? 'N/A') ?></p>
+                    <p class="text-xs text-gray-500"><?= htmlspecialchars($visit['patient_number'] ?? 'N/A') ?></p>
                 </div>
             </div>
             <div class="space-y-2">
@@ -507,21 +701,26 @@ include_once '../../components/reception_sidebar.php';
                 </div>
                 <div>
                     <p class="detail-label">Gender</p>
-                    <p class="detail-value"><?= htmlspecialchars($visit['gender'] ?? 'N/A') ?></p>
+                    <p class="detail-value"><?= ucfirst(htmlspecialchars($visit['gender'] ?? 'N/A')) ?></p>
                 </div>
                 <div>
                     <p class="detail-label">Date of Birth</p>
                     <p class="detail-value"><?= !empty($visit['date_of_birth']) ? date('F d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?></p>
                 </div>
                 <div>
+                    <p class="detail-label">Blood Group</p>
+                    <p class="detail-value"><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></p>
+                </div>
+                <div>
                     <p class="detail-label">Address</p>
                     <p class="detail-value"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></p>
                 </div>
-                <div class="mt-2">
-                    <a href="view_patient.php?id=<?= $visit['patient_id'] ?>" class="btn btn-blue btn-sm w-full justify-center">
-                        <i class="fas fa-user"></i> View Full Profile
-                    </a>
-                </div>
+                <?php if (!empty($visit['allergies'])): ?>
+                    <div>
+                        <p class="detail-label">Allergies</p>
+                        <p class="detail-value text-red-600"><?= htmlspecialchars($visit['allergies']) ?></p>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
         
@@ -550,14 +749,43 @@ include_once '../../components/reception_sidebar.php';
                         <i class="fas fa-phone mr-1"></i> <?= htmlspecialchars($visit['doctor_phone']) ?>
                     </span>
                 <?php endif; ?>
-                <a href="view_doctor.php?id=<?= $visit['doctor_id'] ?>" class="btn btn-outline btn-sm">
-                    <i class="fas fa-eye"></i> View Doctor
-                </a>
             </div>
         <?php else: ?>
             <p class="text-gray-400">No doctor assigned</p>
         <?php endif; ?>
     </div>
+
+    <!-- ================================================================ -->
+    <!-- BILL SUMMARY -->
+    <!-- ================================================================ -->
+    <?php if (!empty($bills)): ?>
+    <div class="detail-card mb-5">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">
+            <i class="fas fa-money-bill-wave text-primary mr-2"></i> Bill Summary
+            <span class="text-sm font-normal text-gray-400">(<?= count($bills) ?> bill(s))</span>
+        </h3>
+        <div class="bill-summary">
+            <div class="bill-item">
+                <p class="bill-amount total">TSh <?= number_format($total_amount, 2) ?></p>
+                <p class="bill-label">Total Amount</p>
+            </div>
+            <div class="bill-item">
+                <p class="bill-amount paid">TSh <?= number_format($total_paid, 2) ?></p>
+                <p class="bill-label">Paid Amount</p>
+            </div>
+            <div class="bill-item">
+                <p class="bill-amount balance <?= $total_balance <= 0 ? 'zero' : '' ?>">TSh <?= number_format($total_balance, 2) ?></p>
+                <p class="bill-label">Balance</p>
+            </div>
+        </div>
+        <div class="mt-3">
+            <span class="text-sm font-medium">Overall Status: </span>
+            <span class="status-badge-visit <?= $total_balance <= 0 ? 'paid' : 'partial' ?>">
+                <?= $total_balance <= 0 ? '✅ Paid' : '⏳ Partial / Pending' ?>
+            </span>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- PRESCRIPTIONS & LAB TESTS -->
@@ -670,6 +898,10 @@ include_once '../../components/reception_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Visit Details
             <span class="text-gray-300 mx-2">|</span>
+            Logged in as: <strong><?= htmlspecialchars($full_name) ?></strong>
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -737,18 +969,37 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - FIXED: Updates every second
     // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+            weekday: 'short',
+            month: 'short', 
+            day: 'numeric', 
+            year: 'numeric'
         });
         var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit', 
+            hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
+        
+        // Update top nav clock
+        var dtEl = document.getElementById('currentDateTime');
+        if (dtEl) {
+            dtEl.innerHTML = '<i class="fas fa-clock mr-1" style="color: var(--primary-light);"></i> ' + dateStr + ' • ' + timeStr;
+        }
+        
+        // Update footer timestamp
+        var ftEl = document.getElementById('footerTimestamp');
+        if (ftEl) {
+            ftEl.textContent = 'Last updated: ' + timeStr;
+        }
     }
+    
+    // Update immediately and every second
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
@@ -778,6 +1029,7 @@ include_once '../../components/reception_sidebar.php';
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
         
+        if (!toast) return;
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
@@ -797,6 +1049,7 @@ include_once '../../components/reception_sidebar.php';
     // TIME AGO
     // ================================================================
     function time_ago(timestamp) {
+        if (!timestamp) return 'Just now';
         var now = new Date();
         var past = new Date(timestamp);
         var diff = Math.floor((now - past) / 1000);
@@ -812,6 +1065,10 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($visit['doctor_name'] ?? 'Not assigned') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Status: <?= ucfirst($visit['status'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
+    console.log('%c🕐 Clock: Updates every second', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>

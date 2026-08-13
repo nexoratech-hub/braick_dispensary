@@ -5,34 +5,37 @@
 // FIXED: Can save WITHOUT assigning doctor (optional)
 // FIXED: Uses 'New Patient' service (category_id=2, price=10000)
 // FIXED: All visits are created as 'new' visit_type
+// FIXED: Session-based login
+// FIXED: Common symptoms selector
+// FIXED: Blue theme for assign doctor section
+// FIXED: Duplicate check PER BRANCH only
+// FIXED: Patient ID with BRANCH CODE (P-2026-01-0001)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT RECEPTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
 // ================================================================
-// PATH SAHIHI
+// GET SESSION DATA
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
 $user_id = $_SESSION['user_id'];
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
+$full_name = $_SESSION['full_name'] ?? 'Receptionist';
+$branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'reception';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = $_SESSION['is_admin'] ?? false;
+
+$user_branch_id = $branch_id;
+$selected_branch_id = $branch_id;
 $message = '';
 $message_type = '';
 
@@ -46,8 +49,25 @@ $total_doctors = 0;
 $latest_patient_id = null;
 $latest_visit_id = null;
 
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
+    
+    // ================================================================
+    // GET UNREAD NOTIFICATIONS COUNT
+    // ================================================================
+    $unread_notifications = 0;
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    } catch (Exception $e) {
+        $unread_notifications = 0;
+    }
 
     // ================================================================
     // ✅ AJAX HANDLER - GET DOCTOR STATUS
@@ -64,7 +84,7 @@ try {
             ORDER BY is_online DESC, full_name
         ");
         $stmt->execute([$branch_id]);
-        $doctors_list = $stmt->fetchAll();
+        $doctors_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $online = [];
         $offline = [];
@@ -134,7 +154,7 @@ try {
         ORDER BY is_online DESC, full_name
     ");
     $stmt->execute([$selected_branch_id]);
-    $doctors = $stmt->fetchAll();
+    $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     $online_doctors = [];
     $offline_doctors = [];
@@ -171,7 +191,7 @@ try {
             service_name
     ");
     $stmt->execute([$selected_branch_id]);
-    $consultation_services = $stmt->fetchAll();
+    $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // Build visit type options
     $visit_type_options = [];
@@ -264,12 +284,42 @@ try {
         ];
     }
     
-    // Generate patient ID
+    // ================================================================
+    // Generate patient ID - UNIQUE PER BRANCH WITH BRANCH CODE
+    // ================================================================
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE branch_id = ?");
     $stmt->execute([$selected_branch_id]);
-    $count = $stmt->fetch()['total'] ?? 0;
+    $count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     $next_id = str_pad($count + 1, 4, '0', STR_PAD_LEFT);
-    $patient_id_number = 'P-' . date('Y') . '-' . $next_id;
+    
+    // Get branch code (2 digits with leading zero)
+    $branch_code = str_pad($selected_branch_id, 2, '0', STR_PAD_LEFT);
+    
+    // Generate patient ID with branch code
+    // Example: P-2026-01-0001 for Dodoma (branch_id=1)
+    // Example: P-2026-02-0001 for Arusha (branch_id=2)
+    $patient_id_number = 'P-' . date('Y') . '-' . $branch_code . '-' . $next_id;
+    
+    // ================================================================
+    // COMMON SYMPTOMS LIST
+    // ================================================================
+    $common_symptoms = [
+        'Fever' => 'Fever',
+        'Headache' => 'Headache',
+        'Cough' => 'Cough',
+        'Sore Throat' => 'Sore Throat',
+        'Body Pain' => 'Body Pain',
+        'Fatigue' => 'Fatigue',
+        'Nausea' => 'Nausea',
+        'Vomiting' => 'Vomiting',
+        'Diarrhea' => 'Diarrhea',
+        'Chest Pain' => 'Chest Pain',
+        'Shortness of Breath' => 'Shortness of Breath',
+        'Abdominal Pain' => 'Abdominal Pain',
+        'Dizziness' => 'Dizziness',
+        'Rash' => 'Rash',
+        'Swelling' => 'Swelling'
+    ];
     
     // ================================================================
     // HANDLE FORM SUBMISSION - REGISTER & ASSIGN DOCTOR (OPTIONAL)
@@ -305,53 +355,53 @@ try {
         if (empty($phone)) $errors[] = 'Phone number is required';
         
         // ================================================================
-        // CHECK FOR DUPLICATE PATIENT
+        // CHECK FOR DUPLICATE PATIENT - PER BRANCH ONLY
         // ================================================================
         $duplicate_error = '';
         
         if (empty($errors)) {
-            // 1. PRIMARY CHECK: Phone number
+            // 1. PRIMARY CHECK: Phone number - PER BRANCH
             if (!empty($phone)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE phone = ? AND branch_id = ?");
                 $stmt->execute([$phone, $branch_id]);
-                $existing = $stmt->fetch();
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($existing) {
-                    $duplicate_error = "❌ A patient with phone number <strong>" . htmlspecialchars($phone) . "</strong> already exists.<br>
+                    $duplicate_error = "❌ A patient with phone number <strong>" . htmlspecialchars($phone) . "</strong> already exists in <strong>" . htmlspecialchars($branch_name) . "</strong> branch.<br>
                                        👤 Name: <strong>" . htmlspecialchars($existing['full_name']) . "</strong><br>
                                        🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
                 }
             }
             
-            // 2. SECONDARY CHECK: Email
+            // 2. SECONDARY CHECK: Email - PER BRANCH
             if (empty($duplicate_error) && !empty($email)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, email FROM patients WHERE email = ? AND branch_id = ?");
                 $stmt->execute([$email, $branch_id]);
-                $existing = $stmt->fetch();
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($existing) {
-                    $duplicate_error = "❌ A patient with email <strong>" . htmlspecialchars($email) . "</strong> already exists.<br>
+                    $duplicate_error = "❌ A patient with email <strong>" . htmlspecialchars($email) . "</strong> already exists in <strong>" . htmlspecialchars($branch_name) . "</strong> branch.<br>
                                        👤 Name: <strong>" . htmlspecialchars($existing['full_name']) . "</strong><br>
                                        🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
                 }
             }
             
-            // 3. TERTIARY CHECK: Full Name + Phone
+            // 3. TERTIARY CHECK: Full Name + Phone - PER BRANCH
             if (empty($duplicate_error) && !empty($full_name) && !empty($phone)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE full_name = ? AND phone = ? AND branch_id = ?");
                 $stmt->execute([$full_name, $phone, $branch_id]);
-                $existing = $stmt->fetch();
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($existing) {
-                    $duplicate_error = "❌ A patient with name <strong>" . htmlspecialchars($full_name) . "</strong> and phone <strong>" . htmlspecialchars($phone) . "</strong> already exists.<br>
+                    $duplicate_error = "❌ A patient with name <strong>" . htmlspecialchars($full_name) . "</strong> and phone <strong>" . htmlspecialchars($phone) . "</strong> already exists in <strong>" . htmlspecialchars($branch_name) . "</strong> branch.<br>
                                        🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
                 }
             }
             
-            // 4. EXTRA CHECK: Full Name + Date of Birth
+            // 4. EXTRA CHECK: Full Name + Date of Birth - PER BRANCH
             if (empty($duplicate_error) && !empty($full_name) && !empty($date_of_birth)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, date_of_birth FROM patients WHERE full_name = ? AND date_of_birth = ? AND branch_id = ?");
                 $stmt->execute([$full_name, $date_of_birth, $branch_id]);
-                $existing = $stmt->fetch();
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($existing) {
-                    $duplicate_error = "❌ A patient with name <strong>" . htmlspecialchars($full_name) . "</strong> and date of birth <strong>" . date('d/m/Y', strtotime($date_of_birth)) . "</strong> already exists.<br>
+                    $duplicate_error = "❌ A patient with name <strong>" . htmlspecialchars($full_name) . "</strong> and date of birth <strong>" . date('d/m/Y', strtotime($date_of_birth)) . "</strong> already exists in <strong>" . htmlspecialchars($branch_name) . "</strong> branch.<br>
                                        🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
                 }
             }
@@ -397,6 +447,9 @@ try {
                     $visit_status = 'assigned';
                 }
                 
+                // ✅ visit_type is ALWAYS 'new' for new patients
+                $visit_type_db = 'new';
+                
                 $stmt = $db->prepare("
                     INSERT INTO visits (
                         visit_number, patient_id, receptionist_id, 
@@ -410,7 +463,7 @@ try {
                     $patient_db_id, 
                     $user_id, 
                     $branch_id,
-                    'new',  // visit_type is always 'new'
+                    $visit_type_db,  // Always 'new' for new patients
                     $visit_status,
                     $consultation_fee,
                     $assign_doctor && $doctor_id > 0 ? $doctor_id : null,
@@ -442,14 +495,14 @@ try {
                     
                     // Log activity
                     try {
-                        $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'patient_registered_with_doctor', ?, NOW())");
-                        $stmt->execute([$user_id, "New patient registered and assigned to doctor ID #$doctor_id: $full_name (ID: $patient_id_number) - Visit: $visit_number"]);
+                        $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'patient_registered_with_doctor', ?, NOW())");
+                        $stmt->execute([$user_id, $branch_id, "New patient registered and assigned to doctor ID #$doctor_id: $full_name (ID: $patient_id_number) - Visit: $visit_number"]);
                     } catch (Exception $e) {}
                 } else {
                     // Log activity - NO doctor assigned
                     try {
-                        $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'patient_registered', ?, NOW())");
-                        $stmt->execute([$user_id, "New patient registered: $full_name (ID: $patient_id_number) in $branch_name - Visit: $visit_number (No doctor assigned)"]);
+                        $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'patient_registered', ?, NOW())");
+                        $stmt->execute([$user_id, $branch_id, "New patient registered: $full_name (ID: $patient_id_number) in $branch_name - Visit: $visit_number (No doctor assigned)"]);
                     } catch (Exception $e) {}
                 }
                 
@@ -462,6 +515,7 @@ try {
                 $message = "✅ Patient registered successfully!";
                 $message .= "<br>📋 Patient ID: <strong>$patient_id_number</strong>";
                 $message .= "<br>📋 Visit #: <strong>$visit_number</strong>";
+                $message .= "<br>📋 Visit Type: <strong>New Patient</strong>";
                 $message .= "<br>💰 Consultation Fee: <strong>TSh " . number_format($consultation_fee, 0) . "</strong>";
                 
                 if ($assign_doctor && $doctor_id > 0) {
@@ -506,6 +560,7 @@ try {
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -524,7 +579,7 @@ function createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consulta
         LIMIT 1
     ");
     $stmt->execute([$patient_id, $branch_id]);
-    $paid_visit = $stmt->fetch();
+    $paid_visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($paid_visit) {
         return [
@@ -543,7 +598,7 @@ function createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consulta
         LIMIT 1
     ");
     $stmt->execute([$visit_id]);
-    $existing_bill = $stmt->fetch();
+    $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($existing_bill) {
         $stmt = $db->prepare("
@@ -619,15 +674,16 @@ function createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consulta
     try {
         $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
         $stmt->execute([$branch_id]);
-        $cashiers = $stmt->fetchAll();
+        $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         foreach ($cashiers as $cashier) {
             $stmt = $db->prepare("
-                INSERT INTO notifications (user_id, title, message, type, link, is_read, created_at)
-                VALUES (?, '💰 New Bill Created', ?, 'bill', ?, 0, NOW())
+                INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at)
+                VALUES (?, ?, '💰 New Bill Created', ?, 'bill', ?, 0, NOW())
             ");
             $stmt->execute([
                 $cashier['id'],
+                $branch_id,
                 "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient ID #$patient_id",
                 "cashier_dashboard.php"
             ]);
@@ -677,12 +733,16 @@ $marital_statuses = [
 ];
 
 // ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/reception_header.php';
 include_once __DIR__ . '/../../components/reception_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -690,8 +750,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Register New Patient - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -1218,20 +1278,20 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           ASSIGN DOCTOR SECTION
+           ASSIGN DOCTOR SECTION - BLUE THEME
            ================================================================ */
         .assign-doctor-section {
             background: var(--primary-bg);
             border-radius: 14px;
             padding: 20px 24px;
             border: 2px solid var(--primary-light);
-            margin-top: 20px;
+            margin-top: 0;
             transition: all 0.3s ease;
         }
         
         .assign-doctor-section:hover {
             border-color: var(--primary);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.08);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.12);
         }
         
         [data-theme="dark"] .assign-doctor-section {
@@ -1250,7 +1310,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         
         .assign-doctor-section .section-title i {
-            color: var(--success);
+            color: var(--primary);
         }
         
         .assign-doctor-toggle {
@@ -1273,7 +1333,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .assign-doctor-toggle input[type="checkbox"] {
             width: 18px;
             height: 18px;
-            accent-color: var(--success);
+            accent-color: var(--primary);
             cursor: pointer;
         }
         
@@ -1284,7 +1344,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         
         .assign-doctor-toggle .toggle-label i {
-            color: var(--success);
+            color: var(--primary);
         }
         
         .assign-doctor-toggle .toggle-sub {
@@ -1658,6 +1718,47 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             0%, 100% { opacity: 1; transform: scale(1); }
             50% { opacity: 0.5; transform: scale(0.8); }
         }
+        
+        /* ================================================================
+           COMMON SYMPTOMS SELECTOR
+           ================================================================ */
+        .symptom-selector {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        
+        .symptom-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 12px 3px 8px;
+            border-radius: 16px;
+            border: 2px solid var(--border-color);
+            background: var(--bg-body);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+        
+        .symptom-chip:hover {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+            transform: translateY(-1px);
+        }
+        
+        .symptom-chip.active {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+            color: var(--primary);
+        }
+        
+        .symptom-chip .symptom-icon {
+            font-size: 0.55rem;
+        }
     </style>
 </head>
 <body>
@@ -1694,12 +1795,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot no-notif"></span>
+            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $logo_path ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= substr($full_name, 0, 1) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1736,6 +1837,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <span class="header-badge" style="background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.15);">
                     <span class="live-update-indicator"></span>
                     <span id="liveUpdateStatus">Live</span>
+                </span>
+                
+                <span class="header-badge" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.2);color:#FBBF24;">
+                    <i class="fas fa-shield-alt"></i>
+                    Duplicate check: <strong>Per Branch</strong>
+                </span>
+                
+                <span class="header-badge" style="background:rgba(96,165,250,0.15);border-color:rgba(96,165,250,0.2);color:#60A5FA;">
+                    <i class="fas fa-hashtag"></i>
+                    Branch Code: <strong><?= str_pad($selected_branch_id, 2, '0', STR_PAD_LEFT) ?></strong>
                 </span>
                 
                 <span class="update-badge-light" id="updateBadge">
@@ -1916,7 +2027,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 8: ASSIGN DOCTOR SECTION - OPTIONAL -->
+            <!-- ROW 8: ASSIGN DOCTOR SECTION - OPTIONAL - BLUE THEME -->
             <!-- ============================================================ -->
             <div class="form-row grid-full">
                 <div class="assign-doctor-section">
@@ -2010,13 +2121,24 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             </div>
                         </div>
                         
-                        <!-- Symptoms & Complaint -->
+                        <!-- ============================================================ -->
+                        <!-- SYMPTOMS - WITH COMMON SYMPTOMS SELECTOR -->
+                        <!-- ============================================================ -->
                         <div class="grid-2" style="margin-top:14px;">
                             <div class="form-row" style="margin-bottom:0;">
                                 <label class="form-label">
                                     <i class="fas fa-notes-medical label-icon"></i> Symptoms
                                 </label>
-                                <textarea name="symptoms" class="form-control" placeholder="Patient symptoms..." rows="2"><?= htmlspecialchars($_POST['symptoms'] ?? '') ?></textarea>
+                                <!-- Common Symptoms Selector -->
+                                <div class="symptom-selector" id="symptomSelector">
+                                    <?php foreach ($common_symptoms as $symptom): ?>
+                                        <span class="symptom-chip" data-symptom="<?= htmlspecialchars($symptom) ?>" onclick="toggleSymptom(this)">
+                                            <span class="symptom-icon">🩺</span>
+                                            <?= htmlspecialchars($symptom) ?>
+                                        </span>
+                                    <?php endforeach; ?>
+                                </div>
+                                <textarea name="symptoms" class="form-control mt-2" placeholder="Patient symptoms..." rows="2" id="symptomsTextarea"><?= htmlspecialchars($_POST['symptoms'] ?? '') ?></textarea>
                             </div>
                             <div class="form-row" style="margin-bottom:0;">
                                 <label class="form-label">
@@ -2047,6 +2169,10 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             <span>Patient will appear in <strong>Assigned</strong> list</span>
                             <span class="mx-1">|</span>
                             <span class="text-green-500" id="doctorLiveStatus">🔄 Auto-update: 3s</span>
+                            <span class="mx-1">|</span>
+                            <span class="text-blue-500">
+                                <i class="fas fa-shield-alt"></i> Duplicate check: Per Branch
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -2080,11 +2206,26 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <i class="fas fa-info-circle mr-1"></i>
                 Patient ID: <strong><?= $patient_id_number ?></strong>
                 <span class="mx-2">|</span>
+                <i class="fas fa-hashtag mr-1"></i>
+                Branch Code: <strong><?= str_pad($selected_branch_id, 2, '0', STR_PAD_LEFT) ?></strong>
+                <span class="mx-2">|</span>
                 <i class="fas fa-user-md mr-1"></i>
                 <span style="color:var(--text-secondary);">Assign doctor is <strong>optional</strong></span>
                 <span class="mx-2">|</span>
                 <i class="fas fa-clock mr-1"></i>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
+                <span class="mx-2">|</span>
+                <span class="text-green-500">
+                    <span class="live-update-indicator"></span> Live
+                </span>
+                <span class="mx-2">|</span>
+                <span class="text-blue-500">
+                    <i class="fas fa-shield-alt"></i> Duplicate check: Per Branch
+                </span>
+                <span class="mx-2">|</span>
+                <span class="text-blue-500">
+                    <i class="fas fa-user-md"></i> <?= $online_doctors_count ?> online
+                </span>
             </div>
         </form>
     </div>
@@ -2096,7 +2237,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         <div class="stat-card">
             <div class="stat-icon">📋</div>
             <p class="stat-number text-purple-600"><?= $patient_id_number ?></p>
-            <p class="stat-label">Next Patient ID</p>
+            <p class="stat-label">Next Patient ID (<?= htmlspecialchars($branch_name) ?>)</p>
         </div>
         <div class="stat-card">
             <div class="stat-icon">👨‍⚕️</div>
@@ -2118,6 +2259,10 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Register Patient
+            <span class="text-gray-300 mx-2">|</span>
+            Logged in as: <strong><?= htmlspecialchars($full_name) ?></strong>
+            <span class="text-gray-300 mx-2">|</span>
+            Branch: <strong><?= htmlspecialchars($branch_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -2306,6 +2451,30 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     syncAllergyChips();
 
     // ================================================================
+    // SYMPTOMS SELECTOR
+    // ================================================================
+    function toggleSymptom(element) {
+        var symptom = element.dataset.symptom;
+        var textarea = document.getElementById('symptomsTextarea');
+        var currentValue = textarea.value;
+        var symptomList = currentValue.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
+        
+        element.classList.toggle('active');
+        
+        if (element.classList.contains('active')) {
+            if (!symptomList.includes(symptom)) {
+                symptomList.push(symptom);
+            }
+        } else {
+            symptomList = symptomList.filter(function(item) {
+                return item !== symptom;
+            });
+        }
+        
+        textarea.value = symptomList.join(', ');
+    }
+
+    // ================================================================
     // TOGGLE ASSIGN DOCTOR
     // ================================================================
     function toggleAssignDoctor(event) {
@@ -2355,6 +2524,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             var checkbox = chip.querySelector('.allergy-checkbox');
             if (checkbox) checkbox.checked = false;
         });
+        
+        var symptomChips = document.querySelectorAll('.symptom-chip');
+        symptomChips.forEach(function(chip) {
+            chip.classList.remove('active');
+        });
+        document.getElementById('symptomsTextarea').value = '';
         
         var selects = form.querySelectorAll('select');
         selects.forEach(function(select) {
@@ -2547,10 +2722,18 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }, 2000);
         
         console.log('%c👤 Braick - New Patient Registration', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+        console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
+        console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?> (Code: <?= str_pad($selected_branch_id, 2, '0', STR_PAD_LEFT) ?>)', 'font-size:13px; color:#6EA8FE;');
+        console.log('%c📋 Patient ID Format: P-YYYY-BRANCH-XXXX', 'font-size:13px; color:#FBBF24;');
+        console.log('%c📋 Next ID: <?= $patient_id_number ?>', 'font-size:13px; color:#FBBF24;');
         console.log('%c✅ Doctor assignment is OPTIONAL', 'font-size:13px; color:#34D399;');
         console.log('%c✅ Patient can be saved WITHOUT assigning doctor', 'font-size:13px; color:#34D399;');
         console.log('%c💰 Default fee: TSh 10,000 (New Patient)', 'font-size:13px; color:#059669;');
         console.log('%c🟢 Online: <?= $online_doctors_count ?> | ⚪ Offline: <?= $offline_doctors_count ?>', 'font-size:13px; color:#64748B;');
+        console.log('%c🩺 Common symptoms selector available', 'font-size:13px; color:#7C3AED;');
+        console.log('%c🔵 Assign doctor section - BLUE theme', 'font-size:13px; color:#0B5ED7;');
+        console.log('%c🔄 Visit type in database: ALWAYS "new"', 'font-size:13px; color:#059669;');
+        console.log('%c🛡️ Duplicate check: PER BRANCH only', 'font-size:13px; color:#FBBF24;');
     });
 </script>
 

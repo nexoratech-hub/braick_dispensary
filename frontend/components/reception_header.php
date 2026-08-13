@@ -2,20 +2,48 @@
 // ================================================================
 // FILE: frontend/components/reception_header.php
 // SHARED HEADER - RECEPTION & CASHIER
+// WITH LOGIN SESSION PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION - Default to reception.rose (Rose Mwangi)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 6;  // reception.rose
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN SESSION PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    // User is not logged in - redirect to login page
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS TO THIS HEADER
+// ================================================================
+$allowed_roles = ['reception', 'cashier', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    // User is not allowed - redirect to their dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': 
+            header('Location: ../doctor/dashboard.php'); 
+            break;
+        case 'pharmacy': 
+            header('Location: ../pharmacy/dashboard.php'); 
+            break;
+        case 'laboratory': 
+            header('Location: ../laboratory/dashboard.php'); 
+            break;
+        default: 
+            header('Location: ../login.php'); 
+            break;
+    }
+    exit;
 }
 
 // ================================================================
@@ -29,6 +57,8 @@ $is_admin = ($_SESSION['role'] === 'admin');
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_role = $_SESSION['role'] ?? 'reception';
 
 // ================================================================
 // BRANCH FILTER - Admin sees all, others see only their branch
@@ -82,7 +112,7 @@ if (empty($page_title) || $page_title == '') {
 // GET UNREAD NOTIFICATIONS
 // ================================================================
 $unread_notifications = 0;
-if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0 && isset($db) && $db !== null) {
+if (isset($db) && $db !== null && isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
     try {
         // Check if notifications table exists
         $stmt = $db->prepare("SHOW TABLES LIKE 'notifications'");
@@ -94,6 +124,20 @@ if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0 && isset($db) && $db
         }
     } catch (Exception $e) {
         $unread_notifications = 0;
+    }
+}
+
+// ================================================================
+// GET BRANCHES FOR DROPDOWN (ADMIN ONLY)
+// ================================================================
+$branches = [];
+if ($is_admin && isset($db) && $db !== null) {
+    try {
+        $stmt = $db->prepare("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+        $stmt->execute();
+        $branches = $stmt->fetchAll();
+    } catch (Exception $e) {
+        $branches = [];
     }
 }
 ?>

@@ -11,6 +11,14 @@
 // ================================================================
 
 // ================================================================
+// SESSION CHECK - REDIRECT TO LOGIN IF NOT DOCTOR
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
 // GET REAL DATA FOR BADGES
 // ================================================================
 $patient_count = 0;
@@ -164,8 +172,20 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_sidebar_data') {
     header('Content-Type: application/json');
     
+    // Verify session for AJAX request
+    if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
+        echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+        exit;
+    }
+    
     $doctor_id = (int)($_POST['doctor_id'] ?? 0);
     $branch_id = (int)($_POST['branch_id'] ?? 1);
+    
+    // Verify the doctor_id matches session
+    if ($doctor_id !== (int)$_SESSION['user_id']) {
+        echo json_encode(['success' => false, 'error' => 'Invalid doctor ID']);
+        exit;
+    }
     
     $response = [
         'success' => false,
@@ -189,12 +209,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if ($doctor_id > 0 && isset($db) && $db !== null) {
         try {
             // Doctor info
-            $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ? AND role = 'doctor'");
+            $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active'");
             $stmt->execute([$doctor_id]);
             $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($doctor) {
                 $response['doctorName'] = $doctor['full_name'] ?? '';
                 $response['doctorStatus'] = ($doctor['is_online'] ?? 0) ? 'online' : 'offline';
+            } else {
+                // Doctor not found or inactive - return error
+                echo json_encode(['success' => false, 'error' => 'Doctor not found']);
+                exit;
             }
             
             // 1. Total Patients
@@ -993,7 +1017,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label">Main Menu</div>
         
-        <a href="../doctor/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
@@ -1002,7 +1026,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Patients</div>
         
-        <a href="../doctor/my_patients.php" class="sidebar-link <?= isActive('my_patients.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/my_patients.php" class="sidebar-link <?= isActive('my_patients.php') ?>">
             <i class="fas fa-users"></i> My Patients
             <span class="badge" id="patientCount"><?= $patient_count ?></span>
         </a>
@@ -1012,7 +1036,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Clinical</div>
         
-        <a href="../doctor/view_prescriptions.php" class="sidebar-link <?= isActive('view_prescriptions.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/view_prescriptions.php" class="sidebar-link <?= isActive('view_prescriptions.php') ?>">
             <i class="fas fa-file-prescription"></i> Prescriptions
             <?php if ($pending_prescriptions > 0): ?>
                 <span class="badge warning" id="prescriptionBadge"><?= $pending_prescriptions ?></span>
@@ -1021,7 +1045,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <a href="../doctor/lab_results.php" class="sidebar-link <?= isActive('lab_results.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/lab_results.php" class="sidebar-link <?= isActive('lab_results.php') ?>">
             <i class="fas fa-flask"></i> Lab Results
             <?php if ($lab_count > 0): ?>
                 <span class="badge warning" id="labCount"><?= $lab_count ?></span>
@@ -1035,7 +1059,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Consultations</div>
         
-        <a href="../doctor/consultations.php" class="sidebar-link <?= isActive('consultations.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/consultations.php" class="sidebar-link <?= isActive('consultations.php') ?>">
             <i class="fas fa-stethoscope"></i> Consultations
             <?php if ($pending_consultations > 0): ?>
                 <span class="badge danger" id="pendingConsultBadge"><?= $pending_consultations ?></span>
@@ -1049,7 +1073,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Resources</div>
         
-        <a href="../doctor/services.php" class="sidebar-link <?= isActive('services.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/services.php" class="sidebar-link <?= isActive('services.php') ?>">
             <i class="fas fa-cog"></i> Services
             <?php 
                 $total_services = $procedures_count + $tools_count + $lab_tests_count;
@@ -1066,7 +1090,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Referrals</div>
         
-        <a href="../doctor/referrals.php" class="sidebar-link <?= isActive('referrals.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/referrals.php" class="sidebar-link <?= isActive('referrals.php') ?>">
             <i class="fas fa-share-alt"></i> Referrals
             <?php if ($referral_count > 0): ?>
                 <span class="badge warning" id="referralCount"><?= $referral_count ?></span>
@@ -1080,7 +1104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Schedule</div>
         
-        <a href="../doctor/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
             <i class="fas fa-calendar-check"></i> Appointments
             <?php if ($appointment_count > 0): ?>
                 <span class="badge blue" id="appointmentCount"><?= $appointment_count ?></span>
@@ -1089,7 +1113,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <a href="../doctor/documents.php" class="sidebar-link <?= isActive('documents.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/documents.php" class="sidebar-link <?= isActive('documents.php') ?>">
             <i class="fas fa-folder"></i> Documents
         </a>
         
@@ -1098,11 +1122,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Account</div>
         
-        <a href="../doctor/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
+        <a href="/dispensary_system/frontend/pages/doctor/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <a href="../../../logout.php" class="sidebar-link logout-link">
+        <!-- ============================================================ -->
+        <!-- LOGOUT - USING ABSOLUTE PATH -->
+        <!-- ============================================================ -->
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
         
@@ -1265,19 +1292,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             console.log('❌ Close button:', document.getElementById('sidebarCloseBtn'));
             console.log('📐 Window width:', window.innerWidth);
             console.log('📱 Is mobile:', window.innerWidth <= 1024);
-            
-            // ================================================================
-            // TEST: Open sidebar after 1 second to verify it works
-            // ================================================================
-            // Uncomment to test automatically
-            // setTimeout(function() {
-            //     console.log('🧪 Testing sidebar open...');
-            //     openSidebar();
-            //     setTimeout(function() {
-            //         console.log('🧪 Testing sidebar close...');
-            //         closeSidebar();
-            //     }, 2000);
-            // }, 1000);
         }
     })();
 
@@ -1437,6 +1451,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             if (data.success) {
                 updateSidebarBadges(data);
                 updateDoctorStatus(data);
+            } else if (data.error === 'Unauthorized' || data.error === 'Invalid doctor ID') {
+                // Session expired - redirect to login
+                window.location.href = '/dispensary_system/frontend/pages/login.php';
             }
         })
         .catch(function(error) {
@@ -1518,6 +1535,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // CONSOLE LOG
     // ================================================================
     console.log('%c👨‍⚕️ Braick Dispensary - Doctor Sidebar', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Full Doctor Sidebar with all menu items', 'font-size:13px; color:#34D399;');
     console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📱 Fully responsive - all devices', 'font-size:13px; color:#F59E0B;');
@@ -1527,4 +1545,5 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     console.log('%c💊 Pending Prescriptions: <?= $pending_prescriptions ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔬 Pending Lab Tests: <?= $lab_count ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Sidebar toggle: Click hamburger icon ☰ to open/close', 'font-size:13px; color:#34D399;');
+    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:13px; color:#F87171;');
 </script>

@@ -1,99 +1,138 @@
 <?php
-// backend/core/Auth.php
+// ================================================================
+// FILE: backend/core/Auth.php
+// BRAICK DISPENSARY - AUTHENTICATION CLASS
+// ================================================================
+
+require_once __DIR__ . '/../config/database.php';
 
 class Auth {
     private $db;
-    private $user = null;
+    private $user_id;
+    private $user_data;
     
     public function __construct() {
-        $this->db = Database::getInstance();
-        $this->init();
-    }
-    
-    private function init() {
-        session_start();
-        if (isset($_SESSION['user_id'])) {
-            $this->loadUser($_SESSION['user_id']);
+        // Get database connection
+        try {
+            $this->db = Database::getInstance()->getConnection();
+        } catch (Exception $e) {
+            $this->db = null;
+        }
+        
+        // Start session if not started
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+        
+        // Set user_id from session
+        $this->user_id = $_SESSION['user_id'] ?? null;
+        
+        // Load user data if logged in
+        if ($this->user_id && $this->db) {
+            $this->loadUserData();
         }
     }
     
-    private function loadUser($user_id) {
-        $query = "SELECT u.*, b.name as branch_name FROM users u 
-                  LEFT JOIN branches b ON u.branch_id = b.id 
-                  WHERE u.id = ? AND u.status = 'active'";
-        $stmt = $this->db->prepare($query);
-        $stmt->execute([$user_id]);
-        $this->user = $stmt->fetch(PDO::FETCH_ASSOC);
+    /**
+     * Load user data from database
+     */
+    private function loadUserData() {
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM users WHERE id = ? AND status = 'active'");
+            $stmt->execute([$this->user_id]);
+            $this->user_data = $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            $this->user_data = null;
+        }
     }
     
-    public function login($username, $password) {
-        $query = "SELECT * FROM users WHERE username = ? AND status = 'active'";
-        $stmt = $this->db->prepare($query);
-        $stmt->execute([$username]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    /**
+     * Check if user is logged in
+     */
+    public function isLoggedIn() {
+        return $this->user_id !== null && $this->user_data !== false;
+    }
+    
+    /**
+     * Get current user data
+     */
+    public function getUser() {
+        return $this->user_data;
+    }
+    
+    /**
+     * Get user ID
+     */
+    public function getUserId() {
+        return $this->user_id;
+    }
+    
+    /**
+     * Get user role
+     */
+    public function getRole() {
+        return $this->user_data['role'] ?? null;
+    }
+    
+    /**
+     * Get user branch ID
+     */
+    public function getBranchId() {
+        return $this->user_data['branch_id'] ?? null;
+    }
+    
+    /**
+     * Logout user - destroy session and update status
+     */
+    public function logout($redirect = true) {
+        // Get user ID before destroying session
+        $user_id = $this->user_id;
         
-        if ($user && password_verify($password, $user['password'])) {
-            $_SESSION['user_id'] = $user['id'];
-            $_SESSION['role'] = $user['role'];
-            $_SESSION['full_name'] = $user['full_name'];
-            $_SESSION['branch_id'] = $user['branch_id'];
-            
-            // Update online status
-            $query = "UPDATE users SET is_online = 1, last_online = NOW() WHERE id = ?";
-            $stmt = $this->db->prepare($query);
-            $stmt->execute([$user['id']]);
-            
-            $this->loadUser($user['id']);
-            return $this->user;
+        // If user is a doctor, set offline status
+        if ($user_id && $this->db) {
+            try {
+                // Check if user is a doctor
+                $stmt = $this->db->prepare("SELECT role FROM users WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($user && $user['role'] === 'doctor') {
+                    // Set doctor offline
+                    $stmt = $this->db->prepare("UPDATE users SET is_online = 0, last_online = NOW() WHERE id = ?");
+                    $stmt->execute([$user_id]);
+                }
+                
+                // Log logout activity
+                $stmt = $this->db->prepare("
+                    INSERT INTO activity_logs (user_id, action, details, created_at) 
+                    VALUES (?, 'user_logout', ?, NOW())
+                ");
+                $stmt->execute([
+                    $user_id,
+                    "User logged out: " . ($this->user_data['full_name'] ?? 'Unknown') . " (Role: " . ($this->user_data['role'] ?? 'unknown') . ")"
+                ]);
+            } catch (Exception $e) {
+                // Silent fail on logout errors
+            }
         }
         
-        return false;
-    }
-    
-    public function logout() {
-        if ($this->user) {
-            $query = "UPDATE users SET is_online = 0 WHERE id = ?";
-            $stmt = $this->db->prepare($query);
-            $stmt->execute([$this->user['id']]);
+        // Destroy session
+        $_SESSION = array();
+        
+        if (ini_get("session.use_cookies")) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000,
+                $params["path"], $params["domain"],
+                $params["secure"], $params["httponly"]
+            );
         }
         
         session_destroy();
-        return true;
-    }
-    
-    public function getUser() {
-        return $this->user;
-    }
-    
-    public function isAuthenticated() {
-        return $this->user !== null;
-    }
-    
-    public function hasRole($role) {
-        return $this->user && $this->user['role'] === $role;
-    }
-    
-    public function hasAnyRole($roles) {
-        if (!$this->user) return false;
-        return in_array($this->user['role'], $roles);
-    }
-    
-    public function hasPermission($permission) {
-        // Simple permission check - can be expanded
-        $permissions = [
-            'admin' => ['*'],
-            'reception' => ['view_patients', 'register_patient', 'view_appointments'],
-            'doctor' => ['view_patients', 'view_visits', 'create_prescription', 'view_lab_tests'],
-            'laboratory' => ['view_lab_tests', 'create_lab_test', 'update_lab_test'],
-            'pharmacy' => ['view_prescriptions', 'dispense_medication', 'view_inventory'],
-            'cashier' => ['view_payments', 'create_payment', 'view_revenue']
-        ];
         
-        if ($this->user && isset($permissions[$this->user['role']])) {
-            $user_perms = $permissions[$this->user['role']];
-            return in_array('*', $user_perms) || in_array($permission, $user_perms);
+        // Redirect to login page
+        if ($redirect) {
+            header('Location: ../frontend/pages/login.php');
+            exit;
         }
-        return false;
     }
 }
-?>

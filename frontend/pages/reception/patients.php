@@ -5,25 +5,52 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception)
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
 }
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'reception';
+$branch_id = $_SESSION['branch_id'] ?? 1;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // PATH SAHIHI
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 // ================================================================
 // GET PARAMETERS
@@ -39,9 +66,9 @@ $error = isset($_GET['error']) ? $_GET['error'] : '';
 $success = isset($_GET['success']) ? $_GET['success'] : '';
 
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
     
-    // ✅ Get patients with filters
+    // ✅ Get ALL patients with filters (including those without doctor)
     $sql = "
         SELECT p.*, 
                u.full_name as assigned_doctor_name,
@@ -56,7 +83,7 @@ try {
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
         WHERE p.branch_id = ? 
     ";
-    $params = [$_SESSION['branch_id']];
+    $params = [$branch_id];
     
     if (!empty($search)) {
         $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
@@ -90,7 +117,7 @@ try {
         FROM patients p
         WHERE p.branch_id = ?
     ";
-    $count_params = [$_SESSION['branch_id']];
+    $count_params = [$branch_id];
     
     if (!empty($search)) {
         $count_sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
@@ -115,7 +142,7 @@ try {
     $total_patients = $total_result['total'] ?? 0;
     $total_pages = ceil($total_patients / $limit);
     
-    // ✅ Get stats
+    // ✅ Get stats - COUNT ALL PATIENTS
     $stmt = $db->prepare("
         SELECT 
             COUNT(*) as total,
@@ -125,7 +152,7 @@ try {
         FROM patients 
         WHERE branch_id = ?
     ");
-    $stmt->execute([$_SESSION['branch_id']]);
+    $stmt->execute([$branch_id]);
     $stats = $stmt->fetch(PDO::FETCH_ASSOC);
     
     // ✅ Get latest visits for each patient
@@ -150,6 +177,29 @@ try {
 }
 
 // ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    if (isset($_SESSION['user_id'])) {
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$_SESSION['user_id']]);
+        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    }
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/reception_header.php';
@@ -163,8 +213,8 @@ include_once '../../components/reception_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Patients - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -917,7 +967,7 @@ include_once '../../components/reception_sidebar.php';
     
     <div class="flex items-center gap-3">
         <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($_SESSION['branch_name'] ?? 'Dodoma') ?>
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime">
@@ -936,8 +986,8 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -962,7 +1012,7 @@ include_once '../../components/reception_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
-                Manage patients in <strong><?= htmlspecialchars($_SESSION['branch_name'] ?? 'Dodoma') ?></strong>
+                Manage patients in <strong><?= htmlspecialchars($branch_name) ?></strong>
                 <span class="header-badge">
                     <i class="fas fa-users"></i>
                     <span id="totalPatients"><?= $stats['total'] ?? 0 ?></span> Total
@@ -1047,7 +1097,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
 
         <!-- ================================================================ -->
-        <!-- PATIENT TABLE - BLUE HEADERS -->
+        <!-- PATIENT TABLE - BLUE HEADERS - SHOWS ALL PATIENTS -->
         <!-- ================================================================ -->
         <div style="overflow-x:auto;">
             <?php if (!empty($patients)): ?>
@@ -1072,9 +1122,12 @@ include_once '../../components/reception_sidebar.php';
                         $status_class = $patient['patient_status'] ?? 'existing';
                         $status_text = $status_class === 'new' ? 'New' : 'Existing';
                         
-                        $doctor_status = !empty($patient['assigned_doctor_name']) ? 
-                            '<span class="status-badge with_doctor">✅ Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . '</span>' : 
-                            '<span class="status-badge without_doctor">⚠️ No Doctor</span>';
+                        // Show doctor name or "No Doctor" badge
+                        if (!empty($patient['assigned_doctor_name'])) {
+                            $doctor_status = '<span class="status-badge with_doctor">✅ Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . '</span>';
+                        } else {
+                            $doctor_status = '<span class="status-badge without_doctor">⚠️ No Doctor</span>';
+                        }
                         
                         $appointment_count = $patient['active_appointments'] ?? 0;
                     ?>
@@ -1111,7 +1164,6 @@ include_once '../../components/reception_sidebar.php';
                                     <a href="view_patient.php?id=<?= $patient['id'] ?>" class="btn btn-primary btn-sm" title="View Patient">
                                         <i class="fas fa-eye"></i>
                                     </a>
-                                    <!-- ✅ NEW APPOINTMENT BUTTON (Replaced Edit) -->
                                     <a href="new_appointment.php?patient_id=<?= $patient['id'] ?>" class="btn btn-purple btn-sm" title="New Appointment">
                                         <i class="fas fa-calendar-plus"></i>
                                     </a>
@@ -1310,10 +1362,10 @@ include_once '../../components/reception_sidebar.php';
     <?php endif; ?>
 
     console.log('%c👤 Braick - Patients', 'font-size:18px; font-weight:bold; color:#2563EB;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($_SESSION['branch_name'] ?? 'Dodoma') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Total Patients: <?= $stats['total'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Shows ALL patients (with and without doctor)', 'font-size:13px; color:#2563EB;');
     console.log('%c📅 New Patients: <?= $stats['new_patients'] ?? 0 ?>', 'font-size:13px; color:#2563EB;');
-    console.log('%c✅ Table headers have BLUE background', 'font-size:13px; color:#2563EB;');
     console.log('%c📅 New Appointment button added (replaced Edit)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🔍 Search filter in header', 'font-size:13px; color:#059669;');
 </script>

@@ -11,32 +11,18 @@
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+    header('Location: ../login.php');
+    exit;
 }
 
-// Make sure doctor_id and user_id are in sync
-if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
-    $_SESSION['doctor_id'] = $_SESSION['user_id'];
-}
-if (isset($_SESSION['doctor_id']) && $_SESSION['doctor_id'] > 0) {
-    $_SESSION['user_id'] = $_SESSION['doctor_id'];
-}
-
-$doctor_id = $_SESSION['user_id'] ?? $_SESSION['doctor_id'] ?? 5;
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 $doctor_branch_name = 'Dodoma';
@@ -48,10 +34,10 @@ require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET DOCTOR DATA FROM DATABASE
+// REFRESH DOCTOR DATA FROM DATABASE
 // ================================================================
 try {
-    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, is_online, profile_pic FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, is_online, profile_pic FROM users WHERE id = ? AND role = 'doctor' AND status = 'active'");
     $stmt->execute([$doctor_id]);
     $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -65,9 +51,23 @@ try {
         $_SESSION['full_name'] = $doctor_name;
         $_SESSION['user_id'] = $doctor_id;
         $_SESSION['doctor_id'] = $doctor_id;
+    } else {
+        // Doctor not found or inactive - logout and redirect
+        session_destroy();
+        header('Location: ../login.php');
+        exit;
     }
 } catch (Exception $e) {
     error_log("Dashboard database error: " . $e->getMessage());
+    // Continue with session data, but log the error
+}
+
+// Make sure doctor_id and user_id are in sync
+if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+    $_SESSION['doctor_id'] = $_SESSION['user_id'];
+}
+if (isset($_SESSION['doctor_id']) && $_SESSION['doctor_id'] > 0) {
+    $_SESSION['user_id'] = $_SESSION['doctor_id'];
 }
 
 // Get branch name
@@ -2017,9 +2017,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     
     console.log('%c👨‍⚕️ Doctor Dashboard Initialized', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
     console.log('%c🔄 Auto-update active every 3 seconds', 'font-size:12px; color:#34D399;');
     console.log('%c🌙 Dark mode uses CSS + localStorage (syncs with header)', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c💡 Dashboard updates automatically - no refresh needed!', 'font-size:12px; color:#64748B;');
 </script>
 
 <!-- ================================================================ -->

@@ -2,11 +2,55 @@
 // ================================================================
 // FILE: frontend/components/reception_sidebar.php
 // RECEPTION - SHARED SIDEBAR (BLUE BACKGROUND)
+// WITH LOGIN SESSION PROTECTION
 // WITH SERVICES SECTION - SHOWS ALL SERVICES FROM services TABLE
 // WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
 // FULLY RESPONSIVE - ALL DEVICES
 // BRAICK DISPENSARY
 // ================================================================
+
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN SESSION PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    // User is not logged in - redirect to login page
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS TO THIS SIDEBAR
+// ================================================================
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    // User is not allowed - redirect to their dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': 
+            header('Location: ../doctor/dashboard.php'); 
+            break;
+        case 'pharmacy': 
+            header('Location: ../pharmacy/dashboard.php'); 
+            break;
+        case 'laboratory': 
+            header('Location: ../laboratory/dashboard.php'); 
+            break;
+        case 'cashier': 
+            header('Location: ../cashier/dashboard.php'); 
+            break;
+        default: 
+            header('Location: ../login.php'); 
+            break;
+    }
+    exit;
+}
 
 // ================================================================
 // GET REAL DATA FOR BADGES
@@ -18,7 +62,17 @@ $today_visits = 0;
 $pending_patients = 0;
 $services_count = 0;
 
-if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
+// Database connection
+require_once __DIR__ . '/../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    // If database connection fails, show error but don't break
+    $db = null;
+}
+
+if ($db !== null && isset($_SESSION['user_id'])) {
     $user_id = $_SESSION['user_id'];
     $user_branch_id = $_SESSION['branch_id'] ?? 1;
     
@@ -83,7 +137,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_reception_sidebar_data') {
     header('Content-Type: application/json');
     
-    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    // Check if user is logged in for AJAX requests too
+    if (!isset($_SESSION['user_id'])) {
+        echo json_encode(['success' => false, 'error' => 'Not logged in']);
+        exit;
+    }
+    
+    $branch_id = (int)($_POST['branch_id'] ?? $_SESSION['branch_id'] ?? 1);
     
     $response = [
         'success' => false,
@@ -96,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'hash' => ''
     ];
     
-    if (isset($db) && $db !== null) {
+    if ($db !== null) {
         try {
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
             $stmt->execute([$branch_id]);
@@ -683,7 +743,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     </div>
     
     <!-- ================================================================ -->
-    <!-- NAVIGATION -->
+    <!-- NAVIGATION - ALL MENUS PRESERVED -->
     <!-- ================================================================ -->
     <nav class="sidebar-nav">
         
@@ -749,6 +809,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Services</div>
         
+        <!-- 7. Services -->
         <a href="../reception/services.php" class="sidebar-link <?= isActive('services.php') ?>">
             <i class="fas fa-cog"></i> Services
             <?php if ($services_count > 0): ?>
@@ -773,13 +834,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Account</div>
         
-        <!-- Profile -->
+        <!-- 9. Profile -->
         <a href="../reception/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <!-- Logout -->
-        <a href="../../../logout.php" class="sidebar-link logout-link">
+        <!-- 10. Logout -->
+        <a href="../logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
         
