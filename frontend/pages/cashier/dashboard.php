@@ -6,7 +6,7 @@
 // ADDED: Green Background on Header
 // WITH AUTO-UPDATE (3 SECONDS) - NO PAGE REFRESH
 // ADDED: Button to go back to Reception Dashboard
-// WITH LOGIN PROTECTION
+// WITH LOGIN PROTECTION - ALLOWS RECEPTIONISTS
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -26,16 +26,15 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER HAS ACCESS (Cashier or Admin)
+// ALLOWED ROLES: Cashier, Reception, Admin
 // ================================================================
-$allowed_roles = ['cashier', 'admin'];
+$allowed_roles = ['cashier', 'reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -53,6 +52,11 @@ $cashier_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $cashier_email = $_SESSION['email'] ?? '';
 $cashier_phone = $_SESSION['phone'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS RECEPTIONIST (for display message)
+// ================================================================
+$is_reception = ($cashier_role === 'reception');
 
 // ================================================================
 // INCLUDE DATABASE
@@ -219,10 +223,18 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="role-tag" style="background:rgba(255,255,255,0.2);color:white;padding:4px 16px;border-radius:20px;font-size:0.7rem;font-weight:600;border:1px solid rgba(255,255,255,0.15);">
                     <i class="fas fa-user mr-1"></i> <?= strtoupper($cashier_role) ?>
                 </span>
+                <?php if ($is_reception): ?>
+                    <span class="reception-view-badge" style="background:rgba(251,191,36,0.3);color:#FCD34D;padding:4px 16px;border-radius:20px;font-size:0.6rem;font-weight:600;border:1px solid rgba(251,191,36,0.3);">
+                        <i class="fas fa-eye"></i> View Only (Reception)
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle" style="color:rgba(255,255,255,0.85);font-size:0.95rem;margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                 <i class="fas fa-user-check" style="color:rgba(255,255,255,0.7);"></i>
                 Welcome back, <strong style="color:white;font-weight:600;"><?= htmlspecialchars($cashier_name) ?></strong>
+                <?php if ($is_reception): ?>
+                    <span style="background:rgba(251,191,36,0.2);color:#FCD34D;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:500;">Viewing as Receptionist</span>
+                <?php endif; ?>
                 <span style="color:rgba(255,255,255,0.3);margin:0 4px;">|</span>
                 <span style="color:rgba(255,255,255,0.8);"><i class="far fa-calendar-alt"></i> <?= date('F d, Y') ?></span>
                 <span style="color:rgba(255,255,255,0.3);margin:0 4px;">|</span>
@@ -568,6 +580,9 @@ include_once '../../components/cashier_sidebar.php';
             Cashier Dashboard
             <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
             <span style="color:#FFD700;font-weight:600;">👤 <?= htmlspecialchars($cashier_name) ?></span>
+            <?php if ($is_reception): ?>
+                <span style="color:#FCD34D;font-weight:500;font-size:0.6rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 View Only</span>
+            <?php endif; ?>
             <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
             <span id="footerTimestamp">● Live</span>
             <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
@@ -827,33 +842,6 @@ include_once '../../components/cashier_sidebar.php';
     });
 
     // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    if (!searchBtn && !searchInput) {
-        searchBtn = document.querySelector('.top-nav .search-btn');
-        searchInput = document.querySelector('.top-nav #searchInput');
-    }
-    
-    function performSearch() {
-        var query = searchInput?.value?.trim() || '';
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
-        }
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
-
-    // ================================================================
     // SIDEBAR TOGGLE
     // ================================================================
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -919,12 +907,12 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
     console.log('%c💳 Today\'s Payments: <?= $today_payments ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Removed: Today\'s Collection Card', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ Receptionists can now access Cashier Dashboard', 'font-size:13px; color:#34D399;');
     console.log('%c🟢 Green Header Applied', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds (NO PAGE REFRESH)', 'font-size:13px; color:#34D399;');
     console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
     console.log('%c🏥 Added button to go back to Reception Dashboard', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#059669;');
+    console.log('%c🔒 Login protection: Active (Cashier, Reception, Admin)', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

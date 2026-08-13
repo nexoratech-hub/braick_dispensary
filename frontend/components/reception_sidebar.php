@@ -130,12 +130,21 @@ $profile_pic_url = !empty($profile_pic)
 
 // Detect current page
 $current_page = basename($_SERVER['PHP_SELF']);
+$current_uri = $_SERVER['REQUEST_URI'];
 
 // ================================================================
-// FUNCTION TO CHECK ACTIVE STATE
+// FUNCTION TO CHECK ACTIVE STATE - IMPROVED
 // ================================================================
-function isActive($page) {
+function isActive($page, $exact = false) {
     global $current_page;
+    global $current_uri;
+    
+    if ($exact) {
+        // Exact match - for specific pages like cashier
+        return (strpos($current_uri, $page) !== false) ? 'active' : '';
+    }
+    
+    // Default - match filename
     if ($page === $current_page) {
         return 'active';
     }
@@ -840,8 +849,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Finance</div>
         
-        <!-- 8. Cashier -->
-        <a href="/dispensary_system/frontend/pages/cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') && strpos($_SERVER['REQUEST_URI'], 'cashier') !== false ? 'active' : '' ?>">
+        <!-- 8. Cashier - FIXED: Using exact URI match -->
+        <a href="/dispensary_system/frontend/pages/cashier/dashboard.php" class="sidebar-link <?= (strpos($current_uri, '/cashier/dashboard.php') !== false) ? 'active' : '' ?>">
             <i class="fas fa-cash-register"></i> Cashier
         </a>
         
@@ -1194,10 +1203,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Patients: <?= $patient_count ?> | Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c📋 Services: <?= $services_count ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
-    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
+    console.log('%c💰 Cashier menu: FIXED - Uses exact URI match', 'font-size:12px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
     console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:12px; color:#F87171;');
 </script>
