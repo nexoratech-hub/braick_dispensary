@@ -2,96 +2,92 @@
 // ================================================================
 // FILE: frontend/components/doctor_header.php
 // DOCTOR - SHARED HEADER WITH SEARCH BAR & ONLINE STATUS
+// WITH LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION DATA - ENSURE DOCTOR SESSION IS SET
+// START SESSION
 // ================================================================
-
-// Check if session exists, if not set default doctor
-if (!isset($_SESSION['user_id']) || $_SESSION['user_id'] <= 0) {
-    // Set default doctor - Dr. John Mushi (ID: 5)
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['is_online'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// If doctor_id is set but user_id is not, sync them
-if (isset($_SESSION['doctor_id']) && $_SESSION['doctor_id'] > 0 && !isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = $_SESSION['doctor_id'];
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-// If user_id is set but doctor_id is not, sync them
-if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0 && !isset($_SESSION['doctor_id'])) {
-    $_SESSION['doctor_id'] = $_SESSION['user_id'];
+// ================================================================
+// CHECK IF USER HAS ACCESS (Doctor only)
+// ================================================================
+if ($_SESSION['role'] !== 'doctor') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'admin': header('Location: /dispensary_system/frontend/pages/admin/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
 }
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'] ?? 0;
+$full_name = $_SESSION['full_name'] ?? 'Doctor';
+$user_role = $_SESSION['role'] ?? 'doctor';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../backend/config/config.php';
 require_once __DIR__ . '/../../backend/config/database.php';
 
-// ================================================================
-// GET DOCTOR DETAILS FROM SESSION OR DATABASE
-// ================================================================
-$doctor_id = $_SESSION['doctor_id'] ?? $_SESSION['user_id'] ?? 5;
-$full_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
-$is_online = $_SESSION['is_online'] ?? 1;
-
-// Try to get latest doctor data from database
 try {
     $db = Database::getInstance()->getConnection();
-    $stmt = $db->prepare("SELECT id, full_name, is_online, profile_pic, branch_id, specialty FROM users WHERE id = ? AND role = 'doctor'");
-    $stmt->execute([$doctor_id]);
-    $user_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($user_data) {
-        $doctor_id = (int)$user_data['id'];
-        $full_name = $user_data['full_name'];
-        $is_online = (int)$user_data['is_online'];
-        $profile_pic = $user_data['profile_pic'] ?? '';
-        
-        // Update session with latest data
-        $_SESSION['user_id'] = $doctor_id;
-        $_SESSION['doctor_id'] = $doctor_id;
-        $_SESSION['full_name'] = $full_name;
-        $_SESSION['is_online'] = $is_online;
-        $_SESSION['branch_id'] = $user_data['branch_id'] ?? 1;
-        $_SESSION['specialty'] = $user_data['specialty'] ?? 'General Practitioner';
-    } else {
-        // If doctor not found in database, use default
-        error_log("Doctor ID $doctor_id not found in database, using default Dr. John Mushi");
-        $doctor_id = 5;
-        $full_name = 'Dr. John Mushi';
-        $is_online = 1;
-        
-        $_SESSION['user_id'] = 5;
-        $_SESSION['doctor_id'] = 5;
-        $_SESSION['full_name'] = 'Dr. John Mushi';
-        $_SESSION['is_online'] = 1;
-        $_SESSION['branch_id'] = 1;
-        $_SESSION['specialty'] = 'General Medicine';
-    }
 } catch (Exception $e) {
-    // Use session values if database fails
-    error_log("Database error in doctor_header: " . $e->getMessage());
-    $doctor_id = $_SESSION['doctor_id'] ?? 5;
-    $full_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
-    $is_online = $_SESSION['is_online'] ?? 1;
+    $db = null;
 }
 
-// Make sure doctor_id is in session
-$_SESSION['user_id'] = $doctor_id;
-$_SESSION['doctor_id'] = $doctor_id;
+// ================================================================
+// GET DOCTOR DETAILS FROM DATABASE (REFRESH SESSION DATA)
+// ================================================================
+if ($db !== null && $doctor_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT id, full_name, is_online, profile_pic, branch_id, specialty FROM users WHERE id = ? AND role = 'doctor' AND status = 'active'");
+        $stmt->execute([$doctor_id]);
+        $user_data = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($user_data) {
+            $doctor_id = (int)$user_data['id'];
+            $full_name = $user_data['full_name'];
+            $is_online = (int)$user_data['is_online'];
+            $profile_pic = $user_data['profile_pic'] ?? '';
+            
+            // Update session with latest data
+            $_SESSION['user_id'] = $doctor_id;
+            $_SESSION['doctor_id'] = $doctor_id;
+            $_SESSION['full_name'] = $full_name;
+            $_SESSION['is_online'] = $is_online;
+            $_SESSION['branch_id'] = $user_data['branch_id'] ?? 1;
+            $_SESSION['specialty'] = $user_data['specialty'] ?? 'General Practitioner';
+        }
+    } catch (Exception $e) {
+        // Use session values if database fails
+        error_log("Database error in doctor_header: " . $e->getMessage());
+    }
+}
 
 // ================================================================
 // AVATAR SETUP
@@ -112,23 +108,41 @@ if (!empty($profile_pic)) {
 }
 
 // ================================================================
-// FAVICON - LOGO
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
+// LOGO PATH
 // ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
+// ================================================================
+// GET CURRENT PAGE
+// ================================================================
 $current_page = basename($_SERVER['PHP_SELF']);
 $page_title = ucfirst(str_replace('.php', '', $current_page));
 if (empty($page_title) || $page_title == '') {
     $page_title = 'Dashboard';
 }
 
-$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
-$is_dark = $dark_mode === 'true';
+// ================================================================
+// DARK MODE - SESSION BASED
+// ================================================================
+if (!isset($_SESSION['dark_mode'])) {
+    $_SESSION['dark_mode'] = 'light';
+}
 
-// ================================================================
-// GET CURRENT PAGE FOR ACTIVE NAV
-// ================================================================
-$current_page = basename($_SERVER['PHP_SELF']);
+if (isset($_GET['toggle_dark'])) {
+    $_SESSION['dark_mode'] = ($_SESSION['dark_mode'] === 'dark') ? 'light' : 'dark';
+    header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+    exit;
+}
+
+$dark_mode = $_SESSION['dark_mode'];
+$is_dark = $dark_mode === 'dark';
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $is_dark ? 'dark' : 'light' ?>">
@@ -655,7 +669,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
             <i class="fas fa-bars"></i>
         </button>
         
-        <a href="dashboard.php" class="flex items-center gap-2 text-gray-700 hover:text-primary transition shrink-0" style="color:var(--text-primary);">
+        <a href="/dispensary_system/frontend/pages/doctor/dashboard.php" class="flex items-center gap-2 text-gray-700 hover:text-primary transition shrink-0" style="color:var(--text-primary);">
             <i class="fas fa-home text-primary"></i>
             <span class="font-semibold text-sm hidden sm:inline">Dashboard</span>
         </a>
@@ -681,17 +695,20 @@ $current_page = basename($_SERVER['PHP_SELF']);
             <span class="status-spinner"></span>
         </button>
         
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
+        <!-- ================================================================ -->
+        <!-- DARK MODE TOGGLE - FIXED: Using link instead of button -->
+        <!-- ================================================================ -->
+        <a href="?toggle_dark=1" class="dark-toggle-btn" id="darkModeLink">
+            <i id="darkIcon" class="fas <?= $is_dark ? 'fa-sun' : 'fa-moon' ?>"></i>
+            <span id="darkText"><?= $is_dark ? 'Light' : 'Dark' ?></span>
+        </a>
         
         <button class="icon-btn" id="notifBtn" title="Notifications">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot" id="notifDot" style="display: none;"></span>
         </button>
         
-        <a href="profile.php" class="avatar-link" title="Profile">
+        <a href="/dispensary_system/frontend/pages/doctor/profile.php" class="avatar-link" title="Profile">
             <?php if ($show_initial): ?>
                 <div class="avatar-placeholder avatar-color-<?= (abs(crc32($full_name)) % 7) + 1 ?>">
                     <?= $initial ?>
@@ -713,7 +730,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
 // DARK MODE TOGGLE
 // ================================================================
 (function() {
-    var darkModeToggle = document.getElementById('darkModeToggle');
+    var darkModeToggle = document.getElementById('darkModeLink');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
     var htmlElement = document.documentElement;
@@ -953,7 +970,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
+            window.location.href = '/dispensary_system/frontend/pages/doctor/search.php?q=' + encodeURIComponent(query);
         }
     }
     
@@ -1014,7 +1031,7 @@ document.addEventListener('keydown', function(e) {
     // Ctrl+D = Toggle Dark Mode
     if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
         e.preventDefault();
-        var darkBtn = document.getElementById('darkModeToggle');
+        var darkBtn = document.getElementById('darkModeLink');
         if (darkBtn) {
             darkBtn.click();
         }
@@ -1047,13 +1064,16 @@ document.addEventListener('keydown', function(e) {
 });
 
 console.log('%c👨‍⚕️ Braick - Doctor Header (WITH SEARCH BAR)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:12px; color:#059669;');
+console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:12px; color:#64748B;');
+console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
 console.log('%c🟢 Status: <?= $is_online ? 'Online ✅' : 'Offline ❌' ?>', 'font-size:12px; color:#059669;');
 console.log('%c🆔 Doctor ID: <?= $doctor_id ?>', 'font-size:12px; color:#64748B;');
-console.log('%c👤 Doctor Name: <?= $full_name ?>', 'font-size:12px; color:#64748B;');
 console.log('%c📸 Profile Picture: <?= !empty($profile_pic) ? '✅ Loaded' : '❌ Using Initial' ?>', 'font-size:12px; color:#64748B;');
-console.log('%c🌙 Dark Mode: ' + (document.documentElement.getAttribute('data-theme') === 'dark' ? 'ON' : 'OFF'), 'font-size:12px; color:#6EA8FE;');
+console.log('%c🌙 Dark Mode: <?= $is_dark ? 'ON' : 'OFF' ?>', 'font-size:12px; color:#6EA8FE;');
 console.log('%c🔍 Search: Ctrl+K to focus search', 'font-size:12px; color:#64748B;');
 console.log('%c🔄 Status: Ctrl+Shift+S to toggle online/offline', 'font-size:12px; color:#64748B;');
+console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

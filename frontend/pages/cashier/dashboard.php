@@ -6,45 +6,64 @@
 // ADDED: Green Background on Header
 // WITH AUTO-UPDATE (3 SECONDS) - NO PAGE REFRESH
 // ADDED: Button to go back to Reception Dashboard
+// WITH LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Rose Mwangi (Reception = Cashier)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 005';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// GET SESSION DATA
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Cashier or Admin)
+// ================================================================
+$allowed_roles = ['cashier', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
 // ================================================================
 $cashier_id = $_SESSION['user_id'];
-$cashier_name = $_SESSION['full_name'];
-$cashier_username = $_SESSION['username'];
-$cashier_role = $_SESSION['role'];
-$cashier_branch_id = $_SESSION['branch_id'];
-$cashier_branch_name = $_SESSION['branch_name'];
-$cashier_email = $_SESSION['email'];
-$cashier_phone = $_SESSION['phone'];
+$cashier_name = $_SESSION['full_name'] ?? 'User';
+$cashier_username = $_SESSION['username'] ?? '';
+$cashier_role = $_SESSION['role'] ?? 'cashier';
+$cashier_branch_id = $_SESSION['branch_id'] ?? 1;
+$cashier_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$cashier_email = $_SESSION['email'] ?? '';
+$cashier_phone = $_SESSION['phone'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET CASHIER STATISTICS
@@ -149,6 +168,15 @@ try {
     $payment_methods = [];
     $patients_with_bills = [];
 }
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // TIME AGO FUNCTION
@@ -896,6 +924,7 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c🔄 Auto-update every 3 seconds (NO PAGE REFRESH)', 'font-size:13px; color:#34D399;');
     console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
     console.log('%c🏥 Added button to go back to Reception Dashboard', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

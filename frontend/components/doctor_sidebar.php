@@ -7,15 +7,61 @@
 // WITH AUTO-UPDATE EVERY 3 SECONDS
 // SERVICES - SINGLE LINK (NO DROPDOWN)
 // SIDEBAR TOGGLE - WORKS PERFECTLY ON MOBILE
+// WITH LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION CHECK - REDIRECT TO LOGIN IF NOT DOCTOR
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Doctor only)
+// ================================================================
+if ($_SESSION['role'] !== 'doctor') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'admin': header('Location: /dispensary_system/frontend/pages/admin/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'] ?? 0;
+$doctor_full_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_role = $_SESSION['role'] ?? 'doctor';
+$doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$doctor_username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    $db = null;
 }
 
 // ================================================================
@@ -37,10 +83,7 @@ $tools_count = 0;
 $lab_tests_count = 0;
 $expiring_medicines = 0;
 
-if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
-    $doctor_id = $_SESSION['user_id'];
-    $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
-    
+if ($db !== null && isset($_SESSION['user_id'])) {
     try {
         // 1. Total Patients (distinct patients)
         $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?");
@@ -145,7 +188,13 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
 // DOCTOR ONLINE STATUS
 // ================================================================
 $doctor_is_online = $_SESSION['is_online'] ?? 0;
-$doctor_full_name = $_SESSION['full_name'] ?? 'Doctor';
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // Detect current page
 $current_page = basename($_SERVER['PHP_SELF']);
@@ -206,7 +255,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'doctorStatus' => 'offline'
     ];
     
-    if ($doctor_id > 0 && isset($db) && $db !== null) {
+    if ($doctor_id > 0 && $db !== null) {
         try {
             // Doctor info
             $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active'");
@@ -1424,8 +1473,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // FETCH LIVE DATA - SELF-CONTAINED
     // ================================================================
     function fetchSidebarData() {
-        var doctorId = <?= json_encode($_SESSION['user_id'] ?? 0) ?>;
-        var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
+        var doctorId = <?= json_encode($doctor_id) ?>;
+        var branchId = <?= json_encode($doctor_branch_id) ?>;
         
         if (!doctorId) return;
         
@@ -1535,11 +1584,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // CONSOLE LOG
     // ================================================================
     console.log('%c👨‍⚕️ Braick Dispensary - Doctor Sidebar', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
+    console.log('%c🔐 Login protection: Active', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($doctor_full_name) ?> (<?= htmlspecialchars($doctor_role) ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📋 Full Doctor Sidebar with all menu items', 'font-size:13px; color:#34D399;');
     console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📱 Fully responsive - all devices', 'font-size:13px; color:#F59E0B;');
-    console.log('%c👤 Doctor: <?= htmlspecialchars($doctor_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Patients: <?= $patient_count ?>', 'font-size:13px; color:#9EC5FE;');
     console.log('%c📋 Pending Consultations: <?= $pending_consultations ?>', 'font-size:13px; color:#EF4444;');
     console.log('%c💊 Pending Prescriptions: <?= $pending_prescriptions ?>', 'font-size:13px; color:#D97706;');

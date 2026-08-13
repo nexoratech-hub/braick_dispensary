@@ -29,6 +29,7 @@ $user_branch_id = $branch_id;
 $selected_branch_id = $branch_id;
 $message = '';
 $message_type = '';
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // Initialize variables
 $all_patients = [];
@@ -70,19 +71,23 @@ try {
     }
     
     // ================================================================
-    // ✅ GET CONSULTATION SERVICES FROM SERVICES TABLE (category_id = 2)
+    // ✅ GET CONSULTATION SERVICES - BRANCH SPECIFIC
     // ================================================================
     $stmt = $db->prepare("
         SELECT id, service_name, description, price, unit, is_active
         FROM services 
-        WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
+        WHERE category_id = 2 
+        AND is_active = 1 
+        AND (branch_id = ? OR branch_id IS NULL)
         ORDER BY 
             CASE 
-                WHEN service_name LIKE '%New%' OR service_name LIKE '%General%' THEN 0
-                WHEN service_name LIKE '%Emergency%' THEN 1
-                WHEN service_name LIKE '%Specialist%' THEN 2
-                WHEN service_name LIKE '%Follow%' THEN 3
-                ELSE 4
+                WHEN service_name LIKE '%New Patient%' THEN 0
+                WHEN service_name LIKE '%General%' THEN 1
+                WHEN service_name LIKE '%Emergency%' THEN 2
+                WHEN service_name LIKE '%Specialist%' THEN 3
+                WHEN service_name LIKE '%Follow%' THEN 4
+                WHEN service_name LIKE '%Consultation%' THEN 5
+                ELSE 6
             END,
             service_name
     ");
@@ -93,90 +98,66 @@ try {
     $visit_type_options = [];
     $default_key = 'general_consultation';
     
-    foreach ($consultation_services as $service) {
-        $service_name = $service['service_name'];
-        $key = strtolower(str_replace(' ', '_', $service_name));
-        $key = str_replace('-', '_', $key);
-        $key = preg_replace('/[^a-z_]/', '', $key);
-        if (empty($key)) {
-            $key = 'consultation_' . $service['id'];
-        }
-        
-        $display_name = $service_name;
-        
-        $icon = '🆕';
-        if (strpos(strtolower($service_name), 'follow') !== false) {
-            $icon = '🔄';
-        } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
-            $icon = '🚨';
-        } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
-            $icon = '👨‍⚕️';
-        } elseif (strpos(strtolower($service_name), 'general') !== false) {
+    // If there are services from database, use them
+    if (!empty($consultation_services)) {
+        foreach ($consultation_services as $service) {
+            $service_name = $service['service_name'];
+            $key = strtolower(str_replace(' ', '_', $service_name));
+            $key = str_replace('-', '_', $key);
+            $key = preg_replace('/[^a-z_]/', '', $key);
+            if (empty($key)) {
+                $key = 'consultation_' . $service['id'];
+            }
+            
+            $display_name = $service_name;
+            
             $icon = '🏥';
-        }
-        
-        $visit_type_options[$key] = [
-            'id' => $service['id'],
-            'name' => $service_name,
-            'display_name' => $display_name,
-            'price' => (float)$service['price'],
-            'unit' => $service['unit'] ?? 'each',
-            'description' => $service['description'] ?? '',
-            'is_active' => $service['is_active'],
-            'icon' => $icon
-        ];
-        
-        // Set default to New Patient / General Consultation
-        if (strpos(strtolower($service_name), 'new') !== false || 
-            strpos(strtolower($service_name), 'general') !== false) {
-            $default_key = $key;
+            if (strpos(strtolower($service_name), 'new') !== false) {
+                $icon = '🆕';
+            } elseif (strpos(strtolower($service_name), 'follow') !== false) {
+                $icon = '🔄';
+            } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
+                $icon = '🚨';
+            } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
+                $icon = '👨‍⚕️';
+            } elseif (strpos(strtolower($service_name), 'general') !== false) {
+                $icon = '🏥';
+            }
+            
+            $visit_type_options[$key] = [
+                'id' => $service['id'],
+                'name' => $service_name,
+                'display_name' => $display_name,
+                'price' => (float)$service['price'],
+                'unit' => $service['unit'] ?? 'each',
+                'description' => $service['description'] ?? '',
+                'is_active' => $service['is_active'],
+                'icon' => $icon
+            ];
+            
+            // Set default to 'New Patient' or 'General Consultation'
+            if (strpos(strtolower($service_name), 'new') !== false) {
+                $default_key = $key;
+            } elseif (strpos(strtolower($service_name), 'general') !== false && $default_key === 'general_consultation') {
+                $default_key = $key;
+            }
         }
     }
     
-    // Fallback if no consultation services found
+    // ✅ FALLBACK: If NO services found for this branch, show "No Visit Type"
     if (empty($visit_type_options)) {
-        $visit_type_options = [
-            'new_patient' => [
-                'id' => null,
-                'name' => 'New Patient Consultation',
-                'display_name' => 'New Patient',
-                'price' => 15000,
-                'unit' => 'each',
-                'description' => 'First time consultation',
-                'is_active' => 1,
-                'icon' => '🆕'
-            ],
-            'general_consultation' => [
-                'id' => null,
-                'name' => 'General Consultation',
-                'display_name' => 'General Consultation',
-                'price' => 12000,
-                'unit' => 'each',
-                'description' => 'Standard doctor consultation',
-                'is_active' => 1,
-                'icon' => '🏥'
-            ],
-            'follow_up' => [
-                'id' => null,
-                'name' => 'Follow-up Consultation',
-                'display_name' => 'Follow-up',
-                'price' => 8000,
-                'unit' => 'each',
-                'description' => 'Follow-up visit',
-                'is_active' => 1,
-                'icon' => '🔄'
-            ],
-            'emergency' => [
-                'id' => null,
-                'name' => 'Emergency Consultation',
-                'display_name' => 'Emergency',
-                'price' => 25000,
-                'unit' => 'each',
-                'description' => 'Emergency visit',
-                'is_active' => 1,
-                'icon' => '🚨'
-            ]
+        // Add a placeholder option
+        $visit_type_options['no_visit'] = [
+            'id' => null,
+            'name' => 'No Visit Type Available',
+            'display_name' => 'No Visit Type',
+            'price' => 0,
+            'unit' => 'each',
+            'description' => 'No consultation services available for this branch. Please contact administrator.',
+            'is_active' => 1,
+            'icon' => '❌'
         ];
+        $default_key = 'no_visit';
     }
     
     // ================================================================
@@ -189,7 +170,7 @@ try {
     // ================================================================
     // GET ALL PATIENTS - WITH DAYS COUNT
     // ================================================================
-    $stmt = $db->prepare("
+    $query = "
         SELECT 
             p.id,
             p.full_name,
@@ -217,10 +198,21 @@ try {
         LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
         LEFT JOIN users u ON v.doctor_id = u.id
         WHERE p.branch_id = ?
-        GROUP BY p.id
-        ORDER BY p.created_at DESC, p.id DESC
-    ");
-    $stmt->execute([$selected_branch_id]);
+    ";
+    $params = [$selected_branch_id];
+    
+    // Add search filter
+    if (!empty($search)) {
+        $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+    }
+    
+    $query .= " GROUP BY p.id ORDER BY p.created_at DESC, p.id DESC";
+    
+    $stmt = $db->prepare($query);
+    $stmt->execute($params);
     $all_patients = $stmt->fetchAll();
     
     // ================================================================
@@ -501,52 +493,69 @@ try {
                 }
             }
             
+            // ✅ FIXED: Get services - BRANCH SPECIFIC
             $stmt = $db->prepare("
                 SELECT id, service_name, description, price, unit, is_active
                 FROM services 
                 WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
                 ORDER BY 
                     CASE 
-                        WHEN service_name LIKE '%New%' OR service_name LIKE '%General%' THEN 0
-                        WHEN service_name LIKE '%Emergency%' THEN 1
-                        WHEN service_name LIKE '%Specialist%' THEN 2
-                        WHEN service_name LIKE '%Follow%' THEN 3
-                        ELSE 4
+                        WHEN service_name LIKE '%New Patient%' THEN 0
+                        WHEN service_name LIKE '%General%' THEN 1
+                        WHEN service_name LIKE '%Emergency%' THEN 2
+                        WHEN service_name LIKE '%Specialist%' THEN 3
+                        WHEN service_name LIKE '%Follow%' THEN 4
+                        WHEN service_name LIKE '%Consultation%' THEN 5
+                        ELSE 6
                     END,
                     service_name
             ");
             $stmt->execute([$selected_branch_id]);
             $updated_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
+            // Build visit type options HTML
             $visit_type_options_html = '';
-            foreach ($updated_services as $service) {
-                $service_name = $service['service_name'];
-                $key = strtolower(str_replace(' ', '_', $service_name));
-                $key = str_replace('-', '_', $key);
-                $key = preg_replace('/[^a-z_]/', '', $key);
-                if (empty($key)) {
-                    $key = 'consultation_' . $service['id'];
-                }
-                
-                $icon = '🆕';
-                if (strpos(strtolower($service_name), 'follow') !== false) {
-                    $icon = '🔄';
-                } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
-                    $icon = '🚨';
-                } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
-                    $icon = '👨‍⚕️';
-                } elseif (strpos(strtolower($service_name), 'general') !== false) {
-                    $icon = '🏥';
-                }
-                
-                $selected = (strpos(strtolower($service_name), 'new') !== false || 
-                            strpos(strtolower($service_name), 'general') !== false) ? 'selected' : '';
-                
+            
+            // If no services found, show "No Visit Type"
+            if (empty($updated_services)) {
                 $visit_type_options_html .= '
-                    <option value="' . htmlspecialchars($key) . '" data-price="' . $service['price'] . '" data-id="' . $service['id'] . '" ' . $selected . '>
-                        ' . $icon . ' ' . htmlspecialchars($service_name) . ' - TSh ' . number_format($service['price'], 0) . '
+                    <option value="no_visit" data-price="0" selected disabled>
+                        ❌ No Visit Type Available - Contact Administrator
                     </option>
                 ';
+            } else {
+                foreach ($updated_services as $service) {
+                    $service_name = $service['service_name'];
+                    $key = strtolower(str_replace(' ', '_', $service_name));
+                    $key = str_replace('-', '_', $key);
+                    $key = preg_replace('/[^a-z_]/', '', $key);
+                    if (empty($key)) {
+                        $key = 'consultation_' . ($service['id'] ?? rand(100, 999));
+                    }
+                    
+                    $icon = '🏥';
+                    if (strpos(strtolower($service_name), 'new') !== false) {
+                        $icon = '🆕';
+                    } elseif (strpos(strtolower($service_name), 'follow') !== false) {
+                        $icon = '🔄';
+                    } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
+                        $icon = '🚨';
+                    } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
+                        $icon = '👨‍⚕️';
+                    } elseif (strpos(strtolower($service_name), 'general') !== false) {
+                        $icon = '🏥';
+                    }
+                    
+                    $price = $service['price'] ?? 0;
+                    $selected = (strpos(strtolower($service_name), 'new') !== false || 
+                                strpos(strtolower($service_name), 'general') !== false) ? 'selected' : '';
+                    
+                    $visit_type_options_html .= '
+                        <option value="' . htmlspecialchars($key) . '" data-price="' . $price . '" data-id="' . ($service['id'] ?? '') . '" ' . $selected . '>
+                            ' . $icon . ' ' . htmlspecialchars($service_name) . ' - TSh ' . number_format($price, 0) . '
+                        </option>
+                    ';
+                }
             }
             
             $pending = 0;
@@ -1057,410 +1066,6 @@ try {
             echo json_encode($response);
             exit;
         }
-        
-        // ================================================================
-        // ORIGINAL ASSIGN DOCTOR (Fallback)
-        // ================================================================
-        if ($action === 'assign_doctor' && $assignment_type === 'doctor') {
-            $patient_id = (int)($_POST['patient_id'] ?? 0);
-            $doctor_id = (int)($_POST['doctor_id'] ?? 0);
-            $visit_type_key = $_POST['visit_type'] ?? 'general_consultation';
-            $symptoms = trim($_POST['symptoms'] ?? '');
-            $complaint = trim($_POST['complaint'] ?? '');
-            $notes = trim($_POST['notes'] ?? '');
-            
-            $temperature = $_POST['temperature'] ?? null;
-            $bp_systolic = $_POST['bp_systolic'] ?? null;
-            $bp_diastolic = $_POST['bp_diastolic'] ?? null;
-            $pulse_rate = $_POST['pulse_rate'] ?? null;
-            $weight = $_POST['weight'] ?? null;
-            $height = $_POST['height'] ?? null;
-            $vital_notes = trim($_POST['vital_notes'] ?? '');
-            
-            $errors = [];
-            if ($patient_id <= 0) $errors[] = 'Please select a patient';
-            if ($doctor_id <= 0) $errors[] = 'Please select a doctor';
-            
-            if ($doctor_id > 0) {
-                $stmt = $db->prepare("SELECT id, is_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active' AND branch_id = ?");
-                $stmt->execute([$doctor_id, $selected_branch_id]);
-                $doctor_check = $stmt->fetch();
-                if (!$doctor_check) {
-                    $errors[] = 'Selected doctor is not available.';
-                }
-            }
-            
-            if (empty($errors)) {
-                $consultation_fee = $visit_type_options[$visit_type_key]['price'] ?? 0;
-                $consultation_service_id = $visit_type_options[$visit_type_key]['id'] ?? null;
-                $consultation_service_name = $visit_type_options[$visit_type_key]['name'] ?? 'Consultation Fee';
-                
-                try {
-                    $db->beginTransaction();
-                    
-                    $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ?");
-                    $stmt->execute([$doctor_id]);
-                    $doctor_data = $stmt->fetch();
-                    $new_doctor_name = $doctor_data['full_name'] ?? '';
-                    $new_doctor_online = $doctor_data['is_online'] ?? 0;
-                    
-                    $stmt = $db->prepare("
-                        SELECT id, status, doctor_id, visit_number, visit_type
-                        FROM visits 
-                        WHERE patient_id = ? AND status = 'lab_test' AND doctor_id IS NULL
-                        AND branch_id = ?
-                        ORDER BY id DESC LIMIT 1
-                    ");
-                    $stmt->execute([$patient_id, $selected_branch_id]);
-                    $lab_only_visit = $stmt->fetch();
-                    
-                    $visit_id = null;
-                    $visit_number = '';
-                    $bill_result = null;
-                    $bill_created = false;
-                    
-                    if ($lab_only_visit) {
-                        $visit_id = $lab_only_visit['id'];
-                        $visit_number = $lab_only_visit['visit_number'];
-                        
-                        $stmt = $db->prepare("
-                            UPDATE visits 
-                            SET doctor_id = ?, 
-                                status = 'assigned',
-                                visit_type = ?,
-                                symptoms = ?,
-                                complaint = ?,
-                                notes = ?,
-                                consultation_fee = ?,
-                                updated_at = NOW()
-                            WHERE id = ?
-                        ");
-                        $stmt->execute([
-                            $doctor_id,
-                            $visit_type_key,
-                            $symptoms,
-                            $complaint,
-                            $notes,
-                            $consultation_fee,
-                            $visit_id
-                        ]);
-                        
-                    } else {
-                        $stmt = $db->prepare("
-                            SELECT id, status, visit_type, doctor_id, visit_number 
-                            FROM visits 
-                            WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor') 
-                            AND branch_id = ?
-                            ORDER BY id DESC LIMIT 1
-                        ");
-                        $stmt->execute([$patient_id, $selected_branch_id]);
-                        $existing_visit = $stmt->fetch();
-                        
-                        if ($existing_visit) {
-                            $visit_id = $existing_visit['id'];
-                            $visit_number = $existing_visit['visit_number'];
-                            
-                            if ($existing_visit['status'] === 'with_doctor' || $existing_visit['status'] === 'completed') {
-                                $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                                
-                                $stmt = $db->prepare("
-                                    INSERT INTO visits (
-                                        visit_number, patient_id, doctor_id, branch_id, 
-                                        visit_type, status, symptoms, complaint, notes, 
-                                        created_at, updated_at, consultation_fee, receptionist_id
-                                    ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, NOW(), NOW(), ?, ?)
-                                ");
-                                $stmt->execute([
-                                    $visit_number, $patient_id, $doctor_id, $selected_branch_id, 
-                                    $visit_type_key, $symptoms, $complaint, $notes, 
-                                    $consultation_fee, $user_id
-                                ]);
-                                $visit_id = $db->lastInsertId();
-                            } else {
-                                $old_visit_type = $existing_visit['visit_type'] ?? 'general_consultation';
-                                
-                                if ($old_visit_type !== $visit_type_key) {
-                                    $stmt = $db->prepare("
-                                        UPDATE patient_bills 
-                                        SET status = 'cancelled', updated_at = NOW() 
-                                        WHERE visit_id = ? AND status IN ('pending', 'partial')
-                                    ");
-                                    $stmt->execute([$visit_id]);
-                                    
-                                    $stmt = $db->prepare("
-                                        UPDATE bill_items 
-                                        SET status = 'cancelled' 
-                                        WHERE bill_id IN (SELECT id FROM patient_bills WHERE visit_id = ? AND status = 'cancelled')
-                                    ");
-                                    $stmt->execute([$visit_id]);
-                                }
-                                
-                                $stmt = $db->prepare("
-                                    UPDATE visits 
-                                    SET doctor_id = ?, status = 'assigned', 
-                                        visit_type = ?, symptoms = ?, complaint = ?, notes = ?, 
-                                        consultation_fee = ?,
-                                        updated_at = NOW()
-                                    WHERE id = ?
-                                ");
-                                $stmt->execute([
-                                    $doctor_id, 
-                                    $visit_type_key, 
-                                    $symptoms, 
-                                    $complaint, 
-                                    $notes,
-                                    $consultation_fee,
-                                    $visit_id
-                                ]);
-                            }
-                        } else {
-                            $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                            
-                            $stmt = $db->prepare("
-                                INSERT INTO visits (
-                                    visit_number, patient_id, doctor_id, branch_id, 
-                                    visit_type, status, symptoms, complaint, notes, 
-                                    created_at, updated_at, consultation_fee, receptionist_id
-                                ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, NOW(), NOW(), ?, ?)
-                            ");
-                            $stmt->execute([
-                                $visit_number, $patient_id, $doctor_id, $selected_branch_id, 
-                                $visit_type_key, $symptoms, $complaint, $notes, 
-                                $consultation_fee, $user_id
-                            ]);
-                            $visit_id = $db->lastInsertId();
-                        }
-                    }
-                    
-                    if ($consultation_fee > 0) {
-                        $bill_result = createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consultation_fee, $user_id, $selected_branch_id);
-                        if ($bill_result && $bill_result['status'] === 'created') {
-                            $bill_created = true;
-                        }
-                    }
-                    
-                    $has_vital = $temperature !== null && $temperature !== '' || 
-                                 $bp_systolic !== null && $bp_systolic !== '' || 
-                                 $bp_diastolic !== null && $bp_diastolic !== '' || 
-                                 $pulse_rate !== null && $pulse_rate !== '' || 
-                                 $weight !== null && $weight !== '' || 
-                                 $height !== null && $height !== '';
-                    
-                    if ($has_vital && $visit_id) {
-                        $bmi = null;
-                        if ($weight && $height && $height > 0) {
-                            $height_m = $height / 100;
-                            $bmi = round($weight / ($height_m * $height_m), 1);
-                        }
-                        
-                        $stmt = $db->prepare("
-                            INSERT INTO vital_signs (
-                                patient_id, visit_id, recorded_by, branch_id,
-                                temperature, blood_pressure_systolic, blood_pressure_diastolic,
-                                pulse_rate, weight, height, bmi, notes, recorded_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-                        ");
-                        $stmt->execute([
-                            $patient_id,
-                            $visit_id,
-                            $user_id,
-                            $selected_branch_id,
-                            $temperature ?: null,
-                            $bp_systolic ?: null,
-                            $bp_diastolic ?: null,
-                            $pulse_rate ?: null,
-                            $weight ?: null,
-                            $height ?: null,
-                            $bmi,
-                            $vital_notes ?: null
-                        ]);
-                    }
-                    
-                    $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
-                    $stmt->execute([$doctor_id, $patient_id]);
-                    
-                    $db->commit();
-                    
-                    $fee_text = '';
-                    if ($consultation_fee > 0) {
-                        $fee_text = ' - Fee: TSh ' . number_format($consultation_fee);
-                        if ($bill_created) {
-                            $fee_text .= ' ✅ Bill #' . $bill_result['bill_number'] . ' sent to Cashier!';
-                        }
-                    } else {
-                        $fee_text = ' - Fee WAIVED';
-                    }
-                    
-                    $online_text = $new_doctor_online == 1 ? '🟢 Online' : '⚪ Offline';
-                    
-                    $message = "✅ Doctor <strong>$new_doctor_name</strong> ($online_text) assigned successfully! Visit #$visit_number" . $fee_text;
-                    
-                    if ($has_vital) {
-                        $message .= " ✅ Vital Signs recorded!";
-                    }
-                    $message_type = 'success';
-                    
-                    echo '<script>
-                        showToast("✅ Success", "' . addslashes($message) . '", "success");
-                        setTimeout(function(){ 
-                            window.location.href = "assign_doctor.php?patient_id=' . $patient_id . '&success=1"; 
-                        }, 2000);
-                    </script>';
-                    
-                } catch (Exception $e) {
-                    $db->rollBack();
-                    $message = "❌ Error: " . $e->getMessage();
-                    $message_type = 'error';
-                }
-                
-            } else {
-                $message = implode('<br>', $errors);
-                $message_type = 'error';
-            }
-        }
-        
-        // ================================================================
-        // LAB TEST REQUEST - NO BILL AT ALL
-        // ================================================================
-        if ($action === 'assign_doctor' && $assignment_type === 'lab') {
-            $patient_id = (int)($_POST['patient_id'] ?? 0);
-            $lab_test_ids = isset($_POST['lab_test_ids']) ? $_POST['lab_test_ids'] : [];
-            $lab_notes = trim($_POST['lab_notes'] ?? '');
-            $symptoms = trim($_POST['symptoms'] ?? '');
-            $complaint = trim($_POST['complaint'] ?? '');
-            $notes = trim($_POST['notes'] ?? '');
-            
-            $errors = [];
-            if ($patient_id <= 0) $errors[] = 'Please select a patient';
-            if (empty($lab_test_ids)) $errors[] = 'Please select at least one lab test';
-            
-            if (empty($errors)) {
-                try {
-                    $db->beginTransaction();
-                    
-                    $stmt = $db->prepare("
-                        SELECT id, status, doctor_id FROM visits 
-                        WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test') 
-                        AND branch_id = ?
-                        ORDER BY id DESC LIMIT 1
-                    ");
-                    $stmt->execute([$patient_id, $selected_branch_id]);
-                    $existing_visit = $stmt->fetch();
-                    
-                    $visit_id = null;
-                    $visit_number = '';
-                    
-                    if ($existing_visit) {
-                        $visit_id = $existing_visit['id'];
-                        
-                        $stmt = $db->prepare("
-                            UPDATE visits 
-                            SET status = 'lab_test', 
-                                symptoms = ?, complaint = ?, notes = ?, 
-                                updated_at = NOW(),
-                                doctor_id = NULL,
-                                consultation_fee = 0,
-                                registration_fee = 0,
-                                visit_total = 0
-                            WHERE id = ?
-                        ");
-                        $stmt->execute([$symptoms, $complaint, $notes, $visit_id]);
-                        
-                        $stmt = $db->prepare("SELECT visit_number FROM visits WHERE id = ?");
-                        $stmt->execute([$visit_id]);
-                        $visit = $stmt->fetch();
-                        $visit_number = $visit['visit_number'] ?? '';
-                        
-                    } else {
-                        $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                        
-                        $stmt = $db->prepare("
-                            INSERT INTO visits (
-                                visit_number, patient_id, doctor_id, branch_id, 
-                                visit_type, status, symptoms, complaint, notes, 
-                                created_at, updated_at, receptionist_id,
-                                consultation_fee, registration_fee, visit_total
-                            ) VALUES (?, ?, NULL, ?, 'lab_only', 'lab_test', ?, ?, ?, NOW(), NOW(), ?, 0, 0, 0)
-                        ");
-                        
-                        $stmt->execute([
-                            $visit_number, $patient_id, $selected_branch_id, 
-                            $symptoms, $complaint, $notes, $user_id
-                        ]);
-                        $visit_id = $db->lastInsertId();
-                    }
-                    
-                    $request_number = 'LAB-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                    
-                    $stmt = $db->prepare("
-                        INSERT INTO lab_requests (
-                            request_number, visit_id, patient_id, doctor_id,
-                            status, notes, requested_at, created_by, branch_id
-                        ) VALUES (?, ?, ?, NULL, 'pending', ?, NOW(), ?, ?)
-                    ");
-                    $stmt->execute([
-                        $request_number,
-                        $visit_id,
-                        $patient_id,
-                        $lab_notes,
-                        $user_id,
-                        $selected_branch_id
-                    ]);
-                    $request_id = $db->lastInsertId();
-                    
-                    $lab_total = 0;
-                    $test_names = [];
-                    foreach ($lab_test_ids as $test_id) {
-                        $stmt = $db->prepare("
-                            SELECT test_name, price FROM lab_tests_catalog WHERE id = ? AND is_active = 1
-                        ");
-                        $stmt->execute([$test_id]);
-                        $test = $stmt->fetch(PDO::FETCH_ASSOC);
-                        
-                        if ($test) {
-                            $lab_total += $test['price'];
-                            $test_names[] = $test['test_name'];
-                            $stmt = $db->prepare("
-                                INSERT INTO lab_request_items (
-                                    request_id, test_id, test_name, price, status, created_at
-                                ) VALUES (?, ?, ?, ?, 'pending', NOW())
-                            ");
-                            $stmt->execute([
-                                $request_id,
-                                $test_id,
-                                $test['test_name'],
-                                $test['price']
-                            ]);
-                        }
-                    }
-                    
-                    $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
-                    $stmt->execute([$patient_id]);
-                    
-                    $db->commit();
-                    
-                    $message = "✅ Lab test request created successfully!";
-                    $message .= "<br>📋 Request #: <strong>$request_number</strong>";
-                    $message .= "<br>🧪 Tests: <strong>" . count($lab_test_ids) . "</strong> test(s) requested";
-                    $message .= "<br>💰 Lab Total: <strong>TSh " . number_format($lab_total) . "</strong>";
-                    $message .= "<br>👨‍⚕️ Doctor: <strong>Not assigned</strong> (lab only)";
-                    $message .= "<br>💳 <strong>NO bill created</strong> - Bill will be created by Lab when results are confirmed";
-                    $message_type = 'success';
-                    
-                    header('Location: assign_doctor.php?patient_id=' . $patient_id . '&success=1');
-                    exit;
-                    
-                } catch (Exception $e) {
-                    $db->rollBack();
-                    $message = "❌ Error: " . $e->getMessage();
-                    $message_type = 'error';
-                }
-                
-            } else {
-                $message = implode('<br>', $errors);
-                $message_type = 'error';
-            }
-        }
     }
     
 } catch (Exception $e) {
@@ -1510,8 +1115,6 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
 ?>
-
-<!-- [REST OF THE HTML REMAINS THE SAME - TOO LONG TO REPEAT] -->
 
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
@@ -1610,6 +1213,55 @@ include_once '../../components/reception_sidebar.php';
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        
+        /* ================================================================
+           SEARCH WRAPPER
+           ================================================================ */
+        .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
+        }
+        
+        .search-wrapper:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+        
+        .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .search-wrapper .search-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .search-wrapper .search-btn:hover {
+            background: var(--primary-dark);
+        }
         
         /* ================================================================
            DAYS BADGES - BLUE BACKGROUND
@@ -2623,13 +2275,21 @@ include_once '../../components/reception_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - WITH CLOCK -->
+<!-- TOP NAVIGATION - WITH SEARCH BAR -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
         </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search patients..." value="<?= htmlspecialchars($search) ?>">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
+        </div>
     </div>
     
     <div class="flex items-center gap-3">
@@ -2654,7 +2314,7 @@ include_once '../../components/reception_sidebar.php';
         
         <a href="profile.php">
             <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -3115,26 +2775,56 @@ include_once '../../components/reception_sidebar.php';
                 <div class="form-row-modern">
                     <label class="form-label">
                         <i class="fas fa-tag label-icon"></i> Visit Type <span class="required">*</span>
-                        <span class="label-badge" id="visitTypePrice">Fee: TSh 15,000</span>
+                        <span class="label-badge" id="visitTypePrice">
+                            <?php 
+                            if (isset($visit_type_options[$default_key])) {
+                                echo 'Fee: TSh ' . number_format($visit_type_options[$default_key]['price'] ?? 0, 0);
+                            } else {
+                                echo 'Fee: TSh 0';
+                            }
+                            ?>
+                        </span>
                     </label>
                     <select name="visit_type" class="form-control-modern" required id="visitTypeSelect" onchange="updateVisitTypePrice()">
                         <?php 
-                        $default_key = 'general_consultation';
-                        foreach ($visit_type_options as $key => $option):
-                            $is_default = (strpos(strtolower($option['name']), 'new') !== false || 
-                                          strpos(strtolower($option['name']), 'general') !== false ||
-                                          $key === 'new_patient');
-                            $selected = $is_default ? 'selected' : '';
-                            if ($is_default) $default_key = $key;
+                        if (!empty($visit_type_options) && is_array($visit_type_options)):
+                            foreach ($visit_type_options as $key => $option):
+                                // Determine if this should be selected
+                                $is_default = ($key === $default_key);
+                                $selected = $is_default ? 'selected' : '';
+                                
+                                $price = $option['price'] ?? 0;
+                                $icon = $option['icon'] ?? '🏥';
+                                $display_name = $option['display_name'] ?? $option['name'] ?? 'Consultation';
+                                
+                                // Check if this is the "no visit" option
+                                $disabled = ($key === 'no_visit') ? 'disabled' : '';
                         ?>
-                            <option value="<?= htmlspecialchars($key) ?>" data-price="<?= $option['price'] ?>" data-id="<?= $option['id'] ?>" <?= $selected ?>>
-                                <?= $option['icon'] ?? '🆕' ?> <?= htmlspecialchars($option['display_name']) ?> - TSh <?= number_format($option['price'], 0) ?>
+                            <option value="<?= htmlspecialchars($key) ?>" data-price="<?= $price ?>" data-id="<?= $option['id'] ?? '' ?>" <?= $selected ?> <?= $disabled ?>>
+                                <?= $icon ?> <?= htmlspecialchars($display_name) ?> 
+                                <?php if ($price > 0): ?>
+                                    - TSh <?= number_format($price, 0) ?>
+                                <?php else: ?>
+                                    (No services available)
+                                <?php endif; ?>
                             </option>
-                        <?php endforeach; ?>
+                        <?php 
+                            endforeach;
+                        else:
+                            // FALLBACK: If no options at all
+                        ?>
+                            <option value="no_visit" data-price="0" selected disabled>❌ No Visit Type Available</option>
+                        <?php endif; ?>
                     </select>
                     <p class="text-xs text-gray-400 mt-1" id="visitTypeDescription">
                         <i class="fas fa-info-circle mr-1"></i> 
-                        <?= $visit_type_options[$default_key]['description'] ?? 'Standard doctor consultation' ?>
+                        <?php 
+                        if (isset($visit_type_options[$default_key])) {
+                            echo $visit_type_options[$default_key]['description'] ?? 'Select a visit type';
+                        } else {
+                            echo 'No consultation services available for this branch';
+                        }
+                        ?>
                     </p>
                 </div>
             </div>
@@ -3451,6 +3141,24 @@ include_once '../../components/reception_sidebar.php';
     
     setInterval(updateClock, 1000);
     updateClock();
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            window.location.href = 'assign_doctor.php?search=' + encodeURIComponent(query);
+        }
+    }
+
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
 
     // ================================================================
     // DARK MODE
@@ -4228,13 +3936,14 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c✅ Assigned: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline)', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Live updates every 3 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c📋 Visit Type: From services table (category_id=2)', 'font-size:13px; color:#2563EB;');
+    console.log('%c📋 Visit Type: Branch specific services', 'font-size:13px; color:#2563EB;');
     console.log('%c💰 Fees: Bill sent to Cashier', 'font-size:13px; color:#059669;');
     console.log('%c📅 Days badge: BLUE background with white text', 'font-size:13px; color:#2563EB;');
     console.log('%c🚫 7 Days Rule: REMOVED', 'font-size:13px; color:#DC2626;');
     console.log('%c🧪 Lab Request - NO bill', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🔍 Search bar: REMOVED', 'font-size:13px; color:#DC2626;');
+    console.log('%c🔍 Search bar: ADDED', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Each patient has a DAYS CARD in dropdown', 'font-size:13px; color:#2563EB;');
+    console.log('%c📋 Visit Type: Shows "No Visit Type Available" if no services for branch', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

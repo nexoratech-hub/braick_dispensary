@@ -8,8 +8,62 @@
 // WITH AUTO-UPDATE EVERY 3 SECONDS (SELF-CONTAINED)
 // WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
 // FULLY RESPONSIVE - ALL DEVICES
+// WITH LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
+
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Laboratory or Admin)
+// ================================================================
+$allowed_roles = ['laboratory', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Laboratory';
+$user_role = $_SESSION['role'] ?? 'laboratory';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    $db = null;
+}
 
 // ================================================================
 // GET REAL DATA FOR BADGES - FIXED
@@ -19,9 +73,7 @@ $in_progress_count = 0;
 $completed_count = 0;
 $today_tests = 0;
 
-if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
-    $user_branch_id = $_SESSION['branch_id'] ?? 1;
-    
+if ($db !== null && isset($_SESSION['user_id'])) {
     try {
         // ================================================================
         // 1. PENDING: FROM lab_tests + lab_requests
@@ -108,6 +160,13 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
 // DETECT CURRENT PAGE
 // ================================================================
 $current_page = basename($_SERVER['PHP_SELF']);
@@ -134,7 +193,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_lab_sidebar_data') {
     header('Content-Type: application/json');
     
-    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    // Check if user is logged in for AJAX requests
+    if (!isset($_SESSION['user_id'])) {
+        echo json_encode(['success' => false, 'error' => 'Not logged in']);
+        exit;
+    }
+    
+    $branch_id = (int)($_POST['branch_id'] ?? $_SESSION['branch_id'] ?? 1);
     
     $response = [
         'success' => false,
@@ -144,7 +209,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'today_tests' => 0
     ];
     
-    if (isset($db) && $db !== null) {
+    if ($db !== null) {
         try {
             // 1. Pending - FROM BOTH
             $stmt = $db->prepare("
@@ -472,7 +537,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       LOGOUT LINK
+       LOGOUT LINK - USING ABSOLUTE PATH
        ================================================================ */
     .sidebar-link.logout-link {
         border-top: 2px solid rgba(255,255,255,0.08);
@@ -768,7 +833,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label">Laboratory</div>
         
         <!-- 1. Dashboard -->
-        <a href="../laboratory/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
+        <a href="/dispensary_system/frontend/pages/laboratory/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
@@ -778,19 +843,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Lab Requests</div>
         
         <!-- Pending (Counts BOTH lab_tests AND lab_requests) -->
-        <a href="../laboratory/pending_requests.php" class="sidebar-link <?= isActive('pending_requests.php') ?>" id="sidebarPendingLink">
+        <a href="/dispensary_system/frontend/pages/laboratory/pending_requests.php" class="sidebar-link <?= isActive('pending_requests.php') ?>" id="sidebarPendingLink">
             <i class="fas fa-clock"></i> Pending
             <span class="badge <?= $pending_count > 0 ? 'danger' : '' ?>" id="sidebarPendingBadge"><?= $pending_count ?></span>
         </a>
         
         <!-- In Progress -->
-        <a href="../laboratory/in_progress.php" class="sidebar-link <?= isActive('in_progress.php') ?>" id="sidebarInProgressLink">
+        <a href="/dispensary_system/frontend/pages/laboratory/in_progress.php" class="sidebar-link <?= isActive('in_progress.php') ?>" id="sidebarInProgressLink">
             <i class="fas fa-spinner"></i> In Progress
             <span class="badge <?= $in_progress_count > 0 ? 'orange' : '' ?>" id="sidebarInProgressBadge"><?= $in_progress_count ?></span>
         </a>
         
         <!-- Completed (Counts BOTH lab_tests AND lab_requests) - FIXED -->
-        <a href="../laboratory/completed_requests.php" class="sidebar-link <?= isActive('completed_requests.php') ?>" id="sidebarCompletedLink">
+        <a href="/dispensary_system/frontend/pages/laboratory/completed_requests.php" class="sidebar-link <?= isActive('completed_requests.php') ?>" id="sidebarCompletedLink">
             <i class="fas fa-check-circle"></i> Completed
             <span class="badge <?= $completed_count > 0 ? 'green' : '' ?>" id="sidebarCompletedBadge"><?= $completed_count ?></span>
         </a>
@@ -801,13 +866,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Results</div>
         
         <!-- Results History -->
-        <a href="../laboratory/results_history.php" class="sidebar-link <?= isActive('results_history.php') ?>" id="sidebarResultsLink">
+        <a href="/dispensary_system/frontend/pages/laboratory/results_history.php" class="sidebar-link <?= isActive('results_history.php') ?>" id="sidebarResultsLink">
             <i class="fas fa-history"></i> Results History
             <span class="badge <?= $today_tests > 0 ? 'green' : '' ?>" id="sidebarTodayTests"><?= $today_tests ?></span>
         </a>
         
         <!-- Reports -->
-        <a href="../laboratory/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
+        <a href="/dispensary_system/frontend/pages/laboratory/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
             <i class="fas fa-chart-bar"></i> Reports
         </a>
         
@@ -817,12 +882,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Account</div>
         
         <!-- Profile -->
-        <a href="../laboratory/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
+        <a href="/dispensary_system/frontend/pages/laboratory/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <!-- Logout -->
-        <a href="../../../logout.php" class="sidebar-link logout-link">
+        <!-- Logout - USING ABSOLUTE PATH -->
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
         
@@ -1175,10 +1240,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
     console.log('%c🧪 Laboratory Sidebar (FULLY FIXED - Auto-update working)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?> | Today: <?= $today_tests ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c✅ FIXED: Completed counts from BOTH lab_tests AND lab_requests', 'font-size:12px; color:#34D399;');
     console.log('%c✅ FIXED: Pending counts from BOTH lab_tests AND lab_requests', 'font-size:12px; color:#34D399;');
     console.log('%c🔄 Data updates every 3 seconds WITHOUT page refresh', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Badges update in real-time', 'font-size:12px; color:#059669;');
     console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
+    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:12px; color:#F87171;');
 </script>

@@ -1,28 +1,37 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/logout.php
-// BRAICK DISPENSARY - LOGOUT (FIXED PATHS)
+// BRAICK DISPENSARY - LOGOUT (FULLY FIXED)
+// WORKS WITH ALL SIDEBARS AND ROLES
 // ================================================================
 
-// Start session
+// ================================================================
+// START SESSION
+// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
 // ================================================================
-// SIMPLE LOGOUT - NO AUTH CLASS DEPENDENCY
+// GET USER INFO BEFORE DESTROYING SESSION
 // ================================================================
-
-// Get user info before destroying session
 $user_id = $_SESSION['user_id'] ?? null;
 $full_name = $_SESSION['full_name'] ?? 'Unknown';
 $role = $_SESSION['role'] ?? 'unknown';
+$branch_id = $_SESSION['branch_id'] ?? null;
 
-// If user is a doctor, set offline status
+// ================================================================
+// IF USER IS DOCTOR, SET OFFLINE
+// ================================================================
 if ($user_id) {
     try {
-        // Include database - correct path from logout.php location
+        // ================================================================
+        // INCLUDE DATABASE - CORRECT PATH FROM CURRENT LOCATION
+        // Current file: /frontend/pages/logout.php
+        // Database: /backend/config/database.php
+        // ================================================================
         require_once __DIR__ . '/../../backend/config/database.php';
+        
         $db = Database::getInstance()->getConnection();
         
         // Check if user is a doctor
@@ -39,16 +48,18 @@ if ($user_id) {
         // Log logout activity
         try {
             $stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, action, details, created_at) 
-                VALUES (?, 'user_logout', ?, NOW())
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'user_logout', ?, NOW())
             ");
             $stmt->execute([
                 $user_id,
+                $branch_id,
                 "User logged out: " . $full_name . " (Role: " . $role . ")"
             ]);
         } catch (Exception $e) {
             // Silent fail
         }
+        
     } catch (Exception $e) {
         // Silent fail if database not available
     }
@@ -70,10 +81,8 @@ if (ini_get("session.use_cookies")) {
 session_destroy();
 
 // ================================================================
-// REDIRECT TO LOGIN PAGE - CORRECT PATH
+// REDIRECT TO LOGIN PAGE
 // ================================================================
-// logout.php iko kwenye: /frontend/pages/logout.php
-// login.php iko kwenye: /frontend/pages/login.php
 header('Location: login.php');
 exit;
 ?>

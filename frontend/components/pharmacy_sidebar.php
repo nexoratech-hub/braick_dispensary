@@ -4,6 +4,7 @@
 // PHARMACY - SHARED SIDEBAR (FIXED)
 // WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
 // FULLY RESPONSIVE - ALL DEVICES
+// WITH LOGIN PROTECTION
 // ================================================================
 // CHANGES:
 // 1. Removed "Dispensing" menu item
@@ -12,8 +13,62 @@
 // 4. Auto-update every 3 seconds from database
 // 5. Self-contained AJAX
 // 6. Added sidebar toggle working with header
+// 7. Added login protection
 // BRAICK DISPENSARY
 // ================================================================
+
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Pharmacy or Admin)
+// ================================================================
+$allowed_roles = ['pharmacy', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy';
+$user_role = $_SESSION['role'] ?? 'pharmacy';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    $db = null;
+}
 
 // ================================================================
 // GET REAL DATA FOR BADGES
@@ -24,9 +79,7 @@ $expired_count = 0;
 $today_sales = 0;
 $today_otc = 0;
 
-if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
-    $user_branch_id = $_SESSION['branch_id'] ?? 1;
-    
+if ($db !== null && isset($_SESSION['user_id'])) {
     try {
         // Pending Prescriptions
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
@@ -78,6 +131,13 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
 // DETECT CURRENT PAGE
 // ================================================================
 $current_page = basename($_SERVER['PHP_SELF']);
@@ -104,7 +164,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_pharmacy_sidebar_data') {
     header('Content-Type: application/json');
     
-    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    // Check if user is logged in for AJAX requests
+    if (!isset($_SESSION['user_id'])) {
+        echo json_encode(['success' => false, 'error' => 'Not logged in']);
+        exit;
+    }
+    
+    $branch_id = (int)($_POST['branch_id'] ?? $_SESSION['branch_id'] ?? 1);
     
     $response = [
         'success' => false,
@@ -115,7 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'today_otc' => 0
     ];
     
-    if (isset($db) && $db !== null) {
+    if ($db !== null) {
         try {
             // Pending Prescriptions
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
@@ -427,7 +493,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       LOGOUT LINK
+       LOGOUT LINK - USING ABSOLUTE PATH
        ================================================================ */
     .sidebar-link.logout-link {
         border-top: 2px solid rgba(255,255,255,0.08);
@@ -723,7 +789,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label">Pharmacy</div>
         
         <!-- 1. Dashboard -->
-        <a href="../pharmacy/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
@@ -733,7 +799,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Prescription Sales</div>
         
         <!-- Prescriptions (was: Pending Prescriptions) -->
-        <a href="../pharmacy/pending_prescriptions.php" class="sidebar-link <?= isActive('pending_prescriptions.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/pending_prescriptions.php" class="sidebar-link <?= isActive('pending_prescriptions.php') ?>">
             <i class="fas fa-prescription"></i> Prescriptions
             <?php if ($pending_prescriptions > 0): ?>
                 <span class="badge danger" id="sidebarPendingBadge"><?= $pending_prescriptions ?></span>
@@ -745,7 +811,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ✅ REMOVED: Dispensing (imeondolewa) -->
         
         <!-- Prescription History -->
-        <a href="../pharmacy/prescription_history.php" class="sidebar-link <?= isActive('prescription_history.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/prescription_history.php" class="sidebar-link <?= isActive('prescription_history.php') ?>">
             <i class="fas fa-history"></i> Prescription History
             <span class="badge" id="sidebarTodayPrescriptions"><?= $today_sales ?></span>
         </a>
@@ -756,12 +822,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">OTC Sales</div>
         
         <!-- New OTC Sale -->
-        <a href="../pharmacy/new_otc_sale.php" class="sidebar-link <?= isActive('new_otc_sale.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/new_otc_sale.php" class="sidebar-link <?= isActive('new_otc_sale.php') ?>">
             <i class="fas fa-plus-circle"></i> New OTC Sale
         </a>
         
         <!-- OTC History -->
-        <a href="../pharmacy/otc_history.php" class="sidebar-link <?= isActive('otc_history.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/otc_history.php" class="sidebar-link <?= isActive('otc_history.php') ?>">
             <i class="fas fa-shopping-cart"></i> OTC History
             <span class="badge" id="sidebarTodayOtc"><?= $today_otc ?></span>
         </a>
@@ -772,12 +838,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Medicines</div>
         
         <!-- Inventory -->
-        <a href="../pharmacy/inventory.php" class="sidebar-link <?= isActive('inventory.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/inventory.php" class="sidebar-link <?= isActive('inventory.php') ?>">
             <i class="fas fa-warehouse"></i> Inventory
         </a>
         
         <!-- Low Stock -->
-        <a href="../pharmacy/low_stock.php" class="sidebar-link <?= isActive('low_stock.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/low_stock.php" class="sidebar-link <?= isActive('low_stock.php') ?>">
             <i class="fas fa-exclamation-triangle"></i> Low Stock
             <?php if ($low_stock_count > 0): ?>
                 <span class="badge danger" id="sidebarLowStockBadge"><?= $low_stock_count ?></span>
@@ -787,7 +853,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </a>
         
         <!-- ✅ NEW: Expired Stock -->
-        <a href="../pharmacy/expired.php" class="sidebar-link <?= isActive('expired.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/expired.php" class="sidebar-link <?= isActive('expired.php') ?>">
             <i class="fas fa-skull"></i> Expired Stock
             <?php if ($expired_count > 0): ?>
                 <span class="badge red" id="sidebarExpiredBadge"><?= $expired_count ?></span>
@@ -799,7 +865,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <!-- REPORTS -->
         <!-- ============================================================ -->
-        <a href="../pharmacy/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
             <i class="fas fa-chart-bar"></i> Reports
         </a>
         
@@ -809,12 +875,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Account</div>
         
         <!-- Profile -->
-        <a href="../pharmacy/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
+        <a href="/dispensary_system/frontend/pages/pharmacy/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <!-- Logout -->
-        <a href="../../../logout.php" class="sidebar-link logout-link">
+        <!-- Logout - ABSOLUTE PATH -->
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
         
@@ -1139,6 +1205,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
     console.log('%c💊 Pharmacy Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Prescriptions: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Expired: <?= $expired_count ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c📊 Today Rx: <?= $today_sales ?> | Today OTC: <?= $today_otc ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
@@ -1148,4 +1216,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     console.log('%c✅ "Pending Prescriptions" changed to "Prescriptions"', 'font-size:12px; color:#34D399;');
     console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
+    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:12px; color:#F87171;');
 </script>

@@ -2,42 +2,39 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/dashboard.php
 // LABORATORY DASHBOARD - FULL VERSION WITH AUTO-UPDATE
-// DEFAULT USER: Lab Technician Dodoma (ID: 8)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// INCLUDE CONFIG
-// ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// DEFAULT SESSION - Lab Technician Dodoma (ID: 8)
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT LABORATORY
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 8;
-    $_SESSION['full_name'] = 'Lab Technician Dodoma';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.dodoma';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 8;
-$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
+// ================================================================
+// GET SESSION DATA
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_username = $_SESSION['username'] ?? 'lab.dodoma';
+$user_username = $_SESSION['username'] ?? 'laboratory';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// DATABASE CONNECTION
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-$db = getDB();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET STATISTICS
@@ -48,17 +45,17 @@ $start_of_month = date('Y-m-01');
 // 1. Pending Requests
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
 $stmt->execute([$user_branch_id]);
-$pending = $stmt->fetch()['count'] ?? 0;
+$pending = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 2. In Progress Requests
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'in_progress'");
 $stmt->execute([$user_branch_id]);
-$in_progress = $stmt->fetch()['count'] ?? 0;
+$in_progress = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 3. Completed Today
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
 $stmt->execute([$user_branch_id, $today]);
-$completed_today = $stmt->fetch()['count'] ?? 0;
+$completed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 4. Today's Tests
 $stmt = $db->prepare("
@@ -68,7 +65,7 @@ $stmt = $db->prepare("
     WHERE lr.branch_id = ? AND DATE(lri.completed_at) = ?
 ");
 $stmt->execute([$user_branch_id, $today]);
-$today_tests = $stmt->fetch()['count'] ?? 0;
+$today_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 5. Total Tests (All Time)
 $stmt = $db->prepare("
@@ -78,12 +75,12 @@ $stmt = $db->prepare("
     WHERE lr.branch_id = ?
 ");
 $stmt->execute([$user_branch_id]);
-$total_tests = $stmt->fetch()['count'] ?? 0;
+$total_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 6. Total Requests
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ?");
 $stmt->execute([$user_branch_id]);
-$total_requests = $stmt->fetch()['count'] ?? 0;
+$total_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 7. Completion Rate
 $stmt = $db->prepare("
@@ -94,7 +91,7 @@ $stmt = $db->prepare("
     WHERE branch_id = ?
 ");
 $stmt->execute([$user_branch_id]);
-$rate_data = $stmt->fetch();
+$rate_data = $stmt->fetch(PDO::FETCH_ASSOC);
 $total_requests_all = $rate_data['total'] ?? 0;
 $completed_requests = $rate_data['completed'] ?? 0;
 $completion_rate = $total_requests_all > 0 ? round(($completed_requests / $total_requests_all) * 100, 1) : 0;
@@ -114,7 +111,7 @@ $stmt = $db->prepare("
     LIMIT 10
 ");
 $stmt->execute([$user_branch_id]);
-$recent_requests = $stmt->fetchAll();
+$recent_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // 9. Daily Tests Chart (Last 7 days)
 $daily_labels = [];
@@ -130,7 +127,7 @@ for ($i = 6; $i >= 0; $i--) {
         WHERE lr.branch_id = ? AND DATE(lri.completed_at) = ?
     ");
     $stmt->execute([$user_branch_id, $date]);
-    $daily_tests[] = (int)($stmt->fetch()['count'] ?? 0);
+    $daily_tests[] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
 }
 
 // 10. Monthly Tests Chart (Last 6 months)
@@ -150,7 +147,7 @@ for ($i = 5; $i >= 0; $i--) {
         WHERE lr.branch_id = ? AND DATE(lri.completed_at) BETWEEN ? AND ?
     ");
     $stmt->execute([$user_branch_id, $start, $end]);
-    $monthly_tests[] = (int)($stmt->fetch()['count'] ?? 0);
+    $monthly_tests[] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
 }
 
 // 11. Most Requested Tests
@@ -164,7 +161,7 @@ $stmt = $db->prepare("
     LIMIT 5
 ");
 $stmt->execute([$user_branch_id]);
-$most_requested = $stmt->fetchAll();
+$most_requested = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -173,7 +170,7 @@ $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
 }
@@ -181,10 +178,11 @@ try {
 // ================================================================
 // PROFILE PICTURE
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -476,6 +474,27 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
     
     /* ================================================================
+       BADGE
+       ================================================================ */
+    .badge {
+        display: inline-block;
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 12px;
+        color: white;
+    }
+    .badge-yellow { background: #D97706; }
+    .badge-blue { background: #0B5ED7; }
+    .badge-green { background: #059669; }
+    .badge-red { background: #DC2626; }
+    
+    [data-theme="dark"] .badge-yellow { background: #B45309; }
+    [data-theme="dark"] .badge-blue { background: #0A4CA8; }
+    [data-theme="dark"] .badge-green { background: #047857; }
+    [data-theme="dark"] .badge-red { background: #B91C1C; }
+    
+    /* ================================================================
        RESPONSIVE
        ================================================================ */
     @media (max-width: 768px) {
@@ -513,7 +532,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
     
     <div class="flex items-center gap-3">
-        <span class="branch-badge">
+        <span class="branch-badge-display">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
@@ -1380,6 +1399,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     console.log('%c🔄 Auto-update: Every 3 seconds (Smart - only when data changes)', 'font-size:13px; color:#34D399;');
     console.log('%c💡 Type LabDashboard.stop() or LabDashboard.start() to control', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💡 Press Alt+R to refresh manually', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

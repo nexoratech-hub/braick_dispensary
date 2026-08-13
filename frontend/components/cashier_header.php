@@ -10,42 +10,38 @@
 // ================================================================
 
 // ================================================================
-// INCLUDE CONFIG
-// ================================================================
-require_once __DIR__ . '/../../backend/config/config.php';
-
-// ================================================================
-// SESSION - Default to Cashier (Rose Mwangi)
+// SESSION CHECK - REDIRECT TO LOGIN IF NOT CASHIER
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 005';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 11;
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
-$user_role = $_SESSION['role'] ?? 'reception';
+// ================================================================
+// GET SESSION DATA
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'cashier';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../backend/config/database.php';
 
 // ================================================================
 // GET UNREAD NOTIFICATIONS
 // ================================================================
 $unread_notifications = 0;
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
 }
@@ -983,8 +979,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
                 console.log('✅ Toggle button event attached');
             } else {
                 console.warn('⚠️ Toggle button not found - trying fallback');
-                // Try to find by class
-                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
+                // Try to find by class                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
                 if (fallbackBtn) {
                     fallbackBtn.addEventListener('click', function(e) {
                         e.preventDefault();
@@ -1243,11 +1238,13 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
     console.log('%c🟢 Cashier Header - With Sidebar Toggle', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📸 Profile Pic: <?= $profile_pic_exists ? '✅ Uploaded' : '❌ Default' ?>', 'font-size:13px; color:#059669;');
     console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? '🌙 Dark' : '☀️ Light'), 'font-size:13px; color:#D97706;');
     console.log('%c📅 Date/Time: ' + new Date().toLocaleString(), 'font-size:13px; color:#0B5ED7;');
     console.log('%c📱 Hamburger button: Click ☰ to toggle sidebar', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:13px; color:#059669;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

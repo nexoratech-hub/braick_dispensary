@@ -2,38 +2,65 @@
 // ================================================================
 // FILE: frontend/components/pharmacy_header.php
 // PHARMACY - SHARED HEADER (DARK MODE FIXED)
+// WITH LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// INCLUDE CONFIG
+// START SESSION
 // ================================================================
-require_once __DIR__ . '/../../backend/config/config.php';
-
-// ================================================================
-// SESSION - Default to pharm.peter (Peter Ngalula)
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Peter Ngalula';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.peter';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Peter Ngalula';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Pharmacy or Admin)
+// ================================================================
+$allowed_roles = ['pharmacy', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy';
 $user_role = $_SESSION['role'] ?? 'pharmacy';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// GET DATABASE CONNECTION - KUTOKA config.php
+// INCLUDE CONFIG
 // ================================================================
-$db = getDB();
+require_once __DIR__ . '/../../backend/config/database.php';
+
+// ================================================================
+// GET DATABASE CONNECTION
+// ================================================================
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    $db = null;
+}
 
 // ================================================================
 // GET UNREAD NOTIFICATIONS COUNT
@@ -41,33 +68,34 @@ $db = getDB();
 $unread_notifications = 0;
 $notifications_list = [];
 
-try {
-    // Get count of unread notifications
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $result = $stmt->fetch();
-    $unread_notifications = $result['total'] ?? 0;
-    
-    // Get latest 5 notifications
-    $stmt = $db->prepare("
-        SELECT id, title, message, type, link, is_read, created_at 
-        FROM notifications 
-        WHERE user_id = ? 
-        ORDER BY created_at DESC 
-        LIMIT 5
-    ");
-    $stmt->execute([$user_id]);
-    $notifications_list = $stmt->fetchAll();
-    
-} catch (Exception $e) {
-    $unread_notifications = 0;
-    $notifications_list = [];
+if ($db !== null && $user_id > 0) {
+    try {
+        // Get count of unread notifications
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $unread_notifications = $result['total'] ?? 0;
+        
+        // Get latest 5 notifications
+        $stmt = $db->prepare("
+            SELECT id, title, message, type, link, is_read, created_at 
+            FROM notifications 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 5
+        ");
+        $stmt->execute([$user_id]);
+        $notifications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+    } catch (Exception $e) {
+        $unread_notifications = 0;
+        $notifications_list = [];
+    }
 }
 
 // ================================================================
-// PROFILE PICTURE
+// PROFILE PICTURE URL
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -87,7 +115,7 @@ if (empty($page_title) || $page_title == '') {
 }
 
 // ================================================================
-// DARK MODE - SESSION BASED (instead of cookie)
+// DARK MODE - SESSION BASED
 // ================================================================
 if (!isset($_SESSION['dark_mode'])) {
     $_SESSION['dark_mode'] = 'light';
@@ -1176,11 +1204,14 @@ $dark_mode = $_SESSION['dark_mode'];
         });
     });
 
-    console.log('%c💊 Braick Dispensary - Pharmacy Header (DARK MODE FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick Dispensary - Pharmacy Header', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:12px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c🌙 Dark Mode: <?= $dark_mode ?>', 'font-size:12px; color:#D97706;');
     console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#D97706;');
     console.log('%c✅ Dark mode toggles via page reload (Session based)', 'font-size:12px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
 </script>
 </body>
 </html>

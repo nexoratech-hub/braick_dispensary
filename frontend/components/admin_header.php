@@ -3,13 +3,37 @@
 // FILE: frontend/components/admin_header.php
 // SUPER ADMIN - SHARED HEADER
 // FAVICON: LOGO INAONEKANA
+// WITH SESSION CHECK
 // BRAICK DISPENSARY
 // ================================================================
+
+// ================================================================
+// SESSION CHECK - REDIRECT TO LOGIN IF NOT ADMIN
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// GET SESSION DATA
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$full_name = $_SESSION['full_name'] ?? 'Admin';
+$branch_id = $_SESSION['branch_id'] ?? 1;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'admin';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // FAVICON - PATH KAMILI (Logo inaonekana)
 // ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// Profile picture
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // Get current page name
 $current_page = basename($_SERVER['PHP_SELF']);
@@ -20,6 +44,35 @@ if (empty($page_title) || $page_title == '') {
 }
 
 $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS COUNT
+// ================================================================
+$unread_notifications = 0;
+if ($user_id > 0) {
+    try {
+        require_once __DIR__ . '/../../backend/config/database.php';
+        $db = Database::getInstance()->getConnection();
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    } catch (Exception $e) {
+        $unread_notifications = 0;
+    }
+}
+
+// ================================================================
+// GET BRANCHES FOR SELECTOR
+// ================================================================
+$branches = [];
+try {
+    require_once __DIR__ . '/../../backend/config/database.php';
+    $db = Database::getInstance()->getConnection();
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode === 'true' ? 'dark' : 'light' ?>">
@@ -234,6 +287,15 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
             border-radius: 50%;
             border: 2px solid var(--bg-nav);
             animation: pulse-dot 2s infinite;
+        }
+        
+        .notif-dot.has-notif {
+            background: #EF4444;
+        }
+        
+        .notif-dot.no-notif {
+            background: #94A3B8;
+            animation: none;
         }
         
         @keyframes pulse-dot {

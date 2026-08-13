@@ -12,26 +12,48 @@
 session_start();
 
 // ================================================================
-// FORCE SESSION
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT ADMIN
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-// Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// GET SESSION DATA
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'Admin';
+$branch_id = $_SESSION['branch_id'] ?? 1;
+$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'admin';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS COUNT
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // BRANCH SELECTION
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
-$branch_name = 'All Branches';
+$branch_name_display = 'All Branches';
 
 // ================================================================
 // FUNCTION TO CHECK IF COLUMN EXISTS
@@ -49,12 +71,12 @@ function columnExists($db, $table, $column) {
 // BRANCH NAME
 // ================================================================
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $branch_id = (int)$selected_branch_id;
+    $branch_id_param = (int)$selected_branch_id;
     $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
-    $stmt->execute([$branch_id]);
+    $stmt->execute([$branch_id_param]);
     $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($branch_data) {
-        $branch_name = $branch_data['name'];
+        $branch_name_display = $branch_data['name'];
     }
 } else {
     $selected_branch_id = 'all';
@@ -322,12 +344,19 @@ try {
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
+// Profile picture
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
+
+<!-- [REST OF THE HTML REMAINS THE SAME] -->
 
 <!-- ================================================================ -->
 <!-- STYLES -->

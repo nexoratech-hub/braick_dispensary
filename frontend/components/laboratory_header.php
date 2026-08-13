@@ -2,54 +2,80 @@
 // ================================================================
 // FILE: frontend/components/laboratory_header.php
 // LABORATORY - SHARED HEADER (FIXED - Database connection)
+// WITH LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// INCLUDE CONFIG
+// START SESSION
 // ================================================================
-require_once __DIR__ . '/../../backend/config/config.php';
-
-// ================================================================
-// SESSION - Default to Lab Technician Dodoma (ID: 8)
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 8;
-    $_SESSION['full_name'] = 'Lab Technician Dodoma';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.dodoma';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 8;
-$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Laboratory or Admin)
+// ================================================================
+$allowed_roles = ['laboratory', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Laboratory';
 $user_role = $_SESSION['role'] ?? 'laboratory';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS (with try-catch)
+// INCLUDE DATABASE
 // ================================================================
-$unread_notifications = 0;
+require_once __DIR__ . '/../../backend/config/database.php';
+
 try {
-    // Only try to get DB if not already connected
-    if (!isset($db) || $db === null) {
-        require_once __DIR__ . '/../../backend/config/database.php';
-        $db = getDB();
-    }
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
-    $unread_notifications = 0;
+    $db = null;
 }
 
 // ================================================================
-// PROFILE PICTURE
+// GET UNREAD NOTIFICATIONS
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
+$unread_notifications = 0;
+if ($db !== null && $user_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    } catch (Exception $e) {
+        $unread_notifications = 0;
+    }
+}
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -69,9 +95,19 @@ if (empty($page_title) || $page_title == '') {
 }
 
 // ================================================================
-// DARK MODE
+// DARK MODE - SESSION BASED
 // ================================================================
-$dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
+if (!isset($_SESSION['dark_mode'])) {
+    $_SESSION['dark_mode'] = 'light';
+}
+
+if (isset($_GET['toggle_dark'])) {
+    $_SESSION['dark_mode'] = ($_SESSION['dark_mode'] === 'dark') ? 'light' : 'dark';
+    header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+    exit;
+}
+
+$dark_mode = $_SESSION['dark_mode'];
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode ?>">
@@ -694,3 +730,130 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
     </style>
 </head>
 <body>
+
+<!-- ================================================================ -->
+<!-- TOP NAVIGATION -->
+<!-- ================================================================ -->
+<nav class="top-nav">
+    <div class="flex items-center gap-4 flex-1">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search lab requests...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex items-center gap-3">
+        <span class="branch-badge">
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
+        </span>
+        
+        <span class="datetime" id="currentDateTime"></span>
+        
+        <!-- ================================================================ -->
+        <!-- DARK MODE TOGGLE - FIXED: Using link instead of button -->
+        <!-- ================================================================ -->
+        <a href="?toggle_dark=1" class="dark-toggle-btn" id="darkModeLink">
+            <i id="darkIcon" class="fas <?= $dark_mode === 'dark' ? 'fa-sun' : 'fa-moon' ?>"></i>
+            <span id="darkText"><?= $dark_mode === 'dark' ? 'Light' : 'Dark' ?></span>
+        </a>
+        
+        <button class="icon-btn">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+        </button>
+        
+        <a href="profile.php">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+        </a>
+    </div>
+</nav>
+
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
+<script>
+    // ================================================================
+    // SEARCH FUNCTIONALITY
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            var currentPage = '<?= basename($_SERVER['PHP_SELF']) ?>';
+            window.location.href = currentPage + '?search=' + encodeURIComponent(query);
+        }
+    }
+    
+    if (searchBtn) {
+        searchBtn.addEventListener('click', performSearch);
+    }
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+    }
+
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
+    function updateDateTime() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var el = document.getElementById('currentDateTime');
+        if (el) {
+            el.textContent = dateStr + ' • ' + timeStr;
+        }
+    }
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // SIDEBAR TOGGLE (Mobile)
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        var sidebar = document.getElementById('sidebar');
+        var sidebarToggle = document.getElementById('sidebarToggle');
+        
+        if (sidebarToggle && sidebar) {
+            sidebarToggle.addEventListener('click', function() {
+                sidebar.classList.toggle('open');
+            });
+        }
+        
+        document.addEventListener('click', function(e) {
+            if (window.innerWidth <= 1024) {
+                if (sidebar && sidebarToggle) {
+                    if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                        sidebar.classList.remove('open');
+                    }
+                }
+            }
+        });
+    });
+
+    console.log('%c🔬 Braick Dispensary - Laboratory Header', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:12px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
+    console.log('%c🌙 Dark Mode: <?= $dark_mode ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Dark mode toggles via page reload (Session based)', 'font-size:12px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
+</script>
+</body>
+</html>

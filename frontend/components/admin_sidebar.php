@@ -5,8 +5,51 @@
 // FULLY RESPONSIVE - ALL DEVICES
 // BACKGROUND: BLUE | HOVER: GREEN
 // WITH AJAX REAL-TIME DATA UPDATES
+// WITH LOGIN PROTECTION
+// WITH ABSOLUTE PATHS
 // BRAICK DISPENSARY
 // ================================================================
+
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Admin only)
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); break;
+        case 'reception': header('Location: /dispensary_system/frontend/pages/reception/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // Pass these variables from each page
 $selected_branch_id = $selected_branch_id ?? 'all';
@@ -15,6 +58,17 @@ $total_doctors = $total_doctors ?? 0;
 $total_branches = $total_branches ?? 0;
 $pending_lab_tests = $pending_lab_tests ?? 0;
 $pending_prescriptions = $pending_prescriptions ?? 0;
+
+// ================================================================
+// INCLUDE DATABASE FOR STATS
+// ================================================================
+require_once __DIR__ . '/../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    $db = null;
+}
 
 // Detect current page and module
 $current_page = basename($_SERVER['PHP_SELF']);
@@ -48,8 +102,7 @@ $service_counts = [];
 $real_employee_count = 0;
 
 try {
-    global $db;
-    if (isset($db)) {
+    if ($db !== null) {
         // Employee count
         if ($total_employees == 0) {
             if ($selected_branch_id === 'all') {
@@ -156,6 +209,13 @@ try {
 $total_employees = $real_employee_count;
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 ?>
 
 <style>
@@ -585,7 +645,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php
             try {
-                if (isset($db)) {
+                if ($db !== null) {
                     $branches_list = [];
                     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
                     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -611,18 +671,18 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- ============================================================ -->
         <div class="nav-label">Main Menu</div>
         
-        <a href="../admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
-        <a href="../admin/employees.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/employees.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('employees.php') ?>">
             <i class="fas fa-users"></i> Employees
             <span class="badge" id="badgeEmployees"><?= $total_employees ?></span>
         </a>
         
-        <a href="../admin/patients.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/patients.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('patients.php') || isAdminPage(['patient_details.php']) ? 'active' : '' ?>">
             <i class="fas fa-user-injured"></i> Patients
             <span class="badge" id="badgePatients"><?= $patient_counts['total'] ?></span>
@@ -636,13 +696,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Modules</div>
         
-        <a href="../admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('doctors_list.php') || isAdminPage(['view_doctor.php']) ? 'active' : '' ?>">
             <i class="fas fa-user-md"></i> Doctors
             <span class="badge" id="badgeDoctors"><?= $total_doctors ?></span>
         </a>
         
-        <a href="../admin/view_pharmacy.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('view_pharmacy.php') ?>">
             <i class="fas fa-prescription"></i> Pharmacy
             <span class="badge" id="badgePharmacy"><?= $module_counts['pharmacy'] ?? 0 ?></span>
@@ -651,13 +711,13 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <a href="../admin/view_reception.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/view_reception.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('view_reception.php') ?>">
             <i class="fas fa-headset"></i> Reception
             <span class="badge" id="badgeReception"><?= $module_counts['reception'] ?? 0 ?></span>
         </a>
         
-        <a href="../admin/view_laboratory.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('view_laboratory.php') ?>">
             <i class="fas fa-flask"></i> Laboratory
             <span class="badge" id="badgeLaboratory"><?= $module_counts['laboratory'] ?? 0 ?></span>
@@ -666,7 +726,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <?php endif; ?>
         </a>
         
-        <a href="../admin/view_cashier.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/view_cashier.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('view_cashier.php') ?>">
             <i class="fas fa-cash-register"></i> Cashier
             <span class="badge" id="badgeCashier"><?= $module_counts['cashier'] ?? 0 ?></span>
@@ -677,7 +737,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Services</div>
         
-        <a href="../admin/services.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/services.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('services.php') || isActive('service_categories.php') ? 'active' : '' ?>">
             <i class="fas fa-concierge-bell"></i> Services
             <span class="badge" id="badgeServices"><?= $service_counts['total'] ?></span>
@@ -691,23 +751,20 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Management</div>
         
-        <a href="../admin/branches.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/branches.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('branches.php') || isAdminPage(['view_branch.php', 'add_branch.php', 'edit_branch.php']) ? 'active' : '' ?>">
             <i class="fas fa-store-alt"></i> Branches
             <span class="badge" id="badgeBranches"><?= $total_branches ?></span>
         </a>
         
-        <a href="../admin/departments.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/departments.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('departments.php') || isAdminPage(['add_department.php', 'edit_department.php']) ? 'active' : '' ?>">
             <i class="fas fa-building"></i> Departments
         </a>
         
-        <a href="../admin/bills.php?branch=<?= $selected_branch_id ?>" 
-           class="sidebar-link <?= isActive('bills.php') || isActive('bill_details.php') || isActive('print_bill.php') || isActive('cancel_bill.php') ? 'active' : '' ?>">
-            <i class="fas fa-file-invoice"></i> Bills
-        </a>
+        <!-- BILLS MENU REMOVED -->
         
-        <a href="../admin/reports.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/reports.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('reports.php') ?>">
             <i class="fas fa-chart-bar"></i> Reports
         </a>
@@ -717,7 +774,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- ============================================================ -->
         <div class="nav-label mt-2">System</div>
         
-        <a href="../admin/settings.php?branch=<?= $selected_branch_id ?>" 
+        <a href="/dispensary_system/frontend/pages/admin/settings.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('settings.php') ? 'active' : '' ?>">
             <i class="fas fa-cog"></i> Settings
         </a>
@@ -727,12 +784,15 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Account</div>
         
-        <a href="../admin/profile.php" 
+        <a href="/dispensary_system/frontend/pages/admin/profile.php" 
            class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <a href="../../../logout.php" 
+        <!-- ============================================================ -->
+        <!-- LOGOUT - ABSOLUTE PATH -->
+        <!-- ============================================================ -->
+        <a href="/dispensary_system/frontend/pages/logout.php" 
            class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
@@ -836,11 +896,16 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         // ================================================================
         // LOG: Debug info
         // ================================================================
-        console.log('✅ Sidebar initialized');
+        console.log('✅ Admin Sidebar initialized');
         console.log('📱 Sidebar element:', sidebar);
         console.log('🔘 Toggle button:', sidebarToggle);
         console.log('📐 Window width:', window.innerWidth);
         console.log('📱 Is mobile:', window.innerWidth <= 1024);
+        console.log('👤 Admin: <?= htmlspecialchars($user_full_name) ?>');
+        console.log('🔒 Login protection: Active');
+        console.log('🚫 Bills menu: REMOVED');
+        console.log('🚪 Logout path: /dispensary_system/frontend/pages/logout.php (ABSOLUTE PATH - FIXED)');
+        console.log('✅ All paths are ABSOLUTE starting with /dispensary_system/');
     });
 
     // ================================================================
@@ -854,7 +919,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         isUpdating = true;
         
         var branch = '<?= $selected_branch_id ?>';
-        var url = 'get_sidebar_stats.php?branch=' + encodeURIComponent(branch) + '&t=' + Date.now();
+        var url = '/dispensary_system/frontend/pages/admin/get_sidebar_stats.php?branch=' + encodeURIComponent(branch) + '&t=' + Date.now();
         
         fetch(url)
             .then(function(response) { 
@@ -950,7 +1015,12 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     // ================================================================
     console.log('%c🏥 Braick Dispensary - Admin Sidebar', 'font-size:16px; font-weight:bold; color:#0AA84F;');
     console.log('%c📁 Full Sidebar with all menu items', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c👤 Employees: <?= $total_employees ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c🔄 AJAX updates every 15 seconds', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📱 Responsive: Desktop fixed, Mobile hidden with toggle', 'font-size:13px; color:#F59E0B;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
+    console.log('%c🚫 Bills menu: REMOVED', 'font-size:13px; color:#DC2626;');
+    console.log('%c🚪 Logout: /dispensary_system/frontend/pages/logout.php (ABSOLUTE PATH)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ All paths are ABSOLUTE - No more relative path issues!', 'font-size:13px; color:#059669;');
 </script>

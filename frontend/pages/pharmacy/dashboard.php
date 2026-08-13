@@ -8,36 +8,61 @@
 // 2. Expired Card - INCLUDES all medicines (active + inactive) that are expired
 // 3. Branch filter - Only Dodoma branch
 // 4. Panadol (inactive + expired) now shows in Expired card
+// WITH LOGIN PROTECTION
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Pharmacy Dodoma
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 9;
-    $_SESSION['full_name'] = 'Pharmacy Dodoma';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.dodoma';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Pharmacy or Admin)
+// ================================================================
+$allowed_roles = ['pharmacy', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_role = $_SESSION['role'] ?? 'pharmacy';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // PATH SAHIHI
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy';
+$branch_name = $user_branch_name;
 $unread_notifications = 0;
 
 try {
-    $db = getDB();
+    $db = Database::getInstance()->getConnection();
     $today = date('Y-m-d');
     $thirty_days_later = date('Y-m-d', strtotime('+30 days'));
     
@@ -286,10 +311,7 @@ try {
     $recent_otc_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
 } catch (Exception $e) {
-    $message = "Database error: " . $e->getMessage();
-    $message_type = 'error';
-    
-    // Set default values
+    // Set default values on error
     $total_stock_items = 0;
     $total_quantity = 0;
     $expired_count = 0;
@@ -315,6 +337,15 @@ try {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE PHARMACY HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/pharmacy_header.php';
@@ -327,8 +358,8 @@ include_once '../../components/pharmacy_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pharmacy Dashboard - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -1095,7 +1126,7 @@ include_once '../../components/pharmacy_sidebar.php';
     
     <div class="flex items-center gap-3">
         <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime"></span>
@@ -1111,8 +1142,8 @@ include_once '../../components/pharmacy_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1140,7 +1171,7 @@ include_once '../../components/pharmacy_sidebar.php';
                 Welcome back, <strong><?= htmlspecialchars($user_full_name) ?></strong>!
                 
                 <span class="header-badge">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
                 
                 <span class="header-badge">
@@ -1585,7 +1616,8 @@ include_once '../../components/pharmacy_sidebar.php';
     }
 
     console.log('%c💊 Braick - Pharmacy Dashboard (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📦 Total Stock (excl. expired): <?= $total_stock_items ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🚫 Expired (all): <?= $expired_count ?> (units: <?= $expired_quantity ?>)', 'font-size:13px; color:#DC2626;');
     console.log('%c⏰ Expire Soon: <?= $expire_soon_count ?>', 'font-size:13px; color:#D97706;');
@@ -1598,7 +1630,8 @@ include_once '../../components/pharmacy_sidebar.php';
     console.log('%c✅ Total Stock EXCLUDES expired medicines (active only)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Expired card INCLUDES all medicines (active + inactive)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Panadol (inactive + expired) now shows in Expired card', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Only Dodoma branch (branch_id=1)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Only selected branch', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

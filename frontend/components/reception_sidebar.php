@@ -21,7 +21,7 @@ if (session_status() === PHP_SESSION_NONE) {
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     // User is not logged in - redirect to login page
-    header('Location: ../login.php');
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
@@ -34,22 +34,44 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': 
-            header('Location: ../doctor/dashboard.php'); 
+            header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); 
             break;
         case 'pharmacy': 
-            header('Location: ../pharmacy/dashboard.php'); 
+            header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); 
             break;
         case 'laboratory': 
-            header('Location: ../laboratory/dashboard.php'); 
+            header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); 
             break;
         case 'cashier': 
-            header('Location: ../cashier/dashboard.php'); 
+            header('Location: /dispensary_system/frontend/pages/cashier/dashboard.php'); 
             break;
         default: 
-            header('Location: ../login.php'); 
+            header('Location: /dispensary_system/frontend/pages/login.php'); 
             break;
     }
     exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Reception';
+$user_role = $_SESSION['role'] ?? 'reception';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    $db = null;
 }
 
 // ================================================================
@@ -62,20 +84,7 @@ $today_visits = 0;
 $pending_patients = 0;
 $services_count = 0;
 
-// Database connection
-require_once __DIR__ . '/../../backend/config/database.php';
-
-try {
-    $db = Database::getInstance()->getConnection();
-} catch (Exception $e) {
-    // If database connection fails, show error but don't break
-    $db = null;
-}
-
 if ($db !== null && isset($_SESSION['user_id'])) {
-    $user_id = $_SESSION['user_id'];
-    $user_branch_id = $_SESSION['branch_id'] ?? 1;
-    
     try {
         // 1. Total Patients
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
@@ -111,6 +120,13 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         error_log("Reception sidebar stats error: " . $e->getMessage());
     }
 }
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // Detect current page
 $current_page = basename($_SERVER['PHP_SELF']);
@@ -457,7 +473,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       LOGOUT LINK
+       LOGOUT LINK - USING ABSOLUTE PATH
        ================================================================ */
     .sidebar-link.logout-link {
         border-top: 2px solid rgba(255,255,255,0.08);
@@ -753,17 +769,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label">Reception</div>
         
         <!-- 1. Dashboard -->
-        <a href="../reception/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
+        <a href="/dispensary_system/frontend/pages/reception/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
         <!-- 2. Register Patient -->
-        <a href="../reception/new_patient.php" class="sidebar-link <?= isActive('new_patient.php') ?>">
+        <a href="/dispensary_system/frontend/pages/reception/new_patient.php" class="sidebar-link <?= isActive('new_patient.php') ?>">
             <i class="fas fa-user-plus"></i> Register Patient
         </a>
         
         <!-- 3. Patients -->
-        <a href="../reception/patients.php" class="sidebar-link <?= isActive('patients.php') ?>">
+        <a href="/dispensary_system/frontend/pages/reception/patients.php" class="sidebar-link <?= isActive('patients.php') ?>">
             <i class="fas fa-users"></i> Patients
             <span class="badge" id="receptionPatientCount"><?= $patient_count ?></span>
         </a>
@@ -774,7 +790,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Appointments</div>
         
         <!-- 4. Appointments -->
-        <a href="../reception/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
+        <a href="/dispensary_system/frontend/pages/reception/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
             <i class="fas fa-calendar-check"></i> Appointments
             <?php if ($pending_appointments > 0): ?>
                 <span class="badge danger" id="receptionAppointmentCount"><?= $appointment_count ?></span>
@@ -789,13 +805,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Visits</div>
         
         <!-- 5. Visit -->
-        <a href="../reception/visits.php?filter=today" class="sidebar-link <?= isActive('visits.php') ?>">
+        <a href="/dispensary_system/frontend/pages/reception/visits.php?filter=today" class="sidebar-link <?= isActive('visits.php') ?>">
             <i class="fas fa-clinic-medical"></i> Visit
             <span class="badge" id="receptionTodayVisits"><?= $today_visits ?></span>
         </a>
         
         <!-- 6. Assign Doctor -->
-        <a href="../reception/assign_doctor.php" class="sidebar-link <?= isActive('assign_doctor.php') ?>">
+        <a href="/dispensary_system/frontend/pages/reception/assign_doctor.php" class="sidebar-link <?= isActive('assign_doctor.php') ?>">
             <i class="fas fa-user-md"></i> Assign Doctor
             <?php if ($pending_patients > 0): ?>
                 <span class="badge danger" id="receptionPendingPatients"><?= $pending_patients ?></span>
@@ -810,7 +826,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Services</div>
         
         <!-- 7. Services -->
-        <a href="../reception/services.php" class="sidebar-link <?= isActive('services.php') ?>">
+        <a href="/dispensary_system/frontend/pages/reception/services.php" class="sidebar-link <?= isActive('services.php') ?>">
             <i class="fas fa-cog"></i> Services
             <?php if ($services_count > 0): ?>
                 <span class="badge purple" id="receptionServicesCount"><?= $services_count ?></span>
@@ -825,7 +841,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Finance</div>
         
         <!-- 8. Cashier -->
-        <a href="../cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') && strpos($_SERVER['REQUEST_URI'], 'cashier') !== false ? 'active' : '' ?>">
+        <a href="/dispensary_system/frontend/pages/cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') && strpos($_SERVER['REQUEST_URI'], 'cashier') !== false ? 'active' : '' ?>">
             <i class="fas fa-cash-register"></i> Cashier
         </a>
         
@@ -835,12 +851,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label mt-2">Account</div>
         
         <!-- 9. Profile -->
-        <a href="../reception/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
+        <a href="/dispensary_system/frontend/pages/reception/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <!-- 10. Logout -->
-        <a href="../logout.php" class="sidebar-link logout-link">
+        <!-- 10. Logout - USING ABSOLUTE PATH -->
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
         
@@ -1174,10 +1190,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     });
 
     console.log('%c🏥 Reception Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Patients: <?= $patient_count ?> | Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c📋 Services: <?= $services_count ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
     console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
     console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
+    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:12px; color:#F87171;');
 </script>

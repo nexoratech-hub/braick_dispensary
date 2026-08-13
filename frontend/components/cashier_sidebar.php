@@ -3,11 +3,64 @@
 // FILE: frontend/components/cashier_sidebar.php
 // CASHIER - SHARED SIDEBAR (GREEN THEME)
 // WITH REAL-TIME STATS AUTO-UPDATE (3 SECONDS) - SELF-CONTAINED
-// REMOVED: Patients, Invoice History, Receive Payment, Reports
-// ADDED: Expenses
+// REMOVED: Patients, Invoice History, Receive Payment, Reports, Expenses
+// ADDED: Payment History & Receipt History
 // FULLY RESPONSIVE - WORKS WITH HEADER
+// WITH LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
+
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Cashier or Admin)
+// ================================================================
+$allowed_roles = ['cashier', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    $db = null;
+}
 
 // ================================================================
 // GET REAL DATA FOR BADGES
@@ -17,12 +70,8 @@ $partial_payments = 0;
 $paid_today = 0;
 $total_paid = 0;
 $patients_waiting = 0;
-$pending_expenses = 0;
-$total_expenses = 0;
 
-if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
-    $user_branch_id = $_SESSION['branch_id'] ?? 1;
-    
+if ($db !== null && isset($_SESSION['user_id'])) {
     try {
         // Pending Bills
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
@@ -61,31 +110,6 @@ if (isset($db) && $db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // ============================================================
-        // EXPENSES - Check if expenses table exists
-        // ============================================================
-        try {
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM expenses 
-                WHERE branch_id = ? AND status = 'pending'
-            ");
-            $stmt->execute([$user_branch_id]);
-            $pending_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-            
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM expenses 
-                WHERE branch_id = ? AND status = 'paid'
-            ");
-            $stmt->execute([$user_branch_id]);
-            $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        } catch (Exception $e) {
-            // Expenses table might not exist yet
-            $pending_expenses = 0;
-            $total_expenses = 0;
-        }
-        
     } catch (Exception $e) {
         // Keep counts as 0
         error_log("Cashier sidebar stats error: " . $e->getMessage());
@@ -114,12 +138,25 @@ function isActive($page) {
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
 // HANDLE AJAX REQUEST FOR SIDEBAR DATA (SELF-CONTAINED)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_cashier_sidebar_data') {
     header('Content-Type: application/json');
     
-    $branch_id = (int)($_POST['branch_id'] ?? 1);
+    // Check if user is logged in for AJAX requests
+    if (!isset($_SESSION['user_id'])) {
+        echo json_encode(['success' => false, 'error' => 'Not logged in']);
+        exit;
+    }
+    
+    $branch_id = (int)($_POST['branch_id'] ?? $_SESSION['branch_id'] ?? 1);
     
     $response = [
         'success' => false,
@@ -128,12 +165,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'paid_today' => 0,
         'total_paid' => 0,
         'patients_waiting' => 0,
-        'pending_expenses' => 0,
-        'total_expenses' => 0,
         'hash' => ''
     ];
     
-    if (isset($db) && $db !== null) {
+    if ($db !== null) {
         try {
             // Pending Bills
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
@@ -172,33 +207,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$branch_id]);
             $response['patients_waiting'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // ============================================================
-            // EXPENSES
-            // ============================================================
-            try {
-                // Check if expenses table exists
-                $stmt = $db->query("SHOW TABLES LIKE 'expenses'");
-                if ($stmt->rowCount() > 0) {
-                    $stmt = $db->prepare("
-                        SELECT COUNT(*) as count 
-                        FROM expenses 
-                        WHERE branch_id = ? AND status = 'pending'
-                    ");
-                    $stmt->execute([$branch_id]);
-                    $response['pending_expenses'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-                    
-                    $stmt = $db->prepare("
-                        SELECT COUNT(*) as count 
-                        FROM expenses 
-                        WHERE branch_id = ? AND status = 'paid'
-                    ");
-                    $stmt->execute([$branch_id]);
-                    $response['total_expenses'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-                }
-            } catch (Exception $e) {
-                // Table doesn't exist - skip
-            }
-            
             $response['success'] = true;
             
             // Create hash to detect changes
@@ -207,9 +215,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $response['partial_payments'] . 
                 $response['paid_today'] . 
                 $response['total_paid'] . 
-                $response['patients_waiting'] .
-                $response['pending_expenses'] .
-                $response['total_expenses']
+                $response['patients_waiting']
             );
             
         } catch (Exception $e) {
@@ -817,36 +823,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </a>
         
         <!-- ============================================================ -->
-        <!-- EXPENSES - NEW -->
-        <!-- ============================================================ -->
-        <div class="nav-label mt-2">Expenses</div>
-        
-        <!-- All Expenses -->
-        <a href="../cashier/expenses.php" class="sidebar-link <?= isActive('expenses.php') ?>">
-            <i class="fas fa-coins"></i> All Expenses
-            <?php if ($total_expenses > 0): ?>
-                <span class="badge purple" id="sidebarTotalExpensesBadge"><?= $total_expenses ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarTotalExpensesBadge">0</span>
-            <?php endif; ?>
-        </a>
-        
-        <!-- Pending Expenses -->
-        <a href="../cashier/expenses.php?status=pending" class="sidebar-link <?= isActive('expenses.php') && isset($_GET['status']) && $_GET['status'] === 'pending' ? 'active' : '' ?>">
-            <i class="fas fa-clock"></i> Pending Expenses
-            <?php if ($pending_expenses > 0): ?>
-                <span class="badge red" id="sidebarPendingExpensesBadge"><?= $pending_expenses ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarPendingExpensesBadge">0</span>
-            <?php endif; ?>
-        </a>
-        
-        <!-- Add Expense -->
-        <a href="../cashier/add_expense.php" class="sidebar-link <?= isActive('add_expense.php') ?>">
-            <i class="fas fa-plus-circle"></i> Add Expense
-        </a>
-        
-        <!-- ============================================================ -->
         <!-- PAYMENTS -->
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Payments</div>
@@ -865,6 +841,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <a href="../cashier/receipt_history.php" class="sidebar-link <?= isActive('receipt_history.php') ?>">
             <i class="fas fa-receipt"></i> Receipt History
         </a>
+        
+        <!-- ============================================================ -->
+        <!-- EXPENSES - REMOVED -->
+        <!-- ============================================================ -->
+        <!-- Expenses menu items removed -->
         
         <!-- ============================================================ -->
         <!-- ACCOUNT -->
@@ -1075,31 +1056,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             partialBadge.classList.add('badge-update');
         }
         
-        // ============================================================
-        // EXPENSES BADGES
-        // ============================================================
-        // Total Expenses
-        var totalExpensesBadge = document.getElementById('sidebarTotalExpensesBadge');
-        if (totalExpensesBadge) {
-            var totalExp = data.total_expenses || 0;
-            totalExpensesBadge.textContent = totalExp;
-            totalExpensesBadge.className = totalExp > 0 ? 'badge purple' : 'badge';
-            totalExpensesBadge.classList.remove('badge-update');
-            void totalExpensesBadge.offsetWidth;
-            totalExpensesBadge.classList.add('badge-update');
-        }
-        
-        // Pending Expenses
-        var pendingExpensesBadge = document.getElementById('sidebarPendingExpensesBadge');
-        if (pendingExpensesBadge) {
-            var pendingExp = data.pending_expenses || 0;
-            pendingExpensesBadge.textContent = pendingExp;
-            pendingExpensesBadge.className = pendingExp > 0 ? 'badge red' : 'badge';
-            pendingExpensesBadge.classList.remove('badge-update');
-            void pendingExpensesBadge.offsetWidth;
-            pendingExpensesBadge.classList.add('badge-update');
-        }
-        
         // Update time
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
@@ -1211,9 +1167,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     console.log('%c💰 Cashier Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c📋 Pending: <?= $pending_bills ?> | Partial: <?= $partial_payments ?> | Total Paid: <?= $total_paid ?>', 'font-size:12px; color:#A7F3D0;');
-    console.log('%c💰 Expenses: Pending: <?= $pending_expenses ?> | Total: <?= $total_expenses ?>', 'font-size:12px; color:#FBBF24;');
     console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
     console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
     console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
+    console.log('%c🚫 Expenses menu: REMOVED', 'font-size:12px; color:#DC2626;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#A7F3D0;');
 </script>
