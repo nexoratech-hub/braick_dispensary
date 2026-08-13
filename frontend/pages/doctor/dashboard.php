@@ -3,6 +3,7 @@
 // FILE: frontend/pages/doctor/dashboard.php
 // DOCTOR DASHBOARD - FULL VERSION WITH AUTO-UPDATE
 // 8 CLICKABLE CARDS - SMART AUTO-UPDATE (3 SECONDS)
+// FIXED: Session-based login (NO BYPASS)
 // FIXED: Dark mode works with header (CSS + localStorage)
 // FULL CSS INCLUDED
 // BRAICK DISPENSARY
@@ -14,24 +15,49 @@ session_start();
 // CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    header('Location: ../login.php');
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
 // ================================================================
-// GET DOCTOR DATA FROM SESSION
+// TIME AGO FUNCTION - PHP VERSION
+// ================================================================
+function time_ago($timestamp) {
+    if (empty($timestamp)) return 'Just now';
+    try {
+        $time = strtotime($timestamp);
+        if ($time === false || $time <= 0) return 'N/A';
+        $diff = time() - $time;
+        if ($diff < 60) return 'Just now';
+        if ($diff < 3600) return floor($diff / 60) . 'm ago';
+        if ($diff < 86400) return floor($diff / 3600) . 'h ago';
+        if ($diff < 604800) return floor($diff / 86400) . 'd ago';
+        return date('M d, Y', $time);
+    } catch (Exception $e) {
+        return 'N/A';
+    }
+}
+
+// ================================================================
+// GET SESSION DATA
 // ================================================================
 $doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 $doctor_branch_name = 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // REFRESH DOCTOR DATA FROM DATABASE
@@ -54,12 +80,11 @@ try {
     } else {
         // Doctor not found or inactive - logout and redirect
         session_destroy();
-        header('Location: ../login.php');
+        header('Location: /dispensary_system/frontend/pages/login.php');
         exit;
     }
 } catch (Exception $e) {
     error_log("Dashboard database error: " . $e->getMessage());
-    // Continue with session data, but log the error
 }
 
 // Make sure doctor_id and user_id are in sync
@@ -80,6 +105,16 @@ try {
     }
 } catch (Exception $e) {
     $doctor_branch_name = 'Branch';
+}
+
+// Get unread notifications count
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$doctor_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -249,6 +284,16 @@ $stmt = $db->prepare("
 ");
 $stmt->execute([$doctor_id, $doctor_id]);
 $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// Profile picture URL
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -1882,7 +1927,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 
 <script>
     // ================================================================
-    // TIME AGO FUNCTION
+    // TIME AGO FUNCTION - JAVASCRIPT VERSION
     // ================================================================
     function time_ago(timestamp) {
         if (!timestamp) return 'N/A';
@@ -2020,6 +2065,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
     console.log('%c🔄 Auto-update active every 3 seconds', 'font-size:12px; color:#34D399;');
     console.log('%c🌙 Dark mode uses CSS + localStorage (syncs with header)', 'font-size:12px; color:#6EA8FE;');
+    console.log('%c💡 Dashboard updates automatically - no refresh needed!', 'font-size:12px; color:#64748B;');
 </script>
 
 <!-- ================================================================ -->
