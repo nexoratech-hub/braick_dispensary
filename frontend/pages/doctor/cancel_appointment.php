@@ -1,14 +1,11 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/doctor/complete_appointment.php
-// DOCTOR - COMPLETE APPOINTMENT
+// FILE: frontend/pages/doctor/cancel_appointment.php
+// DOCTOR - CANCEL APPOINTMENT
 // BRAICK DISPENSARY
 // ================================================================
 
-// Start session
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+session_start();
 
 // ================================================================
 // LOGIN PROTECTION
@@ -18,9 +15,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS DOCTOR OR ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -38,6 +32,7 @@ if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
 // ================================================================
 $doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
@@ -62,24 +57,22 @@ try {
 }
 
 // ================================================================
-// CHECK IF APPOINTMENT EXISTS
+// CHECK IF APPOINTMENT EXISTS AND CAN BE CANCELLED
 // ================================================================
 if ($is_admin) {
     $stmt = $db->prepare("
-        SELECT a.*, p.full_name as patient_name, u.full_name as doctor_name 
+        SELECT a.*, p.full_name as patient_name 
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
-        LEFT JOIN users u ON a.doctor_id = u.id
-        WHERE a.id = ? AND a.status = 'confirmed'
+        WHERE a.id = ? AND a.status IN ('scheduled', 'pending', 'confirmed')
     ");
     $stmt->execute([$appointment_id]);
 } else {
     $stmt = $db->prepare("
-        SELECT a.*, p.full_name as patient_name, u.full_name as doctor_name 
+        SELECT a.*, p.full_name as patient_name 
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
-        LEFT JOIN users u ON a.doctor_id = u.id
-        WHERE a.id = ? AND a.doctor_id = ? AND a.status = 'confirmed'
+        WHERE a.id = ? AND a.doctor_id = ? AND a.status IN ('scheduled', 'pending', 'confirmed')
     ");
     $stmt->execute([$appointment_id, $doctor_id]);
 }
@@ -92,37 +85,55 @@ if (!$appointment) {
 }
 
 // ================================================================
-// COMPLETE APPOINTMENT
+// CANCEL APPOINTMENT
 // ================================================================
 try {
+    $db->beginTransaction();
+
     $stmt = $db->prepare("
         UPDATE appointments 
-        SET status = 'completed', 
-            completed_at = NOW(),
+        SET status = 'cancelled', 
+            notes = CONCAT(IFNULL(notes, ''), ' [CANCELLED: ', NOW(), ']'),
             updated_at = NOW()
         WHERE id = ?
     ");
     $stmt->execute([$appointment_id]);
 
-    // Log activity
+    $db->commit();
+
+    // ================================================================
+    // LOG ACTIVITY
+    // ================================================================
     try {
         $stmt = $db->prepare("
             INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-            VALUES (?, ?, 'appointment_completed', ?, NOW())
+            VALUES (?, ?, 'appointment_cancelled', ?, NOW())
         ");
         $stmt->execute([
             $doctor_id,
-            $_SESSION['branch_id'] ?? 1,
-            "Appointment #$appointment_id completed for patient: " . $appointment['patient_name']
+            $doctor_branch_id,
+            "Appointment #$appointment_id cancelled for patient: " . $appointment['patient_name']
         ]);
-    } catch (Exception $e) {}
+    } catch (Exception $e) {
+        // Silent fail
+    }
 
-    header('Location: appointments.php?completed=1&appointment=' . $appointment_id);
+    // ================================================================
+    // REDIRECT WITH SUCCESS
+    // ================================================================
+    $redirect_url = 'appointments.php?cancelled=1&appointment=' . $appointment_id;
+    if ($is_admin) {
+        $redirect_url .= '&admin=1';
+    }
+    header('Location: ' . $redirect_url);
     exit;
 
 } catch (Exception $e) {
-    error_log("Complete appointment error: " . $e->getMessage());
-    header('Location: appointments.php?error=complete_failed');
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
+    error_log("Cancel appointment error: " . $e->getMessage());
+    header('Location: appointments.php?error=cancel_failed');
     exit;
 }
 ?>

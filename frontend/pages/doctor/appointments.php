@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/doctor/appointments.php
 // DOCTOR - APPOINTMENTS MANAGEMENT
-// WITH DOCTOR GLOBAL STATS AUTO-UPDATE
+// WITH FULL AUTO-UPDATE (3 SECONDS)
+// FIXED: Only View, Confirm, Cancel buttons
+// After Confirm/Cancel: Only View button remains
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -15,7 +17,6 @@ if (session_status() === PHP_SESSION_NONE) {
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    // User is not logged in - redirect to login
     header('Location: ../login.php');
     exit;
 }
@@ -24,7 +25,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // CHECK IF USER IS DOCTOR OR ADMIN
 // ================================================================
 if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
-    // User is not a doctor - redirect to their dashboard
     $role = $_SESSION['role'];
     switch ($role) {
         case 'reception': header('Location: ../reception/dashboard.php'); break;
@@ -47,14 +47,7 @@ $doctor_username = $_SESSION['username'] ?? 'dr.john';
 $doctor_email = $_SESSION['email'] ?? 'john@braick.com';
 $doctor_phone = $_SESSION['phone'] ?? '+255 700 000 011';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-
-// ================================================================
-// IF ADMIN VIEWING DOCTOR PAGE, USE THEIR BRANCH
-// ================================================================
-if ($_SESSION['role'] === 'admin') {
-    // Admin can view all, but we'll use branch filter
-    $doctor_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $doctor_branch_id;
-}
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET PARAMETERS
@@ -66,7 +59,7 @@ $message = isset($_GET['message']) ? trim($_GET['message']) : '';
 $message_type = isset($_GET['type']) ? trim($_GET['type']) : 'info';
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -212,7 +205,7 @@ $profile_pic_url = !empty($profile_pic)
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
+// INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
@@ -228,18 +221,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <div class="page-header-left">
             <h1 class="page-title">
                 <i class="fas fa-calendar-check"></i> Appointments
-                <span class="page-badge"><?= $total_appointments ?> total</span>
+                <span class="page-badge" id="totalBadge"><?= $total_appointments ?> total</span>
             </h1>
             <p class="page-subtitle">
                 Manage your appointments
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?>
                 </span>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200" id="recordsBadge">
                     <i class="fas fa-list mr-1"></i> <?= $total_appointments ?> appointments
                 </span>
                 <?php if ($scheduled_count > 0): ?>
-                    <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
+                    <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200" id="scheduledBadge">
                         <i class="fas fa-clock mr-1"></i> <?= $scheduled_count ?> scheduled
                     </span>
                 <?php endif; ?>
@@ -255,7 +248,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <a href="appointment.php?patient_id=0" class="btn btn-primary">
                 <i class="fas fa-plus"></i> New Appointment
             </a>
-            <button onclick="window.location.href='appointments.php'" class="btn btn-outline">
+            <button onclick="manualRefresh()" class="btn btn-outline" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
@@ -295,14 +288,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
     <!-- Search & Filter -->
     <div class="card mb-6">
-        <form method="GET" class="filter-form">
+        <form method="GET" class="filter-form" id="filterForm">
             <div class="filter-group">
                 <div class="filter-search">
                     <i class="fas fa-search text-muted"></i>
-                    <input type="text" name="search" class="filter-input" placeholder="Search by patient..." value="<?= htmlspecialchars($search) ?>">
+                    <input type="text" name="search" class="filter-input" placeholder="Search by patient..." value="<?= htmlspecialchars($search) ?>" id="searchInput">
                 </div>
-                <input type="date" name="date" class="filter-date" value="<?= htmlspecialchars($date_filter) ?>" placeholder="Filter by date">
-                <select name="status" class="filter-select">
+                <input type="date" name="date" class="filter-date" value="<?= htmlspecialchars($date_filter) ?>" placeholder="Filter by date" id="dateInput">
+                <select name="status" class="filter-select" id="statusSelect">
                     <option value="">All Status</option>
                     <option value="scheduled" <?= $status_filter === 'scheduled' ? 'selected' : '' ?>>Scheduled</option>
                     <option value="confirmed" <?= $status_filter === 'confirmed' ? 'selected' : '' ?>>Confirmed</option>
@@ -323,6 +316,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
     <!-- Appointments Table -->
     <div class="card">
+        <div class="table-header">
+            <span class="table-title">
+                <i class="fas fa-list mr-2"></i> Appointments List
+                <span class="text-sm font-normal text-gray-400">(<strong id="recordsCount"><?= $total_appointments ?></strong> records)</span>
+            </span>
+            <span class="text-xs text-gray-400" id="lastUpdateTime">⏱ Auto-updating</span>
+        </div>
         <div class="table-wrap">
             <table class="data-table">
                 <thead>
@@ -336,10 +336,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <th style="border-radius: 0 8px 0 0; text-align: center;">Action</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="appointmentsTableBody">
                     <?php if (count($appointments) > 0): ?>
                         <?php foreach ($appointments as $index => $appt): ?>
-                            <tr>
+                            <tr data-appointment-id="<?= $appt['id'] ?>" data-status="<?= $appt['status'] ?? 'scheduled' ?>">
                                 <td><?= $index + 1 ?></td>
                                 <td>
                                     <div class="font-medium"><?= htmlspecialchars($appt['patient_name'] ?? 'N/A') ?></div>
@@ -361,21 +361,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <div class="action-buttons">
+                                    <div class="action-buttons" id="actions-<?= $appt['id'] ?>">
+                                        <!-- View Button - Always Visible -->
                                         <a href="view_appointment.php?id=<?= $appt['id'] ?>" class="btn btn-view btn-sm" title="View Details">
                                             <i class="fas fa-eye"></i>
                                         </a>
+                                        
                                         <?php if (($appt['status'] ?? '') === 'scheduled' || ($appt['status'] ?? '') === 'pending'): ?>
-                                            <a href="confirm_appointment.php?id=<?= $appt['id'] ?>" class="btn btn-success btn-sm" title="Confirm" onclick="return confirm('Confirm this appointment?')">
+                                            <!-- Confirm Button - Only for scheduled/pending -->
+                                            <a href="confirm_appointment.php?id=<?= $appt['id'] ?>" class="btn btn-success btn-sm btn-confirm" title="Confirm" onclick="return confirm('Confirm this appointment?')">
                                                 <i class="fas fa-check"></i>
                                             </a>
-                                            <a href="cancel_appointment.php?id=<?= $appt['id'] ?>" class="btn btn-danger btn-sm" title="Cancel" onclick="return confirm('Cancel this appointment?')">
+                                            <!-- Cancel Button - Only for scheduled/pending -->
+                                            <a href="cancel_appointment.php?id=<?= $appt['id'] ?>" class="btn btn-danger btn-sm btn-cancel" title="Cancel" onclick="return confirm('Cancel this appointment?')">
                                                 <i class="fas fa-times"></i>
-                                            </a>
-                                        <?php endif; ?>
-                                        <?php if (($appt['status'] ?? '') === 'confirmed'): ?>
-                                            <a href="complete_appointment.php?id=<?= $appt['id'] ?>" class="btn btn-success btn-sm" title="Complete" onclick="return confirm('Mark this appointment as completed?')">
-                                                <i class="fas fa-check-double"></i>
                                             </a>
                                         <?php endif; ?>
                                     </div>
@@ -383,7 +382,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
-                        <tr>
+                        <tr id="emptyStateRow">
                             <td colspan="7" class="text-center py-8 text-muted">
                                 <i class="fas fa-calendar-check text-3xl block mb-2"></i>
                                 <?php if ($search || $status_filter || $date_filter): ?>
@@ -397,6 +396,21 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </tbody>
             </table>
         </div>
+        <!-- Table Footer -->
+        <div class="table-footer">
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-calendar-alt mr-1"></i> 
+                Showing <strong id="footerRecordsCount"><?= $total_appointments ?></strong> appointment(s)
+            </span>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-user mr-1"></i> 
+                Doctor: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+            </span>
+            <span class="text-sm text-gray-500">
+                <i class="fas fa-clock mr-1"></i> 
+                <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
+            </span>
+        </div>
     </div>
 
     <!-- Footer -->
@@ -408,7 +422,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <span class="separator">|</span>
             Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             <span class="separator">|</span>
-            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span id="footerTimestampBottom">Last updated: <?= date('H:i:s') ?></span>
             <span class="separator">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -572,6 +586,30 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
     }
     .mb-6 { margin-bottom: 24px; }
+    
+    .table-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .table-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .table-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 0 0 0;
+        margin-top: 12px;
+        border-top: 2px solid var(--border-color);
+        flex-wrap: wrap;
+        gap: 8px;
+    }
     
     .filter-form {
         display: flex;
@@ -808,6 +846,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         justify-content: center;
     }
     
+    .action-buttons .btn-confirm,
+    .action-buttons .btn-cancel {
+        transition: all 0.3s ease;
+    }
+    
+    .action-buttons .btn-confirm:hover,
+    .action-buttons .btn-cancel:hover {
+        transform: scale(1.1);
+    }
+    
     .branch-tag {
         background: #059669;
         color: white;
@@ -860,6 +908,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     .footer .footer-brand { color: var(--primary); font-weight: 600; }
     
+    .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255,255,255,0.3);
+        border-top-color: white;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    
     @media (max-width: 1024px) {
         .main-content { padding: 16px; }
         .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -884,6 +943,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .stat-card { padding: 14px 16px; }
         .stat-card .stat-number { font-size: 1.2rem; }
         .action-buttons { flex-wrap: wrap; justify-content: center; }
+        .table-footer { flex-direction: column; text-align: center; }
+        .table-header { flex-direction: column; text-align: center; }
     }
     
     @media (max-width: 480px) {
@@ -902,11 +963,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .page-header { border-bottom: 2px solid #0B5ED7 !important; }
         .stat-card { border: 1px solid #ddd !important; }
         .filter-form { display: none !important; }
+        .action-buttons .btn-success, .action-buttons .btn-danger { display: none !important; }
     }
 </style>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - FULL AUTO-UPDATE -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -937,6 +999,259 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
+    // ESCAPE HTML
+    // ================================================================
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // ================================================================
+    // STATUS BADGE HTML
+    // ================================================================
+    function getStatusBadgeHtml(status) {
+        var colorClass = 'badge-warning';
+        var icon = 'fa-clock';
+        
+        switch (status) {
+            case 'completed':
+                colorClass = 'badge-success';
+                icon = 'fa-check-double';
+                break;
+            case 'confirmed':
+                colorClass = 'badge-info';
+                icon = 'fa-check-circle';
+                break;
+            case 'cancelled':
+                colorClass = 'badge-danger';
+                icon = 'fa-times-circle';
+                break;
+            case 'scheduled':
+                colorClass = 'badge-warning';
+                icon = 'fa-clock';
+                break;
+            case 'pending':
+                colorClass = 'badge-warning';
+                icon = 'fa-hourglass-half';
+                break;
+        }
+        
+        return '<span class="badge ' + colorClass + '">' +
+               '<i class="fas ' + icon + '"></i> ' +
+               status.charAt(0).toUpperCase() + status.slice(1) +
+               '</span>';
+    }
+
+    // ================================================================
+    // GET ACTION BUTTONS - FIXED: Only View remains after action
+    // ================================================================
+    function getActionButtons(appt) {
+        var status = appt.status || 'scheduled';
+        var id = appt.id;
+        var html = '';
+        
+        // View button - ALWAYS visible
+        html += '<a href="view_appointment.php?id=' + id + '" class="btn btn-view btn-sm" title="View Details">' +
+                '<i class="fas fa-eye"></i>' +
+                '</a>';
+        
+        // Only show Confirm and Cancel if status is scheduled or pending
+        if (status === 'scheduled' || status === 'pending') {
+            html += '<a href="confirm_appointment.php?id=' + id + '" class="btn btn-success btn-sm btn-confirm" title="Confirm" onclick="return confirm(\'Confirm this appointment?\')">' +
+                    '<i class="fas fa-check"></i>' +
+                    '</a>';
+            html += '<a href="cancel_appointment.php?id=' + id + '" class="btn btn-danger btn-sm btn-cancel" title="Cancel" onclick="return confirm(\'Cancel this appointment?\')">' +
+                    '<i class="fas fa-times"></i>' +
+                    '</a>';
+        }
+        // For 'confirmed', 'completed', 'cancelled' - only View button shows
+        
+        return html;
+    }
+
+    // ================================================================
+    // FETCH APPOINTMENTS DATA
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+
+    function fetchAppointments() {
+        if (isUpdating) return;
+        isUpdating = true;
+        
+        var status = '<?= addslashes($status_filter) ?>';
+        var date = '<?= addslashes($date_filter) ?>';
+        var search = '<?= addslashes($search) ?>';
+        var doctorId = <?= $doctor_id ?>;
+        
+        var url = '/dispensary_system/frontend/api/get_doctor_appointments.php?t=' + new Date().getTime();
+        url += '&doctor_id=' + doctorId;
+        if (status) url += '&status=' + encodeURIComponent(status);
+        if (date) url += '&date=' + encodeURIComponent(date);
+        if (search) url += '&search=' + encodeURIComponent(search);
+        
+        fetch(url)
+            .then(function(response) { 
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json(); 
+            })
+            .then(function(data) {
+                if (data.success) {
+                    updateUI(data);
+                }
+                isUpdating = false;
+            })
+            .catch(function(error) {
+                console.error('Fetch appointments error:', error);
+                isUpdating = false;
+            });
+    }
+
+    // ================================================================
+    // UPDATE UI
+    // ================================================================
+    function updateUI(data) {
+        var appointments = data.appointments || [];
+        var stats = data.stats || {};
+        var totalRecords = data.total_records || 0;
+        
+        // Update stats
+        document.getElementById('statTotal').textContent = stats.total || 0;
+        document.getElementById('statScheduled').textContent = stats.scheduled || 0;
+        document.getElementById('statConfirmed').textContent = stats.confirmed || 0;
+        document.getElementById('statCompleted').textContent = stats.completed || 0;
+        
+        // Update badges
+        document.getElementById('totalBadge').textContent = (stats.total || 0) + ' total';
+        document.getElementById('recordsBadge').innerHTML = '<i class="fas fa-list mr-1"></i> ' + totalRecords + ' appointments';
+        
+        var scheduledBadge = document.getElementById('scheduledBadge');
+        if (scheduledBadge) {
+            scheduledBadge.innerHTML = '<i class="fas fa-clock mr-1"></i> ' + (stats.scheduled || 0) + ' scheduled';
+            if ((stats.scheduled || 0) > 0) {
+                scheduledBadge.style.display = 'inline-flex';
+            } else {
+                scheduledBadge.style.display = 'none';
+            }
+        }
+        
+        document.getElementById('recordsCount').textContent = totalRecords;
+        document.getElementById('footerRecordsCount').textContent = totalRecords;
+        
+        // Update table
+        var tbody = document.getElementById('appointmentsTableBody');
+        if (!tbody) return;
+        
+        if (appointments.length === 0) {
+            tbody.innerHTML = `
+                <tr id="emptyStateRow">
+                    <td colspan="7" class="text-center py-8 text-muted">
+                        <i class="fas fa-calendar-check text-3xl block mb-2"></i>
+                        ${search || status || date ? 'No appointments found matching your filters' : 'No appointments scheduled. Click "New Appointment" to create one.'}
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+        
+        var html = '';
+        appointments.forEach(function(appt, index) {
+            var appointmentDate = new Date(appt.appointment_date);
+            var dateStr = appointmentDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            var timeStr = appointmentDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+            
+            html += `
+                <tr data-appointment-id="${appt.id}" data-status="${appt.status || 'scheduled'}">
+                    <td>${index + 1}</td>
+                    <td>
+                        <div class="font-medium">${escapeHtml(appt.patient_name || 'N/A')}</div>
+                        <div class="text-xs text-muted">${escapeHtml(appt.patient_code || '')}</div>
+                        ${appt.patient_phone ? `<div class="text-xs text-muted">${escapeHtml(appt.patient_phone)}</div>` : ''}
+                    </td>
+                    <td>
+                        <div class="font-medium">${dateStr}</div>
+                        <div class="text-xs text-muted">${timeStr}</div>
+                    </td>
+                    <td class="text-sm">${escapeHtml((appt.purpose || 'N/A').substring(0, 40))}${(appt.purpose || '').length > 40 ? '...' : ''}</td>
+                    <td class="text-sm">${escapeHtml(appt.created_by_name || 'N/A')}</td>
+                    <td>${getStatusBadgeHtml(appt.status || 'scheduled')}</td>
+                    <td>
+                        <div class="action-buttons" id="actions-${appt.id}">
+                            ${getActionButtons(appt)}
+                        </div>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        tbody.innerHTML = html;
+        
+        // Update timestamp
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        document.getElementById('lastUpdateBadge').innerHTML = 
+            '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
+        document.getElementById('lastUpdateTime').textContent = '⏱ ' + timeStr;
+        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        document.getElementById('footerTimestampBottom').textContent = 'Last updated: ' + timeStr;
+        
+        // Check for notifications
+        if (data.notification) {
+            showToast('📋 Update', data.notification, 'info');
+        }
+    }
+
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        btn.innerHTML = '<span class="spinner"></span> Loading...';
+        btn.disabled = true;
+        
+        fetchAppointments();
+        
+        setTimeout(function() {
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+            btn.disabled = false;
+            showToast('✅ Refreshed', 'Appointments data updated manually', 'success');
+        }, 1500);
+    }
+
+    // ================================================================
+    // START / STOP AUTO-UPDATE
+    // ================================================================
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        fetchAppointments();
+        updateInterval = setInterval(fetchAppointments, 3000);
+    }
+    
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+        }
+    }
+
+    // ================================================================
+    // VISIBILITY CHANGE
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
+
+    // ================================================================
     // SHOW TOAST FOR MESSAGES
     // ================================================================
     <?php if ($message && $message_type): ?>
@@ -948,11 +1263,45 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 500);
     <?php endif; ?>
 
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            document.getElementById('searchInput')?.focus();
+            document.getElementById('searchInput')?.select();
+        }
+        if (e.altKey && e.key === 'n') {
+            e.preventDefault();
+            window.location.href = 'appointment.php?patient_id=0';
+        }
+        if (e.key === 'F5') {
+            e.preventDefault();
+            manualRefresh();
+        }
+        if (e.key === 'Escape' && document.activeElement === document.getElementById('searchInput')) {
+            document.getElementById('searchInput').value = '';
+            document.getElementById('searchInput').blur();
+        }
+    });
+
+    // ================================================================
+    // INITIALIZE
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 1500);
+    });
+
     console.log('%c📅 Appointments - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
     console.log('%c📊 Total: <?= $total_appointments ?> | Scheduled: <?= $scheduled_count ?> | Confirmed: <?= $confirmed_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🔄 Auto-update active every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c🔄 Full auto-update every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Only View, Confirm, Cancel buttons | After action: Only View remains', 'font-size:12px; color:#34D399;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c⌨️ Shortcuts: Ctrl+K=Search | Alt+N=New Appointment | F5=Refresh | Esc=Clear search', 'font-size:12px; color:#64748B;');
 </script>
 
 <!-- ================================================================ -->

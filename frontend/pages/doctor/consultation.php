@@ -3,6 +3,7 @@
 // FILE: frontend/pages/doctor/consultation.php
 // DOCTOR CONSULTATION - BRANCH SPECIFIC
 // FIXED: NO DUPLICATE lab tests - checks pending AND in_progress
+// FIXED: NO DOUBLE BILLING for consultation fee
 // FIXED: Blue theme design with modern cards
 // ================================================================
 
@@ -1111,7 +1112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // 2. SAVE CONSULTATION
+    // 2. SAVE CONSULTATION - FIXED: NO DOUBLE BILLING
     // ================================================================
     if (isset($_POST['save_consultation'])) {
         if ($sections_frozen) {
@@ -1126,6 +1127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $visit_type = $visit['visit_type'] ?? 'new';
             $consultation_fee = 0;
             
+            // Get consultation fee from services
             $stmt = $db->prepare("
                 SELECT price FROM services 
                 WHERE category_id = 2 AND service_name LIKE ? AND is_active = 1 
@@ -1133,7 +1135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 LIMIT 1
             ");
             $type_labels = [
-                'new' => '%General%',
+                'new' => '%New%',
                 'follow-up' => '%Follow-up%',
                 'emergency' => '%Emergency%',
                 'specialist' => '%Specialist%'
@@ -1147,19 +1149,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $consultation_fee = 15000;
             }
             
-            $stmt = $db->prepare("
-                SELECT pb.created_at as paid_date, pb.total_amount
-                FROM patient_bills pb
-                WHERE pb.patient_id = ? 
-                AND pb.branch_id = ? 
-                AND pb.status = 'paid'
-                AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                ORDER BY pb.created_at DESC
-                LIMIT 1
-            ");
-            $stmt->execute([$patient_id, $doctor_branch_id]);
-            $paid_visit = $stmt->fetch();
+            // ================================================================
+            // CHECK IF CONSULTATION FEE IS ALREADY PAID
+            // ================================================================
+            $consultation_already_paid = false;
+            $consultation_paid_status = 'pending';
+            $consultation_item_id = null;
             
+            // Check if consultation fee is already in bill_items
             $stmt = $db->prepare("
                 SELECT id, is_paid, payment_status, total_price 
                 FROM bill_items 
@@ -1168,12 +1165,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $stmt->execute([$bill_id]);
             $existing_consult = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            if ($existing_consult && ($existing_consult['is_paid'] == 1 || $existing_consult['payment_status'] === 'paid')) {
-                $consultation_fee = 0;
-            } elseif ($paid_visit) {
-                $consultation_fee = 0;
+            if ($existing_consult) {
+                $consultation_item_id = $existing_consult['id'];
+                $consultation_paid_status = $existing_consult['payment_status'];
+                
+                // Check if already paid
+                if ($existing_consult['is_paid'] == 1 || $existing_consult['payment_status'] === 'paid') {
+                    $consultation_already_paid = true;
+                    $consultation_fee = 0;
+                }
             }
             
+            // Also check if patient has paid for consultation within 7 days
+            if (!$consultation_already_paid) {
+                $stmt = $db->prepare("
+                    SELECT pb.id, pb.created_at, pb.total_amount
+                    FROM patient_bills pb
+                    WHERE pb.patient_id = ? 
+                    AND pb.branch_id = ? 
+                    AND pb.status = 'paid'
+                    AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                    ORDER BY pb.created_at DESC
+                    LIMIT 1
+                ");
+                $stmt->execute([$patient_id, $doctor_branch_id]);
+                $paid_visit = $stmt->fetch();
+                
+                if ($paid_visit) {
+                    // Check if this paid bill has consultation fee
+                    $stmt = $db->prepare("
+                        SELECT COUNT(*) FROM bill_items 
+                        WHERE bill_id = ? AND item_type = 'consultation' AND (is_paid = 1 OR payment_status = 'paid')
+                    ");
+                    $stmt->execute([$paid_visit['id']]);
+                    $has_paid_consult = $stmt->fetchColumn();
+                    
+                    if ($has_paid_consult > 0) {
+                        $consultation_already_paid = true;
+                        $consultation_fee = 0;
+                    }
+                }
+            }
+            
+            // Update visit with consultation data
             $stmt = $db->prepare("
                 UPDATE visits 
                 SET symptoms = ?, diagnosis = ?, treatment = ?, notes = ?,
@@ -1183,6 +1217,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             ");
             $stmt->execute([$symptoms, $diagnosis, $treatment, $notes, $consultation_fee, $visit_id, $doctor_id]);
             
+            // Update diagnosis in prescriptions
             $stmt = $db->prepare("
                 UPDATE prescriptions 
                 SET diagnosis = ? 
@@ -1190,8 +1225,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             ");
             $stmt->execute([$diagnosis, $visit_id, $patient_id]);
             
-            if ($consultation_fee > 0) {
+            // ================================================================
+            // ADD CONSULTATION FEE TO BILL ONLY IF NOT ALREADY PAID
+            // ================================================================
+            if ($consultation_fee > 0 && !$consultation_already_paid) {
                 if ($existing_consult) {
+                    // Update existing consultation fee (only if not paid)
                     if ($existing_consult['is_paid'] == 0 || $existing_consult['payment_status'] !== 'paid') {
                         $stmt = $db->prepare("
                             UPDATE bill_items 
@@ -1201,6 +1240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                         $stmt->execute([$consultation_fee, $consultation_fee, $existing_consult['id']]);
                     }
                 } else {
+                    // Create new consultation fee bill item
                     $stmt = $db->prepare("
                         INSERT INTO bill_items (
                             bill_id, item_type, item_name, quantity, unit_price, total_price,
@@ -1212,9 +1252,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 }
             }
             
+            // Update bill totals
             $bill_data = updateBillTotal($db, $bill_id);
             
-            $_SESSION['flash_message'] = "✅ Consultation saved successfully!<br>💰 Consultation fee sent to Cashier.<br>📊 Bill Status: <strong>" . ucfirst($bill_data['status']) . "</strong>";
+            // Prepare flash message
+            $msg = "✅ Consultation saved successfully!";
+            
+            if ($consultation_fee > 0 && !$consultation_already_paid) {
+                $msg .= "<br>💰 Consultation fee (TSh " . number_format($consultation_fee) . ") sent to Cashier.";
+            } elseif ($consultation_already_paid) {
+                $msg .= "<br>💚 <strong>Consultation fee already paid</strong> - No additional charge.";
+                $msg .= "<br>📝 <strong>FREE:</strong> Waived consultation fee (already paid).";
+            } else {
+                $msg .= "<br>💚 No consultation fee charged (free visit).";
+            }
+            
+            $msg .= "<br>📊 Bill Status: <strong>" . ucfirst($bill_data['status']) . "</strong>";
+            $msg .= " | Paid: TSh " . number_format($bill_data['paid'], 0);
+            $msg .= " | Balance: TSh " . number_format($bill_data['balance'], 0);
+            
+            $_SESSION['flash_message'] = $msg;
             $_SESSION['flash_type'] = 'success';
             
             header('Location: consultation.php?visit_id=' . $visit_id . '&view=view');
@@ -3247,7 +3304,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="form-actions">
                 <button type="submit" name="save_consultation" class="btn btn-success" id="saveConsultationBtn" 
                         <?= $sections_frozen ? 'disabled' : '' ?>
-                        onclick="return confirm('Save consultation?\n\n- 💊 Medications: Sent to Pharmacy (Bill when dispensed)\n- 🧪 Lab Tests: Sent to Laboratory (Bill when confirmed)\n- 💉 Procedures & Tools: Sent to Cashier now\n- 💰 Consultation fee: Sent to Cashier now')">
+                        onclick="return confirm('Save consultation?\n\n- 💊 Medications: Sent to Pharmacy (Bill when dispensed)\n- 🧪 Lab Tests: Sent to Laboratory (Bill when confirmed)\n- 💉 Procedures & Tools: Sent to Cashier now\n- 💰 Consultation fee: Sent to Cashier now (if not already paid)')">
                     <i class="fas fa-save"></i> Save Consultation
                 </button>
                 <?php if ($sections_frozen): ?>
@@ -4191,6 +4248,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:12px; color:#0B5ED7;');
         console.log('%c✅ FIXED: NO duplicate lab tests - checks pending AND in_progress', 'font-size:12px; color:#34D399;');
         console.log('%c✅ FIXED: Blue theme with modern cards', 'font-size:12px; color:#34D399;');
+        console.log('%c✅ FIXED: NO double billing for consultation fee', 'font-size:12px; color:#34D399;');
         console.log('%c✅ FIXED: Active tests count: ' + activeLabCount, 'font-size:12px; color:#34D399;');
     });
 

@@ -2,8 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/appointments.php
 // RECEPTION - APPOINTMENTS LIST WITH DATE SELECTOR
-// WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
-// FIXED: Period filter (Today, 1 Week, Monthly, 3 Months, 6 Months, Yearly, All)
+// WITH AUTO-UPDATE (3 SECONDS) - FULL TABLE UPDATE
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -215,9 +214,8 @@ include_once '../../components/reception_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
+        /* All existing CSS remains the same */
+        /* ... (keep all existing styles from your file) ... */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -1172,6 +1170,7 @@ include_once '../../components/reception_sidebar.php';
             <h3 class="table-title">
                 <i class="fas fa-list title-blue mr-2"></i> Appointments List
                 <span class="text-sm font-normal text-gray-400">(<strong id="recordsCount"><?= $total_records ?></strong> records)</span>
+                <span class="text-xs text-gray-400 ml-2" id="lastUpdateTime">⏱ Auto-updating</span>
             </h3>
             <span class="text-xs text-gray-400">Scroll to view all</span>
         </div>
@@ -1193,7 +1192,7 @@ include_once '../../components/reception_sidebar.php';
                 <tbody id="appointmentsTableBody">
                     <?php if (count($appointments) > 0): ?>
                         <?php $i = 1; foreach ($appointments as $appt): ?>
-                            <tr class="appointment-row">
+                            <tr class="appointment-row" data-appointment-id="<?= $appt['id'] ?>">
                                 <td><?= $i++ ?></td>
                                 <td><?= date('M d, Y h:i A', strtotime($appt['appointment_date'])) ?></td>
                                 <td>
@@ -1230,7 +1229,7 @@ include_once '../../components/reception_sidebar.php';
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
-                        <tr>
+                        <tr id="emptyStateRow">
                             <td colspan="8" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-calendar-check text-3xl block mb-2"></i>
                                 <?php if (!empty($search) || !empty($status_filter) || !empty($period_filter) || !empty($date_filter)): ?>
@@ -1265,9 +1264,9 @@ include_once '../../components/reception_sidebar.php';
     <!-- ================================================================ -->
     <!-- QUICK STATS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mt-5">
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mt-5" id="statsContainer">
         <?php foreach ($status_counts as $status => $count): ?>
-            <div class="stat-card <?= $status === 'completed' ? 'border-green-500' : ($status === 'cancelled' ? 'border-red-500' : '') ?>">
+            <div class="stat-card <?= $status === 'completed' ? 'border-green-500' : ($status === 'cancelled' ? 'border-red-500' : '') ?>" data-status="<?= $status ?>">
                 <div class="stat-icon <?= $status === 'completed' ? 'text-green-500' : ($status === 'cancelled' ? 'text-red-500' : 'text-blue-500') ?>">
                     <?php if ($status === 'completed'): ?>
                         <i class="fas fa-check-circle"></i>
@@ -1281,7 +1280,7 @@ include_once '../../components/reception_sidebar.php';
                         <i class="fas fa-spinner"></i>
                     <?php endif; ?>
                 </div>
-                <p class="stat-number <?= $status === 'completed' ? 'text-green-600' : ($status === 'cancelled' ? 'text-red-500' : 'text-blue-600') ?>">
+                <p class="stat-number <?= $status === 'completed' ? 'text-green-600' : ($status === 'cancelled' ? 'text-red-500' : 'text-blue-600') ?> stat-count" data-status="<?= $status ?>">
                     <?= $count ?>
                 </p>
                 <p class="stat-label capitalize"><?= ucfirst(str_replace('-', ' ', $status)) ?></p>
@@ -1318,7 +1317,7 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS) -->
+<!-- JAVASCRIPT - FULL AUTO-UPDATE (3 SECONDS) -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1380,8 +1379,10 @@ include_once '../../components/reception_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        var dt = document.getElementById('currentDateTime');
+        if (dt) dt.textContent = dateStr + ' • ' + timeStr;
+        var ft = document.getElementById('footerTimestamp');
+        if (ft) ft.textContent = 'Last updated: ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -1412,6 +1413,7 @@ include_once '../../components/reception_sidebar.php';
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
+        if (!toast) return;
         
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
@@ -1429,49 +1431,207 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // GLOBAL STATS AUTO-UPDATE (3 SECONDS)
+    // STATUS BADGE HTML
     // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
+    function getStatusBadge(status) {
+        var colorClass = 'badge-yellow';
+        if (status === 'confirmed' || status === 'completed') {
+            colorClass = 'badge-green';
+        } else if (status === 'cancelled') {
+            colorClass = 'badge-red';
+        } else if (status === 'scheduled') {
+            colorClass = 'badge-blue';
+        } else if (status === 'in-progress') {
+            colorClass = 'badge-purple';
+        }
+        return '<span class="badge ' + colorClass + '">' + status.charAt(0).toUpperCase() + status.slice(1) + '</span>';
+    }
 
-    function fetchAndUpdateStats() {
-        if (isUpdating) return;
-        isUpdating = true;
+    // ================================================================
+    // FETCH APPOINTMENTS DATA - FULL TABLE UPDATE
+    // ================================================================
+    function fetchAppointmentsData() {
+        var statusFilter = '<?= $status_filter ?>';
+        var periodFilter = '<?= $period_filter ?>';
+        var dateFilter = '<?= $date_filter ?>';
+        var searchQuery = '<?= addslashes($search) ?>';
         
-        fetch('/dispensary_system/frontend/api/get_global_stats.php?t=' + new Date().getTime())
+        var url = '/dispensary_system/frontend/api/get_appointments.php?t=' + new Date().getTime();
+        url += '&branch_id=<?= $selected_branch_id ?>';
+        if (statusFilter) url += '&status=' + encodeURIComponent(statusFilter);
+        if (periodFilter) url += '&period=' + encodeURIComponent(periodFilter);
+        if (dateFilter) url += '&date=' + encodeURIComponent(dateFilter);
+        if (searchQuery) url += '&search=' + encodeURIComponent(searchQuery);
+        
+        fetch(url)
             .then(function(response) { return response.json(); })
             .then(function(data) {
                 if (data.success) {
-                    var stats = data.stats || {};
-                    var onlineCount = stats.online_doctors || 0;
+                    updateAppointmentsTable(data);
+                    updateStatsCounts(data.status_counts || {});
+                    updateHeaderCounts(data);
                     
-                    // Update online doctors count
-                    document.getElementById('onlineDoctorCount').textContent = onlineCount;
-                    
-                    // Update update badge
                     var now = new Date();
                     document.getElementById('updateBadge').innerHTML = 
                         '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
                         now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    document.getElementById('footerTimestamp').textContent = 'Last updated: ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    document.getElementById('lastUpdateTime').textContent = '⏱ ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    
+                    if (data.notification) {
+                        showToast('📋 Update', data.notification, 'info');
+                    }
                 }
-                isUpdating = false;
             })
             .catch(function(error) {
-                console.error('Update error:', error);
-                isUpdating = false;
+                console.error('Fetch appointments error:', error);
             });
+    }
+
+    // ================================================================
+    // UPDATE TABLE
+    // ================================================================
+    function updateAppointmentsTable(data) {
+        var tbody = document.getElementById('appointmentsTableBody');
+        if (!tbody) return;
+        
+        var appointments = data.appointments || [];
+        var totalRecords = appointments.length;
+        
+        if (appointments.length === 0) {
+            tbody.innerHTML = `
+                <tr id="emptyStateRow">
+                    <td colspan="8" class="text-center py-8 text-gray-400">
+                        <i class="fas fa-calendar-check text-3xl block mb-2"></i>
+                        ${data.search || data.status || data.period || data.date ? 'No appointments found matching the filters' : 'No appointments scheduled'}
+                    </td>
+                </tr>
+            `;
+            document.getElementById('recordsCount').textContent = '0';
+            document.getElementById('footerRecordsCount').textContent = '0';
+            document.getElementById('totalRecordsCount').textContent = '0';
+            return;
+        }
+        
+        var html = '';
+        var counter = 1;
+        
+        appointments.forEach(function(appt, index) {
+            var appointmentDate = new Date(appt.appointment_date);
+            var dateStr = appointmentDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            var timeStr = appointmentDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+            
+            html += `
+                <tr class="appointment-row" data-appointment-id="${appt.id}">
+                    <td>${counter++}</td>
+                    <td>${dateStr} ${timeStr}</td>
+                    <td>
+                        <div>
+                            <span class="font-medium">${escapeHtml(appt.patient_name || 'N/A')}</span>
+                            <div class="text-xs text-gray-400">${escapeHtml(appt.patient_id || 'N/A')}</div>
+                        </div>
+                    </td>
+                    <td style="text-align:center;">
+                        <span class="appointment-count-badge">
+                            <i class="fas fa-calendar-alt"></i> ${appt.patient_appointment_count || 0}
+                        </span>
+                    </td>
+                    <td>Dr. ${escapeHtml(appt.doctor_name || 'N/A')}</td>
+                    <td>${escapeHtml(appt.purpose || 'N/A')}</td>
+                    <td>${getStatusBadge(appt.status || 'scheduled')}</td>
+                    <td>
+                        <div class="flex gap-1 justify-center">
+                            <a href="view_appointment.php?id=${appt.id}" 
+                               class="btn btn-blue btn-sm" title="View Appointment">
+                                <i class="fas fa-eye"></i>
+                            </a>
+                            <a href="view_patient.php?id=${appt.patient_id}" 
+                               class="btn btn-outline btn-sm" title="View Patient" 
+                               style="border-color:var(--primary);color:var(--primary);">
+                                <i class="fas fa-user"></i>
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        tbody.innerHTML = html;
+        
+        document.getElementById('recordsCount').textContent = totalRecords;
+        document.getElementById('footerRecordsCount').textContent = totalRecords;
+        document.getElementById('totalRecordsCount').textContent = totalRecords;
+    }
+
+    // ================================================================
+    // UPDATE STATS COUNTS
+    // ================================================================
+    function updateStatsCounts(statusCounts) {
+        var statuses = ['scheduled', 'confirmed', 'in-progress', 'completed', 'cancelled'];
+        
+        statuses.forEach(function(status) {
+            var count = statusCounts[status] || 0;
+            
+            // Update stat cards
+            var statElement = document.querySelector('.stat-count[data-status="' + status + '"]');
+            if (statElement) {
+                statElement.textContent = count;
+            }
+            
+            // Update filter buttons
+            var filterLinks = document.querySelectorAll('.filter-btn');
+            filterLinks.forEach(function(link) {
+                var text = link.textContent.trim();
+                if (text.toLowerCase().startsWith(status) || 
+                    (status === 'scheduled' && text.toLowerCase().startsWith('scheduled'))) {
+                    var matches = text.match(/\((\d+)\)/);
+                    if (matches) {
+                        link.textContent = link.textContent.replace(/\((\d+)\)/, '(' + count + ')');
+                    }
+                }
+            });
+        });
+        
+        // Update "All" count
+        var total = Object.values(statusCounts).reduce(function(a, b) { return a + b; }, 0);
+        var allLink = document.querySelector('.filter-btn:not([href*="status="])');
+        if (allLink) {
+            var matches = allLink.textContent.match(/\((\d+)\)/);
+            if (matches) {
+                allLink.textContent = allLink.textContent.replace(/\((\d+)\)/, '(' + total + ')');
+            }
+        }
+    }
+
+    // ================================================================
+    // UPDATE HEADER COUNTS
+    // ================================================================
+    function updateHeaderCounts(data) {
+        var onlineCount = data.online_doctors || 0;
+        document.getElementById('onlineDoctorCount').textContent = onlineCount;
+    }
+
+    // ================================================================
+    // ESCAPE HTML
+    // ================================================================
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     // ================================================================
     // START / STOP AUTO-UPDATE
     // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+
     function startAutoUpdate() {
         if (updateInterval) {
             clearInterval(updateInterval);
         }
-        updateInterval = setInterval(fetchAndUpdateStats, 3000);
-        fetchAndUpdateStats();
+        fetchAppointmentsData();
+        updateInterval = setInterval(fetchAppointmentsData, 3000);
     }
 
     function stopAutoUpdate() {
@@ -1489,14 +1649,13 @@ include_once '../../components/reception_sidebar.php';
         btn.innerHTML = '<span class="spinner"></span> Loading...';
         btn.disabled = true;
         
-        fetchAndUpdateStats();
-        window.location.reload();
+        fetchAppointmentsData();
         
         setTimeout(function() {
             btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
             btn.disabled = false;
             showToast('✅ Refreshed', 'Appointments data updated manually', 'success');
-        }, 2000);
+        }, 1500);
     }
 
     // ================================================================
@@ -1527,6 +1686,10 @@ include_once '../../components/reception_sidebar.php';
             searchInput.value = '';
             searchInput.blur();
         }
+        if (e.key === 'F5') {
+            e.preventDefault();
+            manualRefresh();
+        }
     });
 
     // ================================================================
@@ -1541,13 +1704,13 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c📅 Braick - Appointments List', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📅 Braick - Appointments List (Auto-Update Active)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Total Appointments: <?= $total_appointments_all ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Showing <?= $total_records ?> appointments', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📆 Period: <?= $period_labels[$period_filter] ?? 'All' ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Full auto-update: Every 3 seconds (ALL data)', 'font-size:13px; color:#34D399;');
     console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
 </script>
 
