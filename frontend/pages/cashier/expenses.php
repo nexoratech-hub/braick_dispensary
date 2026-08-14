@@ -7,35 +7,65 @@
 // FIXED: Column 'branch_id' ambiguous - added table prefix "e."
 // FIXED: Money format - 1,000,000,000
 // FIXED: Auto-format amount with commas while typing
+// FIXED: Reception allowed to access
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Cashier
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 10;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.dodoma';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 10;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// ALLOWED ROLES: Cashier, Reception, Admin
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
 
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
 $currency = 'TSh';
@@ -55,7 +85,7 @@ try {
 }
 
 // ================================================================
-// ✅ MONEY FORMAT FUNCTION - 1,000,000,000
+// MONEY FORMAT FUNCTION - 1,000,000,000
 // ================================================================
 function formatMoney($amount) {
     if ($amount === null || $amount === '') {
@@ -278,7 +308,7 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $view_id = isset($_GET['view']) ? (int)$_GET['view'] : 0;
 
 // ================================================================
-// ✅ GET EXPENSES - FIXED: Added table prefix "e." for all columns
+// GET EXPENSES - FIXED: Added table prefix "e." for all columns
 // ================================================================
 $conditions = ["e.branch_id = ?"];
 $params = [$user_branch_id];
@@ -397,9 +427,20 @@ function formatDateOnly($date) {
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
+
+// ================================================================
+// SIDEBAR - CASHIER SIDEBAR (RECEPTION HAS FULL ACCESS)
+// ================================================================
 include_once '../../components/cashier_sidebar.php';
 ?>
 
@@ -1287,7 +1328,12 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-coins"></i>
                 Expenses
-                <span class="role-badge-display">CASHIER</span>
+                <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);">
+                        <i class="fas fa-check-circle"></i> Full Access
+                    </span>
+                <?php endif; ?>
                 <span class="header-badge">
                     <i class="fas fa-list"></i> <?= $total_expenses ?> Total
                 </span>
@@ -1304,6 +1350,11 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.1);font-size:0.5rem;">
                     <i class="fas fa-check-circle"></i> Paid: <?= $total_paid ?> (<?= $currency ?> <?= formatMoney($paid_amount) ?>)
                 </span>
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);font-size:0.5rem;">
+                        <i class="fas fa-user-tag"></i> Reception Access
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1514,6 +1565,12 @@ include_once '../../components/cashier_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Expenses
             <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
+            <?php if ($is_reception): ?>
+                <span class="text-gray-400 mx-2">|</span>
+                <span style="color:#34D399;">👀 Reception Access</span>
+            <?php endif; ?>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1639,7 +1696,7 @@ include_once '../../components/cashier_sidebar.php';
                 <input type="text" name="description" class="form-control" placeholder="Enter expense description" required>
             </div>
             
-            <!-- ✅ AMOUNT WITH AUTO-FORMAT COMMAS -->
+            <!-- AMOUNT WITH AUTO-FORMAT COMMAS -->
             <div class="form-group">
                 <label>Amount (TSh) <span class="required">*</span></label>
                 <input type="text" 
@@ -1724,7 +1781,7 @@ include_once '../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // ✅ AUTO-FORMAT AMOUNT WITH COMMAS WHILE TYPING
+    // AUTO-FORMAT AMOUNT WITH COMMAS WHILE TYPING
     // ================================================================
     function formatAmount(input) {
         // Remove all non-digit characters
@@ -1912,11 +1969,10 @@ include_once '../../components/cashier_sidebar.php';
     <?php endif; ?>
 
     console.log('%c💰 Braick - Expenses Management', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
     console.log('%c📊 Total: <?= $total_expenses ?> | Amount: <?= $currency ?> <?= formatMoney($total_amount) ?>', 'font-size:12px; color:#059669;');
     console.log('%c⏳ Pending: <?= $total_pending ?> | ✅ Paid: <?= $total_paid ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c📋 Category Filter: <?= $filter_category ?: 'All' ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c🔍 Search: <?= $search ?: 'None' ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c💰 FIXED: Auto-format commas while typing - 1,000,000,000', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

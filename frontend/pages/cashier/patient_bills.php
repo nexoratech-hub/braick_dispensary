@@ -5,50 +5,74 @@
 // DISPLAYS ONLY PAID BILLS WITH "PAID" WATERMARK
 // FIXED: Uses shared header with clock
 // FIXED: Dark mode fully working with header
+// FIXED: Reception access allowed
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Default to cashier (ID: 7)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Cashier User';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier';
-    $_SESSION['email'] = 'cashier@braick.com';
-    $_SESSION['phone'] = '+255 700 000 007';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// ALLOW RECEPTION TO ACCESS CASHIER PAGES
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-$allowed_roles = ['cashier', 'reception', 'admin'];
-if (!in_array($_SESSION['role'], $allowed_roles)) {
-    header('Location: ../' . $_SESSION['role'] . '/dashboard.php');
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
     exit;
 }
 
 // ================================================================
+// ALLOWED ROLES: Cashier, Reception, Admin
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
 // CHECK IF USER IS ADMIN
 // ================================================================
-$is_admin = ($_SESSION['role'] === 'admin' || $_SESSION['is_admin'] === true);
+$is_admin = ($user_role === 'admin');
 
 // ================================================================
-// PATH SAHIHI
+// INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
+$message = '';
+$message_type = '';
+$currency = 'TSh';
 
 // ================================================================
 // GET PATIENT ID FROM URL
@@ -61,7 +85,15 @@ if ($patient_id <= 0) {
 }
 
 try {
-    $db = getDB();
+    // ================================================================
+    // GET SYSTEM SETTINGS
+    // ================================================================
+    $settings = [];
+    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $settings[$row['setting_key']] = $row['setting_value'];
+    }
+    $currency = $settings['currency'] ?? 'TSh';
 
     // ================================================================
     // GET PATIENT DETAILS
@@ -70,10 +102,10 @@ try {
         SELECT p.*, b.name as branch_name 
         FROM patients p
         LEFT JOIN branches b ON p.branch_id = b.id
-        WHERE p.id = ?
+        WHERE p.id = ? AND p.branch_id = ?
     ");
-    $stmt->execute([$patient_id]);
-    $patient = $stmt->fetch();
+    $stmt->execute([$patient_id, $user_branch_id]);
+    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$patient) {
         header('Location: patients.php');
@@ -104,8 +136,8 @@ try {
         WHERE pb.patient_id = ? AND pb.branch_id = ? AND pb.status = 'paid'
         ORDER BY pb.updated_at DESC
     ");
-    $stmt->execute([$patient_id, $selected_branch_id]);
-    $bills = $stmt->fetchAll();
+    $stmt->execute([$patient_id, $user_branch_id]);
+    $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // ================================================================
     // GET BILL ITEMS FOR EACH BILL
@@ -118,7 +150,7 @@ try {
             ORDER BY created_at ASC
         ");
         $stmt->execute([$bill['id']]);
-        $bill_items[$bill['id']] = $stmt->fetchAll();
+        $bill_items[$bill['id']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     // ================================================================
@@ -133,16 +165,6 @@ try {
         $total_paid += (float)$bill['paid_amount'];
     }
 
-    // ================================================================
-    // GET SYSTEM SETTINGS
-    // ================================================================
-    $settings = [];
-    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
-    while ($row = $stmt->fetch()) {
-        $settings[$row['setting_key']] = $row['setting_value'];
-    }
-    $currency = $settings['currency'] ?? 'TSh';
-
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
@@ -156,9 +178,25 @@ try {
 }
 
 // ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
+
+// ================================================================
+// SIDEBAR - CASHIER SIDEBAR (RECEPTION HAS FULL ACCESS)
+// ================================================================
 include_once '../../components/cashier_sidebar.php';
 ?>
 <!DOCTYPE html>
@@ -168,8 +206,8 @@ include_once '../../components/cashier_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Paid Bills - <?= htmlspecialchars($patient['full_name'] ?? 'Patient') ?> - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -970,7 +1008,12 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-file-invoice-dollar"></i>
                 Paid Bills
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);">
+                        <i class="fas fa-check-circle"></i> Full Access
+                    </span>
+                <?php endif; ?>
                 <?php if ($is_admin): ?>
                     <span class="header-badge" style="background:rgba(124,58,237,0.3);border-color:rgba(124,58,237,0.3);color:#C4B5FD;">
                         <i class="fas fa-user-shield"></i> ADMIN VIEW
@@ -991,6 +1034,12 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-check-circle"></i>
                     <?= $total_bills ?> paid bill(s)
                 </span>
+                
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);">
+                        <i class="fas fa-user-tag"></i> Reception Access
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1025,7 +1074,7 @@ include_once '../../components/cashier_sidebar.php';
                 <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
                 <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
                 <span><i class="fas fa-venus-mars"></i> <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
-                <span><i class="fas fa-store-alt"></i> <?= htmlspecialchars($patient['branch_name'] ?? $branch_name) ?></span>
+                <span><i class="fas fa-store-alt"></i> <?= htmlspecialchars($patient['branch_name'] ?? $user_branch_name) ?></span>
             </div>
         </div>
     </div>
@@ -1192,6 +1241,12 @@ include_once '../../components/cashier_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Paid Bills
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
+            <?php if ($is_reception): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#34D399;">👀 Reception Access</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1406,8 +1461,10 @@ include_once '../../components/cashier_sidebar.php';
 
     console.log('%c💰 Braick - Paid Bills (With Watermark)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Total Paid Bills: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total Paid: <?= $currency ?> <?= number_format($total_paid, 0) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Each bill has a "PAID" watermark with slash/strikethrough effect', 'font-size:12px; color:#34D399;');
     console.log('%c🌓 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
 </script>

@@ -3,44 +3,63 @@
 // FILE: frontend/pages/cashier/edit_profile.php
 // CASHIER - EDIT PROFILE
 // USES SHARED HEADER WITH DARK MODE
+// ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// INCLUDE CONFIG
+// START SESSION
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to Cashier
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Cashier Dodoma';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.dodoma';
-    $_SESSION['email'] = 'cashier@braick.com';
-    $_SESSION['phone'] = '+255 700 000 010';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 10;
-$user_full_name = $_SESSION['full_name'] ?? 'Cashier Dodoma';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// ALLOWED ROLES: Cashier, Reception, Admin
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
 $user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_username = $_SESSION['username'] ?? 'cashier.dodoma';
-$user_email = $_SESSION['email'] ?? 'cashier@braick.com';
-$user_phone = $_SESSION['phone'] ?? '+255 700 000 010';
+$user_username = $_SESSION['username'] ?? 'user';
+$user_email = $_SESSION['email'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-$db = getDB();
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // UPLOAD DIRECTORY
@@ -106,8 +125,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Verify current password
                 $stmt = $db->prepare("SELECT password FROM users WHERE id = ?");
                 $stmt->execute([$user_id]);
-                $user_data = $stmt->fetch();
-                if ($user_data && password_verify($current_password, $user_data['password'])) {
+                $user_data = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                // Check password - supports both hashed and plain
+                $password_valid = false;
+                if ($user_data) {
+                    if (str_starts_with($user_data['password'], '$2y$')) {
+                        $password_valid = password_verify($current_password, $user_data['password']);
+                    } else {
+                        $password_valid = ($current_password === $user_data['password']);
+                    }
+                }
+                
+                if ($password_valid) {
                     $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
                 } else {
                     $errors[] = 'Current password is incorrect';
@@ -227,19 +257,19 @@ $patients_waiting = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$user_branch_id]);
-    $pending_bills = $stmt->fetch()['count'] ?? 0;
+    $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'partial'");
     $stmt->execute([$user_branch_id]);
-    $partial_payments = $stmt->fetch()['count'] ?? 0;
+    $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()");
     $stmt->execute([$user_branch_id]);
-    $paid_today = $stmt->fetch()['count'] ?? 0;
+    $paid_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
     $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM patient_bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
     $stmt->execute([$user_branch_id]);
-    $patients_waiting = $stmt->fetch()['count'] ?? 0;
+    $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } catch (Exception $e) {
     // Keep counts as 0
 }
@@ -251,10 +281,20 @@ $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
 }
+
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -269,8 +309,8 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edit Profile - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -399,6 +439,46 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             background: #3A1A1A;
             color: #F87171;
             border-color: #F87171;
+        }
+
+        [data-theme="dark"] .form-card {
+            background: #1E293B;
+            border-color: #334155;
+        }
+
+        [data-theme="dark"] .form-card:hover {
+            border-color: #34D399;
+        }
+
+        [data-theme="dark"] .form-control {
+            background: #1E293B;
+            color: #F1F5F9;
+            border-color: #334155;
+        }
+
+        [data-theme="dark"] .form-control:focus {
+            border-color: #34D399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
+        }
+
+        [data-theme="dark"] .form-control:disabled {
+            opacity: 0.5;
+        }
+
+        [data-theme="dark"] .avatar-upload {
+            background: #0F172A;
+            border-color: #334155;
+        }
+
+        [data-theme="dark"] .btn-outline {
+            border-color: #334155;
+            color: #94A3B8;
+        }
+
+        [data-theme="dark"] .btn-outline:hover {
+            border-color: #34D399;
+            color: #34D399;
+            background: #1A3A2A;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -690,6 +770,41 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             gap: 4px;
         }
 
+        [data-theme="dark"] .page-header-custom .branch-tag {
+            background: #047857;
+        }
+
+        .page-header-custom .role-badge {
+            background: var(--primary-bg);
+            color: var(--primary);
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        [data-theme="dark"] .page-header-custom .role-badge {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+
+        .page-header-custom .reception-badge {
+            background: rgba(251, 191, 36, 0.2);
+            color: #D97706;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            border: 1px solid rgba(251, 191, 36, 0.2);
+        }
+
+        [data-theme="dark"] .page-header-custom .reception-badge {
+            background: rgba(251, 191, 36, 0.15);
+            color: #FCD34D;
+            border-color: rgba(251, 191, 36, 0.2);
+        }
+
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -766,6 +881,12 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-user-edit mr-2" style="color: var(--primary);"></i> Edit Profile
+                <span class="role-badge ml-2"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="reception-badge ml-1">
+                        <i class="fas fa-eye"></i> Reception
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Update your profile information
@@ -953,6 +1074,13 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Edit Profile
             <span class="text-gray-300 mx-2">|</span>
+            <span style="color:<?= $is_reception ? '#FCD34D' : '#FFD700' ?>;font-weight:600;">
+                👤 <?= htmlspecialchars($user_full_name) ?>
+                <?php if ($is_reception): ?>
+                    <span style="color:#FCD34D;font-weight:500;font-size:0.6rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 Reception</span>
+                <?php endif; ?>
+            </span>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -978,7 +1106,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     // DARK MODE - SYNC WITH HEADER
     // ================================================================
     // Note: Dark mode is controlled by header.
-    // This page listens for changes and applies them.
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1106,6 +1233,9 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 
     console.log('%c💰 Braick - Cashier Edit Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
+    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
     console.log('%c📁 Upload Dir: <?= $upload_dir ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
 </script>

@@ -2,42 +2,75 @@
 // ================================================================
 // FILE: frontend/pages/cashier/receive_payment.php
 // CASHIER - RECEIVE PAYMENT
+// ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// INCLUDE CONFIG
+// START SESSION
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to reception.rose (Cashier)
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 6;
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// ALLOWED ROLES: Cashier, Reception, Admin
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_email = $_SESSION['email'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
 
-$db = getDB();
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET BILL ID FROM URL
 // ================================================================
 $bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
 $bill_number = isset($_GET['bill_number']) ? trim($_GET['bill_number']) : '';
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ================================================================
 // GET BILL DETAILS
@@ -48,17 +81,17 @@ $patient = null;
 $visit = null;
 
 if ($bill_id > 0) {
-    // Get bill
+    // Get bill from patient_bills table
     $stmt = $db->prepare("
-        SELECT b.*, p.full_name as patient_name, p.patient_id, p.phone,
+        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
                v.visit_number
-        FROM bills b
-        JOIN patients p ON b.patient_id = p.id
-        LEFT JOIN visits v ON b.visit_id = v.id
-        WHERE b.id = ? AND b.branch_id = ?
+        FROM patient_bills pb
+        JOIN patients p ON pb.patient_id = p.id
+        LEFT JOIN visits v ON pb.visit_id = v.id
+        WHERE pb.id = ? AND pb.branch_id = ?
     ");
     $stmt->execute([$bill_id, $user_branch_id]);
-    $bill = $stmt->fetch();
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($bill) {
         // Get bill items
@@ -68,18 +101,18 @@ if ($bill_id > 0) {
             ORDER BY id
         ");
         $stmt->execute([$bill_id]);
-        $bill_items = $stmt->fetchAll();
+        $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         // Get patient
         $stmt = $db->prepare("SELECT * FROM patients WHERE id = ?");
         $stmt->execute([$bill['patient_id']]);
-        $patient = $stmt->fetch();
+        $patient = $stmt->fetch(PDO::FETCH_ASSOC);
         
         // Get visit
         if ($bill['visit_id']) {
             $stmt = $db->prepare("SELECT * FROM visits WHERE id = ?");
             $stmt->execute([$bill['visit_id']]);
-            $visit = $stmt->fetch();
+            $visit = $stmt->fetch(PDO::FETCH_ASSOC);
         }
     }
 }
@@ -87,27 +120,44 @@ if ($bill_id > 0) {
 // If bill not found by ID, try by bill number
 if (!$bill && !empty($bill_number)) {
     $stmt = $db->prepare("
-        SELECT b.*, p.full_name as patient_name, p.patient_id, p.phone,
+        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
                v.visit_number
-        FROM bills b
-        JOIN patients p ON b.patient_id = p.id
-        LEFT JOIN visits v ON b.visit_id = v.id
-        WHERE b.bill_number = ? AND b.branch_id = ?
+        FROM patient_bills pb
+        JOIN patients p ON pb.patient_id = p.id
+        LEFT JOIN visits v ON pb.visit_id = v.id
+        WHERE pb.bill_number = ? AND pb.branch_id = ?
     ");
     $stmt->execute([$bill_number, $user_branch_id]);
-    $bill = $stmt->fetch();
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($bill) {
         $bill_id = $bill['id'];
         // Get bill items
         $stmt = $db->prepare("SELECT * FROM bill_items WHERE bill_id = ?");
         $stmt->execute([$bill_id]);
-        $bill_items = $stmt->fetchAll();
+        $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $stmt = $db->prepare("SELECT * FROM patients WHERE id = ?");
         $stmt->execute([$bill['patient_id']]);
-        $patient = $stmt->fetch();
+        $patient = $stmt->fetch(PDO::FETCH_ASSOC);
     }
+}
+
+// Search bills
+if (!empty($search) && !$bill) {
+    $stmt = $db->prepare("
+        SELECT pb.id, pb.bill_number, pb.total_amount, pb.balance, pb.status,
+               p.full_name as patient_name, p.patient_id
+        FROM patient_bills pb
+        JOIN patients p ON pb.patient_id = p.id
+        WHERE pb.branch_id = ? 
+        AND (pb.bill_number LIKE ? OR p.full_name LIKE ? OR p.patient_id LIKE ?)
+        AND pb.status IN ('pending', 'partial')
+        LIMIT 10
+    ");
+    $search_term = "%$search%";
+    $stmt->execute([$user_branch_id, $search_term, $search_term, $search_term]);
+    $search_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 // ================================================================
@@ -131,13 +181,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $message = "Amount must be greater than zero!";
         $message_type = 'error';
     } else {
-        // Get bill details
-        $stmt = $db->prepare("SELECT * FROM bills WHERE id = ? AND branch_id = ?");
+        // Get bill details from patient_bills
+        $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
         $stmt->execute([$bill_id, $user_branch_id]);
-        $bill_data = $stmt->fetch();
+        $bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$bill_data) {
-            $message = "Bill not found!";
+            $message = "Bill not found or already processed!";
             $message_type = 'error';
         } elseif ($bill_data['status'] === 'paid') {
             $message = "This bill is already fully paid!";
@@ -185,8 +235,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $payment_id = $db->lastInsertId();
                 
                 // Update bill
-                $new_paid = $bill_data['amount_paid'] + $amount;
-                $new_balance = $bill_data['grand_total'] - $new_paid;
+                $new_paid = $bill_data['paid_amount'] + $amount;
+                $new_balance = $bill_data['total_amount'] - $new_paid;
                 
                 if ($new_balance <= 0) {
                     $new_status = 'paid';
@@ -194,12 +244,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $new_status = 'partial';
                 }
                 
+                // Update patient_bills
                 $stmt = $db->prepare("
-                    UPDATE bills 
-                    SET amount_paid = ?, balance = ?, status = ?, updated_at = NOW()
+                    UPDATE patient_bills 
+                    SET paid_amount = ?, 
+                        balance = ?, 
+                        status = ?, 
+                        updated_at = NOW()
                     WHERE id = ?
                 ");
                 $stmt->execute([$new_paid, $new_balance, $new_status, $bill_id]);
+                
+                // Update bill_items
+                $stmt = $db->prepare("
+                    UPDATE bill_items 
+                    SET is_paid = 1, 
+                        payment_status = 'paid', 
+                        paid_at = NOW()
+                    WHERE bill_id = ? AND (is_paid = 0 OR is_paid IS NULL)
+                ");
+                $stmt->execute([$bill_id]);
                 
                 $db->commit();
                 
@@ -209,25 +273,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 
                 // Refresh bill data
                 $stmt = $db->prepare("
-                    SELECT b.*, p.full_name as patient_name, p.patient_id, p.phone,
+                    SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
                            v.visit_number
-                    FROM bills b
-                    JOIN patients p ON b.patient_id = p.id
-                    LEFT JOIN visits v ON b.visit_id = v.id
-                    WHERE b.id = ? AND b.branch_id = ?
+                    FROM patient_bills pb
+                    JOIN patients p ON pb.patient_id = p.id
+                    LEFT JOIN visits v ON pb.visit_id = v.id
+                    WHERE pb.id = ? AND pb.branch_id = ?
                 ");
                 $stmt->execute([$bill_id, $user_branch_id]);
-                $bill = $stmt->fetch();
+                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 $bill_items = [];
                 $stmt = $db->prepare("SELECT * FROM bill_items WHERE bill_id = ?");
                 $stmt->execute([$bill_id]);
-                $bill_items = $stmt->fetchAll();
+                $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 // Redirect to receipt if requested
                 if (isset($_POST['save_and_print']) || isset($_POST['print_receipt'])) {
-                    echo '<script>setTimeout(function(){ window.location.href = "print_receipt.php?payment_id=' . $payment_id . '"; }, 1500);</script>';
+                    echo '<script>setTimeout(function(){ window.location.href = "print_receipt.php?payment_id=' . $payment_id . '&bill_id=' . $bill_id . '&print=1"; }, 1500);</script>';
                 } else {
-                    echo '<script>setTimeout(function(){ window.location.href = "view_bill.php?id=' . $bill['bill_number'] . '&success=1"; }, 1500);</script>';
+                    echo '<script>setTimeout(function(){ window.location.href = "paid_bills.php?success=1"; }, 1500);</script>';
                 }
                 
             } catch (Exception $e) {
@@ -248,21 +312,21 @@ $paid_today = 0;
 $patients_waiting = 0;
 
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'pending'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$user_branch_id]);
-    $pending_bills = $stmt->fetch()['count'] ?? 0;
+    $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'partial'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'partial'");
     $stmt->execute([$user_branch_id]);
-    $partial_payments = $stmt->fetch()['count'] ?? 0;
+    $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()");
     $stmt->execute([$user_branch_id]);
-    $paid_today = $stmt->fetch()['count'] ?? 0;
+    $paid_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
+    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM patient_bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
     $stmt->execute([$user_branch_id]);
-    $patients_waiting = $stmt->fetch()['count'] ?? 0;
+    $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } catch (Exception $e) {
     // Keep counts as 0
 }
@@ -274,7 +338,7 @@ $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
 }
@@ -282,10 +346,11 @@ try {
 // ================================================================
 // PROFILE PICTURE
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -635,6 +700,32 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         margin-bottom: 12px;
     }
     
+    .search-results {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 16px 20px;
+        border: 2px solid var(--border-color);
+        margin-bottom: 20px;
+    }
+    
+    .search-results .result-item {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .search-results .result-item:last-child {
+        border-bottom: none;
+    }
+    
+    .search-results .result-item:hover {
+        background: var(--table-hover);
+    }
+    
     @media (max-width: 768px) {
         .bill-summary .summary-grid {
             grid-template-columns: 1fr 1fr;
@@ -662,48 +753,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 </style>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search bills, patients...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
@@ -713,6 +762,12 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-hand-holding-usd mr-2" style="color: #059669;"></i> Receive Payment
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="role-badge-display" style="background:rgba(251,191,36,0.3);color:#FCD34D;border:1px solid rgba(251,191,36,0.2);">
+                        <i class="fas fa-eye"></i> Reception
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Process payment for patient bill
@@ -736,6 +791,34 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
+    <!-- Search Results -->
+    <?php if (!empty($search_results) && !$bill): ?>
+        <div class="search-results animate-fade-in-up">
+            <div class="flex justify-between items-center mb-3">
+                <h4 class="font-semibold text-sm">Search Results</h4>
+                <span class="text-xs text-gray-400"><?= count($search_results) ?> bills found</span>
+            </div>
+            <?php foreach ($search_results as $result): ?>
+                <div class="result-item">
+                    <div>
+                        <span class="font-medium"><?= htmlspecialchars($result['patient_name']) ?></span>
+                        <span class="text-xs text-gray-400 ml-2"><?= htmlspecialchars($result['patient_id']) ?></span>
+                        <div class="text-xs text-gray-400"><?= htmlspecialchars($result['bill_number']) ?></div>
+                    </div>
+                    <div class="text-right">
+                        <div class="font-semibold">TSh <?= number_format($result['balance'], 0) ?></div>
+                        <div class="text-xs">
+                            <span class="status-badge <?= $result['status'] ?>"><?= ucfirst($result['status']) ?></span>
+                        </div>
+                        <a href="receive_payment.php?bill_id=<?= $result['id'] ?>" class="btn btn-success btn-sm mt-1">
+                            <i class="fas fa-hand-holding-usd"></i> Pay
+                        </a>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
+
     <!-- ================================================================ -->
     <!-- PAYMENT FORM -->
     <!-- ================================================================ -->
@@ -749,7 +832,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             <div class="summary-grid">
                 <div class="summary-item">
                     <div class="label">Bill Number</div>
-                    <div class="value"><?= htmlspecialchars($bill['bill_number']) ?></div>
+                    <div class="value"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></div>
                 </div>
                 <div class="summary-item">
                     <div class="label">Patient</div>
@@ -767,18 +850,14 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                 <div class="summary-item">
                     <div class="label">Status</div>
                     <div class="value">
-                        <span class="badge <?= 
-                            $bill['status'] === 'paid' ? 'badge-paid' : 
-                            ($bill['status'] === 'partial' ? 'badge-partial' : 
-                            ($bill['status'] === 'pending' ? 'badge-pending' : 'badge-cancelled'))
-                        ?>">
+                        <span class="status-badge <?= $bill['status'] ?? 'pending' ?>">
                             <?= ucfirst($bill['status'] ?? 'Pending') ?>
                         </span>
                     </div>
                 </div>
                 <div class="summary-item">
                     <div class="label">Created</div>
-                    <div class="value"><?= date('M d, Y h:i A', strtotime($bill['created_at'])) ?></div>
+                    <div class="value"><?= isset($bill['created_at']) ? date('M d, Y h:i A', strtotime($bill['created_at'])) : 'N/A' ?></div>
                 </div>
             </div>
             
@@ -796,10 +875,10 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                     <tbody>
                         <?php foreach ($bill_items as $item): ?>
                             <tr>
-                                <td><?= htmlspecialchars($item['description']) ?></td>
-                                <td class="text-right"><?= $item['quantity'] ?></td>
-                                <td class="text-right">TSh <?= number_format($item['unit_price']) ?></td>
-                                <td class="text-right">TSh <?= number_format($item['amount']) ?></td>
+                                <td><?= htmlspecialchars($item['item_name'] ?? $item['description'] ?? 'N/A') ?></td>
+                                <td class="text-right"><?= $item['quantity'] ?? 1 ?></td>
+                                <td class="text-right">TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
+                                <td class="text-right">TSh <?= number_format($item['total_price'] ?? $item['amount'] ?? 0, 0) ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -809,22 +888,22 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             <!-- Totals -->
             <div class="flex flex-wrap justify-between items-center mt-4 pt-4 border-t border-gray-200">
                 <div class="text-right">
-                    <div class="text-sm text-gray-500">Grand Total</div>
-                    <div class="text-xl font-bold text-blue-600">TSh <?= number_format($bill['grand_total']) ?></div>
+                    <div class="text-sm text-gray-500">Total Amount</div>
+                    <div class="text-xl font-bold text-blue-600">TSh <?= number_format($bill['total_amount'] ?? $bill['grand_total'] ?? 0, 0) ?></div>
                 </div>
                 <div class="text-right">
                     <div class="text-sm text-gray-500">Amount Paid</div>
-                    <div class="text-xl font-bold text-green-600">TSh <?= number_format($bill['amount_paid']) ?></div>
+                    <div class="text-xl font-bold text-green-600">TSh <?= number_format($bill['paid_amount'] ?? $bill['amount_paid'] ?? 0, 0) ?></div>
                 </div>
                 <div class="text-right">
                     <div class="text-sm text-gray-500">Balance</div>
-                    <div class="text-xl font-bold text-red-600">TSh <?= number_format($bill['balance']) ?></div>
+                    <div class="text-xl font-bold text-red-600">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></div>
                 </div>
             </div>
         </div>
         
         <!-- Payment Form -->
-        <?php if ($bill['status'] !== 'paid' && $bill['status'] !== 'cancelled'): ?>
+        <?php if (($bill['status'] ?? '') !== 'paid' && ($bill['status'] ?? '') !== 'cancelled'): ?>
         <div class="payment-form animate-fade-in-up">
             <div class="form-title">
                 <i class="fas fa-hand-holding-usd"></i>
@@ -843,12 +922,12 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                         <input type="number" name="amount" id="paymentAmount" 
                                class="form-control form-control-lg" 
                                placeholder="Enter amount" 
-                               max="<?= $bill['balance'] ?>" 
-                               value="<?= $bill['balance'] ?>" 
+                               max="<?= $bill['balance'] ?? 0 ?>" 
+                               value="<?= $bill['balance'] ?? 0 ?>" 
                                step="0.01" min="0.01" required
                                oninput="calculateChange()">
                         <div class="text-xs text-gray-400 mt-1">
-                            Max: TSh <?= number_format($bill['balance']) ?>
+                            Max: TSh <?= number_format($bill['balance'] ?? 0, 0) ?>
                         </div>
                     </div>
                     
@@ -919,7 +998,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         <?php else: ?>
             <div class="message-box info">
                 <i class="fas fa-info-circle"></i>
-                This bill is already <?= $bill['status'] === 'paid' ? 'fully paid' : 'cancelled' ?>.
+                This bill is already <?= ($bill['status'] ?? '') === 'paid' ? 'fully paid' : 'cancelled' ?>.
                 <a href="pending_bills.php" class="ml-2 text-blue-600 hover:underline">Go to pending bills</a>
             </div>
         <?php endif; ?>
@@ -943,6 +1022,13 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Receive Payment
+            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:<?= $is_reception ? '#FCD34D' : '#FFD700' ?>;font-weight:600;">
+                👤 <?= htmlspecialchars($user_full_name) ?>
+                <?php if ($is_reception): ?>
+                    <span style="color:#FCD34D;font-weight:500;font-size:0.55rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 Reception</span>
+                <?php endif; ?>
+            </span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -979,42 +1065,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         if (amount > balance) {
             var change = amount - balance;
             changeContainer.classList.add('show');
-            changeAmount.textContent = 'TSh ' + change.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-            // Set amount to balance (will be processed server-side)
+            changeAmount.textContent = 'TSh ' + change.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
         } else {
             changeContainer.classList.remove('show');
         }
     }
 
     // ================================================================
-    // DARK MODE
+    // DARK MODE - SYNC WITH HEADER
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
+    // Note: Dark mode is controlled by header.
+    // This page listens for changes and applies them.
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1024,9 +1085,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     
     if (sidebarToggle) {
         sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
+            if (sidebar) sidebar.classList.toggle('open');
         });
     }
+    
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                sidebar.classList.remove('open');
+            }
+        }
+    });
 
     // ================================================================
     // SEARCH
@@ -1077,9 +1146,11 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
         
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
+        if (!toast) return;
+        
+        toast.className = 'toast-custom ' + (type || 'info');
+        toastTitle.textContent = title || 'Notification';
+        toastMessage.textContent = message || '';
         toast.style.display = 'flex';
         
         toast.classList.add('show');
@@ -1098,13 +1169,16 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
+            if (searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
         }
     });
 
     console.log('%c💰 Braick - Receive Payment', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Bill: <?= isset($bill['bill_number']) ? htmlspecialchars($bill['bill_number']) : 'None' ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Balance: TSh <?= isset($bill['balance']) ? number_format($bill['balance']) : '0' ?>', 'font-size:13px; color:#DC2626;');
 </script>

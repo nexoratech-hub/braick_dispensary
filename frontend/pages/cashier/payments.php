@@ -2,39 +2,65 @@
 // ================================================================
 // FILE: frontend/pages/cashier/payments.php
 // NEW PAYMENT - FIXED FOR YOUR DATABASE
+// ALLOWS RECEPTION, CASHIER AND ADMIN
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// INCLUDE CONFIG
+// START SESSION
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to reception.rose
-// ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'];
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
 // ================================================================
-// DATABASE CONNECTION
+// ALLOWED ROLES: Cashier, Reception, Admin
 // ================================================================
-$db = getDB();
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PATIENT BY ID OR SEARCH
@@ -62,7 +88,7 @@ if ($patient_id > 0) {
             ORDER BY pb.created_at DESC
         ");
         $stmt->execute([$patient_id, $user_branch_id]);
-        $bills = $stmt->fetchAll();
+        $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
@@ -82,7 +108,7 @@ if (!empty($search_query)) {
     ");
     $search_term = "%$search_query%";
     $stmt->execute([$user_branch_id, $search_term, $search_term, $search_term]);
-    $search_results = $stmt->fetchAll();
+    $search_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 // ================================================================
@@ -92,25 +118,31 @@ if (!empty($search_query)) {
 // Services
 $services = [];
 try {
-    $stmt = $db->query("SELECT id, service_name, price FROM services WHERE status = 'active' ORDER BY service_name");
-    $services = $stmt->fetchAll();
+    $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE is_active = 1 AND (branch_id = ? OR branch_id IS NULL) ORDER BY service_name");
+    $stmt->execute([$user_branch_id]);
+    $services = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $services = [];
 }
 
-// FIXED: Medications table - correct columns: id, name, strength, unit, category
+// Medications - Correct columns: id, name, strength, unit, category
 $medications = [];
-$stmt = $db->query("SELECT id, name, strength, unit, category FROM medications WHERE status = 'active' ORDER BY name");
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $medications[] = [
-        'id' => $row['id'],
-        'name' => $row['name'] . ($row['strength'] ? ' ' . $row['strength'] : ''),
-        'price' => 0, // Price comes from medication_prices table or default
-        'quantity' => 999 // Default quantity
-    ];
+try {
+    $stmt = $db->prepare("SELECT id, name, strength, unit, category FROM medications WHERE status = 'active' ORDER BY name");
+    $stmt->execute();
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $medications[] = [
+            'id' => $row['id'],
+            'name' => $row['name'] . ($row['strength'] ? ' ' . $row['strength'] : ''),
+            'price' => 0, // Price comes from medication_prices table or default
+            'quantity' => 999 // Default quantity
+        ];
+    }
+} catch (Exception $e) {
+    $medications = [];
 }
 
-// Consultation fees - hardcoded or from settings
+// Consultation fees
 $consultation_fees = [
     ['id' => 1, 'visit_type' => 'new', 'fee' => 15000],
     ['id' => 2, 'visit_type' => 'follow-up', 'fee' => 10000],
@@ -118,40 +150,55 @@ $consultation_fees = [
 ];
 
 // ================================================================
-// GET MEDICATION PRICES (if you have a prices table)
+// GET MEDICATION PRICES (from medications_inventory table)
 // ================================================================
 $medication_prices = [];
 try {
-    $stmt = $db->query("SELECT medication_id, selling_price FROM medication_prices WHERE branch_id = ? AND is_active = 1");
+    $stmt = $db->prepare("SELECT id, medication_name, selling_price FROM medications_inventory WHERE branch_id = ? AND status = 'active'");
     $stmt->execute([$user_branch_id]);
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $medication_prices[$row['medication_id']] = $row['selling_price'];
+        // Match by name from medications table
+        $medication_prices[$row['medication_name']] = $row['selling_price'];
     }
 } catch (Exception $e) {
-    // If no prices table, use default prices
+    // If no inventory table, use default prices
     $default_prices = [
-        1 => 500,   // Paracetamol
-        2 => 1500,  // Amoxicillin 250mg
-        3 => 2500,  // Amoxicillin 500mg
-        4 => 2000,  // Ciprofloxacin
-        5 => 2500,  // Metformin 850mg
-        6 => 1500,  // Metformin 500mg
-        7 => 1000,  // Lisinopril
-        8 => 1200,  // Amlodipine
-        9 => 800,   // Omeprazole
-        10 => 1000, // Pantoprazole
-        11 => 1500, // Atorvastatin
-        12 => 1800, // Rosuvastatin
-        13 => 2000, // Doxycycline
-        14 => 1200, // Glibenclamide
-        15 => 1000  // Enalapril
+        'Paracetamol' => 500,
+        'Amoxicillin' => 1500,
+        'Ciprofloxacin' => 2000,
+        'Metformin' => 2500,
+        'Lisinopril' => 1000,
+        'Amlodipine' => 1200,
+        'Omeprazole' => 800,
+        'Pantoprazole' => 1000,
+        'Atorvastatin' => 1500,
+        'Rosuvastatin' => 1800,
+        'Doxycycline' => 2000,
+        'Glibenclamide' => 1200,
+        'Enalapril' => 1000,
+        'Artemether/Lumefantrine' => 500,
+        'Quinine' => 600,
+        'Ibuprofen' => 400,
+        'Diclofenac' => 500,
+        'Cetirizine' => 300
     ];
     $medication_prices = $default_prices;
 }
 
 // Add prices to medications
 foreach ($medications as &$med) {
-    $med['price'] = $medication_prices[$med['id']] ?? 0;
+    // Try to find price by matching name
+    $found = false;
+    foreach ($medication_prices as $key => $price) {
+        if (strpos($med['name'], $key) !== false) {
+            $med['price'] = $price;
+            $found = true;
+            break;
+        }
+    }
+    if (!$found) {
+        $med['price'] = 0;
+    }
 }
 
 // ================================================================
@@ -213,9 +260,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 if ($item_type === 'service') {
                     try {
-                        $stmt = $db->prepare("SELECT service_name, price FROM services WHERE id = ? AND status = 'active'");
+                        $stmt = $db->prepare("SELECT service_name, price FROM services WHERE id = ? AND is_active = 1");
                         $stmt->execute([$item_id]);
-                        $service = $stmt->fetch();
+                        $service = $stmt->fetch(PDO::FETCH_ASSOC);
                         if ($service) {
                             $price = $service['price'];
                             $subtotal = $price * $quantity;
@@ -233,10 +280,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Get medication from database
                     $stmt = $db->prepare("SELECT id, name, strength FROM medications WHERE id = ? AND status = 'active'");
                     $stmt->execute([$item_id]);
-                    $med = $stmt->fetch();
+                    $med = $stmt->fetch(PDO::FETCH_ASSOC);
                     if ($med) {
                         $med_name = $med['name'] . ($med['strength'] ? ' ' . $med['strength'] : '');
-                        $price = $medication_prices[$item_id] ?? 0;
+                        $price = 0;
+                        // Try to find price
+                        foreach ($medication_prices as $key => $p) {
+                            if (strpos($med_name, $key) !== false) {
+                                $price = $p;
+                                break;
+                            }
+                        }
                         $subtotal = $price * $quantity;
                         $total += $subtotal;
                         $bill_items[] = [
@@ -259,8 +313,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 // Insert bill
                 $stmt = $db->prepare("
-                    INSERT INTO patient_bills (bill_number, patient_id, total_amount, paid_amount, balance, status, created_by, branch_id) 
-                    VALUES (?, ?, ?, 0, ?, 'pending', ?, ?)
+                    INSERT INTO patient_bills (bill_number, patient_id, total_amount, paid_amount, balance, status, created_by, branch_id, created_at) 
+                    VALUES (?, ?, ?, 0, ?, 'pending', ?, ?, NOW())
                 ");
                 $stmt->execute([$bill_number, $patient_id, $total, $total, $user_id, $user_branch_id]);
                 $bill_id = $db->lastInsertId();
@@ -268,8 +322,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Insert bill items
                 foreach ($bill_items as $item) {
                     $stmt = $db->prepare("
-                        INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price) 
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price, created_at) 
+                        VALUES (?, ?, ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
                         $bill_id,
@@ -294,7 +348,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     GROUP BY pb.id
                 ");
                 $stmt->execute([$bill_id]);
-                $bills = [$stmt->fetch()];
+                $bills = [$stmt->fetch(PDO::FETCH_ASSOC)];
                 
                 // Redirect to payment
                 echo '<script>setTimeout(function(){ window.location.href = "payments.php?bill_id=' . $bill_id . '&patient_id=' . $patient_id . '"; }, 1500);</script>';
@@ -320,7 +374,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Get bill details
             $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ?");
             $stmt->execute([$bill_id, $user_branch_id]);
-            $bill = $stmt->fetch();
+            $bill = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if (!$bill) {
                 $message = "Bill not found!";
@@ -332,15 +386,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $message = "Amount exceeds balance! Balance: TSh " . number_format($balance);
                     $message_type = 'error';
                 } else {
-                    // Generate payment number
-                    $payment_number = 'PAY-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+                    // Generate receipt number
+                    $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                     
                     // Insert payment
                     $stmt = $db->prepare("
-                        INSERT INTO payments (payment_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, status) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 'completed')
+                        INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
-                    $stmt->execute([$payment_number, $bill_id, $bill['patient_id'], $amount, $payment_method, $user_id, $user_branch_id]);
+                    $stmt->execute([$receipt_number, $bill_id, $bill['patient_id'], $amount, $payment_method, $user_id, $user_branch_id]);
                     $payment_id = $db->lastInsertId();
                     
                     // Update bill
@@ -350,12 +404,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     
                     $stmt = $db->prepare("
                         UPDATE patient_bills 
-                        SET paid_amount = ?, balance = ?, status = ? 
+                        SET paid_amount = ?, balance = ?, status = ?, updated_at = NOW() 
                         WHERE id = ?
                     ");
                     $stmt->execute([$paid_amount, $new_balance, $status, $bill_id]);
                     
-                    $message = "Payment processed successfully! Payment #: $payment_number";
+                    $message = "Payment processed successfully! Receipt #: $receipt_number";
                     $message_type = 'success';
                     
                     // Redirect to receipt
@@ -381,12 +435,12 @@ if ($bill_id > 0) {
         WHERE pb.id = ? AND pb.branch_id = ?
     ");
     $stmt->execute([$bill_id, $user_branch_id]);
-    $current_bill = $stmt->fetch();
+    $current_bill = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($current_bill) {
         $stmt = $db->prepare("SELECT * FROM bill_items WHERE bill_id = ?");
         $stmt->execute([$bill_id]);
-        $bill_items_details = $stmt->fetchAll();
+        $bill_items_details = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
@@ -405,16 +459,20 @@ try {
 // ================================================================
 // PROFILE PICTURE
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
-include_once __DIR__ . '/../../components/reception_header.php';
-include_once __DIR__ . '/../../components/cashier_sidebar.php';
+include_once '../../components/cashier_header.php';
+include_once '../../components/cashier_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -518,51 +576,223 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         display: block;
         margin-bottom: 10px;
     }
-</style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patient by name, ID, or phone...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
     
-    <div class="flex items-center gap-3">
-        <select class="branch-selector" disabled style="opacity:0.7;cursor:not-allowed;">
-            <option value="<?= $user_branch_id ?>">
-                🏥 <?= htmlspecialchars($user_branch_name) ?>
-            </option>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn" id="notifBtn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="../cashier/profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 28px 32px;
+        min-height: calc(100vh - 68px);
+    }
+    
+    .page-header {
+        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        border-radius: 16px;
+        padding: 20px 24px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .page-header .page-title {
+        color: white;
+        font-size: 1.5rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+    
+    .page-header .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin: 0;
+    }
+    
+    .card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 1px solid var(--border-color);
+        transition: all 0.3s;
+        box-shadow: var(--shadow-sm);
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+    
+    .card:hover {
+        border-color: var(--primary);
+        box-shadow: var(--shadow-md);
+    }
+    
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .card-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+    }
+    
+    .data-table thead th {
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: 700;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #fff;
+        background: var(--primary);
+        border-bottom: 3px solid var(--primary-dark);
+        white-space: nowrap;
+    }
+    
+    .data-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+    }
+    
+    .data-table tbody tr:hover td {
+        background: var(--table-hover);
+    }
+    
+    .badge {
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: white;
+        border: none;
+    }
+    
+    .badge-green { background: var(--success); }
+    .badge-yellow { background: #D97706; }
+    .badge-red { background: var(--danger); }
+    
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.8rem;
+        transition: all 0.3s;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    
+    .btn-blue {
+        background: var(--primary);
+        color: white;
+    }
+    .btn-blue:hover {
+        background: var(--primary-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-green {
+        background: var(--success);
+        color: white;
+    }
+    .btn-green:hover {
+        background: var(--success-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+    }
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: var(--primary);
+        color: var(--primary);
+    }
+    
+    .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+    }
+    
+    .toast-custom.show {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    .toast-custom.success { background: var(--success); }
+    .toast-custom.error { background: var(--danger); }
+    .toast-custom.info { background: var(--primary); }
+    
+    @media (max-width: 1024px) {
+        .main-content { margin-left: 0; padding: 16px; }
+    }
+    
+    @media (max-width: 768px) {
+        .page-header { padding: 16px 18px; }
+        .page-header .page-title { font-size: 1.2rem; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -570,28 +800,39 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-plus-circle mr-2" style="color: var(--primary);"></i> New Payment
+                <i class="fas fa-plus-circle"></i> New Payment
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;padding:4px 14px;border-radius:20px;font-size:0.65rem;font-weight:600;text-transform:uppercase;"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);font-size:0.6rem;">
+                        <i class="fas fa-check-circle"></i> Full Access
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
-                Process payments for patients
-                <span class="branch-tag ml-2">
+                <i class="fas fa-money-bill-wave"></i> Process payments for patients
+                <span class="header-badge" style="background:rgba(255,255,255,0.15);color:white;padding:4px 14px;border-radius:20px;font-size:0.7rem;border:1px solid rgba(255,255,255,0.1);backdrop-filter:blur(4px);">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);">
+                        <i class="fas fa-user-tag"></i> Reception Access
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
-        <div>
-            <a href="dashboard.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back to Dashboard
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="dashboard.php" class="btn-outline-light" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);padding:8px 18px;border-radius:10px;font-weight:500;font-size:0.82rem;transition:all 0.3s;text-decoration:none;display:inline-flex;align-items:center;gap:8px;backdrop-filter:blur(4px);">
+                <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
     </div>
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>" style="max-width:1400px;margin:0 auto;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
@@ -603,7 +844,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <div class="card mb-4">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-search title-blue mr-2"></i> Find Patient
+                <i class="fas fa-search title-blue mr-2" style="color:var(--primary);"></i> Find Patient
             </h3>
         </div>
         <form method="GET" class="flex flex-wrap gap-3">
@@ -662,7 +903,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <div class="card mb-4">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-receipt title-blue mr-2"></i> Patient Bills
+                <i class="fas fa-receipt title-blue mr-2" style="color:var(--primary);"></i> Patient Bills
                 <span class="text-sm font-normal text-gray-400">(<?= count($bills) ?> bills)</span>
             </h3>
         </div>
@@ -725,7 +966,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <div class="card mb-4">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-plus-circle title-green mr-2"></i> Generate New Bill
+                <i class="fas fa-plus-circle title-green mr-2" style="color:var(--success);"></i> Generate New Bill
             </h3>
         </div>
         
@@ -816,7 +1057,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <div class="card" style="border-color: var(--success);">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-money-bill-wave title-green mr-2"></i> Process Payment
+                <i class="fas fa-money-bill-wave title-green mr-2" style="color:var(--success);"></i> Process Payment
             </h3>
         </div>
         
@@ -898,11 +1139,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Payments
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
+            <?php if ($is_reception): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#34D399;">👀 Reception Access</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1142,7 +1389,9 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     console.log('%c💰 Braick - Payments (FIXED v2)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
     console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
     console.log('%c💊 Using medications table: id, name, strength, unit, category', 'font-size:13px; color:#6EE7B7;');
     console.log('%c💳 Consultation fees: Hardcoded (new:15000, follow-up:10000, emergency:25000)', 'font-size:13px; color:#6EE7B7;');
 </script>

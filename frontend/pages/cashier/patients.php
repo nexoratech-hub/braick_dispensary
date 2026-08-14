@@ -2,45 +2,69 @@
 // ================================================================
 // FILE: frontend/pages/cashier/patients.php
 // CASHIER - VIEW PATIENTS LIST
+// ALLOWS RECEPTION, CASHIER AND ADMIN
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Default to reception.rose (ID: 11)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 005';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// ALLOW RECEPTION TO ACCESS CASHIER PAGES
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-$allowed_roles = ['cashier', 'reception', 'admin'];
-if (!in_array($_SESSION['role'], $allowed_roles)) {
-    header('Location: ../' . $_SESSION['role'] . '/dashboard.php');
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
     exit;
 }
 
 // ================================================================
-// PATH SAHIHI
+// ALLOWED ROLES: Cashier, Reception, Admin
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
+$message = '';
+$message_type = '';
+$currency = 'TSh';
 
 // ================================================================
 // GET SEARCH PARAMETER
@@ -50,33 +74,54 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $limit = 20;
 $offset = ($page - 1) * $limit;
 
-$message = '';
-$message_type = '';
-
 // Initialize variables
 $patients = [];
 $total_patients = 0;
 $total_pages = 0;
 
+// ================================================================
+// GET SYSTEM SETTINGS
+// ================================================================
 try {
-    $db = getDB();
-    
-    // ================================================================
-    // BUILD SEARCH CONDITION
-    // ================================================================
-    $search_condition = "";
-    $params = [$user_branch_id];
-    
-    if (!empty($search)) {
-        $search_condition = "AND (full_name LIKE ? OR patient_id LIKE ? OR phone LIKE ?)";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
+    $settings = [];
+    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $settings[$row['setting_key']] = $row['setting_value'];
     }
-    
-    // ================================================================
-    // GET TOTAL PATIENTS
-    // ================================================================
+    $currency = $settings['currency'] ?? 'TSh';
+} catch (Exception $e) {
+    $currency = 'TSh';
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
+// BUILD SEARCH CONDITION
+// ================================================================
+$search_condition = "";
+$params = [$user_branch_id];
+
+if (!empty($search)) {
+    $search_condition = "AND (full_name LIKE ? OR patient_id LIKE ? OR phone LIKE ?)";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+}
+
+// ================================================================
+// GET TOTAL PATIENTS
+// ================================================================
+try {
     $stmt = $db->prepare("
         SELECT COUNT(*) as total 
         FROM patients 
@@ -86,10 +131,28 @@ try {
     $stmt->execute($params);
     $total_patients = $stmt->fetch()['total'] ?? 0;
     $total_pages = ceil($total_patients / $limit);
+} catch (Exception $e) {
+    $total_patients = 0;
+    $total_pages = 0;
+}
+
+// ================================================================
+// GET PATIENTS
+// ================================================================
+try {
+    // Rebuild params for patients query
+    $stmt_params = [$user_branch_id, $user_branch_id, $user_branch_id, $user_branch_id];
     
-    // ================================================================
-    // GET PATIENTS
-    // ================================================================
+    // Add search params if any
+    if (!empty($search)) {
+        $stmt_params[] = "%$search%";
+        $stmt_params[] = "%$search%";
+        $stmt_params[] = "%$search%";
+    }
+    
+    $stmt_params[] = $limit;
+    $stmt_params[] = $offset;
+    
     $stmt = $db->prepare("
         SELECT p.*, 
                (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND branch_id = ?) as bill_count,
@@ -101,18 +164,8 @@ try {
         ORDER BY p.full_name ASC
         LIMIT ? OFFSET ?
     ");
-    
-    $stmt_params = [$user_branch_id, $user_branch_id, $user_branch_id, $user_branch_id];
-    foreach ($params as $p) {
-        if ($p !== $user_branch_id) {
-            $stmt_params[] = $p;
-        }
-    }
-    $stmt_params[] = $limit;
-    $stmt_params[] = $offset;
-    
     $stmt->execute($stmt_params);
-    $patients = $stmt->fetchAll();
+    $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
@@ -121,9 +174,25 @@ try {
 }
 
 // ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
+
+// ================================================================
+// SIDEBAR - CASHIER SIDEBAR (RECEPTION HAS FULL ACCESS)
+// ================================================================
 include_once '../../components/cashier_sidebar.php';
 ?>
 <!DOCTYPE html>
@@ -133,8 +202,8 @@ include_once '../../components/cashier_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Patients - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -208,148 +277,7 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
+        /* TOP NAV - already in header */
         
         .main-content {
             margin-left: 270px;
@@ -737,65 +665,42 @@ include_once '../../components/cashier_sidebar.php';
 </head>
 <body>
 
-<!-- TOP NAVIGATION -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patients by name, ID or phone..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+<!-- TOP NAVIGATION - FROM HEADER -->
 
+<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
+<!-- ================================================================ -->
 <main class="main-content">
 
+    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-users"></i>
                 Patients
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);">
+                        <i class="fas fa-check-circle"></i> Full Access
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-user"></i>
-                View all patients in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                View all patients in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
                 
                 <span class="header-badge" style="background:rgba(255,255,255,0.15);color:white;padding:4px 14px;border-radius:20px;font-size:0.7rem;display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,0.1);backdrop-filter:blur(4px);">
                     <i class="fas fa-users"></i>
                     <?= $total_patients ?> Patients
                 </span>
+                
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);">
+                        <i class="fas fa-user-tag"></i> Reception Access
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -938,12 +843,20 @@ include_once '../../components/cashier_sidebar.php';
         <?php endif; ?>
     </div>
 
+    <!-- ================================================================ -->
     <!-- FOOTER -->
+    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Patients
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
+            <?php if ($is_reception): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#34D399;">👀 Reception Access</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -953,7 +866,9 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
+<!-- ================================================================ -->
 <!-- TOAST -->
+<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -962,11 +877,13 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- GLOBAL STATS AUTO-UPDATE -->
-<script src="/dispensary_system/frontend/assets/js/global_stats.js"></script>
-
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
+    // ================================================================
+    // DARK MODE
+    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -994,6 +911,9 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -1009,6 +929,9 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1023,6 +946,9 @@ include_once '../../components/cashier_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
+    // ================================================================
+    // SEARCH
+    // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
@@ -1038,6 +964,9 @@ include_once '../../components/cashier_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
+    // ================================================================
+    // TOAST
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1058,9 +987,11 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c👥 Braick - Patients (Cashier View)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👥 Braick - Patients (Cashier/Reception View)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Patients: <?= $total_patients ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
     console.log('%c🔄 Auto-update every 3 seconds via global_stats.js', 'font-size:13px; color:#34D399;');
 </script>
 

@@ -1,61 +1,77 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/cashier/process_payment.php
+// FILE: frontend/pages/cashier/make_payment.php
 // CASHIER - PROCESS PAYMENT WITH PATIENT CARD DESIGN
 // FIXED: Uses shared header with clock
 // FIXED: Dark mode fully working with header
 // FIXED: Green theme applied throughout
-// FIXED: Default user: Rose Mwangi (ID: 11)
 // FIXED: Partial amount stays as entered (not reduced by discount)
 // FIXED: All items displayed in table with prices
 // FIXED: Comma formatting for amount fields
 // FIXED: Updates OTC sales payment_status when bill is paid
+// ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Default to Rose Mwangi (ID: 11)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.rose';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// ALLOW RECEPTION TO ACCESS CASHIER PAGES
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-$allowed_roles = ['cashier', 'reception', 'admin'];
-if (!in_array($_SESSION['role'], $allowed_roles)) {
-    header('Location: ../' . $_SESSION['role'] . '/dashboard.php');
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
 // ================================================================
-// CHECK IF USER IS ADMIN
+// ALLOWED ROLES: Cashier, Reception, Admin
 // ================================================================
-$is_admin = ($_SESSION['role'] === 'admin' || $_SESSION['is_admin'] === true);
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
 
 // ================================================================
-// PATH SAHIHI
+// GET USER DATA FROM SESSION
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_email = $_SESSION['email'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS ADMIN OR RECEPTION
+// ================================================================
+$is_admin = ($user_role === 'admin');
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_id = $_SESSION['user_id'] ?? 11;
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET SELECTED BILL ID FROM URL
@@ -68,14 +84,12 @@ $message_type = '';
 $currency = 'TSh';
 
 try {
-    $db = getDB();
-
     // ================================================================
     // GET SYSTEM SETTINGS
     // ================================================================
     $settings = [];
     $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
-    while ($row = $stmt->fetch()) {
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $settings[$row['setting_key']] = $row['setting_value'];
     }
     $currency = $settings['currency'] ?? 'TSh';
@@ -111,8 +125,8 @@ try {
                 
                 foreach ($bill_ids as $bill_id) {
                     $stmt = $db->prepare("SELECT balance FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
-                    $stmt->execute([$bill_id, $selected_branch_id]);
-                    $bill = $stmt->fetch();
+                    $stmt->execute([$bill_id, $user_branch_id]);
+                    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                     if ($bill) {
                         $total_original_balance += (float)$bill['balance'];
                     }
@@ -122,8 +136,8 @@ try {
                     $bill_id = (int)$bill_id;
                     
                     $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
-                    $stmt->execute([$bill_id, $selected_branch_id]);
-                    $bill = $stmt->fetch();
+                    $stmt->execute([$bill_id, $user_branch_id]);
+                    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     if (!$bill) {
                         $failed_bills[] = $bill_id;
@@ -176,7 +190,7 @@ try {
                         WHERE bill_id = ? AND payment_status IN ('pending', 'partial')
                     ");
                     $stmt->execute([$bill_id]);
-                    $otc_sale = $stmt->fetch();
+                    $otc_sale = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     if ($otc_sale) {
                         $stmt = $db->prepare("
@@ -199,7 +213,7 @@ try {
                         $amount_to_pay,
                         $payment_method,
                         $user_id,
-                        $selected_branch_id,
+                        $user_branch_id,
                         $bill_discount > 0 ? 'Discount: ' . $currency . ' ' . number_format($bill_discount, 2) : ''
                     ]);
                     
@@ -258,8 +272,8 @@ try {
                 
                 foreach ($bill_ids as $bill_id) {
                     $stmt = $db->prepare("SELECT balance FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
-                    $stmt->execute([$bill_id, $selected_branch_id]);
-                    $bill = $stmt->fetch();
+                    $stmt->execute([$bill_id, $user_branch_id]);
+                    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                     if ($bill) {
                         $total_original_balance += (float)$bill['balance'];
                     }
@@ -286,8 +300,8 @@ try {
                 foreach ($bill_ids as $bill_id) {
                     $bill_id = (int)$bill_id;
                     $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
-                    $stmt->execute([$bill_id, $selected_branch_id]);
-                    $bill = $stmt->fetch();
+                    $stmt->execute([$bill_id, $user_branch_id]);
+                    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     if (!$bill) {
                         $failed_bills[] = $bill_id;
@@ -332,7 +346,7 @@ try {
                             WHERE bill_id = ? AND payment_status IN ('pending', 'partial')
                         ");
                         $stmt->execute([$bill_id]);
-                        $otc_sale = $stmt->fetch();
+                        $otc_sale = $stmt->fetch(PDO::FETCH_ASSOC);
                         
                         if ($otc_sale) {
                             $stmt = $db->prepare("
@@ -356,7 +370,7 @@ try {
                         $bill_payment,
                         $payment_method,
                         $user_id,
-                        $selected_branch_id,
+                        $user_branch_id,
                         'Partial payment - Discount: ' . $currency . ' ' . number_format($bill_discount, 2)
                     ]);
                     
@@ -405,8 +419,8 @@ try {
                     $bill_id = (int)$bill_id;
                     
                     $stmt = $db->prepare("SELECT id, status FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
-                    $stmt->execute([$bill_id, $selected_branch_id]);
-                    $bill = $stmt->fetch();
+                    $stmt->execute([$bill_id, $user_branch_id]);
+                    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     if (!$bill) {
                         $failed_bills[] = $bill_id;
@@ -493,7 +507,7 @@ try {
         WHERE pb.branch_id = ? AND pb.status NOT IN ('paid', 'cancelled')
     ";
 
-    $params = [$selected_branch_id];
+    $params = [$user_branch_id];
 
     if ($selected_bill_id > 0) {
         $bills_query .= " AND pb.id = ?";
@@ -512,7 +526,7 @@ try {
 
     $stmt = $db->prepare($bills_query);
     $stmt->execute($params);
-    $bills = $stmt->fetchAll();
+    $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // ================================================================
     // GET ITEMS FOR EACH BILL
@@ -524,7 +538,7 @@ try {
             ORDER BY is_paid ASC, created_at ASC
         ");
         $stmt->execute([$bill['id']]);
-        $bill['items'] = $stmt->fetchAll();
+        $bill['items'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     // ================================================================
@@ -597,6 +611,15 @@ try {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
@@ -609,8 +632,8 @@ include_once '../../components/cashier_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Process Payment - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -1436,10 +1459,15 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-money-bill-wave"></i>
                 Process Payments
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
                 <?php if ($is_admin): ?>
                     <span class="header-badge" style="background:rgba(124,58,237,0.3);border-color:rgba(124,58,237,0.3);color:#C4B5FD;">
                         <i class="fas fa-user-shield"></i> ADMIN VIEW
+                    </span>
+                <?php endif; ?>
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FCD34D;">
+                        <i class="fas fa-eye"></i> RECEPTION
                     </span>
                 <?php endif; ?>
             </h1>
@@ -1895,6 +1923,13 @@ include_once '../../components/cashier_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Process Payments
+            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:<?= $is_reception ? '#FCD34D' : '#FFD700' ?>;font-weight:600;">
+                👤 <?= htmlspecialchars($user_full_name) ?>
+                <?php if ($is_reception): ?>
+                    <span style="color:#FCD34D;font-weight:500;font-size:0.6rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 Reception</span>
+                <?php endif; ?>
+            </span>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -2479,7 +2514,8 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     console.log('%c💰 Braick - Process Payments (Green Theme)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: Rose Mwangi (ID: 11)', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Partial amount stays as entered (not reduced by discount)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ All items displayed in table with prices', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Comma formatting for amount fields', 'font-size:13px; color:#34D399;');

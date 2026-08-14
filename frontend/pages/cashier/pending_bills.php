@@ -4,51 +4,69 @@
 // CASHIER - PENDING BILLS LIST (GREEN THEME)
 // FIXED: Auto-update removed (causing JSON error)
 // FIXED: Cancel button works via GET
-// FIXED: Buttons vertical and smaller
+// FIXED: Buttons vertical (stacked) in one row
+// FIXED: Table width compact
+// ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Default to cashier (ID: 7)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Cashier User';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier';
-    $_SESSION['email'] = 'cashier@braick.com';
-    $_SESSION['phone'] = '+255 700 000 007';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// ALLOW RECEPTION TO ACCESS CASHIER PAGES
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-$allowed_roles = ['cashier', 'reception', 'admin'];
-if (!in_array($_SESSION['role'], $allowed_roles)) {
-    header('Location: ../' . $_SESSION['role'] . '/dashboard.php');
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
 // ================================================================
-// CHECK IF USER IS ADMIN
+// ALLOWED ROLES: Cashier, Reception, Admin
 // ================================================================
-$is_admin = ($_SESSION['role'] === 'admin' || $_SESSION['is_admin'] === true);
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
 
 // ================================================================
-// PATH SAHIHI
+// GET USER DATA FROM SESSION
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS ADMIN OR RECEPTION
+// ================================================================
+$is_admin = ($user_role === 'admin');
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET FILTER PARAMETERS
@@ -68,8 +86,6 @@ $total_bills_count = 0;
 $currency = 'TSh';
 
 try {
-    $db = getDB();
-    
     // ================================================================
     // HANDLE CANCEL BILL ACTION - FIXED
     // ================================================================
@@ -81,7 +97,7 @@ try {
             
             // Get bill details
             $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ?");
-            $stmt->execute([$bill_id, $selected_branch_id]);
+            $stmt->execute([$bill_id, $user_branch_id]);
             $bill = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($bill) {
@@ -100,7 +116,7 @@ try {
                                 updated_at = NOW() 
                             WHERE id = ? AND branch_id = ?
                         ");
-                        $stmt->execute([$bill_id, $selected_branch_id]);
+                        $stmt->execute([$bill_id, $user_branch_id]);
                         
                         // Update bill items to cancelled
                         $stmt = $db->prepare("
@@ -245,13 +261,13 @@ try {
     $stmt = $db->prepare($sql);
     
     // Build parameters
-    $exec_params = [$selected_branch_id];
+    $exec_params = [$user_branch_id];
     foreach ($params as $param) {
         $exec_params[] = $param;
     }
     
     $stmt->execute($exec_params);
-    $pending_bills = $stmt->fetchAll();
+    $pending_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
     // GROUP BILLS BY PATIENT
@@ -309,6 +325,15 @@ try {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
@@ -321,8 +346,8 @@ include_once '../../components/cashier_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pending Bills - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -494,11 +519,6 @@ include_once '../../components/cashier_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
         .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
@@ -550,14 +570,14 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           FILTER SECTION
+           FILTER SECTION - COMPACT
            ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: 14px;
-            padding: 16px 20px;
+            padding: 12px 16px;
             border: 1px solid var(--border-color);
-            margin-bottom: 20px;
+            margin-bottom: 16px;
             max-width: 1400px;
             margin-left: auto;
             margin-right: auto;
@@ -571,9 +591,9 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .filter-btn {
-            padding: 5px 14px;
+            padding: 4px 12px;
             border-radius: 20px;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             font-weight: 500;
             border: 2px solid var(--border-color);
             background: transparent;
@@ -609,11 +629,11 @@ include_once '../../components/cashier_sidebar.php';
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
         }
         
         .filter-group .filter-label {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             font-weight: 600;
             color: var(--text-secondary);
             margin-right: 4px;
@@ -622,15 +642,15 @@ include_once '../../components/cashier_sidebar.php';
         .date-picker-group {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             flex-wrap: wrap;
         }
         
         .date-picker-group .form-control {
-            padding: 4px 10px;
+            padding: 3px 8px;
             border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 0.75rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
@@ -644,9 +664,9 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .date-picker-group .btn-apply {
-            padding: 4px 14px;
-            border-radius: 8px;
-            font-size: 0.75rem;
+            padding: 3px 12px;
+            border-radius: 6px;
+            font-size: 0.7rem;
             font-weight: 600;
             background: var(--success);
             color: white;
@@ -661,20 +681,20 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           STATS
+           STATS - COMPACT
            ================================================================ */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 12px;
             max-width: 1400px;
-            margin: 0 auto 20px;
+            margin: 0 auto 16px;
         }
         
         .stat-card-box {
             background: var(--bg-card);
-            border-radius: 14px;
-            padding: 16px 20px;
+            border-radius: 12px;
+            padding: 12px 16px;
             border: 1px solid var(--border-color);
             text-align: center;
             transition: all 0.3s ease;
@@ -683,12 +703,12 @@ include_once '../../components/cashier_sidebar.php';
         
         .stat-card-box:hover {
             border-color: var(--success);
-            transform: translateY(-3px);
+            transform: translateY(-2px);
             box-shadow: var(--shadow-md);
         }
         
         .stat-card-box .stat-number {
-            font-size: 2rem;
+            font-size: 1.6rem;
             font-weight: 700;
         }
         
@@ -709,29 +729,29 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .stat-card-box .stat-label {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: var(--text-secondary);
             font-weight: 500;
             margin-top: 2px;
         }
         
         .stat-card-box .stat-icon {
-            font-size: 1.4rem;
-            margin-bottom: 4px;
+            font-size: 1.2rem;
+            margin-bottom: 2px;
         }
         
         /* ================================================================
-           PATIENT CARD
+           PATIENT CARD - COMPACT
            ================================================================ */
         .patient-card {
             background: var(--bg-card);
-            border-radius: 16px;
+            border-radius: 14px;
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
             overflow: hidden;
             max-width: 1400px;
-            margin: 0 auto 16px;
+            margin: 0 auto 14px;
         }
         
         .patient-card:hover {
@@ -741,12 +761,12 @@ include_once '../../components/cashier_sidebar.php';
         
         .patient-card-header {
             background: var(--patient-header-bg);
-            padding: 14px 20px;
+            padding: 10px 16px;
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
             border-bottom: 2px solid var(--border-color);
             cursor: pointer;
             transition: background 0.3s ease, border-color 0.3s ease;
@@ -760,20 +780,20 @@ include_once '../../components/cashier_sidebar.php';
         .patient-card-header .patient-info {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             flex-wrap: wrap;
             flex: 1;
         }
         
         .patient-card-header .patient-avatar {
-            width: 40px;
-            height: 40px;
+            width: 34px;
+            height: 34px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 700;
-            font-size: 1rem;
+            font-size: 0.85rem;
             color: white;
             background: var(--success);
             flex-shrink: 0;
@@ -781,26 +801,26 @@ include_once '../../components/cashier_sidebar.php';
         
         .patient-card-header .patient-name {
             font-weight: 600;
-            font-size: 1rem;
+            font-size: 0.9rem;
             color: var(--text-primary);
         }
         
         .patient-card-header .patient-id {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: var(--text-secondary);
         }
         
         .patient-card-header .patient-totals {
             display: flex;
-            gap: 16px;
+            gap: 10px;
             flex-wrap: wrap;
             align-items: center;
         }
         
         .patient-card-header .total-badge {
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 0.65rem;
+            padding: 3px 10px;
+            border-radius: 10px;
+            font-size: 0.6rem;
             font-weight: 600;
         }
         
@@ -821,13 +841,13 @@ include_once '../../components/cashier_sidebar.php';
         
         .patient-card-header .total-amount {
             font-weight: 700;
-            font-size: 1.1rem;
+            font-size: 1rem;
             color: var(--danger);
         }
         
         .chevron-icon {
             transition: transform 0.3s ease;
-            font-size: 1rem;
+            font-size: 0.9rem;
             color: var(--text-secondary);
             display: inline-block;
         }
@@ -840,17 +860,17 @@ include_once '../../components/cashier_sidebar.php';
             overflow: hidden;
             transition: max-height 0.4s ease-in-out, padding 0.3s ease;
             max-height: 0;
-            padding: 0 20px;
+            padding: 0 16px;
             background: var(--bg-card);
         }
         
         .patient-card-body.open {
             max-height: 3000px;
-            padding: 16px 20px;
+            padding: 12px 16px;
         }
         
         /* ================================================================
-           TABLE
+           TABLE - COMPACT
            ================================================================ */
         .table-wrap {
             overflow-x: auto;
@@ -859,15 +879,15 @@ include_once '../../components/cashier_sidebar.php';
         .data-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.8rem;
-            min-width: <?= $is_admin ? '1100px' : '1000px' ?>;
+            font-size: 0.75rem;
+            min-width: 750px;
         }
         
         .data-table thead th {
             text-align: left;
-            padding: 10px 14px;
+            padding: 6px 10px;
             font-weight: 700;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: white;
@@ -877,15 +897,16 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .data-table thead th:first-child {
-            border-radius: 8px 0 0 0;
+            border-radius: 6px 0 0 0;
+            width: 30px;
         }
         
         .data-table thead th:last-child {
-            border-radius: 0 8px 0 0;
+            border-radius: 0 6px 0 0;
         }
         
         .data-table td {
-            padding: 10px 14px;
+            padding: 6px 10px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
@@ -897,7 +918,7 @@ include_once '../../components/cashier_sidebar.php';
         
         .data-table .bill-number {
             font-weight: 600;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-family: monospace;
         }
         
@@ -914,23 +935,14 @@ include_once '../../components/cashier_sidebar.php';
             text-decoration: line-through;
         }
         
-        <?php if (!$is_admin): ?>
-        .data-table .balance-col {
-            display: none !important;
-        }
-        .data-table .balance-col-header {
-            display: none !important;
-        }
-        <?php endif; ?>
-        
         /* ================================================================
-           STATUS BADGE
+           STATUS BADGE - COMPACT
            ================================================================ */
         .status-badge {
             display: inline-block;
-            padding: 3px 14px;
-            border-radius: 12px;
-            font-size: 0.6rem;
+            padding: 2px 10px;
+            border-radius: 10px;
+            font-size: 0.55rem;
             font-weight: 600;
             text-transform: uppercase;
         }
@@ -951,25 +963,25 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           BUTTONS - VERTICAL (STACKED) AND SMALLER
+           BUTTONS - VERTICAL (STACKED) AND COMPACT
            ================================================================ */
         .btn {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 4px;
-            padding: 4px 8px;
+            padding: 6px 10px;
             border-radius: 6px;
             font-weight: 600;
-            font-size: 0.6rem;
+            font-size: 0.65rem;
             transition: all 0.3s;
             cursor: pointer;
             border: none;
             text-decoration: none;
-            width: 100%;
-            min-width: 60px;
             text-align: center;
             white-space: nowrap;
+            min-height: 30px;
+            width: 100%;
         }
         
         .btn-view {
@@ -1012,13 +1024,14 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .btn-sm { 
-            padding: 3px 6px; 
+            padding: 4px 8px; 
             font-size: 0.55rem; 
             border-radius: 4px; 
+            min-height: 24px;
         }
         
         /* ================================================================
-           ACTION BUTTONS CONTAINER - VERTICAL STACK
+           ACTION BUTTONS CONTAINER - VERTICAL (STACKED)
            ================================================================ */
         .action-buttons {
             display: flex;
@@ -1031,24 +1044,30 @@ include_once '../../components/cashier_sidebar.php';
         .action-buttons .btn {
             width: 100%;
             justify-content: center;
-            padding: 3px 6px;
-            font-size: 0.55rem;
+            padding: 5px 8px;
+            font-size: 0.6rem;
+            min-height: 28px;
             border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 3px;
         }
         
         .action-buttons .btn i {
-            font-size: 0.5rem;
+            font-size: 0.55rem;
         }
         
         .action-status {
             font-size: 0.55rem;
-            padding: 3px 6px;
+            padding: 5px 8px;
             text-align: center;
             border-radius: 4px;
             background: var(--gray-100);
             color: var(--text-secondary);
             display: block;
             width: 100%;
+            min-height: 28px;
+            line-height: 1.4;
         }
         
         [data-theme="dark"] .action-status {
@@ -1056,6 +1075,23 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--gray-400);
         }
         
+        /* ================================================================
+           PATIENT TOTAL ROW
+           ================================================================ */
+        .patient-total-row {
+            background: var(--total-row-bg);
+            font-weight: 700;
+            transition: background 0.3s ease;
+        }
+        
+        .patient-total-row td {
+            border-bottom: 2px solid var(--border-color);
+            padding: 6px 10px;
+        }
+        
+        /* ================================================================
+           BADGES
+           ================================================================ */
         .role-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -1087,14 +1123,25 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600;
         }
         
+        .reception-badge {
+            display: <?= $is_reception ? 'inline-block' : 'none' ?>;
+            background: rgba(251,191,36,0.3);
+            color: #FCD34D;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            border: 1px solid rgba(251,191,36,0.2);
+        }
+        
         /* ================================================================
            MESSAGE BOX
            ================================================================ */
         .message-box {
             max-width: 1400px;
-            margin: 0 auto 16px;
-            padding: 12px 16px;
-            border-radius: 12px;
+            margin: 0 auto 12px;
+            padding: 10px 16px;
+            border-radius: 10px;
             border: 2px solid transparent;
             transition: all 0.3s ease;
         }
@@ -1118,20 +1165,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .message-box i {
-            margin-right: 8px;
-        }
-        
-        /* ================================================================
-           PATIENT TOTAL ROW
-           ================================================================ */
-        .patient-total-row {
-            background: var(--total-row-bg);
-            font-weight: 700;
-            transition: background 0.3s ease;
-        }
-        
-        .patient-total-row td {
-            border-bottom: 2px solid var(--border-color);
+            margin-right: 6px;
         }
         
         /* ================================================================
@@ -1139,19 +1173,19 @@ include_once '../../components/cashier_sidebar.php';
            ================================================================ */
         .empty-state {
             text-align: center;
-            padding: 40px 20px;
+            padding: 30px 20px;
             color: var(--empty-state-color);
         }
         
         .empty-state i {
-            font-size: 3rem;
+            font-size: 2.5rem;
             color: var(--border-color);
             display: block;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
         
         .empty-state .sub {
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             color: var(--text-secondary);
         }
         
@@ -1159,11 +1193,11 @@ include_once '../../components/cashier_sidebar.php';
            FOOTER
            ================================================================ */
         .footer {
-            padding: 14px 0;
+            padding: 12px 0;
             border-top: 1px solid var(--footer-border);
-            margin-top: 24px;
+            margin-top: 20px;
             text-align: center;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: var(--text-secondary);
             transition: border-color 0.3s ease;
         }
@@ -1208,32 +1242,49 @@ include_once '../../components/cashier_sidebar.php';
         @media (max-width: 768px) {
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .filter-section { padding: 12px 14px; }
+            .filter-section { padding: 10px 12px; }
             .filter-group { gap: 4px; }
-            .filter-btn { font-size: 0.6rem; padding: 3px 10px; }
+            .filter-btn { font-size: 0.55rem; padding: 3px 8px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .patient-card-header { flex-direction: column; align-items: flex-start; }
             .patient-card-header .patient-totals { width: 100%; justify-content: flex-start; }
-            .action-buttons { min-width: 50px; }
-            .action-buttons .btn { font-size: 0.5rem; padding: 2px 4px; }
+            .data-table { min-width: 600px; }
+            .action-buttons { min-width: 55px; }
+            .action-buttons .btn { 
+                font-size: 0.55rem; 
+                padding: 4px 6px; 
+                min-height: 24px;
+            }
+            .action-buttons .btn i { font-size: 0.5rem; }
+            .action-status { font-size: 0.5rem; padding: 4px 6px; min-height: 24px; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .filter-section { padding: 10px 12px; }
-            .filter-btn { font-size: 0.55rem; padding: 2px 8px; }
+            .filter-section { padding: 8px 10px; }
+            .filter-btn { font-size: 0.5rem; padding: 2px 6px; }
             .date-picker-group { flex-direction: column; align-items: stretch; }
             .date-picker-group .form-control { width: 100%; }
             .date-picker-group .btn-apply { width: 100%; justify-content: center; }
-            .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
-            .stat-card-box { padding: 12px 14px; }
-            .stat-card-box .stat-number { font-size: 1.4rem; }
-            .data-table { font-size: 0.65rem; min-width: 600px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+            .stat-card-box { padding: 8px 12px; }
+            .stat-card-box .stat-number { font-size: 1.2rem; }
+            .data-table { min-width: 500px; font-size: 0.6rem; }
             .patient-card-header .patient-info { width: 100%; }
             .patient-card-header .patient-totals { width: 100%; flex-wrap: wrap; }
-            .action-buttons { min-width: 45px; }
-            .action-buttons .btn { font-size: 0.45rem; padding: 2px 3px; }
-            .action-buttons .btn i { font-size: 0.4rem; }
+            .action-buttons { min-width: 50px; }
+            .action-buttons .btn { 
+                font-size: 0.5rem; 
+                padding: 3px 5px; 
+                min-height: 22px;
+                gap: 2px;
+            }
+            .action-buttons .btn i { font-size: 0.45rem; }
+            .action-status { 
+                font-size: 0.5rem; 
+                padding: 3px 5px; 
+                min-height: 22px;
+            }
         }
     </style>
 </head>
@@ -1256,14 +1307,17 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-clock"></i>
                 Pending Bills
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
                 <?php if ($is_admin): ?>
                     <span class="admin-badge"><i class="fas fa-user-shield"></i> ADMIN VIEW</span>
+                <?php endif; ?>
+                <?php if ($is_reception): ?>
+                    <span class="reception-badge"><i class="fas fa-eye"></i> RECEPTION</span>
                 <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-file-invoice"></i>
-                Manage pending bills in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                Manage pending bills in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
                 
                 <span class="header-badge">
                     <i class="fas fa-file-invoice"></i>
@@ -1281,11 +1335,6 @@ include_once '../../components/cashier_sidebar.php';
                     <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
                 </span>
                 <?php endif; ?>
-                
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-sync-alt fa-fw"></i>
-                    <span id="updateCount">0</span> updates
-                </span>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1310,7 +1359,7 @@ include_once '../../components/cashier_sidebar.php';
     <!-- FILTERS -->
     <!-- ================================================================ -->
     <div class="filter-section">
-        <div class="filter-group" style="margin-bottom:8px;">
+        <div class="filter-group" style="margin-bottom:6px;">
             <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
             
             <a href="?filter=all&search=<?= urlencode($search) ?>" class="filter-btn <?= $filter === 'all' ? 'active' : '' ?>">
@@ -1336,7 +1385,7 @@ include_once '../../components/cashier_sidebar.php';
             </a>
         </div>
         
-        <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;transition:border-color 0.3s ease;">
+        <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:6px;margin-top:4px;transition:border-color 0.3s ease;">
             <input type="hidden" name="filter" value="custom">
             <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
             
@@ -1345,7 +1394,7 @@ include_once '../../components/cashier_sidebar.php';
             <div class="date-picker-group">
                 <input type="date" name="start_date" class="form-control" 
                        value="<?= $start_date ?>" placeholder="Start Date">
-                <span style="color:var(--text-secondary);font-size:0.7rem;">to</span>
+                <span style="color:var(--text-secondary);font-size:0.65rem;">to</span>
                 <input type="date" name="end_date" class="form-control" 
                        value="<?= $end_date ?>" placeholder="End Date">
                 <button type="submit" class="btn-apply">
@@ -1418,7 +1467,7 @@ include_once '../../components/cashier_sidebar.php';
                                     <?= htmlspecialchars($patient['patient_id_number'] ?? 'N/A') ?>
                                 </span>
                             </div>
-                            <div style="font-size:0.75rem;color:var(--text-secondary);">
+                            <div style="font-size:0.7rem;color:var(--text-secondary);">
                                 <i class="fas fa-phone mr-1"></i> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?>
                                 <?php if ($patient['gender']): ?>
                                     <span class="mx-1">•</span>
@@ -1454,17 +1503,17 @@ include_once '../../components/cashier_sidebar.php';
                         <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th>#</th>
-                                    <th>Bill #</th>
-                                    <th>Total Amount</th>
-                                    <th>Paid</th>
+                                    <th style="width:30px;">#</th>
+                                    <th style="min-width:100px;">Bill #</th>
+                                    <th style="min-width:80px;">Total</th>
+                                    <th style="min-width:80px;">Paid</th>
                                     <?php if ($is_admin): ?>
-                                        <th class="balance-col-header">Balance</th>
+                                        <th style="min-width:80px;">Balance</th>
                                     <?php endif; ?>
-                                    <th>Status</th>
-                                    <th>Items</th>
-                                    <th>Created</th>
-                                    <th style="text-align:center;min-width:70px;">Actions</th>
+                                    <th style="min-width:70px;">Status</th>
+                                    <th style="min-width:40px;">Items</th>
+                                    <th style="min-width:80px;">Created</th>
+                                    <th style="min-width:75px;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1497,7 +1546,7 @@ include_once '../../components/cashier_sidebar.php';
                                             <?php endif; ?>
                                         </td>
                                         <?php if ($is_admin): ?>
-                                            <td class="balance-col">
+                                            <td>
                                                 <span class="font-semibold" style="color:var(--danger);">
                                                     <?= $currency ?> <?= number_format($bill['balance'], 0) ?>
                                                 </span>
@@ -1516,7 +1565,7 @@ include_once '../../components/cashier_sidebar.php';
                                         <td class="text-xs">
                                             <?= isset($bill['created_at']) ? date('d/m/Y', strtotime($bill['created_at'])) : 'N/A' ?>
                                             <br>
-                                            <span style="color:var(--text-secondary);font-size:0.6rem;">
+                                            <span style="color:var(--text-secondary);font-size:0.55rem;">
                                                 <?= isset($bill['created_at']) ? date('h:i A', strtotime($bill['created_at'])) : '' ?>
                                             </span>
                                         </td>
@@ -1560,7 +1609,7 @@ include_once '../../components/cashier_sidebar.php';
                                 <?php endforeach; ?>
                                 <!-- Patient Total Row -->
                                 <tr class="patient-total-row">
-                                    <td colspan="2" style="text-align:right;font-size:0.8rem;">
+                                    <td colspan="2" style="text-align:right;font-size:0.75rem;">
                                         <i class="fas fa-calculator mr-1"></i> Patient Total:
                                     </td>
                                     <td>
@@ -1581,13 +1630,13 @@ include_once '../../components/cashier_sidebar.php';
                     </div>
                     
                     <!-- Patient Action Buttons -->
-                    <div style="padding: 12px 0 0; display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--border-color); margin-top: 8px; transition: border-color 0.3s ease;">
-                        <a href="patient_bills.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-view" style="width:auto;padding:4px 12px;">
-                            <i class="fas fa-file-invoice"></i> View All Bills
+                    <div style="padding: 8px 0 0; display: flex; gap: 6px; flex-wrap: wrap; border-top: 1px solid var(--border-color); margin-top: 6px; transition: border-color 0.3s ease;">
+                        <a href="patient_bills.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-view btn-sm" style="width:auto;">
+                            <i class="fas fa-file-invoice"></i> All Bills
                         </a>
                         <?php if (!$is_admin): ?>
-                            <a href="process_payment.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-process" style="width:auto;padding:4px 12px;">
-                                <i class="fas fa-money-bill-wave"></i> Pay All Bills
+                            <a href="process_payment.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-process btn-sm" style="width:auto;">
+                                <i class="fas fa-money-bill-wave"></i> Pay All
                             </a>
                         <?php endif; ?>
                     </div>
@@ -1599,11 +1648,6 @@ include_once '../../components/cashier_sidebar.php';
             <i class="fas fa-exclamation-circle" style="color:var(--warning);"></i>
             <p class="text-lg font-semibold">No Pending Bills Found</p>
             <p class="sub">Check if there are any bills with status 'pending' or 'partial'</p>
-            <p class="text-xs" style="color:var(--text-secondary);margin-top:4px;">Debug: Total bills in query: <?= $total_bills_count ?></p>
-            <p class="text-xs" style="color:var(--text-secondary);">Branch ID: <?= $selected_branch_id ?></p>
-            <?php if ($filter !== 'all'): ?>
-                <p class="text-xs" style="color:var(--text-secondary);">Filter: <?= $filter ?></p>
-            <?php endif; ?>
         </div>
     <?php endif; ?>
 
@@ -1615,6 +1659,13 @@ include_once '../../components/cashier_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Pending Bills
+            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:<?= $is_reception ? '#FCD34D' : '#FFD700' ?>;font-weight:600;">
+                👤 <?= htmlspecialchars($user_full_name) ?>
+                <?php if ($is_reception): ?>
+                    <span style="color:#FCD34D;font-weight:500;font-size:0.55rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 Reception</span>
+                <?php endif; ?>
+            </span>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1796,8 +1847,6 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     // MANUAL REFRESH - WITHOUT AUTO-UPDATE
     // ================================================================
-    var updateCount = 0;
-    
     function manualRefresh() {
         var btn = document.getElementById('refreshBtn');
         btn.innerHTML = '<span class="spinner"></span> Loading...';
@@ -1813,12 +1862,6 @@ include_once '../../components/cashier_sidebar.php';
             showToast('✅ Refreshed', 'Page data updated manually', 'success');
         }, 2000);
     }
-
-    // ================================================================
-    // CANCEL BUTTON - WORKS VIA GET
-    // ================================================================
-    // Cancel button uses direct GET request with confirmation
-    // No AJAX needed - works reliably
 
     // ================================================================
     // INITIALIZE
@@ -1838,12 +1881,15 @@ include_once '../../components/cashier_sidebar.php';
     });
 
     console.log('%c⏳ Braick - Pending Bills (Cancel Working - No Auto-Update)', 'font-size:18px; font-weight:bold; color:#D97706;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Bills Found: <?= $total_bills_count ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patients: <?= count($patient_bills) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🗑️ Cancel button uses GET request (reliable)', 'font-size:13px; color:#DC2626;');
     console.log('%c✅ Cancelled bills removed from pending list', 'font-size:13px; color:#34D399;');
-    console.log('%c📌 Buttons are vertical (stacked) and smaller', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📌 Buttons are VERTICAL (STACKED) in one row', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Table width is COMPACT', 'font-size:13px; color:#059669;');
     console.log('%c❌ Auto-update removed to avoid JSON errors', 'font-size:13px; color:#DC2626;');
 </script>
 

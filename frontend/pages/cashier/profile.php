@@ -4,50 +4,82 @@
 // CASHIER - FULL PROFILE WITH PROFILE PICTURE UPLOAD (GREEN THEME)
 // PICTURE SHOWS ACROSS ALL PAGES
 // USES SHARED HEADER WITH DARK MODE
+// ALLOWS RECEPTION, CASHIER AND ADMIN
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Cashier
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Cashier Dodoma';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.dodoma';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['email'] = 'cashier.dodoma@braick.com';
-    $_SESSION['phone'] = '+255 700 000 016';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// PATH SAHIHI
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
-$user_id = $_SESSION['user_id'];
-$user_full_name = $_SESSION['full_name'] ?? 'Cashier Dodoma';
+// ================================================================
+// ALLOWED ROLES: Cashier, Reception, Admin
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
 $user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_username = $_SESSION['username'] ?? 'cashier.dodoma';
-$user_email = $_SESSION['email'] ?? 'cashier.dodoma@braick.com';
-$user_phone = $_SESSION['phone'] ?? '+255 700 000 016';
+$user_username = $_SESSION['username'] ?? 'cashier';
+$user_email = $_SESSION['email'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+$is_admin = ($user_role === 'admin');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 $message = '';
 $message_type = '';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 
+// ================================================================
+// GET USER DATA FROM DATABASE
+// ================================================================
 try {
-    $db = getDB();
-    
-    // Get user data from database
-    $stmt = $db->prepare("SELECT * FROM users WHERE id = ?");
+    $stmt = $db->prepare("SELECT * FROM users WHERE id = ? AND status = 'active'");
     $stmt->execute([$user_id]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -67,7 +99,7 @@ try {
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['profile_pic'])) {
         $file = $_FILES['profile_pic'];
-        $upload_dir = 'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/profiles/';
+        $upload_dir = __DIR__ . '/../../../assets/uploads/profiles/';
         
         // Create directory if not exists
         if (!is_dir($upload_dir)) {
@@ -95,7 +127,7 @@ try {
         if (empty($errors)) {
             // Generate unique filename
             $file_extension = pathinfo($file['name'], PATHINFO_EXTENSION);
-            $new_filename = 'cashier_' . $user_id . '_' . time() . '.' . $file_extension;
+            $new_filename = 'user_' . $user_id . '_' . time() . '.' . $file_extension;
             $file_path = $upload_dir . $new_filename;
             
             // Move uploaded file
@@ -187,7 +219,7 @@ $profile_pic_url = !empty($profile_pic)
 
 $profile_pic_exists = false;
 if (!empty($profile_pic)) {
-    $file_path = 'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
+    $file_path = __DIR__ . '/../../../assets/uploads/profiles/' . $profile_pic;
     if (file_exists($file_path)) {
         $profile_pic_exists = true;
     }
@@ -196,6 +228,11 @@ if (!empty($profile_pic)) {
 // Default avatar
 $default_avatar = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 $default_letter = strtoupper(substr($user_full_name, 0, 1));
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -211,8 +248,8 @@ include_once '../../components/cashier_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Profile - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -919,11 +956,21 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-user-circle"></i>
                 My Profile
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);font-size:0.6rem;">
+                        <i class="fas fa-check-circle"></i> Full Access
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-id-card"></i>
                 View and manage your profile information
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);padding:2px 12px;border-radius:16px;font-size:0.6rem;">
+                        <i class="fas fa-user-tag"></i> Reception Access
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -1084,6 +1131,12 @@ include_once '../../components/cashier_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             My Profile
             <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
+            <?php if ($is_reception): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#34D399;">👀 Reception Access</span>
+            <?php endif; ?>
+            <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
@@ -1111,7 +1164,6 @@ include_once '../../components/cashier_sidebar.php';
     // DARK MODE - SYNC WITH HEADER
     // ================================================================
     // Note: Dark mode is controlled by header.
-    // This page listens for changes and applies them.
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1234,7 +1286,8 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     console.log('%c👤 Braick - Cashier Profile (Uses Header Dark Mode)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c📋 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
     console.log('%c📸 Profile pic: <?= $profile_pic_exists ? 'Uploaded ✅' : 'Default' ?>', 'font-size:13px; color:#059669;');
     console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
 </script>

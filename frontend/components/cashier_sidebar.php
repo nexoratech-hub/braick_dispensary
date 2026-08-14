@@ -3,10 +3,11 @@
 // FILE: frontend/components/cashier_sidebar.php
 // CASHIER - SHARED SIDEBAR (GREEN THEME)
 // WITH REAL-TIME STATS AUTO-UPDATE (3 SECONDS) - SELF-CONTAINED
-// REMOVED: Patients, Invoice History, Receive Payment, Reports, Expenses
-// ADDED: Payment History & Receipt History
+// MENU: Dashboard, Pending Bills, Paid Bills, Partial Payments,
+//       Cancelled Bills, Payment History, Receipt History,
+//       Expenses, Profile, Logout
 // FULLY RESPONSIVE - WORKS WITH HEADER
-// WITH LOGIN PROTECTION
+// WITH LOGIN PROTECTION - ALLOWS RECEPTION, CASHIER, ADMIN
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -21,22 +22,21 @@ if (session_status() === PHP_SESSION_NONE) {
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    header('Location: ../login.php');
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
 // ================================================================
-// CHECK IF USER HAS ACCESS (Cashier or Admin)
+// CHECK IF USER HAS ACCESS (Cashier, Reception or Admin)
 // ================================================================
-$allowed_roles = ['cashier', 'admin'];
+$allowed_roles = ['cashier', 'reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
-        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
-        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
-        default: header('Location: ../login.php'); break;
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
     }
     exit;
 }
@@ -69,7 +69,9 @@ $pending_bills = 0;
 $partial_payments = 0;
 $paid_today = 0;
 $total_paid = 0;
+$cancelled_bills = 0;
 $patients_waiting = 0;
+$total_expenses = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
@@ -83,32 +85,20 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // Paid Today
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM patient_bills 
-            WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()
-        ");
-        $stmt->execute([$user_branch_id]);
-        $paid_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        
-        // Total Paid Bills (All time)
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM patient_bills 
-            WHERE branch_id = ? AND status = 'paid'
-        ");
+        // Paid Bills (All time)
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'paid'");
         $stmt->execute([$user_branch_id]);
         $total_paid = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // Patients Waiting for Payment (pending + partial)
-        $stmt = $db->prepare("
-            SELECT COUNT(DISTINCT patient_id) as count 
-            FROM patient_bills 
-            WHERE branch_id = ? AND status IN ('pending', 'partial')
-        ");
+        // Cancelled Bills
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'cancelled'");
         $stmt->execute([$user_branch_id]);
-        $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $cancelled_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Total Expenses
+        $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'paid'");
+        $stmt->execute([$user_branch_id]);
+        $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
         
     } catch (Exception $e) {
         // Keep counts as 0
@@ -120,6 +110,7 @@ if ($db !== null && isset($_SESSION['user_id'])) {
 // DETECT CURRENT PAGE
 // ================================================================
 $current_page = basename($_SERVER['PHP_SELF']);
+$current_uri = $_SERVER['REQUEST_URI'];
 
 // ================================================================
 // FUNCTION TO CHECK ACTIVE STATE
@@ -164,7 +155,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'partial_payments' => 0,
         'paid_today' => 0,
         'total_paid' => 0,
+        'cancelled_bills' => 0,
         'patients_waiting' => 0,
+        'total_expenses' => 0,
         'hash' => ''
     ];
     
@@ -198,6 +191,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$branch_id]);
             $response['total_paid'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
+            // Cancelled Bills
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM patient_bills 
+                WHERE branch_id = ? AND status = 'cancelled'
+            ");
+            $stmt->execute([$branch_id]);
+            $response['cancelled_bills'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
             // Patients Waiting for Payment
             $stmt = $db->prepare("
                 SELECT COUNT(DISTINCT patient_id) as count 
@@ -207,6 +209,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$branch_id]);
             $response['patients_waiting'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
+            // Total Expenses
+            $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'paid'");
+            $stmt->execute([$branch_id]);
+            $response['total_expenses'] = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+            
             $response['success'] = true;
             
             // Create hash to detect changes
@@ -215,7 +222,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $response['partial_payments'] . 
                 $response['paid_today'] . 
                 $response['total_paid'] . 
-                $response['patients_waiting']
+                $response['cancelled_bills'] .
+                $response['patients_waiting'] .
+                $response['total_expenses']
             );
             
         } catch (Exception $e) {
@@ -471,6 +480,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         background: #DC2626;
     }
     
+    .sidebar-link .badge.yellow {
+        background: #D97706;
+    }
+    
     .sidebar-link:hover .badge {
         background: rgba(255,255,255,0.25);
     }
@@ -486,7 +499,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       LOGOUT LINK
+       LOGOUT LINK - FIXED PATH
        ================================================================ */
     .sidebar-link.logout-link {
         border-top: 2px solid rgba(255,255,255,0.08);
@@ -782,7 +795,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div class="nav-label">Cashier</div>
         
         <!-- 1. Dashboard -->
-        <a href="../cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
+        <a href="/dispensary_system/frontend/pages/cashier/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
@@ -791,8 +804,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Billing</div>
         
-        <!-- Pending Bills -->
-        <a href="../cashier/pending_bills.php" class="sidebar-link <?= isActive('pending_bills.php') ?>">
+        <!-- 2. Pending Bills -->
+        <a href="/dispensary_system/frontend/pages/cashier/pending_bills.php" class="sidebar-link <?= isActive('pending_bills.php') ?>">
             <i class="fas fa-clock"></i> Pending Bills
             <?php if ($pending_bills > 0): ?>
                 <span class="badge orange" id="sidebarPendingBadge"><?= $pending_bills ?></span>
@@ -801,14 +814,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- Paid Bills -->
-        <a href="../cashier/paid_bills.php" class="sidebar-link <?= isActive('paid_bills.php') ?>">
+        <!-- 3. Paid Bills -->
+        <a href="/dispensary_system/frontend/pages/cashier/paid_bills.php" class="sidebar-link <?= isActive('paid_bills.php') ?>">
             <i class="fas fa-check-circle"></i> Paid Bills
             <span class="badge green" id="sidebarPaidBadge"><?= $total_paid ?></span>
         </a>
         
-        <!-- Partial Payments -->
-        <a href="../cashier/partial_payments.php" class="sidebar-link <?= isActive('partial_payments.php') ?>">
+        <!-- 4. Partial Payments -->
+        <a href="/dispensary_system/frontend/pages/cashier/partial_payments.php" class="sidebar-link <?= isActive('partial_payments.php') ?>">
             <i class="fas fa-hand-holding-usd"></i> Partial Payments
             <?php if ($partial_payments > 0): ?>
                 <span class="badge blue" id="sidebarPartialBadge"><?= $partial_payments ?></span>
@@ -817,9 +830,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- Cancelled Bills -->
-        <a href="../cashier/cancelled_bills.php" class="sidebar-link <?= isActive('cancelled_bills.php') ?>">
+        <!-- 5. Cancelled Bills -->
+        <a href="/dispensary_system/frontend/pages/cashier/cancelled_bills.php" class="sidebar-link <?= isActive('cancelled_bills.php') ?>">
             <i class="fas fa-times-circle"></i> Cancelled Bills
+            <?php if ($cancelled_bills > 0): ?>
+                <span class="badge red" id="sidebarCancelledBadge"><?= $cancelled_bills ?></span>
+            <?php else: ?>
+                <span class="badge" id="sidebarCancelledBadge">0</span>
+            <?php endif; ?>
         </a>
         
         <!-- ============================================================ -->
@@ -827,8 +845,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Payments</div>
         
-        <!-- Payment History -->
-        <a href="../cashier/payment_history.php" class="sidebar-link <?= isActive('payment_history.php') ?>">
+        <!-- 6. Payment History -->
+        <a href="/dispensary_system/frontend/pages/cashier/payment_history.php" class="sidebar-link <?= isActive('payment_history.php') ?>">
             <i class="fas fa-history"></i> Payment History
         </a>
         
@@ -837,26 +855,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Receipts</div>
         
-        <!-- Receipt History -->
-        <a href="../cashier/receipt_history.php" class="sidebar-link <?= isActive('receipt_history.php') ?>">
+        <!-- 7. Receipt History -->
+        <a href="/dispensary_system/frontend/pages/cashier/receipt_history.php" class="sidebar-link <?= isActive('receipt_history.php') ?>">
             <i class="fas fa-receipt"></i> Receipt History
         </a>
         
         <!-- ============================================================ -->
-        <!-- EXPENSES - REMOVED -->
+        <!-- EXPENSES -->
         <!-- ============================================================ -->
-        <!-- Expenses menu items removed -->
+        <div class="nav-label mt-2">Expenses</div>
+        
+        <!-- 8. Expenses -->
+        <a href="/dispensary_system/frontend/pages/cashier/expenses.php" class="sidebar-link <?= isActive('expenses.php') ?>">
+            <i class="fas fa-coins"></i> Expenses
+            <?php if ($total_expenses > 0): ?>
+                <span class="badge yellow" id="sidebarExpensesBadge">TSh <?= number_format($total_expenses) ?></span>
+            <?php else: ?>
+                <span class="badge" id="sidebarExpensesBadge">0</span>
+            <?php endif; ?>
+        </a>
         
         <!-- ============================================================ -->
         <!-- ACCOUNT -->
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Account</div>
         
-        <a href="../cashier/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
+        <!-- 9. Profile -->
+        <a href="/dispensary_system/frontend/pages/cashier/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <a href="../../../logout.php" class="sidebar-link logout-link">
+        <!-- 10. Logout - FIXED PATH -->
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
         
@@ -1056,6 +1086,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             partialBadge.classList.add('badge-update');
         }
         
+        // Cancelled Bills
+        var cancelledBadge = document.getElementById('sidebarCancelledBadge');
+        if (cancelledBadge) {
+            var cancelled = data.cancelled_bills || 0;
+            cancelledBadge.textContent = cancelled;
+            cancelledBadge.className = cancelled > 0 ? 'badge red' : 'badge';
+            cancelledBadge.classList.remove('badge-update');
+            void cancelledBadge.offsetWidth;
+            cancelledBadge.classList.add('badge-update');
+        }
+        
+        // Expenses
+        var expensesBadge = document.getElementById('sidebarExpensesBadge');
+        if (expensesBadge) {
+            var expenses = data.total_expenses || 0;
+            expensesBadge.textContent = expenses > 0 ? 'TSh ' + Number(expenses).toLocaleString() : '0';
+            expensesBadge.className = expenses > 0 ? 'badge yellow' : 'badge';
+            expensesBadge.classList.remove('badge-update');
+            void expensesBadge.offsetWidth;
+            expensesBadge.classList.add('badge-update');
+        }
+        
         // Update time
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
@@ -1166,12 +1218,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     });
 
     console.log('%c💰 Cashier Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c📋 Pending: <?= $pending_bills ?> | Partial: <?= $partial_payments ?> | Total Paid: <?= $total_paid ?>', 'font-size:12px; color:#A7F3D0;');
+    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
+    console.log('%c📋 Menu Items:', 'font-size:13px; color:#A7F3D0;');
+    console.log('%c   📊 Dashboard', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   ⏳ Pending Bills', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   ✅ Paid Bills', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   💳 Partial Payments', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   ❌ Cancelled Bills', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   📜 Payment History', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   🧾 Receipt History', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   💰 Expenses', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   👤 Profile', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c   🚪 Logout', 'font-size:12px; color:#D1FAE5;');
+    console.log('%c📊 Pending: <?= $pending_bills ?> | Partial: <?= $partial_payments ?> | Paid: <?= $total_paid ?>', 'font-size:12px; color:#A7F3D0;');
+    console.log('%c❌ Cancelled: <?= $cancelled_bills ?> | 💰 Expenses: TSh <?= number_format($total_expenses) ?>', 'font-size:12px; color:#A7F3D0;');
     console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
     console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
     console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
     console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
-    console.log('%c🚫 Expenses menu: REMOVED', 'font-size:12px; color:#DC2626;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#A7F3D0;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#A7F3D0;');
+    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (FIXED)', 'font-size:12px; color:#F87171;');
 </script>

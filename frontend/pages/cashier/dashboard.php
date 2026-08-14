@@ -1,12 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/dashboard.php
-// CASHIER DASHBOARD - WITH SHARED HEADER & SHARED SIDEBAR
-// REMOVED: Today's Collection Card
-// ADDED: Green Background on Header
-// WITH AUTO-UPDATE (3 SECONDS) - NO PAGE REFRESH
-// ADDED: Button to go back to Reception Dashboard
-// WITH LOGIN PROTECTION - ALLOWS RECEPTIONISTS
+// CASHIER DASHBOARD - ALLOWS RECEPTION AND ADMIN
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -198,7 +193,7 @@ function time_ago($timestamp) {
 }
 
 // ================================================================
-// INCLUDE SHARED HEADER & SHARED SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
 include_once '../../components/cashier_sidebar.php';
@@ -215,7 +210,7 @@ include_once '../../components/cashier_sidebar.php';
     <div class="page-header-green" style="background:linear-gradient(135deg, #059669, #047857);border-radius:16px;padding:24px 32px;margin-bottom:28px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px;box-shadow:0 4px 25px rgba(5,150,105,0.3);">
         <div>
             <h1 class="page-title" style="font-size:1.8rem;font-weight:700;color:white;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;">
-                <i class="fas fa-home" style="color:rgba(255,255,255,0.9);"></i>
+                <i class="fas fa-cash-register" style="color:rgba(255,255,255,0.9);"></i>
                 Cashier Dashboard
                 <span class="branch-tag" style="background:rgba(255,255,255,0.2);color:white;padding:4px 16px;border-radius:20px;font-size:0.7rem;font-weight:600;border:1px solid rgba(255,255,255,0.15);">
                     <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($cashier_branch_name) ?>
@@ -233,7 +228,7 @@ include_once '../../components/cashier_sidebar.php';
                 <i class="fas fa-user-check" style="color:rgba(255,255,255,0.7);"></i>
                 Welcome back, <strong style="color:white;font-weight:600;"><?= htmlspecialchars($cashier_name) ?></strong>
                 <?php if ($is_reception): ?>
-                    <span style="background:rgba(251,191,36,0.2);color:#FCD34D;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:500;">Viewing as Receptionist</span>
+                    <span style="background:rgba(251,191,36,0.2);color:#FCD34D;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:500;">👀 Viewing as Receptionist</span>
                 <?php endif; ?>
                 <span style="color:rgba(255,255,255,0.3);margin:0 4px;">|</span>
                 <span style="color:rgba(255,255,255,0.8);"><i class="far fa-calendar-alt"></i> <?= date('F d, Y') ?></span>
@@ -261,7 +256,7 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - 5 CARDS (REMOVED Today's Collection) -->
+    <!-- STATS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:16px;margin-bottom:28px;">
         
@@ -581,7 +576,7 @@ include_once '../../components/cashier_sidebar.php';
             <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
             <span style="color:#FFD700;font-weight:600;">👤 <?= htmlspecialchars($cashier_name) ?></span>
             <?php if ($is_reception): ?>
-                <span style="color:#FCD34D;font-weight:500;font-size:0.6rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 View Only</span>
+                <span style="color:#FCD34D;font-weight:500;font-size:0.6rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 View Only (Reception)</span>
             <?php endif; ?>
             <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
             <span id="footerTimestamp">● Live</span>
@@ -902,7 +897,7 @@ include_once '../../components/cashier_sidebar.php';
     // CONSOLE
     // ================================================================
     console.log('%c🟢 Braick - Cashier Dashboard (Auto-Update 3s)', 'font-size:20px; font-weight:bold; color:#059669;');
-    console.log('%c👤 Cashier: <?= htmlspecialchars($cashier_name) ?>', 'font-size:16px; font-weight:bold; color:#FFD700;');
+    console.log('%c👤 User: <?= htmlspecialchars($cashier_name) ?>', 'font-size:16px; font-weight:bold; color:#FFD700;');
     console.log('%c👤 Role: <?= strtoupper($cashier_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
@@ -910,8 +905,6 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c✅ Receptionists can now access Cashier Dashboard', 'font-size:13px; color:#34D399;');
     console.log('%c🟢 Green Header Applied', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds (NO PAGE REFRESH)', 'font-size:13px; color:#34D399;');
-    console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
-    console.log('%c🏥 Added button to go back to Reception Dashboard', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔒 Login protection: Active (Cashier, Reception, Admin)', 'font-size:13px; color:#059669;');
 </script>
 

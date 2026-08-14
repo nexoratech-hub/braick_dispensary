@@ -4,29 +4,66 @@
 // CASHIER - PRINT RECEIPT WITH BRAICK LOGO
 // AUTO OPENS PRINT DIALOG
 // SAVES RECEIPT TO DATABASE (FIXED: payment_id can be NULL)
+// ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Cashier
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Cashier Dodoma';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.dodoma';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// PATH SAHIHI
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// ALLOWED ROLES: Cashier, Reception, Admin
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET BILL ID
@@ -46,8 +83,6 @@ $error_message = '';
 $has_error = false;
 
 try {
-    $db = getDB();
-    
     // ================================================================
     // GET SYSTEM SETTINGS
     // ================================================================
@@ -76,7 +111,7 @@ try {
             LEFT JOIN visits v ON pb.visit_id = v.id
             WHERE pb.id = ? AND pb.branch_id = ?
         ");
-        $stmt->execute([$bill_id, $_SESSION['branch_id']]);
+        $stmt->execute([$bill_id, $user_branch_id]);
         $bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($bill) {
@@ -152,8 +187,8 @@ try {
                 $stmt = $db->prepare("
                     INSERT INTO receipts (
                         receipt_number, payment_id, bill_id, patient_id, receipt_data, 
-                        printed_by, printed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, NOW())
+                        printed_by, printed_at, branch_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)
                 ");
                 $stmt->execute([
                     $receipt_number,
@@ -161,7 +196,8 @@ try {
                     $bill_id,
                     $bill['patient_id'],
                     $receipt_data,
-                    $_SESSION['user_id']
+                    $user_id,
+                    $user_branch_id
                 ]);
                 
                 $receipt_saved = true;
@@ -198,6 +234,7 @@ foreach ($logo_paths as $path) {
         $logo_data = file_get_contents($path);
         $mime_type = mime_content_type($path);
         $logo_base64 = 'data:' . $mime_type . ';base64,' . base64_encode($logo_data);
+        $logo_available = true;
         break;
     }
 }
@@ -905,6 +942,8 @@ $logo_available = !empty($logo_base64);
     });
 
     console.log('%c🧾 Braick - Receipt Print (FIXED - payment_id NULL allowed)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');

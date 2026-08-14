@@ -6,13 +6,22 @@
 // WITH DATE AND TIME - LIVE UPDATE
 // WITH DARK MODE - FULLY WORKING
 // WITH SIDEBAR TOGGLE - FULLY WORKING ON MOBILE
+// ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION CHECK - REDIRECT TO LOGIN IF NOT CASHIER
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// SESSION CHECK - REDIRECT TO LOGIN IF NOT ALLOWED
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], $allowed_roles)) {
     header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
@@ -21,11 +30,11 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
 // GET SESSION DATA
 // ================================================================
 $user_id = $_SESSION['user_id'];
-$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_full_name = $_SESSION['full_name'] ?? 'User';
 $user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? 'cashier';
+$username = $_SESSION['username'] ?? 'user';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
@@ -83,6 +92,13 @@ if (empty($page_title) || $page_title == '') {
 // DARK MODE - Check from cookie/localStorage via JS
 // ================================================================
 $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
+
+// ================================================================
+// CHECK IF USER IS RECEPTION (for display message)
+// ================================================================
+$is_reception = ($user_role === 'reception');
+$is_admin = ($user_role === 'admin');
+$is_cashier = ($user_role === 'cashier');
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode ?>">
@@ -459,6 +475,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             background: var(--primary-bg);
             color: var(--primary);
             text-transform: uppercase;
+            white-space: nowrap;
         }
         
         [data-theme="dark"] .role-badge {
@@ -480,6 +497,8 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             background: #1A3A2A;
             color: #34D399;
         }
+        
+        /* Reception Badge - REMOVED */
         
         .main-content {
             margin-left: 270px;
@@ -791,6 +810,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             .dark-toggle-btn { padding: 4px 10px; font-size: 0.7rem; }
             .dark-toggle-btn span { display: none; }
             .branch-badge { font-size: 0.5rem; padding: 2px 8px; }
+            .role-badge { font-size: 0.5rem; padding: 2px 8px; }
             .main-content { padding: 12px; margin-top: 60px; }
             .sidebar-toggle-btn { font-size: 1.2rem; padding: 4px 8px; }
             .dashboard-link span { display: none; }
@@ -809,6 +829,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             .top-nav .icon-btn i { font-size: 0.8rem; }
             .top-nav .avatar, .top-nav .avatar-avatar { width: 28px; height: 28px; font-size: 0.7rem; }
             .branch-badge { font-size: 0.45rem; padding: 2px 6px; }
+            .role-badge { font-size: 0.45rem; padding: 2px 6px; }
             .sidebar-toggle-btn { font-size: 1rem; padding: 2px 6px; }
             .page-header .page-title { font-size: 1rem; }
         }
@@ -870,6 +891,11 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
     <!-- Right Side -->
     <div class="flex items-center gap-3 shrink-0">
         
+        <!-- Role Badge -->
+        <span class="role-badge">
+            <i class="fas fa-user mr-1"></i> <?= strtoupper($user_role) ?>
+        </span>
+        
         <!-- Branch Badge -->
         <span class="branch-badge">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
@@ -920,7 +946,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
             var sidebarToggle = document.getElementById('sidebarToggle');
             var overlay = document.getElementById('sidebarOverlay');
             
-            console.log('🔧 Cashier Sidebar toggle initialization...');
+            console.log('🔧 Cashier Header - Sidebar toggle initialization...');
             console.log('📱 Sidebar element:', sidebar);
             console.log('🔘 Toggle button:', sidebarToggle);
             
@@ -979,7 +1005,8 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
                 console.log('✅ Toggle button event attached');
             } else {
                 console.warn('⚠️ Toggle button not found - trying fallback');
-                // Try to find by class                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
+                // Try to find by class
+                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
                 if (fallbackBtn) {
                     fallbackBtn.addEventListener('click', function(e) {
                         e.preventDefault();
@@ -1019,7 +1046,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
                 }
             });
             
-            console.log('✅ Cashier Sidebar toggle fully initialized!');
+            console.log('✅ Cashier Header - Sidebar toggle fully initialized!');
         }
         
         // Run on DOM ready
@@ -1240,6 +1267,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 
     console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📸 Profile Pic: <?= $profile_pic_exists ? '✅ Uploaded' : '❌ Default' ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
     console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? '🌙 Dark' : '☀️ Light'), 'font-size:13px; color:#D97706;');
     console.log('%c📅 Date/Time: ' + new Date().toLocaleString(), 'font-size:13px; color:#0B5ED7;');
     console.log('%c📱 Hamburger button: Click ☰ to toggle sidebar', 'font-size:13px; color:#34D399;');

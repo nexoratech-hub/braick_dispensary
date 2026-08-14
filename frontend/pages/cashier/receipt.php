@@ -3,41 +3,65 @@
 // FILE: frontend/pages/cashier/receipt.php
 // RECEIPT - VIEW AND PRINT RECEIPT
 // WITH BRAICK LOGO AND DETAILS - IMPROVED DESIGN
+// ALLOWS RECEPTION, CASHIER AND ADMIN
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// INCLUDE CONFIG
+// START SESSION
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to reception.rose
-// ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.rose';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'];
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// ALLOWED ROLES: Cashier, Reception, Admin
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// DATABASE CONNECTION
+// CHECK IF USER IS RECEPTION
 // ================================================================
-$db = getDB();
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PAYMENT ID
@@ -84,7 +108,7 @@ if ($payment_id <= 0) {
         // Get bill items
         $stmt = $db->prepare("SELECT * FROM bill_items WHERE bill_id = ? ORDER BY id");
         $stmt->execute([$receipt_data['bill_id']]);
-        $bill_items = $stmt->fetchAll();
+        $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
@@ -117,6 +141,11 @@ $profile_pic_url = !empty($profile_pic)
     : '';
 
 $default_letter = strtoupper(substr($user_full_name, 0, 1));
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -805,24 +834,35 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
-        <div>
-            <h1 class="page-title" style="font-size:1.6rem; font-weight:700; color:var(--text-primary);">
-                <i class="fas fa-receipt mr-3" style="color: var(--success);"></i> 
+    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5" style="background:linear-gradient(135deg, var(--success), var(--success-dark));border-radius:16px;padding:20px 24px;margin-bottom:24px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px;box-shadow:0 4px 20px rgba(5,150,105,0.25);position:relative;overflow:hidden;">
+        <div style="position:relative;z-index:1;">
+            <h1 class="page-title" style="font-size:1.6rem; font-weight:700; color:white;display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;">
+                <i class="fas fa-receipt" style="color:rgba(255,255,255,0.9);"></i> 
                 Receipt
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;padding:4px 14px;border-radius:20px;font-size:0.65rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;backdrop-filter:blur(4px);"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);font-size:0.6rem;">
+                        <i class="fas fa-check-circle"></i> Full Access
+                    </span>
+                <?php endif; ?>
             </h1>
-            <p class="page-subtitle" style="color:var(--text-secondary); font-size:0.9rem;">
+            <p class="page-subtitle" style="color:rgba(255,255,255,0.85);font-size:0.9rem;display:flex;align-items:center;gap:8px;flex-wrap:wrap;position:relative;z-index:1;margin:0;">
                 Payment receipt details
-                <span class="branch-tag ml-2" style="background:var(--success-bg); color:var(--success); padding:2px 14px; border-radius:20px; font-size:0.7rem; font-weight:600;">
+                <span class="branch-tag" style="background:rgba(255,255,255,0.15);color:white;padding:2px 14px;border-radius:20px;font-size:0.7rem;font-weight:600;border:1px solid rgba(255,255,255,0.1);backdrop-filter:blur(4px);">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);padding:2px 12px;border-radius:16px;font-size:0.6rem;">
+                        <i class="fas fa-user-tag"></i> Reception Access
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap no-print">
-            <button onclick="window.print()" class="btn btn-primary" style="background:var(--success); color:white; border:none; padding:10px 22px; border-radius:10px; font-weight:600; font-size:0.85rem; cursor:pointer; transition:all 0.3s; display:inline-flex; align-items:center; gap:8px;">
+        <div class="flex gap-2 flex-wrap no-print" style="position:relative;z-index:1;">
+            <button onclick="window.print()" class="btn btn-primary" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);padding:8px 18px;border-radius:10px;font-weight:500;font-size:0.82rem;transition:all 0.3s;text-decoration:none;display:inline-flex;align-items:center;gap:8px;backdrop-filter:blur(4px);cursor:pointer;">
                 <i class="fas fa-print"></i> Print Receipt
             </button>
-            <a href="payment_history.php" class="btn btn-outline" style="background:transparent; color:var(--text-secondary); border:2px solid var(--border-color); padding:10px 22px; border-radius:10px; font-weight:600; font-size:0.85rem; text-decoration:none; transition:all 0.3s; display:inline-flex; align-items:center; gap:8px;">
+            <a href="payment_history.php" class="btn btn-outline" style="background:rgba(255,255,255,0.1);color:white;border:1px solid rgba(255,255,255,0.15);padding:8px 18px;border-radius:10px;font-weight:500;font-size:0.82rem;transition:all 0.3s;text-decoration:none;display:inline-flex;align-items:center;gap:8px;backdrop-filter:blur(4px);">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -848,12 +888,12 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             </div>
             <div class="receipt-number">
                 <div class="label">Receipt Number</div>
-                <div class="number">#<?= htmlspecialchars($receipt_data['payment_number'] ?? 'N/A') ?></div>
+                <div class="number">#<?= htmlspecialchars($receipt_data['receipt_number'] ?? $receipt_data['payment_number'] ?? 'N/A') ?></div>
                 <div class="date-badge">
                     <i class="fas fa-calendar-alt"></i>
-                    <?= date('d M Y', strtotime($receipt_data['payment_date'] ?? 'now')) ?>
+                    <?= date('d M Y', strtotime($receipt_data['received_at'] ?? $receipt_data['payment_date'] ?? 'now')) ?>
                     <i class="fas fa-clock ml-1"></i>
-                    <?= date('h:i A', strtotime($receipt_data['payment_date'] ?? 'now')) ?>
+                    <?= date('h:i A', strtotime($receipt_data['received_at'] ?? $receipt_data['payment_date'] ?? 'now')) ?>
                 </div>
             </div>
         </div>
@@ -961,9 +1001,9 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                     <div class="total-row">
                         <span class="label">Status</span>
                         <span class="value">
-                            <span class="status-badge <?= $receipt_data['status'] ?? 'completed' ?>">
+                            <span class="status-badge <?= $receipt_data['bill_status'] ?? 'completed' ?>">
                                 <i class="fas fa-circle"></i>
-                                <?= ucfirst($receipt_data['status'] ?? 'Completed') ?>
+                                <?= ucfirst($receipt_data['bill_status'] ?? 'Completed') ?>
                             </span>
                         </span>
                     </div>
@@ -990,7 +1030,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                 </span>
                 <span>
                     <i class="fas fa-calendar-check"></i>
-                    <strong>Date:</strong> <?= date('d/m/Y h:i A', strtotime($receipt_data['payment_date'] ?? 'now')) ?>
+                    <strong>Date:</strong> <?= date('d/m/Y h:i A', strtotime($receipt_data['received_at'] ?? $receipt_data['payment_date'] ?? 'now')) ?>
                 </span>
                 <span>
                     <i class="fas fa-fingerprint"></i>
@@ -1019,12 +1059,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer mt-5" style="padding:12px 0;border-top:1px solid var(--border-color);margin-top:20px;text-align:center;font-size:0.65rem;color:var(--text-secondary);">
         <p>
             <span class="footer-brand" style="color:var(--success); font-weight:600;">Braick Dispensary</span> 
-            <span style="color:var(--text-secondary); opacity:0.3; margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary); opacity:0.3; margin:0 6px;">|</span>
             Receipt
-            <span style="color:var(--text-secondary); opacity:0.3; margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary); opacity:0.3; margin:0 6px;">|</span>
+            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
+            <?php if ($is_reception): ?>
+                <span style="color:#34D399;font-size:0.5rem;margin-left:4px;">👀 Reception</span>
+            <?php endif; ?>
+            <span style="color:var(--text-secondary); opacity:0.3; margin:0 6px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1116,7 +1161,9 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
 
     console.log('%c🧾 Braick - Receipt (Improved Design)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c📋 Payment #: <?= htmlspecialchars($receipt_data['payment_number'] ?? 'N/A') ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c📋 Payment #: <?= htmlspecialchars($receipt_data['receipt_number'] ?? $receipt_data['payment_number'] ?? 'N/A') ?>', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Patient: <?= htmlspecialchars($receipt_data['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#6EE7B7;');
     console.log('%c💰 Amount: TSh <?= number_format($receipt_data['amount'] ?? 0) ?>', 'font-size:13px; color:#6EE7B7;');
     console.log('%c🎨 Improved design with better fonts and layout', 'font-size:13px; color:#8B5CF6;');

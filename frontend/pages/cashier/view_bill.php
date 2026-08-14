@@ -6,53 +6,71 @@
 // FIXED: Uses shared header with clock
 // FIXED: Dark mode fully working with header
 // FIXED: Green theme applied throughout
-// FIXED: Default user: Rose Mwangi (ID: 11)
 // FIXED: Removed duplicate "Dr." in doctor name
 // FIXED: Bill summary grid - 3 items per row
+// FIXED: Removed Print button
+// FIXED: Removed Reference column from payments table
+// ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Default to Rose Mwangi (ID: 11)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.rose';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// ALLOW RECEPTION TO ACCESS CASHIER PAGES
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-$allowed_roles = ['cashier', 'reception', 'admin'];
-if (!in_array($_SESSION['role'], $allowed_roles)) {
-    header('Location: ../' . $_SESSION['role'] . '/dashboard.php');
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
 // ================================================================
-// CHECK IF USER IS ADMIN
+// ALLOWED ROLES: Cashier, Reception, Admin
 // ================================================================
-$is_admin = ($_SESSION['role'] === 'admin' || $_SESSION['is_admin'] === true);
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
 
 // ================================================================
-// PATH SAHIHI
+// GET USER DATA FROM SESSION
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS ADMIN OR RECEPTION
+// ================================================================
+$is_admin = ($user_role === 'admin');
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET BILL ID FROM URL
@@ -69,8 +87,6 @@ $message_type = '';
 $currency = 'TSh';
 
 try {
-    $db = getDB();
-
     // ================================================================
     // GET BILL DETAILS
     // ================================================================
@@ -98,8 +114,8 @@ try {
         LEFT JOIN branches b ON pb.branch_id = b.id
         WHERE pb.id = ? AND pb.branch_id = ?
     ");
-    $stmt->execute([$bill_id, $selected_branch_id]);
-    $bill = $stmt->fetch();
+    $stmt->execute([$bill_id, $user_branch_id]);
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$bill) {
         header('Location: dashboard.php?error=Bill not found');
@@ -115,7 +131,7 @@ try {
         ORDER BY id ASC
     ");
     $stmt->execute([$bill_id]);
-    $items = $stmt->fetchAll();
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // ================================================================
     // GET PAYMENTS
@@ -126,7 +142,7 @@ try {
         ORDER BY id DESC
     ");
     $stmt->execute([$bill_id]);
-    $payments = $stmt->fetchAll();
+    $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // ================================================================
     // CALCULATE TOTALS
@@ -152,7 +168,7 @@ try {
     // ================================================================
     $settings = [];
     $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
-    while ($row = $stmt->fetch()) {
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $settings[$row['setting_key']] = $row['setting_value'];
     }
     $currency = $settings['currency'] ?? 'TSh';
@@ -176,6 +192,15 @@ try {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
@@ -188,8 +213,8 @@ include_once '../../components/cashier_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Bill #<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?> - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -748,7 +773,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           BUTTONS
+           BUTTONS - NO PRINT BUTTON
            ================================================================ */
         .btn {
             display: inline-flex;
@@ -991,10 +1016,15 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-file-invoice"></i>
                 Bill Details
-                <span class="role-badge-display">CASHIER</span>
+                <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
                 <?php if ($is_admin): ?>
                     <span class="header-badge" style="background:rgba(124,58,237,0.3);border-color:rgba(124,58,237,0.3);color:#C4B5FD;">
                         <i class="fas fa-user-shield"></i> ADMIN
+                    </span>
+                <?php endif; ?>
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(251,191,36,0.3);border-color:rgba(251,191,36,0.3);color:#FCD34D;">
+                        <i class="fas fa-eye"></i> RECEPTION
                     </span>
                 <?php endif; ?>
             </h1>
@@ -1025,9 +1055,7 @@ include_once '../../components/cashier_sidebar.php';
             <a href="pending_bills.php" class="btn-outline-light">
                 <i class="fas fa-list"></i> Pending
             </a>
-            <a href="print_bill.php?id=<?= $bill_id ?>" class="btn-outline-light" target="_blank">
-                <i class="fas fa-print"></i> Print
-            </a>
+            <!-- PRINT BUTTON REMOVED -->
         </div>
     </div>
 
@@ -1073,7 +1101,7 @@ include_once '../../components/cashier_sidebar.php';
             <!-- Row 1: Branch, Visit, Type -->
             <div class="summary-item">
                 <span class="label">Branch</span>
-                <span class="value"><?= htmlspecialchars($bill['branch_name'] ?? $branch_name) ?></span>
+                <span class="value"><?= htmlspecialchars($bill['branch_name'] ?? $user_branch_name) ?></span>
             </div>
             <div class="summary-item">
                 <span class="label">Visit Number</span>
@@ -1239,7 +1267,7 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PAYMENTS TABLE -->
+    <!-- PAYMENTS TABLE - REFERENCE COLUMN REMOVED -->
     <!-- ================================================================ -->
     <div class="table-wrapper animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="table-header">
@@ -1259,11 +1287,11 @@ include_once '../../components/cashier_sidebar.php';
                 <thead>
                     <tr>
                         <th style="width:35px;text-align:center;">#</th>
-                        <th>Payment #</th>
+                        <th>Receipt #</th>
                         <th style="text-align:right;">Amount</th>
                         <th>Method</th>
-                        <th>Reference</th>
-                        <th>Status</th>
+                        <!-- REFERENCE COLUMN REMOVED -->
+                        <th style="text-align:center;">Status</th>
                         <th>Date</th>
                     </tr>
                 </thead>
@@ -1274,7 +1302,7 @@ include_once '../../components/cashier_sidebar.php';
                                 <td style="text-align:center;"><?= $counter++ ?></td>
                                 <td>
                                     <span class="font-mono font-semibold" style="color:var(--primary);font-size:0.75rem;">
-                                        <?= htmlspecialchars($payment['payment_number'] ?? 'N/A') ?>
+                                        <?= htmlspecialchars($payment['receipt_number'] ?? $payment['payment_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td style="text-align:right;font-weight:600;color:var(--success);font-size:0.8rem;">
@@ -1285,14 +1313,16 @@ include_once '../../components/cashier_sidebar.php';
                                         <?= ucfirst($payment['payment_method'] ?? 'Cash') ?>
                                     </span>
                                 </td>
-                                <td style="font-size:0.75rem;"><?= htmlspecialchars($payment['reference_number'] ?? 'N/A') ?></td>
+                                <!-- REFERENCE COLUMN REMOVED -->
                                 <td style="text-align:center;">
                                     <span class="status-badge <?= ($payment['status'] ?? 'completed') === 'completed' ? 'paid' : 'pending' ?>">
                                         <?= ucfirst($payment['status'] ?? 'Completed') ?>
                                     </span>
                                 </td>
                                 <td style="font-size:0.7rem;color:var(--text-secondary);">
-                                    <?php if (isset($payment['created_at']) && !empty($payment['created_at'])): ?>
+                                    <?php if (isset($payment['received_at']) && !empty($payment['received_at'])): ?>
+                                        <?= date('M d, Y h:i A', strtotime($payment['received_at'])) ?>
+                                    <?php elseif (isset($payment['created_at']) && !empty($payment['created_at'])): ?>
                                         <?= date('M d, Y h:i A', strtotime($payment['created_at'])) ?>
                                     <?php else: ?>
                                         <?= date('M d, Y h:i A', strtotime($payment['payment_date'] ?? $payment['updated_at'] ?? 'now')) ?>
@@ -1305,11 +1335,11 @@ include_once '../../components/cashier_sidebar.php';
                             <td style="text-align:right;font-size:0.85rem;color:var(--success);">
                                 <?= $currency ?> <?= number_format($total_paid_amount, 0) ?>
                             </td>
-                            <td colspan="4"></td>
+                            <td colspan="3"></td>
                         </tr>
                     <?php else: ?>
                         <tr>
-                            <td colspan="7" style="text-align:center;padding:25px 20px;color:var(--text-secondary);font-size:0.85rem;">
+                            <td colspan="6" style="text-align:center;padding:25px 20px;color:var(--text-secondary);font-size:0.85rem;">
                                 <i class="fas fa-info-circle mr-1"></i> No payments recorded
                             </td>
                         </tr>
@@ -1320,7 +1350,7 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- ACTION BUTTONS -->
+    <!-- ACTION BUTTONS - PRINT BUTTON REMOVED -->
     <!-- ================================================================ -->
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
         <?php if ($bill['status'] !== 'paid' && $bill['status'] !== 'cancelled'): ?>
@@ -1331,9 +1361,7 @@ include_once '../../components/cashier_sidebar.php';
         <a href="pending_bills.php" class="btn btn-primary">
             <i class="fas fa-list"></i> Pending Bills
         </a>
-        <a href="print_bill.php?id=<?= $bill_id ?>" class="btn btn-outline" target="_blank">
-            <i class="fas fa-print"></i> Print
-        </a>
+        <!-- PRINT BUTTON REMOVED -->
         <?php if ($is_admin): ?>
             <button onclick="editBill(<?= $bill_id ?>)" class="btn btn-outline">
                 <i class="fas fa-edit"></i> Edit
@@ -1363,6 +1391,13 @@ include_once '../../components/cashier_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Bill Details
+            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:<?= $is_reception ? '#FCD34D' : '#FFD700' ?>;font-weight:600;">
+                👤 <?= htmlspecialchars($user_full_name) ?>
+                <?php if ($is_reception): ?>
+                    <span style="color:#FCD34D;font-weight:500;font-size:0.55rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 Reception</span>
+                <?php endif; ?>
+            </span>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1546,11 +1581,14 @@ include_once '../../components/cashier_sidebar.php';
     });
 
     console.log('%c🟢 Braick - View Bill Details (3 Items Per Row)', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c👤 Default User: Rose Mwangi (ID: 11)', 'font-size:12px; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
+    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:12px; color:#34D399;');
     console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:12px; color:#64748B;');
     console.log('%c💰 Total: <?= $currency ?> <?= number_format($total_amount, 0) ?> | Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?>', 'font-size:12px; color:#059669;');
     console.log('%c✅ Fixed: 3 items per row in bill summary', 'font-size:12px; color:#34D399;');
+    console.log('%c❌ Print button removed', 'font-size:12px; color:#DC2626;');
+    console.log('%c❌ Reference column removed from payments table', 'font-size:12px; color:#DC2626;');
 </script>
 
 </body>

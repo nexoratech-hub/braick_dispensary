@@ -8,33 +8,65 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Cashier (User ID 11)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'cashier') {
-    $_SESSION['user_id'] = 11;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'cashier';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'cashier.rose';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['email'] = 'rose@braick.com';
-    $_SESSION['phone'] = '+255 700 000 005';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// PATH SAHIHI
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// ALLOWED ROLES: Cashier, Reception, Admin
+// ================================================================
+$allowed_roles = ['cashier', 'reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// CHECK IF USER IS RECEPTION
+// ================================================================
+$is_reception = ($user_role === 'reception');
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$selected_branch_id = $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
+$message = '';
+$message_type = '';
+$currency = 'TSh';
 
 // ================================================================
 // GET FILTER PARAMETERS
@@ -44,73 +76,81 @@ $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : '';
 $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-$message = '';
-$message_type = '';
-
 // Initialize variables
 $partial_bills = [];
 $total_partial = 0;
 $total_amount = 0;
-$currency = 'TSh';
 
+// ================================================================
+// GET SYSTEM SETTINGS
+// ================================================================
 try {
-    $db = getDB();
-    
-    // ================================================================
-    // BUILD DATE FILTER
-    // ================================================================
-    $date_condition = "";
-    $params = [$selected_branch_id];
-    
-    switch ($filter) {
-        case 'today':
-            $date_condition = "AND DATE(pb.updated_at) = CURDATE()";
-            break;
-        case 'week':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-            break;
-        case 'month':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-            break;
-        case '3months':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-            break;
-        case '6months':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-            break;
-        case 'year':
-            $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-            break;
-        case 'custom':
-            if (!empty($start_date) && !empty($end_date)) {
-                $date_condition = "AND DATE(pb.updated_at) BETWEEN ? AND ?";
-                $params[] = $start_date;
-                $params[] = $end_date;
-            } else {
-                $date_condition = "";
-            }
-            break;
-        case 'all':
-        default:
+    $settings = [];
+    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $settings[$row['setting_key']] = $row['setting_value'];
+    }
+    $currency = $settings['currency'] ?? 'TSh';
+} catch (Exception $e) {
+    $currency = 'TSh';
+}
+
+// ================================================================
+// BUILD DATE FILTER
+// ================================================================
+$date_condition = "";
+$params = [$user_branch_id];
+
+switch ($filter) {
+    case 'today':
+        $date_condition = "AND DATE(pb.updated_at) = CURDATE()";
+        break;
+    case 'week':
+        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        break;
+    case 'month':
+        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        break;
+    case '3months':
+        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        break;
+    case '6months':
+        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        break;
+    case 'year':
+        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        break;
+    case 'custom':
+        if (!empty($start_date) && !empty($end_date)) {
+            $date_condition = "AND DATE(pb.updated_at) BETWEEN ? AND ?";
+            $params[] = $start_date;
+            $params[] = $end_date;
+        } else {
             $date_condition = "";
-            break;
-    }
-    
-    // ================================================================
-    // BUILD SEARCH CONDITION
-    // ================================================================
-    $search_condition = "";
-    if (!empty($search)) {
-        $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pb.bill_number LIKE ? OR p.phone LIKE ?)";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-    }
-    
-    // ================================================================
-    // GET PARTIAL PAYMENT BILLS
-    // ================================================================
+        }
+        break;
+    case 'all':
+    default:
+        $date_condition = "";
+        break;
+}
+
+// ================================================================
+// BUILD SEARCH CONDITION
+// ================================================================
+$search_condition = "";
+if (!empty($search)) {
+    $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pb.bill_number LIKE ? OR p.phone LIKE ?)";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+}
+
+// ================================================================
+// GET PARTIAL PAYMENT BILLS
+// ================================================================
+try {
     $sql = "
         SELECT pb.*, 
                p.full_name as patient_name, 
@@ -140,16 +180,6 @@ try {
         $total_amount += $bill['total_amount'] ?? 0;
     }
     
-    // ================================================================
-    // GET SYSTEM SETTINGS
-    // ================================================================
-    $settings = [];
-    $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $settings[$row['setting_key']] = $row['setting_value'];
-    }
-    $currency = $settings['currency'] ?? 'TSh';
-    
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
@@ -159,9 +189,25 @@ try {
 }
 
 // ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
+
+// ================================================================
+// SIDEBAR - CASHIER SIDEBAR (RECEPTION HAS FULL ACCESS)
+// ================================================================
 include_once '../../components/cashier_sidebar.php';
 ?>
 <!DOCTYPE html>
@@ -171,8 +217,8 @@ include_once '../../components/cashier_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Partial Payments - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -1046,11 +1092,16 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-money-bill-wave"></i>
                 Partial Payments
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">CASHIER</span>
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
+                <?php if ($is_reception): ?>
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);">
+                        <i class="fas fa-check-circle"></i> Full Access
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-percent"></i>
-                View bills with partial payments in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                View bills with partial payments in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
                 
                 <span class="header-badge">
                     <i class="fas fa-file-invoice"></i>
@@ -1062,6 +1113,12 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-filter"></i>
                     <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
                 </span>
+                <?php endif; ?>
+                
+                <?php if ($is_reception): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);">
+                        <i class="fas fa-user-tag"></i> Reception Access
+                    </span>
                 <?php endif; ?>
             </p>
         </div>
@@ -1228,7 +1285,7 @@ include_once '../../components/cashier_sidebar.php';
                                 </td>
                                 <td>
                                     <span class="font-semibold text-green-600">
-                                        <?= $currency ?> <?= number_format($bill['amount_paid'] ?? 0, 0) ?>
+                                        <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
                                     </span>
                                 </td>
                                 <td>
@@ -1290,6 +1347,12 @@ include_once '../../components/cashier_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Partial Payments
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
+            <?php if ($is_reception): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#34D399;">👀 Reception Access</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1433,10 +1496,11 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     console.log('%c🟡 Braick - Partial Payments (Green Theme)', 'font-size:18px; font-weight:bold; color:#D97706;');
-    console.log('%c👤 User ID: 11 - Rose Mwangi', 'font-size:13px; color:#64748B;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Partial Bills: <?= $total_partial ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📅 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
     console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
     console.log('%c🟢 Green theme applied', 'font-size:13px; color:#059669;');
 </script>
