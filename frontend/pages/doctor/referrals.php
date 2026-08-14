@@ -73,7 +73,7 @@ try {
 }
 
 // ================================================================
-// GET REFERRALS FOR THIS DOCTOR - FIXED QUERY
+// GET REFERRALS FOR THIS DOCTOR - FIXED QUERY (USING CORRECT COLUMNS)
 // ================================================================
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $type_filter = isset($_GET['type']) ? $_GET['type'] : 'all';
@@ -86,6 +86,7 @@ $sql = "
         p.patient_id as patient_code,
         p.phone as patient_phone,
         u_from.full_name as from_doctor_name,
+        u_from.specialty as from_doctor_specialty,
         u_to.full_name as to_doctor_name,
         u_to.specialty as to_doctor_specialty,
         v.visit_number,
@@ -93,21 +94,22 @@ $sql = "
     FROM referrals r
     LEFT JOIN patients p ON r.patient_id = p.id
     LEFT JOIN visits v ON r.visit_id = v.id
-    LEFT JOIN users u_from ON r.created_by = u_from.id
-    LEFT JOIN users u_to ON r.referred_to = u_to.id
+    LEFT JOIN users u_from ON r.from_doctor_id = u_from.id
+    LEFT JOIN users u_to ON r.to_doctor_id = u_to.id
     WHERE 1=1
 ";
 
 $params = [];
 
 if ($type_filter === 'sent') {
-    $sql .= " AND r.created_by = ?";
+    $sql .= " AND r.from_doctor_id = ?";
     $params[] = $doctor_id;
 } elseif ($type_filter === 'received') {
-    $sql .= " AND r.referred_to = ?";
+    $sql .= " AND r.to_doctor_id = ?";
     $params[] = $doctor_id;
 } else {
-    $sql .= " AND (r.created_by = ? OR r.referred_to = ?)";
+    // Show both sent and received
+    $sql .= " AND (r.from_doctor_id = ? OR r.to_doctor_id = ?)";
     $params[] = $doctor_id;
     $params[] = $doctor_id;
 }
@@ -179,6 +181,14 @@ function getStatusBadgeClass($status) {
         case 'rejected': return 'badge-danger';
         case 'pending': return 'badge-warning';
         default: return 'badge-warning';
+    }
+}
+
+function getReferralTypeLabel($type) {
+    if ($type === 'internal') {
+        return '🏥 Internal';
+    } else {
+        return '🌍 External';
     }
 }
 
@@ -311,6 +321,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <th style="border-radius: 8px 0 0 0;">#</th>
                         <th>Patient</th>
                         <th>Visit</th>
+                        <th>Type</th>
                         <th>From Doctor</th>
                         <th>To Doctor</th>
                         <th>Reason</th>
@@ -327,25 +338,40 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <td>
                                     <div class="font-medium"><?= htmlspecialchars($ref['patient_name'] ?? 'N/A') ?></div>
                                     <div class="text-xs text-muted"><?= htmlspecialchars($ref['patient_code'] ?? '') ?></div>
+                                    <div class="text-xs text-muted">📞 <?= htmlspecialchars($ref['patient_phone'] ?? 'N/A') ?></div>
                                 </td>
                                 <td>
                                     <span class="font-mono text-xs"><?= htmlspecialchars($ref['visit_number'] ?? 'N/A') ?></span>
                                 </td>
                                 <td>
-                                    <?php if ($ref['created_by'] == $doctor_id): ?>
-                                        <span class="text-green-600 font-medium">Me</span>
-                                    <?php else: ?>
-                                        <?= htmlspecialchars($ref['from_doctor_name'] ?? 'Unknown') ?>
+                                    <span class="badge <?= $ref['referral_type'] === 'internal' ? 'badge-info' : 'badge-success' ?>">
+                                        <?= getReferralTypeLabel($ref['referral_type']) ?>
+                                    </span>
+                                    <?php if ($ref['referral_type'] === 'external' && !empty($ref['to_hospital_name'])): ?>
+                                        <div class="text-xs text-muted">🏥 <?= htmlspecialchars($ref['to_hospital_name']) ?></div>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <?php if ($ref['referred_to'] == $doctor_id): ?>
+                                    <?php if ($ref['from_doctor_id'] == $doctor_id): ?>
+                                        <span class="text-green-600 font-medium">Me</span>
+                                    <?php else: ?>
+                                        <?= htmlspecialchars($ref['from_doctor_name'] ?? 'Unknown') ?>
+                                        <?php if (!empty($ref['from_doctor_specialty'])): ?>
+                                            <div class="text-xs text-muted"><?= htmlspecialchars($ref['from_doctor_specialty']) ?></div>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if ($ref['to_doctor_id'] == $doctor_id): ?>
                                         <span class="text-blue-600 font-medium">Me</span>
                                     <?php else: ?>
                                         <?= htmlspecialchars($ref['to_doctor_name'] ?? 'Unknown') ?>
                                     <?php endif; ?>
                                     <?php if (!empty($ref['to_doctor_specialty'])): ?>
                                         <div class="text-xs text-muted"><?= htmlspecialchars($ref['to_doctor_specialty']) ?></div>
+                                    <?php endif; ?>
+                                    <?php if ($ref['referral_type'] === 'external' && !empty($ref['to_hospital_name'])): ?>
+                                        <div class="text-xs text-muted">🏥 <?= htmlspecialchars($ref['to_hospital_name']) ?></div>
                                     <?php endif; ?>
                                 </td>
                                 <td class="text-sm"><?= htmlspecialchars(substr($ref['reason'] ?? '', 0, 50)) ?><?= strlen($ref['reason'] ?? '') > 50 ? '...' : '' ?></td>
@@ -360,7 +386,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                         <a href="view_referral.php?id=<?= $ref['id'] ?>" class="btn btn-view btn-sm" title="View Details">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <?php if (($ref['status'] ?? '') === 'pending' && $ref['referred_to'] == $doctor_id): ?>
+                                        <?php if (($ref['status'] ?? '') === 'pending' && $ref['to_doctor_id'] == $doctor_id): ?>
                                             <a href="accept_referral.php?id=<?= $ref['id'] ?>" class="btn btn-success btn-sm" title="Accept" onclick="return confirm('Accept this referral?')">
                                                 <i class="fas fa-check"></i> Accept
                                             </a>
@@ -374,7 +400,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="9" class="text-center py-8 text-muted">
+                            <td colspan="10" class="text-center py-8 text-muted">
                                 <i class="fas fa-ambulance text-3xl block mb-2"></i>
                                 <?php if ($search || $status_filter): ?>
                                     No referrals found matching your filters
@@ -1013,8 +1039,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     console.log('%c🔄 Referrals - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c📊 Total: <?= $total_referrals ?> | Pending: <?= $pending_count ?> | Accepted: <?= $accepted_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c✅ Query fixed: Uses created_by and referred_to columns', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c✅ Query fixed: Uses from_doctor_id and to_doctor_id (correct schema)', 'font-size:12px; color:#0B5ED7;');
     console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📋 Referral count: <?= $total_referrals ?>', 'font-size:12px; color:#64748B;');
 </script>
 
 </body>

@@ -28,6 +28,7 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $is_online = $_SESSION['is_online'] ?? 0;
+$user_phone = $_SESSION['phone'] ?? '';
 
 // ================================================================
 // INCLUDE DATABASE
@@ -42,12 +43,13 @@ try {
 
 $message = '';
 $message_type = '';
+$error_message = '';
 
 // ================================================================
 // VERIFY DOCTOR EXISTS AND IS ACTIVE
 // ================================================================
 try {
-    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online, phone FROM users WHERE id = ? AND role = 'doctor'");
     $stmt->execute([$user_id]);
     $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -62,12 +64,14 @@ try {
     $user_specialty = $doctor_data['specialty'] ?? 'General Medicine';
     $profile_pic = $doctor_data['profile_pic'] ?? '';
     $is_online = $doctor_data['is_online'] ?? 0;
+    $user_phone = $doctor_data['phone'] ?? '';
     
     $_SESSION['full_name'] = $user_full_name;
     $_SESSION['branch_id'] = $user_branch_id;
     $_SESSION['specialty'] = $user_specialty;
     $_SESSION['profile_pic'] = $profile_pic;
     $_SESSION['is_online'] = $is_online;
+    $_SESSION['phone'] = $user_phone;
     
 } catch (Exception $e) {
     error_log("refer_patient verification error: " . $e->getMessage());
@@ -85,7 +89,7 @@ $visit_id = isset($_GET['visit_id']) ? (int)$_GET['visit_id'] : 0;
 $patients_list = [];
 try {
     $stmt = $db->prepare("
-        SELECT DISTINCT p.id, p.full_name, p.patient_id, p.gender, p.phone, p.date_of_birth
+        SELECT DISTINCT p.id, p.full_name, p.patient_id, p.gender, p.phone, p.date_of_birth, p.emergency_contact
         FROM patients p
         JOIN visits v ON p.id = v.patient_id
         WHERE v.doctor_id = ?
@@ -101,6 +105,12 @@ try {
 // GET SELECTED PATIENT DETAILS (if patient_id is provided)
 // ================================================================
 $patient = null;
+$last_visit = null;
+$medications = [];
+$procedures = [];
+$diagnosis = '';
+$treatment = '';
+
 if ($patient_id > 0) {
     try {
         // Check if patient exists
@@ -126,8 +136,9 @@ if ($patient_id > 0) {
         
         // Get latest visit info if patient exists
         if ($patient) {
+            // Get last visit - TRY TO FIND ANY VISIT
             $stmt = $db->prepare("
-                SELECT id, visit_number, diagnosis, symptoms, created_at
+                SELECT id, visit_number, diagnosis, symptoms, treatment, created_at, status
                 FROM visits 
                 WHERE patient_id = ? AND doctor_id = ?
                 ORDER BY created_at DESC
@@ -136,11 +147,51 @@ if ($patient_id > 0) {
             $stmt->execute([$patient_id, $user_id]);
             $visit_info = $stmt->fetch(PDO::FETCH_ASSOC);
             
+            // If no visit found with this doctor, get any visit
+            if (!$visit_info) {
+                $stmt = $db->prepare("
+                    SELECT id, visit_number, diagnosis, symptoms, treatment, created_at, status
+                    FROM visits 
+                    WHERE patient_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ");
+                $stmt->execute([$patient_id]);
+                $visit_info = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            
             if ($visit_info) {
                 $patient['visit_id'] = $visit_info['id'] ?? null;
                 $patient['visit_number'] = $visit_info['visit_number'] ?? null;
                 $patient['diagnosis'] = $visit_info['diagnosis'] ?? null;
                 $patient['symptoms'] = $visit_info['symptoms'] ?? null;
+                $patient['treatment'] = $visit_info['treatment'] ?? null;
+                $patient['last_visit_date'] = $visit_info['created_at'] ?? null;
+                $patient['last_visit_status'] = $visit_info['status'] ?? null;
+                $last_visit = $visit_info;
+                $diagnosis = $visit_info['diagnosis'] ?? '';
+                $treatment = $visit_info['treatment'] ?? '';
+                
+                // Get medications from last visit
+                $stmt = $db->prepare("
+                    SELECT pi.medication_name, pi.dosage, pi.frequency, pi.quantity, pi.instructions
+                    FROM prescriptions p
+                    JOIN prescription_items pi ON p.id = pi.prescription_id
+                    WHERE p.visit_id = ?
+                ");
+                $stmt->execute([$visit_info['id']]);
+                $medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Get procedures from last visit
+                $stmt = $db->prepare("
+                    SELECT bi.item_name, bi.quantity, bi.total_price
+                    FROM bill_items bi
+                    WHERE bi.bill_id IN (SELECT id FROM patient_bills WHERE visit_id = ?)
+                    AND bi.item_type = 'procedure'
+                    AND bi.status != 'cancelled'
+                ");
+                $stmt->execute([$visit_info['id']]);
+                $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
             }
         }
     } catch (Exception $e) {
@@ -208,17 +259,51 @@ $specialties = [
 ];
 
 // ================================================================
-// HANDLE FORM SUBMISSION
+// EXPERT TYPES FOR EXTERNAL REFERRAL DROPDOWN
+// ================================================================
+$expert_types = [
+    'Cardiology Expert',
+    'Dermatology Expert',
+    'Endocrinology Expert',
+    'Gastroenterology Expert',
+    'Hematology Expert',
+    'Infectious Diseases Expert',
+    'Nephrology Expert',
+    'Neurology Expert',
+    'Obstetrics & Gynecology Expert',
+    'Oncology Expert',
+    'Ophthalmology Expert',
+    'Orthopedics Expert',
+    'Otolaryngology (ENT) Expert',
+    'Pediatrics Expert',
+    'Psychiatry Expert',
+    'Pulmonology Expert',
+    'Radiology Expert',
+    'Rheumatology Expert',
+    'Surgery Expert',
+    'Urology Expert',
+    'General Medicine Expert',
+    'Emergency Medicine Expert',
+    'Intensive Care Expert',
+    'Nutrition Expert',
+    'Physiotherapy Expert',
+    'Other (Specify)'
+];
+
+// ================================================================
+// HANDLE FORM SUBMISSION - FIXED
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     if ($action === 'save_referral') {
         $referral_type = $_POST['referral_type'] ?? '';
-        $reason = trim($_POST['reason'] ?? '');
+        $reason = trim($_POST['reason'] ?? '');          // Internal reason
+        $referral_reason = trim($_POST['referral_reason'] ?? ''); // External reason
         $notes = trim($_POST['notes'] ?? '');
         $patient_id_post = (int)($_POST['patient_id'] ?? 0);
-        $visit_id_post = (int)($_POST['visit_id'] ?? 0);
+        $visit_id_post = isset($_POST['visit_id']) ? (int)$_POST['visit_id'] : 0;
+        $urgency = $_POST['urgency'] ?? 'routine';
         
         // Internal referral fields
         $referred_to_doctor = isset($_POST['referred_to_doctor']) ? (int)$_POST['referred_to_doctor'] : 0;
@@ -229,9 +314,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $external_address = trim($_POST['external_address'] ?? '');
         $external_phone = trim($_POST['external_phone'] ?? '');
         $external_email = trim($_POST['external_email'] ?? '');
-        $external_contact_person = trim($_POST['external_contact_person'] ?? '');
-        $referral_reason = trim($_POST['referral_reason'] ?? '');
+        $expert_type = trim($_POST['expert_type'] ?? '');
+        $expert_type_other = trim($_POST['expert_type_other'] ?? '');
         $clinical_summary = trim($_POST['clinical_summary'] ?? '');
+        
+        // If "Other" selected, use the custom value
+        if ($expert_type === 'Other (Specify)' && !empty($expert_type_other)) {
+            $expert_type = $expert_type_other;
+        }
         
         // Validate
         $errors = [];
@@ -241,15 +331,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (empty($referral_type)) {
             $errors[] = "Please select referral type";
         }
-        if (empty($reason)) {
-            $errors[] = "Please enter reason for referral";
-        }
         
         if ($referral_type === 'internal') {
+            if (empty($reason)) {
+                $errors[] = "Please enter reason for referral";
+            }
             if ($referred_to_doctor <= 0) {
                 $errors[] = "Please select a doctor";
             }
         } elseif ($referral_type === 'external') {
+            if (empty($referral_reason)) {
+                $errors[] = "Please enter reason for referral";
+            }
             if (empty($external_facility)) {
                 $errors[] = "Please enter facility name";
             }
@@ -261,25 +354,154 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 $referral_number = 'REF-' . date('Ymd') . '-' . str_pad($patient_id_post, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
                 
-                $full_notes = $notes;
+                // Build clinical notes with diagnosis, medications and procedures
+                $clinical_notes_final = $notes;
                 
+                if ($last_visit) {
+                    $clinical_notes_final .= "\n\n--- Last Visit Information ---\n";
+                    $clinical_notes_final .= "Visit: " . ($last_visit['visit_number'] ?? 'N/A') . "\n";
+                    $clinical_notes_final .= "Date: " . date('M d, Y', strtotime($last_visit['created_at'])) . "\n";
+                    $clinical_notes_final .= "Status: " . ($last_visit['status'] ?? 'N/A') . "\n";
+                    
+                    if (!empty($diagnosis)) {
+                        $clinical_notes_final .= "\nDiagnosis:\n" . $diagnosis . "\n";
+                    }
+                    
+                    if (!empty($treatment)) {
+                        $clinical_notes_final .= "\nTreatment Given:\n" . $treatment . "\n";
+                    }
+                    
+                    if (count($medications) > 0) {
+                        $clinical_notes_final .= "\nMedications Prescribed:\n";
+                        foreach ($medications as $med) {
+                            $clinical_notes_final .= "- " . ($med['medication_name'] ?? 'N/A');
+                            if (!empty($med['dosage'])) {
+                                $clinical_notes_final .= " " . $med['dosage'];
+                            }
+                            if (!empty($med['frequency'])) {
+                                $clinical_notes_final .= " " . $med['frequency'];
+                            }
+                            if (!empty($med['quantity'])) {
+                                $clinical_notes_final .= " x" . $med['quantity'];
+                            }
+                            $clinical_notes_final .= "\n";
+                        }
+                    }
+                    
+                    if (count($procedures) > 0) {
+                        $clinical_notes_final .= "\nProcedures Performed:\n";
+                        foreach ($procedures as $proc) {
+                            $clinical_notes_final .= "- " . ($proc['item_name'] ?? 'N/A');
+                            if (!empty($proc['quantity'])) {
+                                $clinical_notes_final .= " x" . $proc['quantity'];
+                            }
+                            $clinical_notes_final .= "\n";
+                        }
+                    }
+                    
+                    if (!empty($patient['symptoms'])) {
+                        $clinical_notes_final .= "\nSymptoms: " . $patient['symptoms'] . "\n";
+                    }
+                }
+                
+                // ================================================================
+                // FIX: GET OR CREATE VISIT ID
+                // ================================================================
+                $visit_id_to_use = null;
+                
+                // 1. Try to use the provided visit_id
+                if ($visit_id_post > 0) {
+                    $visit_id_to_use = $visit_id_post;
+                }
+                
+                // 2. If no visit_id, try to get the latest visit for this patient
+                if ($visit_id_to_use === null && $patient_id_post > 0) {
+                    $stmt = $db->prepare("
+                        SELECT id FROM visits 
+                        WHERE patient_id = ? AND doctor_id = ?
+                        ORDER BY created_at DESC LIMIT 1
+                    ");
+                    $stmt->execute([$patient_id_post, $user_id]);
+                    $visit = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($visit) {
+                        $visit_id_to_use = $visit['id'];
+                    }
+                }
+                
+                // 3. If still no visit, try to get any visit for this patient
+                if ($visit_id_to_use === null && $patient_id_post > 0) {
+                    $stmt = $db->prepare("
+                        SELECT id FROM visits 
+                        WHERE patient_id = ?
+                        ORDER BY created_at DESC LIMIT 1
+                    ");
+                    $stmt->execute([$patient_id_post]);
+                    $visit = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($visit) {
+                        $visit_id_to_use = $visit['id'];
+                    }
+                }
+                
+                // 4. If still no visit, create a new visit
+                if ($visit_id_to_use === null && $patient_id_post > 0) {
+                    $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+                    $stmt = $db->prepare("
+                        INSERT INTO visits (
+                            visit_number, visit_date, patient_id, doctor_id,
+                            branch_id, visit_type, status, created_at
+                        ) VALUES (?, NOW(), ?, ?, ?, 'new', 'pending', NOW())
+                    ");
+                    $stmt->execute([$visit_number, $patient_id_post, $user_id, $user_branch_id]);
+                    $visit_id_to_use = $db->lastInsertId();
+                }
+                
+                // ================================================================
+                // INSERT REFERRAL - USING CORRECT SCHEMA
+                // ================================================================
                 if ($referral_type === 'internal') {
-                    $stmt = $db->prepare("SELECT full_name FROM users WHERE id = ?");
+                    // Get doctor name for internal referral
+                    $stmt = $db->prepare("SELECT full_name, phone, specialty FROM users WHERE id = ?");
                     $stmt->execute([$referred_to_doctor]);
                     $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
                     $doctor_name = $doctor['full_name'] ?? 'Unknown Doctor';
                     
-                    $full_notes .= "\n\n--- Internal Referral ---\n";
-                    $full_notes .= "Referred to: " . $doctor_name . "\n";
-                    $full_notes .= "Specialty: " . ($_POST['specialty'] ?? 'N/A') . "\n";
-                    $full_notes .= "Notes: " . $internal_notes;
+                    // Internal referral - use to_doctor_id
+                    $stmt = $db->prepare("
+                        INSERT INTO referrals (
+                            referral_number, visit_id, patient_id, from_doctor_id,
+                            referral_type, to_doctor_id,
+                            reason, clinical_notes, diagnosis, treatment_given,
+                            urgency, status, referral_date, created_by, branch_id, created_at
+                        ) VALUES (
+                            ?, ?, ?, ?,
+                            ?, ?,
+                            ?, ?, ?, ?,
+                            ?, 'pending', NOW(), ?, ?, NOW()
+                        )
+                    ");
+                    
+                    $stmt->execute([
+                        $referral_number,
+                        $visit_id_to_use,
+                        $patient_id_post,
+                        $user_id,
+                        $referral_type,
+                        $referred_to_doctor,
+                        $reason,
+                        $clinical_notes_final,
+                        $diagnosis,
+                        $treatment,
+                        $urgency,
+                        $user_id,
+                        $user_branch_id
+                    ]);
                     
                     // Create notification for receiving doctor
                     $stmt = $db->prepare("
                         INSERT INTO notifications (user_id, title, message, type, link, created_at)
                         VALUES (?, ?, ?, 'info', ?, NOW())
                     ");
-                    $notif_message = "New referral from Dr. " . $user_full_name . " for patient";
+                    $notif_message = "New referral from Dr. " . $user_full_name . " for patient " . ($patient['full_name'] ?? '');
                     $stmt->execute([
                         $referred_to_doctor,
                         "📋 New Referral Received",
@@ -288,35 +510,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ]);
                     
                 } else {
-                    $full_notes .= "\n\n--- External Referral ---\n";
-                    $full_notes .= "Facility: " . $external_facility . "\n";
-                    $full_notes .= "Address: " . $external_address . "\n";
-                    $full_notes .= "Phone: " . $external_phone . "\n";
-                    $full_notes .= "Email: " . $external_email . "\n";
-                    $full_notes .= "Contact Person: " . $external_contact_person . "\n";
-                    $full_notes .= "Reason: " . $referral_reason . "\n";
-                    $full_notes .= "Clinical Summary: " . $clinical_summary;
+                    // External referral - use to_hospital_name, to_hospital_address, to_hospital_phone
+                    $stmt = $db->prepare("
+                        INSERT INTO referrals (
+                            referral_number, visit_id, patient_id, from_doctor_id,
+                            referral_type, to_hospital_name, to_hospital_address, to_hospital_phone,
+                            reason, clinical_notes, diagnosis, treatment_given,
+                            urgency, status, referral_date, created_by, branch_id, created_at
+                        ) VALUES (
+                            ?, ?, ?, ?,
+                            ?, ?, ?, ?,
+                            ?, ?, ?, ?,
+                            ?, 'pending', NOW(), ?, ?, NOW()
+                        )
+                    ");
+                    
+                    // Build clinical notes with expert type
+                    $clinical_notes_with_expert = $clinical_notes_final;
+                    if (!empty($expert_type)) {
+                        $clinical_notes_with_expert = "Expert Type: " . $expert_type . "\n\n" . $clinical_notes_final;
+                    }
+                    
+                    $stmt->execute([
+                        $referral_number,
+                        $visit_id_to_use,
+                        $patient_id_post,
+                        $user_id,
+                        $referral_type,
+                        $external_facility,
+                        $external_address,
+                        $external_phone,
+                        $referral_reason,
+                        $clinical_notes_with_expert,
+                        $diagnosis,
+                        $treatment,
+                        $urgency,
+                        $user_id,
+                        $user_branch_id
+                    ]);
                 }
-                
-                // Insert referral
-                $stmt = $db->prepare("
-                    INSERT INTO referrals (
-                        referral_number, patient_id, visit_id, 
-                        referral_type, reason, referred_to, notes,
-                        created_by, branch_id, created_at, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 'pending')
-                ");
-                $stmt->execute([
-                    $referral_number,
-                    $patient_id_post,
-                    $visit_id_post ?: null,
-                    $referral_type,
-                    $reason,
-                    $referral_type === 'internal' ? $referred_to_doctor : null,
-                    $full_notes,
-                    $user_id,
-                    $user_branch_id
-                ]);
                 
                 $referral_id = $db->lastInsertId();
                 
@@ -327,7 +559,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $stmt->execute([
                     $user_id,
-                    "Patient referred: " . $patient['full_name'] . " (#$referral_number) - Type: $referral_type"
+                    "Patient referred: " . ($patient['full_name'] ?? '') . " (#$referral_number) - Type: $referral_type"
                 ]);
                 
                 $db->commit();
@@ -551,6 +783,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .title-blue { color: var(--primary); }
         .title-purple { color: #7C3AED; }
+        .title-green { color: #059669; }
         
         .form-label {
             display: block;
@@ -655,6 +888,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-weight: 600;
         }
         .badge-info { background: var(--primary-bg); color: var(--primary); }
+        .badge-success { background: var(--success-bg); color: var(--success); }
         
         .alert {
             padding: 14px 20px;
@@ -689,7 +923,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .detail-label {
             font-weight: 600;
             color: var(--text-secondary);
-            width: 140px;
+            width: 160px;
             flex-shrink: 0;
             font-size: 0.8rem;
         }
@@ -697,6 +931,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex: 1;
             color: var(--text-primary);
             font-size: 0.85rem;
+        }
+        
+        .detail-value .phone-number {
+            font-family: monospace;
+            background: var(--bg-body);
+            padding: 2px 8px;
+            border-radius: 4px;
         }
         
         /* PATIENT SELECTION TABLE */
@@ -854,6 +1095,27 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             50% { opacity: 0.5; transform: scale(0.8); }
         }
         
+        /* Expert Type - Show/Hide Other Input */
+        .expert-other-wrapper {
+            display: none;
+            margin-top: 8px;
+        }
+        .expert-other-wrapper.show {
+            display: block;
+        }
+        
+        /* Urgency Badges */
+        .urgency-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.6rem;
+            font-weight: 600;
+        }
+        .urgency-badge.routine { background: var(--success-bg); color: var(--success); }
+        .urgency-badge.urgent { background: var(--warning-bg); color: var(--warning); }
+        .urgency-badge.emergency { background: var(--danger-bg); color: var(--danger); }
+        
         .referral-letter {
             background: var(--bg-card);
             border: 2px solid var(--primary);
@@ -904,7 +1166,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .referral-letter .letter-body .field-row .field-label {
             font-weight: 600;
-            width: 140px;
+            width: 160px;
             color: var(--text-secondary);
             flex-shrink: 0;
         }
@@ -963,6 +1225,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .text-sm { font-size: 0.875rem; }
         .font-semibold { font-weight: 600; }
         .text-gray-600 { color: var(--text-secondary); }
+        .text-green-600 { color: #059669; }
         .grid { display: grid; }
         .grid-cols-1 { grid-template-columns: 1fr; }
         .gap-2 { gap: 8px; }
@@ -1018,6 +1281,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     Patient: <strong><?= htmlspecialchars($patient['full_name']) ?></strong>
                     <span class="separator">|</span>
                     ID: <?= htmlspecialchars($patient['patient_id']) ?>
+                    <span class="separator">|</span>
+                    Phone: <span class="phone-number"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
                 <?php else: ?>
                     Select a patient from the list below
                 <?php endif; ?>
@@ -1043,6 +1308,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <?= $message ?>
         </div>
     <?php endif; ?>
+    
+    <?php if ($error_message): ?>
+        <div class="alert alert-error">
+            <i class="fas fa-exclamation-circle"></i>
+            <?= $error_message ?>
+        </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- STEP 1: SELECT PATIENT (Only if no patient selected) -->
@@ -1064,7 +1336,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <div class="patient-meta">
                             <?= htmlspecialchars($p['gender'] ?? 'N/A') ?> • 
                             <?= !empty($p['date_of_birth']) ? calculateAge($p['date_of_birth']) . ' yrs' : 'N/A' ?> • 
-                            <?= htmlspecialchars($p['phone'] ?? 'N/A') ?>
+                            <?= htmlspecialchars($p['phone'] ?? 'N/A') ?> •
+                            Emergency: <?= htmlspecialchars($p['emergency_contact'] ?? 'N/A') ?>
                         </div>
                     </a>
                 <?php endforeach; ?>
@@ -1084,11 +1357,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- ================================================================ -->
     <?php if ($patient): ?>
     
-    <!-- Patient Information -->
+    <!-- Patient Information with Emergency Contact -->
     <div class="card">
         <h3 class="card-title">
             <i class="fas fa-user-circle title-blue mr-2"></i>
             Patient Information
+            <?php if ($patient['visit_number']): ?>
+                <span class="badge badge-info ml-2">Last Visit: <?= htmlspecialchars($patient['visit_number']) ?></span>
+            <?php endif; ?>
         </h3>
         
         <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -1097,12 +1373,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="detail-row"><span class="detail-label">Gender</span><span class="detail-value"><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span></div>
             <div class="detail-row"><span class="detail-label">Date of Birth</span><span class="detail-value"><?= !empty($patient['date_of_birth']) ? date('d/m/Y', strtotime($patient['date_of_birth'])) : 'N/A' ?></span></div>
             <div class="detail-row"><span class="detail-label">Phone</span><span class="detail-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Emergency Contact</span><span class="detail-value"><strong><?= htmlspecialchars($patient['emergency_contact'] ?? 'N/A') ?></strong></span></div>
             <div class="detail-row"><span class="detail-label">Blood Group</span><span class="detail-value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Referred By</span><span class="detail-value"><strong>Dr. <?= htmlspecialchars($user_full_name) ?></strong> (<?= htmlspecialchars($user_specialty) ?>)</span></div>
             <?php if (!empty($patient['diagnosis'])): ?>
                 <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Diagnosis</span><span class="detail-value"><?= htmlspecialchars($patient['diagnosis']) ?></span></div>
             <?php endif; ?>
+            <?php if (!empty($patient['symptoms'])): ?>
+                <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Symptoms</span><span class="detail-value"><?= htmlspecialchars($patient['symptoms']) ?></span></div>
+            <?php endif; ?>
             <?php if (!empty($patient['visit_number'])): ?>
-                <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Visit</span><span class="detail-value"><?= htmlspecialchars($patient['visit_number']) ?></span></div>
+                <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Last Visit</span><span class="detail-value"><?= htmlspecialchars($patient['visit_number']) ?> (<?= !empty($patient['last_visit_date']) ? date('M d, Y', strtotime($patient['last_visit_date'])) : 'N/A' ?>)</span></div>
             <?php endif; ?>
         </div>
     </div>
@@ -1217,7 +1498,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
-            <!-- External Referral -->
+            <!-- External Referral with Dropdown Expert Type -->
             <div class="external-form" id="externalForm">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div class="form-group">
@@ -1225,8 +1506,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <input type="text" name="external_facility" class="form-control" placeholder="e.g. Muhimbili National Hospital">
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Contact Person</label>
-                        <input type="text" name="external_contact_person" class="form-control" placeholder="e.g. Dr. Jane Doe">
+                        <label class="form-label">Expert Type</label>
+                        <select name="expert_type" class="form-control" id="expertTypeSelect" onchange="toggleExpertOther()">
+                            <option value="">-- Select Expert Type --</option>
+                            <?php foreach ($expert_types as $expert): ?>
+                                <option value="<?= htmlspecialchars($expert) ?>"><?= htmlspecialchars($expert) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <div class="expert-other-wrapper" id="expertOtherWrapper">
+                            <input type="text" name="expert_type_other" class="form-control" placeholder="Specify expert type..." style="margin-top:6px;">
+                            <small class="text-xs text-gray-400">Please specify the expert type</small>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Phone Number</label>
@@ -1242,26 +1532,85 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                 </div>
                 
+                <!-- Urgency -->
                 <div class="form-group">
-                    <label class="form-label">Reason for Referral <span class="text-danger">*</span></label>
-                    <textarea name="referral_reason" class="form-control" rows="3" placeholder="Explain why the patient is being referred..."></textarea>
+                    <label class="form-label">Urgency</label>
+                    <select name="urgency" class="form-control">
+                        <option value="routine">🟢 Routine</option>
+                        <option value="urgent">🟡 Urgent</option>
+                        <option value="emergency">🔴 Emergency</option>
+                    </select>
                 </div>
                 
+                <!-- SINGLE REASON FIELD - EXTERNAL -->
                 <div class="form-group">
-                    <label class="form-label">Clinical Summary</label>
-                    <textarea name="clinical_summary" class="form-control" rows="3" placeholder="Summary of patient's clinical history, diagnosis, and treatment so far..."></textarea>
+                    <label class="form-label">Reason for Referral <span class="text-danger">*</span></label>
+                    <textarea name="referral_reason" class="form-control" rows="3" placeholder="Explain why the patient is being referred..." required></textarea>
                 </div>
             </div>
             
             <!-- Common Fields -->
             <div class="form-group mt-4">
-                <label class="form-label">Reason for Referral <span class="text-danger">*</span></label>
-                <textarea name="reason" class="form-control" rows="2" placeholder="Brief reason for referral..." required></textarea>
-            </div>
-            
-            <div class="form-group">
                 <label class="form-label">Additional Notes</label>
                 <textarea name="notes" class="form-control" rows="2" placeholder="Any additional notes..."></textarea>
+            </div>
+            
+            <!-- Clinical Summary with Diagnosis, Medications and Procedures -->
+            <div class="form-group">
+                <label class="form-label">Clinical Summary</label>
+                <textarea name="clinical_summary" id="clinicalSummary" class="form-control" rows="6" placeholder="Summary of patient's clinical history, diagnosis, and treatment so far..."><?php 
+                    if ($last_visit) {
+                        echo "--- Last Visit Information ---\n";
+                        echo "Visit: " . ($last_visit['visit_number'] ?? 'N/A') . "\n";
+                        echo "Date: " . date('M d, Y', strtotime($last_visit['created_at'])) . "\n";
+                        echo "Status: " . ($last_visit['status'] ?? 'N/A') . "\n";
+                        
+                        if (!empty($diagnosis)) {
+                            echo "\n--- Diagnosis ---\n" . $diagnosis . "\n";
+                        }
+                        
+                        if (!empty($treatment)) {
+                            echo "\n--- Treatment Given ---\n" . $treatment . "\n";
+                        }
+                        
+                        if (count($medications) > 0) {
+                            echo "\n--- Medications Prescribed ---\n";
+                            foreach ($medications as $med) {
+                                echo "- " . ($med['medication_name'] ?? 'N/A');
+                                if (!empty($med['dosage'])) {
+                                    echo " " . $med['dosage'];
+                                }
+                                if (!empty($med['frequency'])) {
+                                    echo " " . $med['frequency'];
+                                }
+                                if (!empty($med['quantity'])) {
+                                    echo " x" . $med['quantity'];
+                                }
+                                echo "\n";
+                            }
+                        }
+                        
+                        if (count($procedures) > 0) {
+                            echo "\n--- Procedures Performed ---\n";
+                            foreach ($procedures as $proc) {
+                                echo "- " . ($proc['item_name'] ?? 'N/A');
+                                if (!empty($proc['quantity'])) {
+                                    echo " x" . $proc['quantity'];
+                                }
+                                echo "\n";
+                            }
+                        }
+                        
+                        if (!empty($patient['symptoms'])) {
+                            echo "\n--- Symptoms ---\n" . $patient['symptoms'] . "\n";
+                        }
+                    }
+                ?></textarea>
+                <?php if ($last_visit): ?>
+                    <small class="text-xs text-gray-400 mt-1">
+                        <i class="fas fa-info-circle"></i> Clinical summary includes diagnosis, treatment, medications, procedures, and symptoms from the last visit.
+                    </small>
+                <?php endif; ?>
             </div>
             
             <!-- External Referral Letter Preview -->
@@ -1285,14 +1634,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <div class="field-row"><span class="field-label">Date:</span><span class="field-value" id="letterDate"><?= date('d/m/Y') ?></span></div>
                         <div class="field-row"><span class="field-label">Patient Name:</span><span class="field-value"><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></span></div>
                         <div class="field-row"><span class="field-label">Patient ID:</span><span class="field-value"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span></div>
+                        <div class="field-row"><span class="field-label">Phone:</span><span class="field-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span></div>
+                        <div class="field-row"><span class="field-label">Emergency Contact:</span><span class="field-value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'N/A') ?></span></div>
                         <div class="field-row"><span class="field-label">Age/Sex:</span><span class="field-value"><?= !empty($patient['date_of_birth']) ? calculateAge($patient['date_of_birth']) . ' yrs' : 'N/A' ?> / <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span></div>
+                        <div class="field-row"><span class="field-label">Blood Group:</span><span class="field-value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span></div>
                         <div class="field-row"><span class="field-label">Referred To:</span><span class="field-value" id="letterFacility">[Facility Name]</span></div>
-                        <div class="field-row"><span class="field-label">Contact Person:</span><span class="field-value" id="letterContact">[Contact Person]</span></div>
+                        <div class="field-row"><span class="field-label">Expert Type:</span><span class="field-value" id="letterExpertType">[Expert Type]</span></div>
                         <div class="field-row"><span class="field-label">Reason for Referral:</span><span class="field-value" id="letterReason">[Reason]</span></div>
                         <div class="field-row"><span class="field-label">Clinical Summary:</span><span class="field-value" id="letterSummary">[Clinical Summary]</span></div>
-                        <div class="field-row"><span class="field-label">Referred By:</span><span class="field-value"><?= htmlspecialchars($user_full_name) ?></span></div>
+                        <div class="field-row"><span class="field-label">Referred By:</span><span class="field-value"><strong>Dr. <?= htmlspecialchars($user_full_name) ?></strong></span></div>
                         <div class="field-row"><span class="field-label">Specialty:</span><span class="field-value"><?= htmlspecialchars($user_specialty) ?></span></div>
-                        <div class="field-row"><span class="field-label">Contact:</span><span class="field-value"><?= htmlspecialchars($doctor_branch_name) ?> | <?= date('d/m/Y') ?></span></div>
+                        <div class="field-row"><span class="field-label">Contact:</span><span class="field-value"><?= htmlspecialchars($doctor_branch_name) ?> | <?= htmlspecialchars($user_phone) ?> | <?= date('d/m/Y') ?></span></div>
                     </div>
                     
                     <div class="letter-footer">
@@ -1353,7 +1705,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - FULLY FIXED -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1377,7 +1729,23 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     });
 
     // ================================================================
-    // SELECT REFERRAL TYPE
+    // EXPERT TYPE - TOGGLE OTHER INPUT
+    // ================================================================
+    function toggleExpertOther() {
+        var select = document.getElementById('expertTypeSelect');
+        var otherWrapper = document.getElementById('expertOtherWrapper');
+        
+        if (select && select.value === 'Other (Specify)') {
+            otherWrapper.classList.add('show');
+        } else if (otherWrapper) {
+            otherWrapper.classList.remove('show');
+        }
+        
+        updateLetterPreview();
+    }
+
+    // ================================================================
+    // SELECT REFERRAL TYPE - FIXED
     // ================================================================
     function selectReferralType(type, element) {
         document.querySelectorAll('.referral-type-option').forEach(function(btn) {
@@ -1396,11 +1764,28 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         if (type === 'internal') {
             internalForm.classList.add('active');
             externalForm.classList.remove('active');
-            externalPreview.style.display = 'none';
+            if (externalPreview) externalPreview.style.display = 'none';
+            
+            // Set required fields
+            document.querySelectorAll('.internal-form .form-control[required]').forEach(function(el) {
+                el.setAttribute('required', 'required');
+            });
+            document.querySelectorAll('.external-form .form-control[required]').forEach(function(el) {
+                el.removeAttribute('required');
+            });
         } else {
             internalForm.classList.remove('active');
             externalForm.classList.add('active');
-            externalPreview.style.display = 'block';
+            if (externalPreview) externalPreview.style.display = 'block';
+            
+            // Set required fields
+            document.querySelectorAll('.external-form .form-control[required]').forEach(function(el) {
+                el.setAttribute('required', 'required');
+            });
+            document.querySelectorAll('.internal-form .form-control[required]').forEach(function(el) {
+                el.removeAttribute('required');
+            });
+            
             updateLetterPreview();
         }
     }
@@ -1410,27 +1795,123 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     // ================================================================
     function updateLetterPreview() {
         var facility = document.querySelector('input[name="external_facility"]')?.value || '[Facility Name]';
-        var contact = document.querySelector('input[name="external_contact_person"]')?.value || '[Contact Person]';
+        var expertType = document.querySelector('select[name="expert_type"]')?.value || '[Expert Type]';
+        var expertTypeOther = document.querySelector('input[name="expert_type_other"]')?.value || '';
         var reason = document.querySelector('textarea[name="referral_reason"]')?.value || '[Reason]';
         var summary = document.querySelector('textarea[name="clinical_summary"]')?.value || '[Clinical Summary]';
         
+        if (expertType === 'Other (Specify)' && expertTypeOther) {
+            expertType = expertTypeOther + ' (Other)';
+        }
+        
         var letterFacility = document.getElementById('letterFacility');
-        var letterContact = document.getElementById('letterContact');
+        var letterExpertType = document.getElementById('letterExpertType');
         var letterReason = document.getElementById('letterReason');
         var letterSummary = document.getElementById('letterSummary');
         
         if (letterFacility) letterFacility.textContent = facility;
-        if (letterContact) letterContact.textContent = contact;
+        if (letterExpertType) letterExpertType.textContent = expertType;
         if (letterReason) letterReason.textContent = reason;
         if (letterSummary) letterSummary.textContent = summary;
     }
 
+    // ================================================================
+    // FORM VALIDATION - FIXED
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        var inputs = document.querySelectorAll('.external-form input, .external-form textarea');
+        // Initialize required fields
+        document.querySelectorAll('.internal-form .form-control[required]').forEach(function(el) {
+            el.setAttribute('required', 'required');
+        });
+        document.querySelectorAll('.external-form .form-control[required]').forEach(function(el) {
+            el.removeAttribute('required');
+        });
+        
+        // Listen to form changes for preview
+        var inputs = document.querySelectorAll('.external-form input, .external-form textarea, .external-form select');
         inputs.forEach(function(input) {
             input.addEventListener('input', updateLetterPreview);
             input.addEventListener('change', updateLetterPreview);
         });
+        
+        // ================================================================
+        // FORM SUBMIT VALIDATION - FIXED
+        // ================================================================
+        var form = document.getElementById('referralForm');
+        if (form) {
+            form.addEventListener('submit', function(e) {
+                var referralType = document.getElementById('referralType')?.value || 'internal';
+                var patientId = document.querySelector('input[name="patient_id"]')?.value;
+                
+                console.log('🔍 Referral Type:', referralType);
+                console.log('🔍 Patient ID:', patientId);
+                
+                // Check patient
+                if (!patientId || patientId == 0) {
+                    e.preventDefault();
+                    showToast('Error', 'Please select a patient', 'error');
+                    return false;
+                }
+                
+                // ============================================================
+                // INTERNAL REFERRAL VALIDATION
+                // ============================================================
+                if (referralType === 'internal') {
+                    var reason = document.querySelector('textarea[name="reason"]')?.value?.trim();
+                    var doctorSelect = document.querySelector('select[name="referred_to_doctor"]');
+                    
+                    console.log('🔍 Internal Reason:', reason);
+                    
+                    if (!reason) {
+                        e.preventDefault();
+                        showToast('Error', 'Please enter reason for referral', 'error');
+                        document.querySelector('textarea[name="reason"]')?.focus();
+                        return false;
+                    }
+                    
+                    if (!doctorSelect || !doctorSelect.value) {
+                        e.preventDefault();
+                        showToast('Error', 'Please select a doctor to refer to', 'error');
+                        return false;
+                    }
+                }
+                
+                // ============================================================
+                // EXTERNAL REFERRAL VALIDATION
+                // ============================================================
+                if (referralType === 'external') {
+                    var facility = document.querySelector('input[name="external_facility"]');
+                    var reasonExternal = document.querySelector('textarea[name="referral_reason"]')?.value?.trim();
+                    
+                    console.log('🔍 External Facility:', facility?.value);
+                    console.log('🔍 External Reason:', reasonExternal);
+                    
+                    if (!facility || !facility.value.trim()) {
+                        e.preventDefault();
+                        showToast('Error', 'Please enter facility/hospital name', 'error');
+                        facility?.focus();
+                        return false;
+                    }
+                    
+                    if (!reasonExternal) {
+                        e.preventDefault();
+                        showToast('Error', 'Please enter reason for referral', 'error');
+                        document.querySelector('textarea[name="referral_reason"]')?.focus();
+                        return false;
+                    }
+                }
+                
+                // Show loading
+                var submitBtn = form.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
+                }
+                
+                console.log('✅ Form validation passed - submitting...');
+                return true;
+            });
+        }
     });
 
     // ================================================================
@@ -1462,7 +1943,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         printWindow.document.write('.letter-header h2 { color: #0B5ED7; font-size: 20px; margin: 0; }');
         printWindow.document.write('.letter-header .subtitle { font-size: 12px; color: ' + (isDark ? '#94A3B8' : '#666') + '; margin: 2px 0 0 0; }');
         printWindow.document.write('.letter-body .field-row { display: flex; padding: 6px 0; border-bottom: 1px solid ' + (isDark ? '#334155' : '#f0f0f0') + '; }');
-        printWindow.document.write('.letter-body .field-row .field-label { font-weight: 600; width: 140px; color: ' + (isDark ? '#94A3B8' : '#555') + '; flex-shrink: 0; }');
+        printWindow.document.write('.letter-body .field-row .field-label { font-weight: 600; width: 160px; color: ' + (isDark ? '#94A3B8' : '#555') + '; flex-shrink: 0; }');
         printWindow.document.write('.letter-body .field-row .field-value { flex: 1; color: ' + (isDark ? '#F1F5F9' : '#333') + '; }');
         printWindow.document.write('.letter-footer { border-top: 2px solid #0B5ED7; padding-top: 15px; margin-top: 15px; text-align: center; font-size: 12px; color: ' + (isDark ? '#94A3B8' : '#888') + '; }');
         printWindow.document.write('</style>');
@@ -1482,13 +1963,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     function resetForm() {
         if (!confirm('Clear all form fields?')) return;
         document.getElementById('doctorSelect').value = '';
-        document.querySelectorAll('.external-form input, .external-form textarea').forEach(function(el) {
+        document.querySelectorAll('.external-form input, .external-form textarea, .external-form select').forEach(function(el) {
             el.value = '';
         });
-        document.querySelectorAll('textarea[name="reason"], textarea[name="notes"]').forEach(function(el) {
+        document.querySelectorAll('textarea[name="reason"], textarea[name="referral_reason"], textarea[name="notes"], textarea[name="clinical_summary"]').forEach(function(el) {
             el.value = '';
         });
-        document.getElementById('externalLetterPreview').style.display = 'none';
+        var preview = document.getElementById('externalLetterPreview');
+        if (preview) preview.style.display = 'none';
+        var otherWrapper = document.getElementById('expertOtherWrapper');
+        if (otherWrapper) otherWrapper.classList.remove('show');
         showToast('Info', 'Form has been cleared', 'info');
     }
 
@@ -1516,8 +2000,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
     console.log('%c🏥 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= $patient ? htmlspecialchars($patient['full_name']) : 'Not selected' ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📞 Emergency Contact: <?= $patient ? htmlspecialchars($patient['emergency_contact'] ?? 'N/A') : 'N/A' ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👨‍⚕️ Referred By: Dr. <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔄 Internal Doctors: <?= count($doctors) ?> (same branch only)', 'font-size:13px; color:#059669;');
     console.log('%c🟢 Online: <?= $online_count ?> | ⚪ Offline: <?= $offline_count ?>', 'font-size:13px; color:#059669;');
+    console.log('%c💊 Medications: <?= count($medications) ?> | 🔬 Procedures: <?= count($procedures) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📋 Internal Reason: name="reason" | External Reason: name="referral_reason"', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Validation fixed - checks correct field based on referral type', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ visit_id automatically handled - will create visit if needed', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
