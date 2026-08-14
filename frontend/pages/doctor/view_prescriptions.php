@@ -4,37 +4,70 @@
 // DOCTOR - VIEW PRESCRIPTIONS
 // SHOWS ALL PRESCRIPTIONS FOR THE LOGGED IN DOCTOR
 // WITH FILTERS AND AUTO-UPDATE
+// Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
+// ================================================================
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    
+} catch (Exception $e) {
+    error_log("view_prescriptions verification error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET FILTER PARAMETERS
@@ -97,43 +130,61 @@ $sql = "
     ORDER BY p.created_at DESC
 ";
 
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("Prescriptions fetch error: " . $e->getMessage());
+    $prescriptions = [];
+}
 
 // ================================================================
 // GET STATUS COUNTS
 // ================================================================
-$status_counts = [];
+$status_counts = ['pending' => 0, 'dispensed' => 0, 'cancelled' => 0];
 $statuses = ['pending', 'dispensed', 'cancelled'];
+
 foreach ($statuses as $status) {
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM prescriptions 
-        WHERE doctor_id = ? AND status = ?
-    ");
-    $stmt->execute([$doctor_id, $status]);
-    $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    try {
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM prescriptions 
+            WHERE doctor_id = ? AND status = ?
+        ");
+        $stmt->execute([$doctor_id, $status]);
+        $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    } catch (Exception $e) {
+        $status_counts[$status] = 0;
+    }
 }
 
 // Total prescriptions
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ?");
-$stmt->execute([$doctor_id]);
-$total_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ?");
+    $stmt->execute([$doctor_id]);
+    $total_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $total_count = 0;
+}
 
 // ================================================================
 // GET PATIENT LIST FOR FILTER
 // ================================================================
 $patients_list = [];
-$stmt = $db->prepare("
-    SELECT DISTINCT p.patient_id, pat.full_name, pat.patient_id as patient_code
-    FROM prescriptions p
-    JOIN patients pat ON p.patient_id = pat.id
-    WHERE p.doctor_id = ?
-    ORDER BY pat.full_name ASC
-");
-$stmt->execute([$doctor_id]);
-$patients_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("
+        SELECT DISTINCT p.patient_id, pat.full_name, pat.patient_id as patient_code
+        FROM prescriptions p
+        JOIN patients pat ON p.patient_id = pat.id
+        WHERE p.doctor_id = ?
+        ORDER BY pat.full_name ASC
+    ");
+    $stmt->execute([$doctor_id]);
+    $patients_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $patients_list = [];
+}
 
 // ================================================================
 // HELPER FUNCTIONS
@@ -161,6 +212,21 @@ function getStatusLabel($status) {
 function formatDate($datetime) {
     if (empty($datetime)) return 'N/A';
     return date('d/m/Y h:i A', strtotime($datetime));
+}
+
+// ================================================================
+// GET DOCTOR'S BRANCH NAME
+// ================================================================
+$doctor_branch_name = 'Not Assigned';
+try {
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([$doctor_branch_id]);
+    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch_data) {
+        $doctor_branch_name = $branch_data['name'];
+    }
+} catch (Exception $e) {
+    $doctor_branch_name = 'Branch';
 }
 
 // ================================================================
@@ -208,7 +274,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             --radius-lg: 14px;
             --transition: all 0.3s ease;
             
-            /* Summary Card Colors */
             --card-total: #0B5ED7;
             --card-total-bg: #E8F0FE;
             --card-pending: #D97706;
@@ -709,6 +774,46 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }
         
         /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 16px 0;
+            border-top: 2px solid var(--gray-200);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--gray-500);
+        }
+        [data-theme="dark"] .footer {
+            border-color: var(--gray-700);
+            color: var(--gray-400);
+        }
+        
+        .footer .footer-brand {
+            color: var(--primary);
+            font-weight: 600;
+        }
+        
+        .text-gray-300 { color: var(--gray-300); }
+        .text-gray-400 { color: var(--gray-400); }
+        .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
+        .ml-2 { margin-left: 0.5rem; }
+        .text-xs { font-size: 0.75rem; }
+        .text-sm { font-size: 0.875rem; }
+        .font-mono { font-family: monospace; }
+        .font-medium { font-weight: 500; }
+        .font-semibold { font-weight: 600; }
+        .block { display: block; }
+        .flex { display: flex; }
+        .flex-wrap { flex-wrap: wrap; }
+        .gap-1 { gap: 4px; }
+        .gap-2 { gap: 8px; }
+        .gap-3 { gap: 12px; }
+        .gap-4 { gap: 16px; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 768px) {
@@ -748,6 +853,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <p class="page-subtitle">
                 View all prescriptions you have written
                 <span class="text-xs text-gray-400 ml-2"><?= date('F d, Y') ?></span>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-user-md mr-1"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
+                </span>
             </p>
         </div>
         <div>
@@ -928,11 +1036,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     </div>
 
     <!-- Footer -->
-    <footer class="footer" style="padding:16px 0;border-top:2px solid var(--gray-200);margin-top:24px;text-align:center;font-size:0.7rem;color:var(--gray-500);">
+    <footer class="footer">
         <p>
-            <span class="footer-brand" style="color:var(--primary);font-weight:600;">Braick Dispensary</span> Management System
+            <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             My Prescriptions
+            <span class="text-gray-300 mx-2">|</span>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -987,12 +1097,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     console.log('%c💊 View Prescriptions - With Colors', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c📊 Summary Cards: Blue (Total), Yellow (Pending), Green (Dispensed), Red (Cancelled)', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Table Header: Blue Background', 'font-size:12px; color:#0B5ED7;');
     console.log('%c📋 Total Prescriptions: <?= $total_count ?>', 'font-size:12px; color:#059669;');
     console.log('%c⏳ Pending: <?= $status_counts['pending'] ?? 0 ?>', 'font-size:12px; color:#D97706;');
     console.log('%c✅ Dispensed: <?= $status_counts['dispensed'] ?? 0 ?>', 'font-size:12px; color:#059669;');
     console.log('%c❌ Cancelled: <?= $status_counts['cancelled'] ?? 0 ?>', 'font-size:12px; color:#DC2626;');
+    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

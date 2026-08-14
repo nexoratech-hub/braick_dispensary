@@ -5,30 +5,44 @@
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET LAB TEST ID
@@ -41,58 +55,106 @@ if ($lab_test_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
-// FETCH LAB TEST DETAILS - REMOVED NON-EXISTENT COLUMNS
+// FETCH LAB TEST DETAILS
 // ================================================================
-$sql = "
-    SELECT 
-        lt.id,
-        lt.test_name,
-        lt.status,
-        lt.results,
-        lt.reference_range,
-        lt.interpretation,
-        lt.notes as lab_notes,
-        lt.created_at,
-        lt.completed_at,
-        lt.updated_at,
-        lt.lab_technician_id,
-        lt.formatted_result,
-        p.id as patient_id,
-        p.patient_id as patient_code,
-        p.full_name as patient_name,
-        p.phone,
-        p.gender,
-        p.date_of_birth,
-        p.blood_group,
-        p.allergies,
-        p.address,
-        u.full_name as doctor_name,
-        u.specialty as doctor_specialty,
-        v.visit_number,
-        v.visit_type,
-        v.id as visit_id,
-        v.symptoms,
-        v.complaint,
-        v.diagnosis,
-        v.treatment,
-        (SELECT full_name FROM users WHERE id = lt.lab_technician_id) as technician_name
-    FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    JOIN patients p ON v.patient_id = p.id
-    LEFT JOIN users u ON v.doctor_id = u.id
-    WHERE lt.id = ?
-";
-
-$stmt = $db->prepare($sql);
-$stmt->execute([$lab_test_id]);
+if ($is_admin) {
+    // Admin can view any lab result
+    $sql = "
+        SELECT 
+            lt.id,
+            lt.test_name,
+            lt.status,
+            lt.results,
+            lt.reference_range,
+            lt.interpretation,
+            lt.notes as lab_notes,
+            lt.created_at,
+            lt.completed_at,
+            lt.updated_at,
+            lt.lab_technician_id,
+            lt.formatted_result,
+            p.id as patient_id,
+            p.patient_id as patient_code,
+            p.full_name as patient_name,
+            p.phone,
+            p.gender,
+            p.date_of_birth,
+            p.blood_group,
+            p.allergies,
+            p.address,
+            u.full_name as doctor_name,
+            u.specialty as doctor_specialty,
+            v.visit_number,
+            v.visit_type,
+            v.id as visit_id,
+            v.symptoms,
+            v.complaint,
+            v.diagnosis,
+            v.treatment,
+            (SELECT full_name FROM users WHERE id = lt.lab_technician_id) as technician_name
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE lt.id = ?
+    ";
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$lab_test_id]);
+} else {
+    // Doctor can only view their own lab results
+    $sql = "
+        SELECT 
+            lt.id,
+            lt.test_name,
+            lt.status,
+            lt.results,
+            lt.reference_range,
+            lt.interpretation,
+            lt.notes as lab_notes,
+            lt.created_at,
+            lt.completed_at,
+            lt.updated_at,
+            lt.lab_technician_id,
+            lt.formatted_result,
+            p.id as patient_id,
+            p.patient_id as patient_code,
+            p.full_name as patient_name,
+            p.phone,
+            p.gender,
+            p.date_of_birth,
+            p.blood_group,
+            p.allergies,
+            p.address,
+            u.full_name as doctor_name,
+            u.specialty as doctor_specialty,
+            v.visit_number,
+            v.visit_type,
+            v.id as visit_id,
+            v.symptoms,
+            v.complaint,
+            v.diagnosis,
+            v.treatment,
+            (SELECT full_name FROM users WHERE id = lt.lab_technician_id) as technician_name
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE lt.id = ? AND v.doctor_id = ?
+    ";
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$lab_test_id, $doctor_id]);
+}
 $lab_test = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$lab_test) {
@@ -119,7 +181,16 @@ $branch_email = 'info@braick.com';
 $branch_address = 'Dodoma City, Tanzania';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE SHARED HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
@@ -132,7 +203,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lab Result - <?= htmlspecialchars($lab_test['test_name']) ?> - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -713,6 +785,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <i class="fas fa-flask"></i>
                 Lab Result Details
                 <span class="role-badge-display">DOCTOR</span>
+                <?php if ($is_admin): ?>
+                    <span class="role-badge-display" style="background:rgba(220,38,38,0.3);color:white;border:1px solid rgba(220,38,38,0.3);">👑 Admin</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-vial"></i>
@@ -725,6 +800,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <i class="fas fa-<?= $lab_test['status'] === 'completed' ? 'check-circle' : 'clock' ?>"></i>
                     <?= ucfirst(str_replace('_', ' ', $lab_test['status'] ?? 'Pending')) ?>
                 </span>
+                <?php if ($is_admin): ?>
+                    <span class="header-badge" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);color:#F87171;">
+                        <i class="fas fa-user-shield"></i> Admin View
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -746,7 +826,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <div class="report-header">
             <div class="logo-section">
                 <div>
-                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" 
+                    <img src="<?= $logo_path ?>" 
                          alt="Braick Dispensary" 
                          class="logo-img"
                          onerror="this.style.display='none'">
@@ -914,6 +994,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Lab Result Details
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1069,7 +1153,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+
     console.log('%c🧪 Braick - Lab Result Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Viewing All Lab Results', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name']) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Status: <?= ucfirst($lab_test['status'] ?? 'Pending') ?>', 'font-size:13px; color:#64748B;');

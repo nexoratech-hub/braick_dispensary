@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/patient_details.php
 // DOCTOR - PATIENT DETAILS WITH VITAL SIGNS & PDF EXPORT
+// FIXED: Session-based login (NO BYPASS)
 // FIXED: Uses shared header and sidebar with dark mode
 // BRAICK DISPENSARY
 // ================================================================
@@ -9,22 +10,60 @@
 session_start();
 
 // ================================================================
-// FORCE SESSION - Doctor Only
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['is_online'] = 1;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-// Include database and helpers
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
+$selected_branch_id = $_SESSION['branch_id'] ?? 1;
 
-$db = Database::getInstance()->getConnection();
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
+// ================================================================
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    $selected_branch_id = $doctor_data['branch_id'] ?? 1;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    $_SESSION['branch_id'] = $selected_branch_id;
+    
+} catch (Exception $e) {
+    error_log("patient_details verification error: " . $e->getMessage());
+    $profile_pic = '';
+    $is_online = 0;
+}
 
 // ================================================================
 // VARIABLES
@@ -36,34 +75,22 @@ if ($patient_id <= 0) {
     exit;
 }
 
-$doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'];
-
-// ================================================================
-// GET DOCTOR PROFILE PICTURE
-// ================================================================
-$profile_pic = '';
-$stmt = $db->prepare("SELECT profile_pic FROM users WHERE id = ? AND role = 'doctor'");
-$stmt->execute([$doctor_id]);
-$user_data = $stmt->fetch(PDO::FETCH_ASSOC);
-if ($user_data && !empty($user_data['profile_pic'])) {
-    $profile_pic = $user_data['profile_pic'];
-}
-$_SESSION['profile_pic'] = $profile_pic;
-$is_online = $_SESSION['is_online'] ?? 1;
-
 // ================================================================
 // GET PATIENT DATA - Verify doctor has access
 // ================================================================
-$stmt = $db->prepare("
-    SELECT p.*, b.name as branch_name, u.full_name as assigned_doctor_name
-    FROM patients p
-    LEFT JOIN branches b ON p.branch_id = b.id
-    LEFT JOIN users u ON p.assigned_doctor_id = u.id
-    WHERE p.id = ? AND p.assigned_doctor_id = ?
-");
-$stmt->execute([$patient_id, $doctor_id]);
-$patient = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("
+        SELECT p.*, b.name as branch_name, u.full_name as assigned_doctor_name
+        FROM patients p
+        LEFT JOIN branches b ON p.branch_id = b.id
+        LEFT JOIN users u ON p.assigned_doctor_id = u.id
+        WHERE p.id = ? AND p.assigned_doctor_id = ?
+    ");
+    $stmt->execute([$patient_id, $doctor_id]);
+    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $patient = null;
+}
 
 if (!$patient) {
     header('Location: my_patients.php');
@@ -241,18 +268,101 @@ $recent_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR - FIXED
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/doctor_header.php';
-include_once '../../components/doctor_sidebar.php';
+include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
+include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
 ?>
 
+<!-- ================================================================ -->
+<!-- FULL CSS WITH DARK MODE SUPPORT (SAME AS ORIGINAL) -->
+<!-- ================================================================ -->
 <style>
     /* ================================================================
-       ADDITIONAL STYLES - WITH DARK MODE SUPPORT
+       ROOT VARIABLES - LIGHT & DARK MODE
        ================================================================ */
+    :root {
+        --primary: #0B5ED7;
+        --primary-dark: #0A4CA8;
+        --primary-light: #6EA8FE;
+        --primary-bg: #E8F0FE;
+        --success: #059669;
+        --success-dark: #047857;
+        --success-light: #34D399;
+        --success-bg: #D1FAE5;
+        --danger: #DC2626;
+        --danger-dark: #B91C1C;
+        --danger-light: #F87171;
+        --danger-bg: #FEE2E2;
+        --warning: #D97706;
+        --warning-bg: #FEF3C7;
+        --purple: #7C3AED;
+        --purple-bg: #EDE9FE;
+        --white: #FFFFFF;
+        --gray-50: #F8FAFC;
+        --gray-100: #F1F5F9;
+        --gray-200: #E2E8F0;
+        --gray-300: #CBD5E1;
+        --gray-400: #94A3B8;
+        --gray-500: #64748B;
+        --gray-600: #475569;
+        --gray-700: #334155;
+        --gray-800: #1E293B;
+        --gray-900: #0F172A;
+        --bg-body: #F1F5F9;
+        --bg-card: #FFFFFF;
+        --bg-nav: #FFFFFF;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --border-color: #E2E8F0;
+        --shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.07);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.1);
+    }
     
-    /* Profile Header */
+    [data-theme="dark"] {
+        --bg-body: #0F172A;
+        --bg-card: #1E293B;
+        --bg-nav: #1E293B;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --border-color: #334155;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.4);
+    }
+    
+    /* ================================================================
+       BASE STYLES
+       ================================================================ */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg-body); }
+    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+    
+    /* ================================================================
+       MAIN CONTENT
+       ================================================================ */
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 24px 28px;
+        min-height: calc(100vh - 68px);
+        transition: all 0.3s ease;
+        background: var(--bg-body);
+    }
+    
+    /* ================================================================
+       PROFILE HEADER
+       ================================================================ */
     .profile-header {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
         border-radius: 16px;
@@ -307,7 +417,9 @@ include_once '../../components/doctor_sidebar.php';
         border: 1px solid rgba(255,255,255,0.1);
     }
     
-    /* Stat Cards */
+    /* ================================================================
+       STAT CARDS
+       ================================================================ */
     .stat-card-mini {
         background: var(--bg-card);
         border-radius: 12px;
@@ -372,7 +484,9 @@ include_once '../../components/doctor_sidebar.php';
         color: #34D399;
     }
     
-    /* Table Header - Blue Theme */
+    /* ================================================================
+       TABLE - BLUE THEME
+       ================================================================ */
     .table-blue thead th {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8) !important;
         color: #FFFFFF !important;
@@ -417,7 +531,9 @@ include_once '../../components/doctor_sidebar.php';
         background: #1A3A5F !important;
     }
     
-    /* Badge styles */
+    /* ================================================================
+       BADGES
+       ================================================================ */
     .badge {
         padding: 3px 12px !important;
         border-radius: 20px !important;
@@ -429,57 +545,21 @@ include_once '../../components/doctor_sidebar.php';
         border: none !important;
     }
     
-    .badge-success {
-        background: #D1FAE5 !important;
-        color: #059669 !important;
-    }
+    .badge-success { background: #D1FAE5 !important; color: #059669 !important; }
+    .badge-warning { background: #FEF3C7 !important; color: #D97706 !important; }
+    .badge-danger { background: #FEE2E2 !important; color: #EF4444 !important; }
+    .badge-info { background: #E8F0FE !important; color: #0B5ED7 !important; }
+    .badge-secondary { background: #E2E8F0 !important; color: #64748B !important; }
     
-    .badge-warning {
-        background: #FEF3C7 !important;
-        color: #D97706 !important;
-    }
+    [data-theme="dark"] .badge-success { background: #1A3A2A !important; color: #34D399 !important; }
+    [data-theme="dark"] .badge-warning { background: #3A2A1A !important; color: #FBBF24 !important; }
+    [data-theme="dark"] .badge-danger { background: #3A1A1A !important; color: #F87171 !important; }
+    [data-theme="dark"] .badge-info { background: #1E3A5F !important; color: #6EA8FE !important; }
+    [data-theme="dark"] .badge-secondary { background: #2D3748 !important; color: #94A3B8 !important; }
     
-    .badge-danger {
-        background: #FEE2E2 !important;
-        color: #EF4444 !important;
-    }
-    
-    .badge-info {
-        background: #E8F0FE !important;
-        color: #0B5ED7 !important;
-    }
-    
-    .badge-secondary {
-        background: #E2E8F0 !important;
-        color: #64748B !important;
-    }
-    
-    [data-theme="dark"] .badge-success {
-        background: #1A3A2A !important;
-        color: #34D399 !important;
-    }
-    
-    [data-theme="dark"] .badge-warning {
-        background: #3A2A1A !important;
-        color: #FBBF24 !important;
-    }
-    
-    [data-theme="dark"] .badge-danger {
-        background: #3A1A1A !important;
-        color: #F87171 !important;
-    }
-    
-    [data-theme="dark"] .badge-info {
-        background: #1E3A5F !important;
-        color: #6EA8FE !important;
-    }
-    
-    [data-theme="dark"] .badge-secondary {
-        background: #2D3748 !important;
-        color: #94A3B8 !important;
-    }
-    
-    /* Info rows */
+    /* ================================================================
+       INFO ROWS
+       ================================================================ */
     .info-row {
         display: flex;
         padding: 8px 0;
@@ -500,7 +580,9 @@ include_once '../../components/doctor_sidebar.php';
         font-size: 0.85rem;
     }
     
-    /* Section title */
+    /* ================================================================
+       SECTION TITLE
+       ================================================================ */
     .section-title {
         font-size: 1rem;
         font-weight: 700;
@@ -550,7 +632,7 @@ include_once '../../components/doctor_sidebar.php';
     }
     
     /* ================================================================
-       VITAL SIGNS CARDS - MODERN DESIGN (6 CARDS)
+       VITAL SIGNS CARDS
        ================================================================ */
     .vital-card {
         background: var(--bg-card);
@@ -583,18 +665,13 @@ include_once '../../components/doctor_sidebar.php';
         box-shadow: 0 8px 30px rgba(0,0,0,0.1);
     }
     
-    .vital-card .vital-icon {
-        font-size: 1.8rem;
-        margin-bottom: 6px;
-    }
-    
+    .vital-card .vital-icon { font-size: 1.8rem; margin-bottom: 6px; }
     .vital-card .vital-value {
         font-size: 1.5rem;
         font-weight: 700;
         color: var(--text-primary);
         line-height: 1.2;
     }
-    
     .vital-card .vital-label {
         font-size: 0.65rem;
         color: var(--text-secondary);
@@ -603,7 +680,6 @@ include_once '../../components/doctor_sidebar.php';
         letter-spacing: 0.04em;
         margin-top: 2px;
     }
-    
     .vital-card .vital-unit {
         font-size: 0.6rem;
         color: var(--text-secondary);
@@ -611,7 +687,6 @@ include_once '../../components/doctor_sidebar.php';
         margin-left: 2px;
     }
     
-    /* Card Colors */
     .vital-card.blue::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
     .vital-card.blue .vital-icon { color: #0B5ED7; }
     .vital-card.blue .vital-value { color: #0B5ED7; }
@@ -658,7 +733,7 @@ include_once '../../components/doctor_sidebar.php';
     [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
     
     /* ================================================================
-       PDF EXPORT BUTTON - MODERN DESIGN
+       PDF EXPORT BUTTON
        ================================================================ */
     .btn-pdf {
         display: inline-flex;
@@ -701,10 +776,7 @@ include_once '../../components/doctor_sidebar.php';
         box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
     }
     
-    .btn-pdf i {
-        font-size: 1rem;
-    }
-    
+    .btn-pdf i { font-size: 1rem; }
     .btn-pdf .pdf-icon {
         background: rgba(255,255,255,0.2);
         padding: 4px 6px;
@@ -722,58 +794,135 @@ include_once '../../components/doctor_sidebar.php';
         box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5);
     }
     
-    /* Responsive */
-    @media (max-width: 640px) {
-        .profile-header {
-            padding: 16px 18px;
-        }
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.75rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        background: transparent;
+    }
+    
+    .btn-primary {
+        background: var(--primary);
+        color: white;
+    }
+    .btn-primary:hover {
+        background: var(--primary-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+    }
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: var(--primary);
+        color: var(--primary);
+        transform: translateY(-2px);
+    }
+    
+    .btn-sm {
+        padding: 4px 10px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+    }
+    
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    .text-gray-300 { color: #D1D5DB; }
+    .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
+    
+    /* ================================================================
+       TOAST
+       ================================================================ */
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #EF4444; }
+    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.warning { background: #D97706; }
+    
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1024px) {
+        .main-content { padding: 16px; }
+    }
+    
+    @media (max-width: 768px) {
+        .main-content { padding: 12px; }
+        .profile-header { padding: 16px 18px; }
         .profile-header .profile-avatar {
             width: 60px;
             height: 60px;
             font-size: 1.8rem;
         }
-        .profile-header .profile-name {
-            font-size: 1.2rem;
-        }
-        .info-row {
-            flex-direction: column;
-            gap: 2px;
-        }
-        .info-row .info-label {
-            width: 100%;
-            font-size: 0.75rem;
-        }
-        .stat-card-mini .stat-number {
+        .profile-header .profile-name { font-size: 1.2rem; }
+        .info-row { flex-direction: column; gap: 2px; }
+        .info-row .info-label { width: 100%; font-size: 0.75rem; }
+        .stat-card-mini .stat-number { font-size: 1.4rem; }
+        .table-blue tbody td { font-size: 0.7rem; padding: 6px 10px !important; }
+        .vital-card { min-height: 80px; padding: 12px 8px; }
+        .vital-card .vital-value { font-size: 1.2rem; }
+        .vital-card .vital-icon { font-size: 1.4rem; }
+        .grid-cols-2.sm\:grid-cols-3.md\:grid-cols-6 { grid-template-columns: repeat(2, 1fr); }
+        .btn-pdf { padding: 6px 12px; font-size: 0.7rem; }
+        .btn-pdf .pdf-text { display: none; }
+        .page-header { flex-direction: column; align-items: flex-start; }
+        .card-header { flex-direction: column; align-items: flex-start; }
+    }
+    
+    @media (max-width: 480px) {
+        .main-content { padding: 8px; }
+        .profile-header .profile-avatar {
+            width: 50px;
+            height: 50px;
             font-size: 1.4rem;
         }
-        .table-blue tbody td {
-            font-size: 0.7rem;
-            padding: 6px 10px !important;
-        }
-        .btn {
-            font-size: 0.7rem;
-            padding: 4px 10px;
-        }
-        .vital-card {
-            min-height: 80px;
-            padding: 12px 8px;
-        }
-        .vital-card .vital-value {
-            font-size: 1.2rem;
-        }
-        .vital-card .vital-icon {
-            font-size: 1.4rem;
-        }
-        .grid-cols-2.sm\:grid-cols-3.md\:grid-cols-6 {
-            grid-template-columns: repeat(2, 1fr);
-        }
-        .btn-pdf {
-            padding: 6px 12px;
-            font-size: 0.7rem;
-        }
-        .btn-pdf .pdf-text {
-            display: none;
-        }
+        .profile-header .profile-name { font-size: 1rem; }
+        .stat-card-mini .stat-number { font-size: 1.2rem; }
+        .stat-card-mini { padding: 10px 12px; }
+        .card { padding: 12px 14px; }
+        .grid-cols-2.sm\:grid-cols-3.md\:grid-cols-6 { grid-template-columns: repeat(2, 1fr); }
     }
 </style>
 
@@ -872,7 +1021,7 @@ include_once '../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- LATEST VITAL SIGNS - 6 CARDS -->
+    <!-- LATEST VITAL SIGNS -->
     <!-- ================================================================ -->
     <?php if ($latest_vital_signs): ?>
     <div class="card mb-5">
@@ -993,7 +1142,7 @@ include_once '../../components/doctor_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- PATIENT INFORMATION WITH PDF EXPORT BUTTON -->
+    <!-- PATIENT INFORMATION WITH PDF EXPORT -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
@@ -1404,6 +1553,8 @@ include_once '../../components/doctor_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Patient Details
             <span class="text-gray-300 mx-2">|</span>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1533,6 +1684,7 @@ include_once '../../components/doctor_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     console.log('%c🏥 Braick Dispensary - Patient Details (Doctor)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c❤️ Vital Signs Records: <?= $total_vital_signs ?>', 'font-size:13px; color:#EC4899;');

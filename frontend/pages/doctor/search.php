@@ -6,28 +6,43 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET SEARCH QUERY
@@ -36,10 +51,15 @@ $query = isset($_GET['q']) ? trim($_GET['q']) : '';
 $filter = isset($_GET['filter']) ? trim($_GET['filter']) : 'all'; // all, pending, completed
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
 // SEARCH PATIENTS
@@ -52,61 +72,112 @@ if (!empty($query)) {
     try {
         $search_term = "%$query%";
         
-        // Build query - search patients that belong to this doctor
-        $sql = "
-            SELECT DISTINCT 
-                p.id,
-                p.patient_id,
-                p.full_name,
-                p.phone,
-                p.email,
-                p.gender,
-                p.date_of_birth,
-                p.address,
-                p.blood_group,
-                p.allergies,
-                p.created_at,
-                (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND doctor_id = ?) as total_visits,
-                (SELECT status FROM visits WHERE patient_id = p.id AND doctor_id = ? 
-                 ORDER BY created_at DESC LIMIT 1) as last_status,
-                (SELECT created_at FROM visits WHERE patient_id = p.id AND doctor_id = ? 
-                 ORDER BY created_at DESC LIMIT 1) as last_visit
-            FROM patients p
-            WHERE p.id IN (
-                SELECT DISTINCT patient_id FROM visits WHERE doctor_id = ?
-            )
-            AND (
-                p.full_name LIKE ? 
-                OR p.patient_id LIKE ? 
-                OR p.phone LIKE ?
-                OR p.email LIKE ?
-            )
-        ";
-        
-        $params = [
-            $doctor_id, // for total_visits
-            $doctor_id, // for last_status
-            $doctor_id, // for last_visit
-            $doctor_id, // for subquery
-            $search_term,
-            $search_term,
-            $search_term,
-            $search_term
-        ];
+        if ($is_admin) {
+            // Admin can search all patients
+            $sql = "
+                SELECT DISTINCT 
+                    p.id,
+                    p.patient_id,
+                    p.full_name,
+                    p.phone,
+                    p.email,
+                    p.gender,
+                    p.date_of_birth,
+                    p.address,
+                    p.blood_group,
+                    p.allergies,
+                    p.created_at,
+                    (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
+                    (SELECT status FROM visits WHERE patient_id = p.id 
+                     ORDER BY created_at DESC LIMIT 1) as last_status,
+                    (SELECT created_at FROM visits WHERE patient_id = p.id 
+                     ORDER BY created_at DESC LIMIT 1) as last_visit,
+                    (SELECT full_name FROM users WHERE id = p.assigned_doctor_id) as assigned_doctor
+                FROM patients p
+                WHERE (
+                    p.full_name LIKE ? 
+                    OR p.patient_id LIKE ? 
+                    OR p.phone LIKE ?
+                    OR p.email LIKE ?
+                )
+            ";
+            $params = [
+                $search_term,
+                $search_term,
+                $search_term,
+                $search_term
+            ];
+        } else {
+            // Doctor can only search their patients
+            $sql = "
+                SELECT DISTINCT 
+                    p.id,
+                    p.patient_id,
+                    p.full_name,
+                    p.phone,
+                    p.email,
+                    p.gender,
+                    p.date_of_birth,
+                    p.address,
+                    p.blood_group,
+                    p.allergies,
+                    p.created_at,
+                    (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND doctor_id = ?) as total_visits,
+                    (SELECT status FROM visits WHERE patient_id = p.id AND doctor_id = ? 
+                     ORDER BY created_at DESC LIMIT 1) as last_status,
+                    (SELECT created_at FROM visits WHERE patient_id = p.id AND doctor_id = ? 
+                     ORDER BY created_at DESC LIMIT 1) as last_visit,
+                    (SELECT full_name FROM users WHERE id = p.assigned_doctor_id) as assigned_doctor
+                FROM patients p
+                WHERE p.id IN (
+                    SELECT DISTINCT patient_id FROM visits WHERE doctor_id = ?
+                )
+                AND (
+                    p.full_name LIKE ? 
+                    OR p.patient_id LIKE ? 
+                    OR p.phone LIKE ?
+                    OR p.email LIKE ?
+                )
+            ";
+            $params = [
+                $user_id, // for total_visits
+                $user_id, // for last_status
+                $user_id, // for last_visit
+                $user_id, // for subquery
+                $search_term,
+                $search_term,
+                $search_term,
+                $search_term
+            ];
+        }
         
         // Add filter
         if ($filter === 'pending') {
-            $sql .= " AND p.id IN (
-                SELECT DISTINCT patient_id FROM visits 
-                WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')
-            )";
-            $params[] = $doctor_id;
+            if ($is_admin) {
+                $sql .= " AND p.id IN (
+                    SELECT DISTINCT patient_id FROM visits 
+                    WHERE status IN ('pending', 'assigned', 'with_doctor')
+                )";
+            } else {
+                $sql .= " AND p.id IN (
+                    SELECT DISTINCT patient_id FROM visits 
+                    WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')
+                )";
+                $params[] = $user_id;
+            }
         } elseif ($filter === 'completed') {
-            $sql .= " AND p.id IN (
-                SELECT DISTINCT patient_id FROM visits 
-                WHERE doctor_id = ? AND status = 'completed'
-            )";
-            $params[] = $doctor_id;
+            if ($is_admin) {
+                $sql .= " AND p.id IN (
+                    SELECT DISTINCT patient_id FROM visits 
+                    WHERE status = 'completed'
+                )";
+            } else {
+                $sql .= " AND p.id IN (
+                    SELECT DISTINCT patient_id FROM visits 
+                    WHERE doctor_id = ? AND status = 'completed'
+                )";
+                $params[] = $user_id;
+            }
         }
         
         $sql .= " ORDER BY p.full_name ASC LIMIT 50";
@@ -127,20 +198,33 @@ if (!empty($query)) {
 // GET STATS
 // ================================================================
 try {
-    // Total patients for this doctor
-    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ?");
-    $stmt->execute([$doctor_id]);
-    $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    
-    // Pending patients
-    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')");
-    $stmt->execute([$doctor_id]);
-    $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    
-    // Completed patients
-    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ? AND status = 'completed'");
-    $stmt->execute([$doctor_id]);
-    $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    if ($is_admin) {
+        // Admin stats - all patients
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients");
+        $stmt->execute();
+        $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+        
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE status IN ('pending', 'assigned', 'with_doctor')");
+        $stmt->execute();
+        $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+        
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE status = 'completed'");
+        $stmt->execute();
+        $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    } else {
+        // Doctor stats - only their patients
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ?");
+        $stmt->execute([$user_id]);
+        $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+        
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')");
+        $stmt->execute([$user_id]);
+        $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+        
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ? AND status = 'completed'");
+        $stmt->execute([$user_id]);
+        $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    }
     
 } catch (Exception $e) {
     $total_patients = 0;
@@ -149,10 +233,19 @@ try {
 }
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// PROFILE PICTURE URL
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
+// ================================================================
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -168,6 +261,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <h1 class="page-title">
                 <i class="fas fa-search"></i> Search Patients
                 <span class="page-badge"><?= $total_patients ?> total</span>
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Search for patients by name, ID, phone or email
@@ -177,6 +273,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     </span>
                     <span class="search-result-count">
                         <?= $total_results ?> patient(s) found
+                    </span>
+                <?php endif; ?>
+                <?php if ($is_admin): ?>
+                    <span style="color:#DC2626;font-size:0.7rem;font-weight:600;background:rgba(220,38,38,0.1);padding:2px 12px;border-radius:12px;">
+                        <i class="fas fa-user-shield"></i> Admin View - All Patients
                     </span>
                 <?php endif; ?>
             </p>
@@ -296,6 +397,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <div class="result-card-info">
                                     <h4 class="result-name"><?= htmlspecialchars($patient['full_name']) ?></h4>
                                     <span class="result-id"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+                                    <?php if ($is_admin && !empty($patient['assigned_doctor'])): ?>
+                                        <div style="font-size:0.65rem;color:var(--text-secondary);">
+                                            <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($patient['assigned_doctor']) ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                                 <span class="status-badge status-<?= $patient['last_status'] ?? 'pending' ?>">
                                     <?= ucfirst($patient['last_status'] ?? 'Pending') ?>
@@ -309,6 +415,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                     <span><i class="fas fa-calendar-alt"></i> Visits: <strong><?= $patient['total_visits'] ?? 0 ?></strong></span>
                                     <?php if (!empty($patient['last_visit'])): ?>
                                         <span><i class="fas fa-clock"></i> Last: <?= date('M d, Y', strtotime($patient['last_visit'])) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($patient['blood_group'])): ?>
+                                        <span><i class="fas fa-tint"></i> <?= htmlspecialchars($patient['blood_group']) ?></span>
                                     <?php endif; ?>
                                 </div>
                             </div>
@@ -367,6 +476,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="separator">|</span>
             Search Patients
+            <?php if ($is_admin): ?>
+                <span class="separator">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="separator">|</span>
             <span id="footerTimestamp"><?= date('H:i:s') ?></span>
             <span class="separator">|</span>
@@ -881,8 +994,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .btn-sm { padding: 4px 12px; font-size: 0.7rem; border-radius: 6px; }
     
     /* ================================================================
-       EMPTY STATE
-       ================================================================ */
+       EMPTY STATE       ================================================================ */
     .empty-state {
         text-align: center;
         padding: 40px 20px;
@@ -1053,6 +1165,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     console.log('%c🔍 Search Patients - Doctor Panel', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $user_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Searching All Patients', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     <?php if (!empty($query)): ?>
         console.log('%c📊 Search Results: <?= $total_results ?> patient(s) found for "<?= addslashes($query) ?>"', 'font-size:12px; color:#059669;');
     <?php else: ?>

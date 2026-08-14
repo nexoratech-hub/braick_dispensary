@@ -8,24 +8,28 @@
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+    // Return JSON error for AJAX requests
+    if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+        header('Content-Type: application/json');
+        echo json_encode([
+            'success' => false,
+            'error' => 'Unauthorized - Please login first',
+            'redirect' => '/dispensary_system/frontend/pages/login.php'
+        ]);
+        exit;
+    }
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
@@ -42,10 +46,48 @@ if (!in_array($filter, $allowed_filters)) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Database connection failed: ' . $e->getMessage()
+    ]);
+    exit;
+}
+
+// ================================================================
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, status FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => false,
+                'error' => 'Doctor account inactive',
+                'redirect' => '/dispensary_system/frontend/pages/login.php'
+            ]);
+            exit;
+        }
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $_SESSION['full_name'] = $doctor_name;
+    
+} catch (Exception $e) {
+    error_log("get_consultations doctor verification error: " . $e->getMessage());
+}
 
 // ================================================================
 // ✅ AUTO-COMPLETE LOGIC - RUN BEFORE FETCHING DATA
@@ -178,10 +220,14 @@ $status_map = [
 ];
 
 foreach ($counts as $key => $value) {
-    $condition = $status_map[$key] ?? "status = '$key'";
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND $condition");
-    $stmt->execute([$doctor_id]);
-    $counts[$key] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    try {
+        $condition = $status_map[$key] ?? "status = '$key'";
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND $condition");
+        $stmt->execute([$doctor_id]);
+        $counts[$key] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    } catch (Exception $e) {
+        $counts[$key] = 0;
+    }
 }
 
 // ================================================================
@@ -252,12 +298,26 @@ $sql = "
     WHERE v.doctor_id = ? 
     $status_condition
     $search_condition
-    ORDER BY v.created_at DESC
+    ORDER BY 
+        CASE 
+            WHEN v.status IN ('pending', 'assigned', 'with_doctor') THEN 1
+            WHEN v.status = 'lab_test' THEN 2
+            WHEN v.status = 'prescribed' THEN 3
+            WHEN v.status = 'completed' THEN 4
+            ELSE 5
+        END,
+        v.created_at DESC
 ";
 
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$consultations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$consultations = [];
+try {
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $consultations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("get_consultations query error: " . $e->getMessage());
+    $consultations = [];
+}
 
 // ================================================================
 // BUILD HTML
@@ -300,6 +360,7 @@ if (count($consultations) > 0) {
                             ' . htmlspecialchars($consultation['gender'] ?? 'N/A') . ' • 
                             ' . htmlspecialchars($consultation['phone'] ?? 'N/A') . '
                             ' . (!empty($consultation['blood_group']) ? '• Blood: ' . htmlspecialchars($consultation['blood_group']) : '') . '
+                            ' . (!empty($consultation['allergies']) ? '• Allergies: ' . htmlspecialchars($consultation['allergies']) : '') . '
                         </div>
                     </div>
                 </div>
@@ -419,6 +480,8 @@ echo json_encode([
     'hash' => $hash,
     'timestamp' => $timestamp,
     'filter' => $filter,
-    'search' => $search
+    'search' => $search,
+    'doctor_id' => $doctor_id,
+    'doctor_name' => $doctor_name
 ]);
 exit;

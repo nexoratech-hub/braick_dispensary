@@ -5,28 +5,43 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET DOCUMENT ID
@@ -39,10 +54,15 @@ if ($document_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
 // GET DOCUMENT DETAILS
@@ -54,24 +74,47 @@ $web_path = '';
 $download_url = '';
 
 try {
-    $stmt = $db->prepare("
-        SELECT 
-            pd.*,
-            p.full_name as patient_name,
-            p.patient_id as patient_code,
-            p.phone as patient_phone,
-            u.full_name as doctor_name,
-            u.specialty as doctor_specialty,
-            v.visit_number,
-            vu.full_name as verified_by_name
-        FROM patient_documents pd
-        JOIN patients p ON pd.patient_id = p.id
-        LEFT JOIN users u ON pd.doctor_id = u.id
-        LEFT JOIN visits v ON pd.visit_id = v.id
-        LEFT JOIN users vu ON pd.verified_by = vu.id
-        WHERE pd.id = ? AND pd.doctor_id = ?
-    ");
-    $stmt->execute([$document_id, $doctor_id]);
+    if ($is_admin) {
+        // Admin can view any document
+        $stmt = $db->prepare("
+            SELECT 
+                pd.*,
+                p.full_name as patient_name,
+                p.patient_id as patient_code,
+                p.phone as patient_phone,
+                u.full_name as doctor_name,
+                u.specialty as doctor_specialty,
+                v.visit_number,
+                vu.full_name as verified_by_name
+            FROM patient_documents pd
+            JOIN patients p ON pd.patient_id = p.id
+            LEFT JOIN users u ON pd.doctor_id = u.id
+            LEFT JOIN visits v ON pd.visit_id = v.id
+            LEFT JOIN users vu ON pd.verified_by = vu.id
+            WHERE pd.id = ?
+        ");
+        $stmt->execute([$document_id]);
+    } else {
+        // Doctor can only view their own documents
+        $stmt = $db->prepare("
+            SELECT 
+                pd.*,
+                p.full_name as patient_name,
+                p.patient_id as patient_code,
+                p.phone as patient_phone,
+                u.full_name as doctor_name,
+                u.specialty as doctor_specialty,
+                v.visit_number,
+                vu.full_name as verified_by_name
+            FROM patient_documents pd
+            JOIN patients p ON pd.patient_id = p.id
+            LEFT JOIN users u ON pd.doctor_id = u.id
+            LEFT JOIN visits v ON pd.visit_id = v.id
+            LEFT JOIN users vu ON pd.verified_by = vu.id
+            WHERE pd.id = ? AND pd.doctor_id = ?
+        ");
+        $stmt->execute([$document_id, $doctor_id]);
+    }
     $document = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$document) {
@@ -88,6 +131,7 @@ try {
         'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/' . $document['file_name'],
         'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/' . str_replace('doc_', '', $document['file_name']),
         str_replace('\\', '/', 'C:/xampp/htdocs' . $document['file_path']),
+        __DIR__ . '/../../assets/uploads/documents/' . $document['file_name'],
     ];
 
     foreach ($paths_to_check as $path) {
@@ -106,6 +150,7 @@ try {
     $download_url = 'download_document.php?id=' . $document['id'];
 
 } catch (Exception $e) {
+    error_log("View document error: " . $e->getMessage());
     header('Location: documents.php?error=database');
     exit;
 }
@@ -176,10 +221,19 @@ function getFileIcon($file_type) {
 }
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// PROFILE PICTURE URL
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
+// ================================================================
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -192,6 +246,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div class="page-header-left">
             <h1 class="page-title">
                 <i class="fas fa-file-medical"></i> Document Details
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 View complete document information
@@ -213,6 +270,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <i class="fas fa-clock mr-1"></i> Pending
                     </span>
                 <?php endif; ?>
+                <?php if ($is_admin): ?>
+                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                        <i class="fas fa-user-shield mr-1"></i> Admin View
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="page-header-right">
@@ -220,11 +282,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <i class="fas fa-arrow-left"></i> Back
             </a>
             <?php if ($file_exists): ?>
-                <!-- DOWNLOAD BUTTON - Using download_document.php handler -->
                 <a href="<?= $download_url ?>" class="btn btn-success" id="downloadBtn">
                     <i class="fas fa-download"></i> Download
                 </a>
-                <!-- VIEW BUTTON -->
                 <a href="<?= $web_path ?>" target="_blank" class="btn btn-primary" id="viewBtn">
                     <i class="fas fa-eye"></i> View File
                 </a>
@@ -320,6 +380,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <span class="info-value text-sm"><?= nl2br(htmlspecialchars($document['description'])) ?></span>
                     </div>
                 <?php endif; ?>
+                <?php if ($is_admin && !empty($document['doctor_name'])): ?>
+                    <div class="info-row">
+                        <span class="info-label">Uploaded By</span>
+                        <span class="info-value"><?= htmlspecialchars($document['doctor_name']) ?></span>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -399,6 +465,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="separator">|</span>
             Document Details
+            <?php if ($is_admin): ?>
+                <span class="separator">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="separator">|</span>
             Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             <span class="separator">|</span>
@@ -445,6 +515,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         flex-wrap: wrap;
     }
     .page-title i { color: var(--primary); }
+    .page-badge {
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: var(--primary-bg);
+        color: var(--primary);
+        padding: 2px 14px;
+        border-radius: 20px;
+    }
     .page-subtitle {
         font-size: 0.9rem;
         color: var(--text-secondary);
@@ -854,7 +932,18 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         console.log('🔗 Download URL: <?= $download_url ?>');
     });
 
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+
     console.log('%c📄 Document Details - <?= htmlspecialchars($document['document_name']) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Can view all documents', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c📁 Patient: <?= htmlspecialchars($document['patient_name']) ?>', 'font-size:12px; color:#059669;');
     console.log('%c📂 File: <?= htmlspecialchars($document['file_name']) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c📊 Size: <?= formatFileSize($document['file_size'] ?? 0) ?>', 'font-size:12px; color:#64748B;');

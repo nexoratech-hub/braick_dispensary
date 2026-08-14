@@ -2,158 +2,81 @@
 // ================================================================
 // FILE: frontend/pages/doctor/update_doctor_status.php
 // UPDATES DOCTOR ONLINE STATUS IN DATABASE
+// Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// DEBUG - LOG SESSION DATA
+// HEADERS - Return JSON
 // ================================================================
-error_log("=== DOCTOR STATUS UPDATE ===");
-error_log("SESSION: " . print_r($_SESSION, true));
-error_log("POST: " . print_r($_POST, true));
+header('Content-Type: application/json');
 
 // ================================================================
-// GET DOCTOR ID - TRY MULTIPLE WAYS
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
-$doctor_id = 0;
-
-// 1. Try from POST (sent from AJAX)
-if (isset($_POST['doctor_id']) && $_POST['doctor_id'] > 0) {
-    $doctor_id = (int)$_POST['doctor_id'];
-    error_log("Found doctor_id from POST: " . $doctor_id);
-}
-
-// 2. Try from SESSION user_id
-if ($doctor_id <= 0 && isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
-    $doctor_id = (int)$_SESSION['user_id'];
-    error_log("Found doctor_id from SESSION user_id: " . $doctor_id);
-}
-
-// 3. Try from SESSION doctor_id
-if ($doctor_id <= 0 && isset($_SESSION['doctor_id']) && $_SESSION['doctor_id'] > 0) {
-    $doctor_id = (int)$_SESSION['doctor_id'];
-    error_log("Found doctor_id from SESSION doctor_id: " . $doctor_id);
-}
-
-// 4. Try from SESSION id
-if ($doctor_id <= 0 && isset($_SESSION['id']) && $_SESSION['id'] > 0) {
-    $doctor_id = (int)$_SESSION['id'];
-    error_log("Found doctor_id from SESSION id: " . $doctor_id);
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
+    echo json_encode([
+        'success' => false,
+        'message' => 'Unauthorized - Please login first',
+        'redirect' => '/dispensary_system/frontend/pages/login.php'
+    ]);
+    exit;
 }
 
 // ================================================================
-// IF STILL NO DOCTOR_ID, GET FROM DATABASE USING USERNAME OR EMAIL
+// GET DOCTOR DATA FROM SESSION
 // ================================================================
-if ($doctor_id <= 0) {
-    try {
-        require_once __DIR__ . '/../../../backend/config/config.php';
-        $db = getDB();
-        
-        // Try by username
-        if (isset($_SESSION['username'])) {
-            $stmt = $db->prepare("SELECT id FROM users WHERE username = ? AND role = 'doctor'");
-            $stmt->execute([$_SESSION['username']]);
-            $user = $stmt->fetch();
-            if ($user) {
-                $doctor_id = (int)$user['id'];
-                error_log("Found doctor_id from username: " . $doctor_id);
-            }
-        }
-        
-        // Try by email if still not found
-        if ($doctor_id <= 0 && isset($_SESSION['email'])) {
-            $stmt = $db->prepare("SELECT id FROM users WHERE email = ? AND role = 'doctor'");
-            $stmt->execute([$_SESSION['email']]);
-            $user = $stmt->fetch();
-            if ($user) {
-                $doctor_id = (int)$user['id'];
-                error_log("Found doctor_id from email: " . $doctor_id);
-            }
-        }
-        
-        // Try by full_name if still not found
-        if ($doctor_id <= 0 && isset($_SESSION['full_name'])) {
-            $stmt = $db->prepare("SELECT id FROM users WHERE full_name = ? AND role = 'doctor'");
-            $stmt->execute([$_SESSION['full_name']]);
-            $user = $stmt->fetch();
-            if ($user) {
-                $doctor_id = (int)$user['id'];
-                error_log("Found doctor_id from full_name: " . $doctor_id);
-            }
-        }
-        
-    } catch (Exception $e) {
-        error_log("Error getting doctor from database: " . $e->getMessage());
-    }
+$doctor_id = (int)$_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
+$doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    echo json_encode([
+        'success' => false,
+        'message' => 'Database connection failed: ' . $e->getMessage()
+    ]);
+    exit;
 }
 
 // ================================================================
-// IF STILL NO DOCTOR_ID, USE DEFAULT DOCTOR (Dr. John Mushi - ID: 5)
-// ================================================================
-if ($doctor_id <= 0) {
-    $doctor_id = 5; // Dr. John Mushi
-    error_log("Using default doctor_id: " . $doctor_id);
-}
-
-// STORE THE DOCTOR ID IN SESSION FOR FUTURE USE
-if ($doctor_id > 0) {
-    $_SESSION['user_id'] = $doctor_id;
-    $_SESSION['doctor_id'] = $doctor_id;
-}
-
-error_log("Final doctor_id: " . $doctor_id);
-
-// ================================================================
-// VERIFY DOCTOR EXISTS IN DATABASE
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
 // ================================================================
 try {
-    require_once __DIR__ . '/../../../backend/config/config.php';
-    $db = getDB();
-    
-    $stmt = $db->prepare("SELECT id, full_name, branch_id FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, status FROM users WHERE id = ? AND role = 'doctor'");
     $stmt->execute([$doctor_id]);
-    $doctor = $stmt->fetch();
+    $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if (!$doctor) {
-        error_log("Doctor not found with ID: " . $doctor_id);
-        
-        // Try to get any active doctor
-        $stmt = $db->prepare("SELECT id, full_name, branch_id FROM users WHERE role = 'doctor' AND status = 'active' LIMIT 1");
-        $stmt->execute();
-        $doctor = $stmt->fetch();
-        
-        if ($doctor) {
-            $doctor_id = (int)$doctor['id'];
-            $_SESSION['user_id'] = $doctor_id;
-            $_SESSION['doctor_id'] = $doctor_id;
-            error_log("Using alternative doctor: " . $doctor_id . " - " . $doctor['full_name']);
-        } else {
-            header('Content-Type: application/json');
-            echo json_encode([
-                'success' => false, 
-                'message' => 'No doctor found in database',
-                'debug' => [
-                    'doctor_id' => $doctor_id,
-                    'session' => $_SESSION
-                ]
-            ]);
-            exit;
-        }
+    if (!$doctor || $doctor['status'] !== 'active') {
+        session_destroy();
+        echo json_encode([
+            'success' => false,
+            'message' => 'Doctor account inactive or not found',
+            'redirect' => '/dispensary_system/frontend/pages/login.php'
+        ]);
+        exit;
     }
     
     $doctor_name = $doctor['full_name'];
-    $doctor_branch_id = $doctor['branch_id'];
+    $doctor_branch_id = $doctor['branch_id'] ?? 1;
     
-    error_log("Found doctor: " . $doctor_name . " (ID: " . $doctor_id . ")");
+    // Update session with latest data
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
     
 } catch (Exception $e) {
-    error_log("Database error: " . $e->getMessage());
-    header('Content-Type: application/json');
+    error_log("update_doctor_status verification error: " . $e->getMessage());
     echo json_encode([
         'success' => false,
-        'message' => 'Database error: ' . $e->getMessage()
+        'message' => 'Error verifying doctor account: ' . $e->getMessage()
     ]);
     exit;
 }
@@ -165,8 +88,10 @@ $status = isset($_POST['status']) ? (int)$_POST['status'] : 0;
 
 // Validate status (0 = offline, 1 = online)
 if (!in_array($status, [0, 1])) {
-    header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'message' => 'Invalid status value']);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Invalid status value. Must be 0 (offline) or 1 (online).'
+    ]);
     exit;
 }
 
@@ -182,7 +107,6 @@ try {
     
     if (!$result) {
         error_log("Failed to update status for doctor_id: " . $doctor_id);
-        header('Content-Type: application/json');
         echo json_encode([
             'success' => false,
             'message' => 'Failed to update status in database'
@@ -226,7 +150,7 @@ try {
             AND status = 'active'
         ");
         $stmt->execute([$doctor_branch_id]);
-        $receptionists = $stmt->fetchAll();
+        $receptionists = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         foreach ($receptionists as $receptionist) {
             $stmt = $db->prepare("
@@ -249,7 +173,7 @@ try {
             AND status = 'active'
         ");
         $stmt->execute();
-        $admins = $stmt->fetchAll();
+        $admins = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         foreach ($admins as $admin) {
             $stmt = $db->prepare("
@@ -274,7 +198,6 @@ try {
     // ================================================================
     // RETURN SUCCESS RESPONSE
     // ================================================================
-    header('Content-Type: application/json');
     echo json_encode([
         'success' => true,
         'message' => 'Status updated successfully',
@@ -290,10 +213,9 @@ try {
     
 } catch (Exception $e) {
     error_log("Database error: " . $e->getMessage());
-    header('Content-Type: application/json');
     echo json_encode([
         'success' => false,
         'message' => 'Database error: ' . $e->getMessage()
     ]);
 }
-?>
+exit;

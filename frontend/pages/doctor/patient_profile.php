@@ -5,33 +5,29 @@
 // - View complete patient information
 // - Personal details, visit history, lab results, prescriptions, bills
 // - Uses SHARED HEADER (dark mode, date/time, status toggle inherited)
+// - Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // GET PATIENT ID
@@ -46,13 +42,44 @@ if ($patient_id <= 0) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
-// GET PATIENT DETAILS
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    
+} catch (Exception $e) {
+    error_log("patient_profile verification error: " . $e->getMessage());
+}
+
+// ================================================================
+// GET PATIENT DETAILS - Verify doctor has access
 // ================================================================
 try {
     $stmt = $db->prepare("
@@ -63,9 +90,9 @@ try {
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
         LEFT JOIN branches b ON p.branch_id = b.id
-        WHERE p.id = ? AND p.branch_id = ?
+        WHERE p.id = ? AND p.assigned_doctor_id = ?
     ");
-    $stmt->execute([$patient_id, $doctor_branch_id]);
+    $stmt->execute([$patient_id, $doctor_id]);
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$patient) {
@@ -764,6 +791,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <p class="page-subtitle">
                 <i class="fas fa-id-card"></i>
                 Complete patient information and history
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.15);color:white;font-size:0.6rem;">
+                    <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -832,7 +862,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </span>
             </div>
             <div class="info-group">
-                <span class="label"><i fa="fas fa-phone-alt"></i> Emergency Contact</span>
+                <span class="label"><i class="fas fa-phone-alt"></i> Emergency Contact</span>
                 <span class="value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'N/A') ?></span>
             </div>
         </div>
@@ -1229,6 +1259,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>
             <span class="text-gray-300 mx-2">|</span>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1294,6 +1326,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     console.log('%c👨‍⚕️ Braick - Patient Profile (Using Shared Header)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Visits: <?= count($visits) ?> | Lab Results: <?= count($lab_results) ?> | Prescriptions: <?= count($prescriptions) ?> | Bills: <?= count($bills) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c✅ Uses shared header for dark mode, date/time, status toggle', 'font-size:13px; color:#34D399;');

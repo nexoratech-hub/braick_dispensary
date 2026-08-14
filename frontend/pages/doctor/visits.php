@@ -5,26 +5,43 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Doctor';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // FUNCTIONS
@@ -52,10 +69,15 @@ function getUserColor($name) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
 // GET FILTERS
@@ -67,22 +89,41 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 // ================================================================
 // BUILD QUERY
 // ================================================================
-$sql = "
-    SELECT v.*, 
-           p.full_name as patient_name, 
-           p.patient_id, 
-           p.phone,
-           p.gender,
-           p.date_of_birth,
-           u.full_name as doctor_name,
-           u.specialty
-    FROM visits v
-    JOIN patients p ON v.patient_id = p.id
-    LEFT JOIN users u ON v.doctor_id = u.id
-    WHERE v.doctor_id = ?
-";
-
-$params = [$doctor_id];
+if ($is_admin) {
+    // Admin can see all visits
+    $sql = "
+        SELECT v.*, 
+               p.full_name as patient_name, 
+               p.patient_id, 
+               p.phone,
+               p.gender,
+               p.date_of_birth,
+               u.full_name as doctor_name,
+               u.specialty
+        FROM visits v
+        JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE 1=1
+    ";
+    $params = [];
+} else {
+    // Doctor can only see their own visits
+    $sql = "
+        SELECT v.*, 
+               p.full_name as patient_name, 
+               p.patient_id, 
+               p.phone,
+               p.gender,
+               p.date_of_birth,
+               u.full_name as doctor_name,
+               u.specialty
+        FROM visits v
+        JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE v.doctor_id = ?
+    ";
+    $params = [$doctor_id];
+}
 
 // Filter by status
 if (!empty($status_filter)) {
@@ -124,26 +165,52 @@ $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // ================================================================
 $status_counts = [];
 $statuses = ['pending', 'assigned', 'with_doctor', 'completed', 'cancelled'];
-foreach ($statuses as $status) {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = ?");
-    $stmt->execute([$doctor_id, $status]);
-    $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+if ($is_admin) {
+    // Admin counts - all visits
+    foreach ($statuses as $status) {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status = ?");
+        $stmt->execute([$status]);
+        $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    }
+
+    // Today count
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE DATE(created_at) = CURDATE()");
+    $stmt->execute();
+    $today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+    // Pending count (all pending statuses)
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status IN ('pending', 'assigned', 'with_doctor')");
+    $stmt->execute();
+    $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+    // Completed count
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status = 'completed'");
+    $stmt->execute();
+    $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} else {
+    // Doctor counts - only their visits
+    foreach ($statuses as $status) {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = ?");
+        $stmt->execute([$doctor_id, $status]);
+        $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    }
+
+    // Today count
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND DATE(created_at) = CURDATE()");
+    $stmt->execute([$doctor_id]);
+    $today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+    // Pending count (all pending statuses)
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')");
+    $stmt->execute([$doctor_id]);
+    $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+    // Completed count
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'completed'");
+    $stmt->execute([$doctor_id]);
+    $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
-
-// Today count
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND DATE(created_at) = CURDATE()");
-$stmt->execute([$doctor_id]);
-$today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Pending count (all pending statuses)
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')");
-$stmt->execute([$doctor_id]);
-$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Completed count
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'completed'");
-$stmt->execute([$doctor_id]);
-$completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // ================================================================
 // GET DOCTOR'S BRANCH NAME
@@ -161,10 +228,19 @@ try {
 }
 
 // ================================================================
-// INCLUDE DOCTOR HEADER & SIDEBAR
+// PROFILE PICTURE URL
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE DOCTOR HEADER & SIDEBAR - CORRECT PATHS
+// ================================================================
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <style>
@@ -735,6 +811,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div>
             <h1 class="page-title">
                 <i class="fas fa-clinic-medical mr-2" style="color: #0B5ED7;"></i> Visits
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 View all patient visits
@@ -744,6 +823,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-list mr-1"></i> <?= count($visits) ?> visits
                 </span>
+                <?php if ($is_admin): ?>
+                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                        <i class="fas fa-user-shield mr-1"></i> Admin View
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -878,7 +962,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <td class="text-xs"><?= isset($visit['created_at']) ? date('M d, Y h:i A', strtotime($visit['created_at'])) : 'N/A' ?></td>
                                 <td>
                                     <div class="action-buttons">
-                                        <a href="visit_details.php?id=<?= $visit['id'] ?>" class="btn btn-view btn-sm" title="View Visit">
+                                        <a href="view_visit.php?id=<?= $visit['id'] ?>" class="btn btn-view btn-sm" title="View Visit">
                                             <i class="fas fa-eye"></i>
                                         </a>
                                         <a href="view_patient.php?id=<?= $visit['patient_id'] ?>" class="btn btn-blue btn-sm" title="View Patient">
@@ -924,6 +1008,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Visits
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
@@ -1002,6 +1090,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     console.log('%c🏥 Braick - Visits List', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Viewing All Visits', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c📊 Total Visits: <?= count($visits) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#64748B;');
 </script>

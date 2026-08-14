@@ -1,44 +1,77 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/refer_patient.php
-// DOCTOR - REFER PATIENT
-// Internal: Select doctor from dropdown (SAME BRANCH ONLY) with ONLINE/OFFLINE status
-// External: Form with Braick logo
-// USES SHARED HEADER - Dark mode, date/time, status toggle inherited
+// DOCTOR - REFER PATIENT (TWO-STEP)
+// Step 1: Select patient from list
+// Step 2: Referral form
+// Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Doctor
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['specialty'] = 'General Medicine';
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
-// INCLUDE CONFIG
+// INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
+
+// ================================================================
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$user_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $user_full_name = $doctor_data['full_name'];
+    $user_branch_id = $doctor_data['branch_id'] ?? 1;
+    $user_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
+    $_SESSION['full_name'] = $user_full_name;
+    $_SESSION['branch_id'] = $user_branch_id;
+    $_SESSION['specialty'] = $user_specialty;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    
+} catch (Exception $e) {
+    error_log("refer_patient verification error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PATIENT ID FROM URL
@@ -46,45 +79,79 @@ $message_type = '';
 $patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 $visit_id = isset($_GET['visit_id']) ? (int)$_GET['visit_id'] : 0;
 
-if ($patient_id <= 0) {
-    header('Location: my_patients.php?error=invalid_patient');
-    exit;
-}
-
 // ================================================================
-// GET PATIENT DETAILS
+// GET ALL PATIENTS FOR THIS DOCTOR
 // ================================================================
-$patient = [];
+$patients_list = [];
 try {
     $stmt = $db->prepare("
-        SELECT p.*, 
-               u.full_name as doctor_name,
-               v.id as visit_id,
-               v.visit_number,
-               v.diagnosis,
-               v.symptoms
+        SELECT DISTINCT p.id, p.full_name, p.patient_id, p.gender, p.phone, p.date_of_birth
         FROM patients p
-        LEFT JOIN visits v ON v.patient_id = p.id AND v.status NOT IN ('completed', 'cancelled')
-        LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE p.id = ? AND p.branch_id = ?
-        ORDER BY v.created_at DESC
-        LIMIT 1
+        JOIN visits v ON p.id = v.patient_id
+        WHERE v.doctor_id = ?
+        ORDER BY p.full_name ASC
     ");
-    $stmt->execute([$patient_id, $user_branch_id]);
-    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (!$patient) {
-        header('Location: my_patients.php?error=patient_not_found');
-        exit;
-    }
+    $stmt->execute([$user_id]);
+    $patients_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    error_log("Patient fetch error: " . $e->getMessage());
-    header('Location: my_patients.php?error=database_error');
-    exit;
+    $patients_list = [];
 }
 
 // ================================================================
-// GET DOCTORS LIST (For Internal Referral) - SAME BRANCH ONLY WITH ONLINE STATUS
+// GET SELECTED PATIENT DETAILS (if patient_id is provided)
+// ================================================================
+$patient = null;
+if ($patient_id > 0) {
+    try {
+        // Check if patient exists
+        $stmt = $db->prepare("SELECT * FROM patients WHERE id = ?");
+        $stmt->execute([$patient_id]);
+        $patient = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$patient) {
+            $error_message = '❌ Patient not found. Please select a valid patient.';
+        } else {
+            // Check if this doctor has access to this patient
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE patient_id = ? AND doctor_id = ?");
+            $stmt->execute([$patient_id, $user_id]);
+            $visit_check = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (($visit_check['count'] ?? 0) == 0) {
+                if ($patient['assigned_doctor_id'] != $user_id) {
+                    $patient = null;
+                    $error_message = '❌ This patient is not assigned to you.';
+                }
+            }
+        }
+        
+        // Get latest visit info if patient exists
+        if ($patient) {
+            $stmt = $db->prepare("
+                SELECT id, visit_number, diagnosis, symptoms, created_at
+                FROM visits 
+                WHERE patient_id = ? AND doctor_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            ");
+            $stmt->execute([$patient_id, $user_id]);
+            $visit_info = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($visit_info) {
+                $patient['visit_id'] = $visit_info['id'] ?? null;
+                $patient['visit_number'] = $visit_info['visit_number'] ?? null;
+                $patient['diagnosis'] = $visit_info['diagnosis'] ?? null;
+                $patient['symptoms'] = $visit_info['symptoms'] ?? null;
+            }
+        }
+    } catch (Exception $e) {
+        error_log("Patient fetch error: " . $e->getMessage());
+        $patient = null;
+        $error_message = '❌ Database error occurred.';
+    }
+}
+
+// ================================================================
+// GET DOCTORS LIST (For Internal Referral)
 // ================================================================
 $doctors = [];
 $online_count = 0;
@@ -102,7 +169,6 @@ try {
     $stmt->execute([$user_id, $user_branch_id]);
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Count online/offline
     foreach ($doctors as $doctor) {
         if ($doctor['is_online'] == 1) {
             $online_count++;
@@ -151,6 +217,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $referral_type = $_POST['referral_type'] ?? '';
         $reason = trim($_POST['reason'] ?? '');
         $notes = trim($_POST['notes'] ?? '');
+        $patient_id_post = (int)($_POST['patient_id'] ?? 0);
+        $visit_id_post = (int)($_POST['visit_id'] ?? 0);
         
         // Internal referral fields
         $referred_to_doctor = isset($_POST['referred_to_doctor']) ? (int)$_POST['referred_to_doctor'] : 0;
@@ -167,6 +235,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         // Validate
         $errors = [];
+        if ($patient_id_post <= 0) {
+            $errors[] = "Please select a patient";
+        }
         if (empty($referral_type)) {
             $errors[] = "Please select referral type";
         }
@@ -188,13 +259,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $db->beginTransaction();
                 
-                $referral_number = 'REF-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                $referral_number = 'REF-' . date('Ymd') . '-' . str_pad($patient_id_post, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
                 
-                // Prepare notes
                 $full_notes = $notes;
                 
                 if ($referral_type === 'internal') {
-                    // Get doctor name
                     $stmt = $db->prepare("SELECT full_name FROM users WHERE id = ?");
                     $stmt->execute([$referred_to_doctor]);
                     $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -204,6 +273,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $full_notes .= "Referred to: " . $doctor_name . "\n";
                     $full_notes .= "Specialty: " . ($_POST['specialty'] ?? 'N/A') . "\n";
                     $full_notes .= "Notes: " . $internal_notes;
+                    
+                    // Create notification for receiving doctor
+                    $stmt = $db->prepare("
+                        INSERT INTO notifications (user_id, title, message, type, link, created_at)
+                        VALUES (?, ?, ?, 'info', ?, NOW())
+                    ");
+                    $notif_message = "New referral from Dr. " . $user_full_name . " for patient";
+                    $stmt->execute([
+                        $referred_to_doctor,
+                        "📋 New Referral Received",
+                        $notif_message,
+                        "referrals.php"
+                    ]);
+                    
                 } else {
                     $full_notes .= "\n\n--- External Referral ---\n";
                     $full_notes .= "Facility: " . $external_facility . "\n";
@@ -225,8 +308,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $stmt->execute([
                     $referral_number,
-                    $patient_id,
-                    $visit_id ?: null,
+                    $patient_id_post,
+                    $visit_id_post ?: null,
                     $referral_type,
                     $reason,
                     $referral_type === 'internal' ? $referred_to_doctor : null,
@@ -237,14 +320,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 $referral_id = $db->lastInsertId();
                 
-                // Update patient status
+                // Log activity
                 $stmt = $db->prepare("
-                    UPDATE patients 
-                    SET status = 'referred',
-                        updated_at = NOW()
-                    WHERE id = ?
+                    INSERT INTO activity_logs (user_id, action, details, created_at) 
+                    VALUES (?, 'referral_created', ?, NOW())
                 ");
-                $stmt->execute([$patient_id]);
+                $stmt->execute([
+                    $user_id,
+                    "Patient referred: " . $patient['full_name'] . " (#$referral_number) - Type: $referral_type"
+                ]);
                 
                 $db->commit();
                 
@@ -261,6 +345,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->rollBack();
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
+                error_log("Referral error: " . $e->getMessage());
             }
         } else {
             $message = implode('<br>', $errors);
@@ -298,14 +383,26 @@ function getLogoHTML() {
     return '<div style="display:inline-block;background:#0B5ED7;color:white;padding:8px 20px;border-radius:8px;font-size:18px;font-weight:bold;font-family:Arial,sans-serif;">BRAICK</div>';
 }
 
-// ================================================================
-// HELPER FUNCTIONS
-// ================================================================
 function calculateAge($dob) {
     if (empty($dob)) return 'N/A';
     $birthDate = new DateTime($dob);
     $today = new DateTime('today');
     return $birthDate->diff($today)->y;
+}
+
+// ================================================================
+// GET BRANCH NAME
+// ================================================================
+$doctor_branch_name = 'Not Assigned';
+try {
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([$user_branch_id]);
+    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch_data) {
+        $doctor_branch_name = $branch_data['name'];
+    }
+} catch (Exception $e) {
+    $doctor_branch_name = 'Branch';
 }
 
 // ================================================================
@@ -322,11 +419,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Refer Patient - Braick Dispensary</title>
     
-    <!-- The header already includes Tailwind, FontAwesome, and styles -->
-    <!-- Add page-specific styles -->
     <style>
         /* ================================================================
-           PAGE-SPECIFIC STYLES (Overrides/complements shared header)
+           PAGE-SPECIFIC STYLES
            ================================================================ */
         .main-content {
             margin-left: 270px;
@@ -338,7 +433,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        /* Page Header inside content */
         .page-header-custom {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
@@ -394,21 +488,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             z-index: 1;
         }
         
-        .page-header-custom .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-        
         .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -432,7 +511,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* Cards */
+        .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
         .card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -440,6 +528,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border: 1px solid var(--border-color);
             transition: all 0.3s ease;
             box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            margin-bottom: 20px;
         }
         
         .card:hover {
@@ -447,15 +536,21 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
         
+        [data-theme="dark"] .card {
+            background: #1E293B;
+            border-color: #334155;
+        }
+        [data-theme="dark"] .card:hover {
+            border-color: #6EA8FE;
+        }
+        
         .card-title {
             font-size: 0.95rem;
             font-weight: 600;
             color: var(--text-primary);
         }
-        
-        .card-title .title-blue { color: var(--primary); }
-        .card-title .title-green { color: #059669; }
-        .card-title .title-purple { color: #7C3AED; }
+        .title-blue { color: var(--primary); }
+        .title-purple { color: #7C3AED; }
         
         .form-label {
             display: block;
@@ -483,6 +578,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
         }
         
+        [data-theme="dark"] .form-control {
+            background: #1E293B;
+            border-color: #334155;
+            color: #F1F5F9;
+        }
+        [data-theme="dark"] .form-control:focus {
+            border-color: #6EA8FE;
+            box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.15);
+        }
+        
         textarea.form-control {
             resize: vertical;
             min-height: 80px;
@@ -506,6 +611,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border: none;
             text-decoration: none;
             font-family: inherit;
+            min-height: 40px;
         }
         
         .btn-success {
@@ -513,7 +619,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: white;
             box-shadow: 0 2px 8px rgba(5, 150, 105, 0.2);
         }
-        
         .btn-success:hover {
             background: #047857;
             transform: translateY(-2px);
@@ -525,7 +630,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
         }
-        
         .btn-outline:hover {
             background: var(--gray-50);
             border-color: var(--primary);
@@ -537,7 +641,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: white;
             box-shadow: 0 2px 8px rgba(11, 94, 215, 0.2);
         }
-        
         .btn-primary:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
@@ -551,7 +654,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.6rem;
             font-weight: 600;
         }
-        
         .badge-info { background: var(--primary-bg); color: var(--primary); }
         
         .alert {
@@ -574,12 +676,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
         .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
         
+        [data-theme="dark"] .alert-success { background: #1A3A2A; color: #34D399; border-color: #34D399; }
+        [data-theme="dark"] .alert-error { background: #3A1A1A; color: #F87171; border-color: #F87171; }
+        
         .detail-row {
             display: flex;
             padding: 6px 0;
             border-bottom: 1px solid var(--border-color);
         }
-        
         .detail-row:last-child { border-bottom: none; }
         
         .detail-label {
@@ -589,11 +693,51 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex-shrink: 0;
             font-size: 0.8rem;
         }
-        
         .detail-value {
             flex: 1;
             color: var(--text-primary);
             font-size: 0.85rem;
+        }
+        
+        /* PATIENT SELECTION TABLE */
+        .patient-select-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+        
+        .patient-select-card {
+            background: var(--bg-card);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 14px 16px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            text-decoration: none;
+            color: var(--text-primary);
+            display: block;
+        }
+        
+        .patient-select-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-3px);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.12);
+        }
+        
+        .patient-select-card .patient-name {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        .patient-select-card .patient-id {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-family: monospace;
+        }
+        .patient-select-card .patient-meta {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
         }
         
         .referral-type-selector {
@@ -631,12 +775,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             display: block;
             margin-bottom: 6px;
         }
-        
         .referral-type-option .option-title {
             font-weight: 600;
             font-size: 0.95rem;
         }
-        
         .referral-type-option .option-desc {
             font-size: 0.75rem;
             opacity: 0.7;
@@ -649,7 +791,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-top: 2px solid var(--border-color);
             margin-top: 16px;
         }
-        
         .internal-form.active, .external-form.active {
             display: block;
         }
@@ -669,7 +810,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: var(--success);
             font-weight: 600;
         }
-        
         .doctor-select-wrapper select option.doctor-offline {
             background-color: var(--gray-100);
             color: var(--gray-500);
@@ -701,12 +841,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             height: 8px;
             border-radius: 50%;
         }
-        
         .doctor-info-text .status-dot.online {
             background: #059669;
             animation: pulse-dot 2s infinite;
         }
-        
         .doctor-info-text .status-dot.offline {
             background: #94A3B8;
         }
@@ -733,7 +871,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding-bottom: 15px;
             margin-bottom: 20px;
         }
-        
         .referral-letter .letter-header .logo-container {
             display: flex;
             align-items: center;
@@ -742,7 +879,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex-wrap: wrap;
             margin-bottom: 10px;
         }
-        
         .referral-letter .letter-header .logo-container img {
             height: 50px;
             width: auto;
@@ -750,13 +886,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-radius: 6px;
             object-fit: contain;
         }
-        
         .referral-letter .letter-header h2 {
             color: var(--primary);
             font-size: 20px;
             margin: 0;
         }
-        
         .referral-letter .letter-header .subtitle {
             font-size: 12px;
             color: var(--text-secondary);
@@ -768,14 +902,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding: 6px 0;
             border-bottom: 1px solid var(--border-color);
         }
-        
         .referral-letter .letter-body .field-row .field-label {
             font-weight: 600;
             width: 140px;
             color: var(--text-secondary);
             flex-shrink: 0;
         }
-        
         .referral-letter .letter-body .field-row .field-value {
             flex: 1;
             color: var(--text-primary);
@@ -798,11 +930,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.7rem;
             color: var(--text-secondary);
         }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 600;
-        }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         .toast-custom {
             position: fixed;
@@ -821,11 +949,26 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: #ffffff;
             box-shadow: 0 10px 40px rgba(0,0,0,0.15);
         }
-        
         .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: #059669; }
         .toast-custom.error { background: #DC2626; }
         .toast-custom.info { background: #0B5ED7; }
+        
+        .mb-5 { margin-bottom: 20px; }
+        .mt-4 { margin-top: 16px; }
+        .mt-3 { margin-top: 12px; }
+        .mr-2 { margin-right: 8px; }
+        .mx-2 { margin-left: 8px; margin-right: 8px; }
+        .text-danger { color: #EF4444; }
+        .text-sm { font-size: 0.875rem; }
+        .font-semibold { font-weight: 600; }
+        .text-gray-600 { color: var(--text-secondary); }
+        .grid { display: grid; }
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .gap-2 { gap: 8px; }
+        .gap-3 { gap: 12px; }
+        .gap-4 { gap: 16px; }
+        .md\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
         
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
@@ -843,6 +986,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .referral-letter .letter-body .field-row { flex-direction: column; }
             .referral-letter .letter-body .field-row .field-label { width: 100%; }
             .doctor-info-text { flex-direction: column; align-items: flex-start; gap: 4px; }
+            .md\:grid-cols-2 { grid-template-columns: 1fr; }
+            .patient-select-grid { grid-template-columns: 1fr; }
         }
         
         @media (max-width: 480px) {
@@ -855,7 +1000,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- MAIN CONTENT (Header and Sidebar are included from components) -->
+<!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
@@ -868,16 +1013,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span class="role-badge-display">DOCTOR</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-user"></i>
-                Patient: <strong><?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?></strong>
+                <i class="fas fa-share-alt"></i>
+                <?php if ($patient): ?>
+                    Patient: <strong><?= htmlspecialchars($patient['full_name']) ?></strong>
+                    <span class="separator">|</span>
+                    ID: <?= htmlspecialchars($patient['patient_id']) ?>
+                <?php else: ?>
+                    Select a patient from the list below
+                <?php endif; ?>
                 <span class="separator">|</span>
-                ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>
+                <span class="badge badge-info">Branch: <?= htmlspecialchars($doctor_branch_name) ?></span>
                 <span class="separator">|</span>
-                <?= !empty($patient['date_of_birth']) ? calculateAge($patient['date_of_birth']) . ' yrs' : 'N/A' ?>
-                <span class="separator">|</span>
-                <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?>
-                <span class="separator">|</span>
-                <span class="badge badge-info">Branch: <?= htmlspecialchars($user_branch_name) ?></span>
+                <span class="badge badge-info">
+                    <i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($user_full_name) ?>
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -896,9 +1045,47 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- PATIENT INFORMATION -->
+    <!-- STEP 1: SELECT PATIENT (Only if no patient selected) -->
     <!-- ================================================================ -->
-    <div class="card mb-5">
+    <?php if (!$patient): ?>
+    <div class="card">
+        <h3 class="card-title">
+            <i class="fas fa-users title-blue mr-2"></i>
+            Select Patient
+            <span class="text-sm font-normal text-gray-400">(<?= count($patients_list) ?> patients)</span>
+        </h3>
+        
+        <?php if (count($patients_list) > 0): ?>
+            <div class="patient-select-grid">
+                <?php foreach ($patients_list as $p): ?>
+                    <a href="refer_patient.php?patient_id=<?= $p['id'] ?>" class="patient-select-card">
+                        <div class="patient-name"><?= htmlspecialchars($p['full_name']) ?></div>
+                        <div class="patient-id">ID: <?= htmlspecialchars($p['patient_id']) ?></div>
+                        <div class="patient-meta">
+                            <?= htmlspecialchars($p['gender'] ?? 'N/A') ?> • 
+                            <?= !empty($p['date_of_birth']) ? calculateAge($p['date_of_birth']) . ' yrs' : 'N/A' ?> • 
+                            <?= htmlspecialchars($p['phone'] ?? 'N/A') ?>
+                        </div>
+                    </a>
+                <?php endforeach; ?>
+            </div>
+        <?php else: ?>
+            <div class="empty-state text-center py-6">
+                <i class="fas fa-users text-4xl block mb-3" style="color: var(--border-color);"></i>
+                <p class="text-gray-400">No patients assigned to you yet</p>
+                <p class="text-xs text-gray-400">Patients will appear here once assigned to you</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- STEP 2: REFERRAL FORM (Only if patient selected) -->
+    <!-- ================================================================ -->
+    <?php if ($patient): ?>
+    
+    <!-- Patient Information -->
+    <div class="card">
         <h3 class="card-title">
             <i class="fas fa-user-circle title-blue mr-2"></i>
             Patient Information
@@ -914,12 +1101,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <?php if (!empty($patient['diagnosis'])): ?>
                 <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Diagnosis</span><span class="detail-value"><?= htmlspecialchars($patient['diagnosis']) ?></span></div>
             <?php endif; ?>
+            <?php if (!empty($patient['visit_number'])): ?>
+                <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Visit</span><span class="detail-value"><?= htmlspecialchars($patient['visit_number']) ?></span></div>
+            <?php endif; ?>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- REFERRAL FORM -->
-    <!-- ================================================================ -->
+    <!-- Referral Form -->
     <form method="POST" action="" id="referralForm">
         <input type="hidden" name="action" value="save_referral">
         <input type="hidden" name="patient_id" value="<?= $patient_id ?>">
@@ -1001,12 +1189,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 </span>
                                 <span class="total-doctors">
                                     <i class="fas fa-users"></i> 
-                                    <strong><?= count($doctors) ?></strong> doctor(s) in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
+                                    <strong><?= count($doctors) ?></strong> doctor(s) in <strong><?= htmlspecialchars($doctor_branch_name) ?></strong>
                                 </span>
                             <?php else: ?>
                                 <span class="status-item" style="color:var(--danger);">
                                     <i class="fas fa-exclamation-triangle"></i> 
-                                    No other doctors found in <strong><?= htmlspecialchars($user_branch_name) ?></strong> branch
+                                    No other doctors found in <strong><?= htmlspecialchars($doctor_branch_name) ?></strong> branch
                                 </span>
                             <?php endif; ?>
                         </div>
@@ -1094,50 +1282,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                     
                     <div class="letter-body">
-                        <div class="field-row">
-                            <span class="field-label">Date:</span>
-                            <span class="field-value" id="letterDate"><?= date('d/m/Y') ?></span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Patient Name:</span>
-                            <span class="field-value"><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Patient ID:</span>
-                            <span class="field-value"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Age/Sex:</span>
-                            <span class="field-value"><?= !empty($patient['date_of_birth']) ? calculateAge($patient['date_of_birth']) . ' yrs' : 'N/A' ?> / <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Referred To:</span>
-                            <span class="field-value" id="letterFacility">[Facility Name]</span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Contact Person:</span>
-                            <span class="field-value" id="letterContact">[Contact Person]</span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Reason for Referral:</span>
-                            <span class="field-value" id="letterReason">[Reason]</span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Clinical Summary:</span>
-                            <span class="field-value" id="letterSummary">[Clinical Summary]</span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Referred By:</span>
-                            <span class="field-value"><?= htmlspecialchars($user_full_name) ?></span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Specialty:</span>
-                            <span class="field-value"><?= htmlspecialchars($user_specialty) ?></span>
-                        </div>
-                        <div class="field-row">
-                            <span class="field-label">Contact:</span>
-                            <span class="field-value"><?= htmlspecialchars($user_branch_name) ?> | <?= date('d/m/Y') ?></span>
-                        </div>
+                        <div class="field-row"><span class="field-label">Date:</span><span class="field-value" id="letterDate"><?= date('d/m/Y') ?></span></div>
+                        <div class="field-row"><span class="field-label">Patient Name:</span><span class="field-value"><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></span></div>
+                        <div class="field-row"><span class="field-label">Patient ID:</span><span class="field-value"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span></div>
+                        <div class="field-row"><span class="field-label">Age/Sex:</span><span class="field-value"><?= !empty($patient['date_of_birth']) ? calculateAge($patient['date_of_birth']) . ' yrs' : 'N/A' ?> / <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span></div>
+                        <div class="field-row"><span class="field-label">Referred To:</span><span class="field-value" id="letterFacility">[Facility Name]</span></div>
+                        <div class="field-row"><span class="field-label">Contact Person:</span><span class="field-value" id="letterContact">[Contact Person]</span></div>
+                        <div class="field-row"><span class="field-label">Reason for Referral:</span><span class="field-value" id="letterReason">[Reason]</span></div>
+                        <div class="field-row"><span class="field-label">Clinical Summary:</span><span class="field-value" id="letterSummary">[Clinical Summary]</span></div>
+                        <div class="field-row"><span class="field-label">Referred By:</span><span class="field-value"><?= htmlspecialchars($user_full_name) ?></span></div>
+                        <div class="field-row"><span class="field-label">Specialty:</span><span class="field-value"><?= htmlspecialchars($user_specialty) ?></span></div>
+                        <div class="field-row"><span class="field-label">Contact:</span><span class="field-value"><?= htmlspecialchars($doctor_branch_name) ?> | <?= date('d/m/Y') ?></span></div>
                     </div>
                     
                     <div class="letter-footer">
@@ -1161,12 +1316,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <button type="reset" class="btn btn-outline" onclick="resetForm()">
                     <i class="fas fa-undo"></i> Clear
                 </button>
+                <a href="refer_patient.php" class="btn btn-outline">
+                    <i class="fas fa-users"></i> Change Patient
+                </a>
                 <a href="my_patients.php" class="btn btn-outline">
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
         </div>
     </form>
+    
+    <?php endif; ?>
 
     <!-- Footer -->
     <footer class="footer">
@@ -1174,6 +1334,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Refer Patient
+            <span class="text-gray-300 mx-2">|</span>
+            Dr. <?= htmlspecialchars($user_full_name) ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1195,7 +1357,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // SIDEBAR TOGGLE (for responsive)
+    // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -1263,7 +1425,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         if (letterSummary) letterSummary.textContent = summary;
     }
 
-    // Listen to form changes
     document.addEventListener('DOMContentLoaded', function() {
         var inputs = document.querySelectorAll('.external-form input, .external-form textarea');
         inputs.forEach(function(input) {
@@ -1351,102 +1512,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 5000);
     }
 
-    // ================================================================
-    // LIVE DOCTOR STATUS UPDATE - Auto refresh every 30 seconds
-    // ================================================================
-    function updateDoctorStatus() {
-        var select = document.getElementById('doctorSelect');
-        if (!select) return;
-        
-        var selectedValue = select.value;
-        
-        fetch(window.location.href + '?ajax=1&action=get_doctor_status&branch_id=<?= $user_branch_id ?>')
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    while (select.options.length > 1) {
-                        select.remove(1);
-                    }
-                    
-                    var onlineDoctors = data.doctors.filter(d => d.is_online == 1);
-                    var offlineDoctors = data.doctors.filter(d => d.is_online == 0);
-                    
-                    if (onlineDoctors.length > 0) {
-                        var group = document.createElement('optgroup');
-                        group.label = '🟢 Online Doctors (' + onlineDoctors.length + ')';
-                        onlineDoctors.forEach(function(doc) {
-                            var option = document.createElement('option');
-                            option.value = doc.id;
-                            option.text = '🟢 ' + doc.full_name + (doc.specialty ? ' (' + doc.specialty + ')' : '') + ' - Online';
-                            option.className = 'doctor-online';
-                            if (doc.id == selectedValue) {
-                                option.selected = true;
-                            }
-                            group.appendChild(option);
-                        });
-                        select.appendChild(group);
-                    }
-                    
-                    if (offlineDoctors.length > 0) {
-                        var group = document.createElement('optgroup');
-                        group.label = '⚪ Offline Doctors (' + offlineDoctors.length + ')';
-                        offlineDoctors.forEach(function(doc) {
-                            var option = document.createElement('option');
-                            option.value = doc.id;
-                            option.text = '⚪ ' + doc.full_name + (doc.specialty ? ' (' + doc.specialty + ')' : '') + ' - Offline';
-                            option.className = 'doctor-offline';
-                            if (doc.id == selectedValue) {
-                                option.selected = true;
-                            }
-                            group.appendChild(option);
-                        });
-                        select.appendChild(group);
-                    }
-                    
-                    var infoText = document.getElementById('doctorInfoText');
-                    if (infoText) {
-                        infoText.innerHTML = `
-                            <span class="status-item">
-                                <span class="status-dot online"></span>
-                                <strong>${onlineDoctors.length}</strong> Online
-                            </span>
-                            <span class="status-item">
-                                <span class="status-dot offline"></span>
-                                <strong>${offlineDoctors.length}</strong> Offline
-                            </span>
-                            <span class="total-doctors">
-                                <i class="fas fa-users"></i> 
-                                <strong>${data.doctors.length}</strong> doctor(s) in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
-                            </span>
-                        `;
-                    }
-                }
-            })
-            .catch(function(error) {
-                console.log('Status update error:', error);
-            });
-    }
-
-    var statusInterval = setInterval(updateDoctorStatus, 30000);
-
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            clearInterval(statusInterval);
-        } else {
-            statusInterval = setInterval(updateDoctorStatus, 30000);
-            updateDoctorStatus();
-        }
-    });
-
-    setTimeout(updateDoctorStatus, 1000);
-
-    console.log('%c👨‍⚕️ Refer Patient - Using Shared Header', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👨‍⚕️ Refer Patient - Two Step Process', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
+    console.log('%c🏥 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👤 Patient: <?= $patient ? htmlspecialchars($patient['full_name']) : 'Not selected' ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Internal Doctors: <?= count($doctors) ?> (same branch only)', 'font-size:13px; color:#059669;');
     console.log('%c🟢 Online: <?= $online_count ?> | ⚪ Offline: <?= $offline_count ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🌍 External: Form with Braick logo', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Dark mode, date/time, status toggle from shared header', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

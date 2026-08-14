@@ -6,29 +6,44 @@
 // FIXED: Blue theme design with modern cards
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$doctor_username = $_SESSION['username'] ?? 'dr.john';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET PARAMETERS
@@ -43,38 +58,69 @@ if ($visit_id <= 0 && $patient_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
 // GET OR CREATE VISIT
 // ================================================================
 if ($visit_id > 0) {
-    $stmt = $db->prepare("
-        SELECT v.*, 
-               p.id as patient_id,
-               p.full_name as patient_name,
-               p.patient_id as patient_code,
-               p.phone,
-               p.email,
-               p.date_of_birth,
-               p.gender,
-               p.address,
-               p.blood_group,
-               p.allergies,
-               p.emergency_contact,
-               p.created_at as patient_registered,
-               u.full_name as doctor_name,
-               b.name as branch_name
-        FROM visits v
-        JOIN patients p ON v.patient_id = p.id
-        LEFT JOIN users u ON v.doctor_id = u.id
-        LEFT JOIN branches b ON v.branch_id = b.id
-        WHERE v.id = ? AND v.doctor_id = ?
-    ");
-    $stmt->execute([$visit_id, $doctor_id]);
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            SELECT v.*, 
+                   p.id as patient_id,
+                   p.full_name as patient_name,
+                   p.patient_id as patient_code,
+                   p.phone,
+                   p.email,
+                   p.date_of_birth,
+                   p.gender,
+                   p.address,
+                   p.blood_group,
+                   p.allergies,
+                   p.emergency_contact,
+                   p.created_at as patient_registered,
+                   u.full_name as doctor_name,
+                   b.name as branch_name
+            FROM visits v
+            JOIN patients p ON v.patient_id = p.id
+            LEFT JOIN users u ON v.doctor_id = u.id
+            LEFT JOIN branches b ON v.branch_id = b.id
+            WHERE v.id = ?
+        ");
+        $stmt->execute([$visit_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT v.*, 
+                   p.id as patient_id,
+                   p.full_name as patient_name,
+                   p.patient_id as patient_code,
+                   p.phone,
+                   p.email,
+                   p.date_of_birth,
+                   p.gender,
+                   p.address,
+                   p.blood_group,
+                   p.allergies,
+                   p.emergency_contact,
+                   p.created_at as patient_registered,
+                   u.full_name as doctor_name,
+                   b.name as branch_name
+            FROM visits v
+            JOIN patients p ON v.patient_id = p.id
+            LEFT JOIN users u ON v.doctor_id = u.id
+            LEFT JOIN branches b ON v.branch_id = b.id
+            WHERE v.id = ? AND v.doctor_id = ?
+        ");
+        $stmt->execute([$visit_id, $doctor_id]);
+    }
     $visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$visit) {
@@ -231,7 +277,7 @@ function updateBillTotal($db, $bill_id) {
 }
 
 // ================================================================
-// ✅ GET DATA FOR DOCTOR'S BRANCH ONLY
+// GET DATA FOR DOCTOR'S BRANCH ONLY
 // ================================================================
 
 // 1. Lab Tests Catalog - BRANCH SPECIFIC
@@ -389,7 +435,7 @@ try {
 } catch (Exception $e) { $bill_items = []; }
 
 // ================================================================
-// GET LAB STATUS - FIXED: NO DUPLICATES - CHECKS BOTH pending AND in_progress
+// GET LAB STATUS - FIXED: NO DUPLICATES
 // ================================================================
 $lab_requests = [];
 $lab_results = [];
@@ -559,7 +605,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: GET LAB STATUS - FIXED: NO DUPLICATES
+    // AJAX: GET LAB STATUS
     // ================================================================
     if ($action === 'get_lab_status') {
         header('Content-Type: application/json');
@@ -1273,18 +1319,31 @@ function getStatusBadgeClass($status) {
 }
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
+<!-- ================================================================ -->
+<!-- HTML CONTENT - REST OF THE PAGE -->
+<!-- ================================================================ -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= $is_completed ? 'View Consultation' : 'Consultation' ?> - Braick Dispensary</title>
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
@@ -1555,102 +1614,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         /* ================================================================
-           PROCEDURE & TOOL TOTALS
-           ================================================================ */
-        .proc-total-display {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-            margin-top: 8px;
-            width: 100%;
-        }
-        .proc-total-display .total-item {
-            font-size: 0.7rem;
-            font-weight: 500;
-            padding: 4px 14px;
-            border-radius: 20px;
-            border: 1px solid var(--gray-200);
-            background: white;
-        }
-        .proc-total-display .total-item .label { color: var(--gray-500); }
-        .proc-total-display .total-item .amount { font-weight: 700; }
-        .proc-total-display .total-item .amount.procedure { color: #7C3AED; }
-        .proc-total-display .total-item .amount.tool { color: #D97706; }
-        .proc-total-display .total-item .amount.combined { color: var(--primary); }
-        
-        .proc-total-display .total-item.purple-bg {
-            background: var(--purple-bg);
-            border-color: var(--purple);
-        }
-        .proc-total-display .total-item.warning-bg {
-            background: var(--warning-bg);
-            border-color: var(--warning);
-        }
-        .proc-total-display .total-item.primary-bg {
-            background: var(--primary-bg);
-            border-color: var(--primary);
-        }
-        [data-theme="dark"] .proc-total-display .total-item {
-            background: var(--gray-700);
-            border-color: var(--gray-600);
-        }
-        [data-theme="dark"] .proc-total-display .total-item.purple-bg {
-            background: #2D1B5F;
-            border-color: #7C3AED;
-        }
-        [data-theme="dark"] .proc-total-display .total-item.warning-bg {
-            background: #3D2E0A;
-            border-color: #D97706;
-        }
-        [data-theme="dark"] .proc-total-display .total-item.primary-bg {
-            background: #1E3A5F;
-            border-color: #0B5ED7;
-        }
-        
-        /* ================================================================
-           LAB STATUS BADGE
-           ================================================================ */
-        .lab-status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            padding: 4px 14px;
-            border-radius: 20px;
-        }
-        .lab-status-badge.pending {
-            background: var(--warning-bg);
-            color: var(--warning);
-            border: 1px solid var(--warning);
-        }
-        .lab-status-badge.in_progress {
-            background: var(--primary-bg);
-            color: var(--primary);
-            border: 1px solid var(--primary);
-        }
-        .lab-status-badge.completed {
-            background: var(--success-bg);
-            color: var(--success);
-            border: 1px solid var(--success);
-        }
-        .lab-status-badge .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            display: inline-block;
-        }
-        .lab-status-badge.pending .status-dot { background: var(--warning); }
-        .lab-status-badge.in_progress .status-dot { background: var(--primary); }
-        .lab-status-badge.completed .status-dot { background: var(--success); }
-        .status-dot-pulse { animation: pulse-dot 1.5s infinite; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.5; transform: scale(0.8); }
-        }
-        
-        /* ================================================================
            GRAND TOTAL BAR - BLUE GRADIENT
            ================================================================ */
         .grand-total-bar {
@@ -1821,6 +1784,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .live-badge i { font-size: 0.4rem; }
         
         @keyframes pulse-badge { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+        @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
         
         /* ================================================================
            FROZEN OVERLAY
@@ -2428,8 +2392,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 width: 80%;
             }
             .grand-total-bar .total-amount { font-size: 1.3rem; }
-            .proc-total-display { gap: 6px; }
-            .proc-total-display .total-item { font-size: 0.6rem; padding: 1px 8px; }
         }
         @media (max-width: 480px) {
             .main-content { padding: 12px; }

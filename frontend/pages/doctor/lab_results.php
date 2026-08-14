@@ -14,30 +14,44 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET FILTER PARAMETER
@@ -52,19 +66,32 @@ if (!in_array($filter, $allowed_filters)) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
-// GET LAB RESULTS FOR THIS DOCTOR
+// GET LAB RESULTS
 // ================================================================
-$params = [$doctor_id];
+$params = [];
 $search_condition = "";
 $status_condition = "";
+$doctor_condition = "";
+
+if ($is_admin) {
+    // Admin can see all lab results
+    $doctor_condition = "";
+} else {
+    // Doctor can only see their own lab results
+    $doctor_condition = "v.doctor_id = ?";
+    $params[] = $user_id;
+}
 
 // Build search condition
 if (!empty($search)) {
@@ -105,6 +132,7 @@ $sql = "
         lt.completed_at,
         lt.updated_at,
         lt.lab_technician_id,
+        lt.test_price,
         p.id as patient_id,
         p.full_name as patient_name,
         p.patient_id as patient_code,
@@ -121,7 +149,8 @@ $sql = "
     JOIN visits v ON lt.visit_id = v.id
     JOIN patients p ON v.patient_id = p.id
     LEFT JOIN users u ON v.doctor_id = u.id
-    WHERE v.doctor_id = ? 
+    WHERE 1=1
+    " . ($is_admin ? "" : "AND " . $doctor_condition) . "
     $status_condition
     $search_condition
     ORDER BY 
@@ -147,44 +176,93 @@ $in_progress_count = 0;
 $completed_count = 0;
 $cancelled_count = 0;
 
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    WHERE v.doctor_id = ? AND lt.status = 'pending'
-");
-$stmt->execute([$doctor_id]);
-$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+if ($is_admin) {
+    // Admin counts - all doctors
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        WHERE lt.status = 'pending'
+    ");
+    $stmt->execute();
+    $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    WHERE v.doctor_id = ? AND lt.status = 'in_progress'
-");
-$stmt->execute([$doctor_id]);
-$in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        WHERE lt.status = 'in_progress'
+    ");
+    $stmt->execute();
+    $in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    WHERE v.doctor_id = ? AND lt.status = 'completed'
-");
-$stmt->execute([$doctor_id]);
-$completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        WHERE lt.status = 'completed'
+    ");
+    $stmt->execute();
+    $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    WHERE v.doctor_id = ? AND lt.status = 'cancelled'
-");
-$stmt->execute([$doctor_id]);
-$cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        WHERE lt.status = 'cancelled'
+    ");
+    $stmt->execute();
+    $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} else {
+    // Doctor counts - only their tests
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        WHERE v.doctor_id = ? AND lt.status = 'pending'
+    ");
+    $stmt->execute([$user_id]);
+    $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        WHERE v.doctor_id = ? AND lt.status = 'in_progress'
+    ");
+    $stmt->execute([$user_id]);
+    $in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        WHERE v.doctor_id = ? AND lt.status = 'completed'
+    ");
+    $stmt->execute([$user_id]);
+    $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests lt
+        JOIN visits v ON lt.visit_id = v.id
+        WHERE v.doctor_id = ? AND lt.status = 'cancelled'
+    ");
+    $stmt->execute([$user_id]);
+    $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+}
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE SHARED HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
@@ -197,7 +275,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lab Results - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <style>
         /* ================================================================
@@ -814,6 +893,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <i class="fas fa-flask"></i>
                 Lab Results
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">DOCTOR</span>
+                <?php if ($is_admin): ?>
+                    <span class="role-badge-display" style="background:rgba(220,38,38,0.3);color:white;border:1px solid rgba(220,38,38,0.3);">👑 Admin</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-table"></i>
@@ -829,6 +911,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     Live
                     <span id="liveTime" style="font-weight:400;font-size:0.55rem;"><?= date('H:i:s') ?></span>
                 </span>
+                
+                <?php if ($is_admin): ?>
+                    <span class="header-badge" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);color:#F87171;">
+                        <i class="fas fa-user-shield"></i> Admin View
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -998,6 +1086,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Lab Results
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1105,7 +1197,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 if (data.success) {
                     if (lastHash !== data.hash) {
                         lastHash = data.hash;
-                        updateLabResults(data.data);
+                        updateLabResults(data);
                         updateFooterTime();
                         
                         if (updateCount > 1) {
@@ -1133,10 +1225,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var cancelledTab = document.querySelector('.filter-tab[href*="filter=cancelled"] .tab-badge');
         
         if (allTab) allTab.textContent = data.total;
-        if (pendingTab) pendingTab.textContent = data.counts.pending;
-        if (inProgressTab) inProgressTab.textContent = data.counts.in_progress;
-        if (completedTab) completedTab.textContent = data.counts.completed;
-        if (cancelledTab) cancelledTab.textContent = data.counts.cancelled;
+        if (pendingTab) pendingTab.textContent = data.pending_count;
+        if (inProgressTab) inProgressTab.textContent = data.in_progress_count;
+        if (completedTab) completedTab.textContent = data.completed_count;
+        if (cancelledTab) cancelledTab.textContent = data.cancelled_count;
         
         // Update page header total
         var totalBadge = document.querySelector('.header-badge');
@@ -1225,6 +1317,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     });
 
     console.log('%c🧪 Braick - Lab Results (Table Format - Blue Headers)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c👤 User ID: <?= $user_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Viewing All Lab Results', 'font-size:13px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c📊 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?> | Cancelled: <?= $cancelled_count ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c🔵 Table headers with blue gradient background', 'font-size:13px; color:#0B5ED7;');

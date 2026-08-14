@@ -2,29 +2,29 @@
 // ================================================================
 // FILE: frontend/pages/doctor/referrals.php
 // DOCTOR - REFERRALS MANAGEMENT (FIXED QUERY)
+// Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // INCLUDE DATABASE
@@ -35,13 +35,48 @@ if (file_exists($db_path)) {
 } else {
     die("❌ Database file not found at: " . $db_path);
 }
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
-// GET REFERRALS FOR THIS DOCTOR - FIXED: Use visit_id to get patient
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    
+} catch (Exception $e) {
+    error_log("referrals verification error: " . $e->getMessage());
+}
+
+// ================================================================
+// GET REFERRALS FOR THIS DOCTOR - FIXED QUERY
 // ================================================================
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
-$type_filter = isset($_GET['type']) ? $_GET['type'] : 'all'; // all, sent, received
+$type_filter = isset($_GET['type']) ? $_GET['type'] : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 $sql = "
@@ -56,24 +91,23 @@ $sql = "
         v.visit_number,
         v.diagnosis as visit_diagnosis
     FROM referrals r
+    LEFT JOIN patients p ON r.patient_id = p.id
     LEFT JOIN visits v ON r.visit_id = v.id
-    LEFT JOIN patients p ON v.patient_id = p.id
-    LEFT JOIN users u_from ON r.from_doctor_id = u_from.id
-    LEFT JOIN users u_to ON r.to_doctor_id = u_to.id
+    LEFT JOIN users u_from ON r.created_by = u_from.id
+    LEFT JOIN users u_to ON r.referred_to = u_to.id
     WHERE 1=1
 ";
 
 $params = [];
 
 if ($type_filter === 'sent') {
-    $sql .= " AND r.from_doctor_id = ?";
+    $sql .= " AND r.created_by = ?";
     $params[] = $doctor_id;
 } elseif ($type_filter === 'received') {
-    $sql .= " AND r.to_doctor_id = ?";
+    $sql .= " AND r.referred_to = ?";
     $params[] = $doctor_id;
 } else {
-    // Show both sent and received
-    $sql .= " AND (r.from_doctor_id = ? OR r.to_doctor_id = ?)";
+    $sql .= " AND (r.created_by = ? OR r.referred_to = ?)";
     $params[] = $doctor_id;
     $params[] = $doctor_id;
 }
@@ -93,9 +127,14 @@ if (!empty($search)) {
 
 $sql .= " ORDER BY r.created_at DESC";
 
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$referrals = $stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $referrals = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("Referrals fetch error: " . $e->getMessage());
+    $referrals = [];
+}
 
 // ================================================================
 // GET STATISTICS
@@ -157,16 +196,6 @@ function time_ago($timestamp) {
 }
 
 // ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = 0;
-
-// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
@@ -179,7 +208,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-6">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-ambulance mr-2" style="color: #0B5ED7;"></i> Referrals
@@ -197,6 +226,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <i class="fas fa-clock mr-1"></i> <?= $pending_count ?> pending
                     </span>
                 <?php endif; ?>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-user-md mr-1"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
+                </span>
             </p>
         </div>
         <div>
@@ -300,14 +332,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                     <span class="font-mono text-xs"><?= htmlspecialchars($ref['visit_number'] ?? 'N/A') ?></span>
                                 </td>
                                 <td>
-                                    <?php if ($ref['from_doctor_id'] == $doctor_id): ?>
+                                    <?php if ($ref['created_by'] == $doctor_id): ?>
                                         <span class="text-green-600 font-medium">Me</span>
                                     <?php else: ?>
                                         <?= htmlspecialchars($ref['from_doctor_name'] ?? 'Unknown') ?>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <?php if ($ref['to_doctor_id'] == $doctor_id): ?>
+                                    <?php if ($ref['referred_to'] == $doctor_id): ?>
                                         <span class="text-blue-600 font-medium">Me</span>
                                     <?php else: ?>
                                         <?= htmlspecialchars($ref['to_doctor_name'] ?? 'Unknown') ?>
@@ -328,7 +360,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                         <a href="view_referral.php?id=<?= $ref['id'] ?>" class="btn btn-view btn-sm" title="View Details">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <?php if (($ref['status'] ?? '') === 'pending' && $ref['to_doctor_id'] == $doctor_id): ?>
+                                        <?php if (($ref['status'] ?? '') === 'pending' && $ref['referred_to'] == $doctor_id): ?>
                                             <a href="accept_referral.php?id=<?= $ref['id'] ?>" class="btn btn-success btn-sm" title="Accept" onclick="return confirm('Accept this referral?')">
                                                 <i class="fas fa-check"></i> Accept
                                             </a>
@@ -364,7 +396,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="text-gray-300 mx-2">|</span>
             Referrals
             <span class="text-gray-300 mx-2">|</span>
-            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -387,6 +419,115 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- STYLES -->
 <!-- ================================================================ -->
 <style>
+    /* ================================================================
+       ROOT VARIABLES
+       ================================================================ */
+    :root {
+        --primary: #0B5ED7;
+        --primary-dark: #0A4CA8;
+        --primary-light: #6EA8FE;
+        --primary-bg: #E8F0FE;
+        --success: #059669;
+        --success-bg: #D1FAE5;
+        --danger: #DC2626;
+        --danger-bg: #FEE2E2;
+        --warning: #D97706;
+        --warning-bg: #FEF3C7;
+        --purple: #7C3AED;
+        --purple-bg: #EDE9FE;
+        --white: #FFFFFF;
+        --gray-50: #F8FAFC;
+        --gray-100: #F1F5F9;
+        --gray-200: #E2E8F0;
+        --gray-300: #CBD5E1;
+        --gray-400: #94A3B8;
+        --gray-500: #64748B;
+        --gray-600: #475569;
+        --gray-700: #334155;
+        --gray-800: #1E293B;
+        --gray-900: #0F172A;
+        --bg-body: #F1F5F9;
+        --bg-card: #FFFFFF;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --border-color: #E2E8F0;
+        --shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.07);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.1);
+    }
+    
+    [data-theme="dark"] {
+        --bg-body: #0F172A;
+        --bg-card: #1E293B;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --border-color: #334155;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.4);
+    }
+    
+    /* ================================================================
+       MAIN CONTENT
+       ================================================================ */
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 24px 28px;
+        min-height: calc(100vh - 68px);
+        transition: all 0.3s ease;
+        background: var(--bg-body);
+    }
+    
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 3px solid var(--primary);
+    }
+    
+    .page-title {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+    
+    .page-title i { color: var(--primary); }
+    
+    .page-subtitle {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        margin-top: 4px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    .branch-tag {
+        background: #059669;
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .ml-2 { margin-left: 8px; }
+    .mr-1 { margin-right: 4px; }
+    .mr-2 { margin-right: 8px; }
+    .mx-2 { margin-left: 8px; margin-right: 8px; }
+    
     /* ================================================================
        STATS GRID
        ================================================================ */
@@ -445,6 +586,17 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         margin-top: 2px;
     }
     
+    [data-theme="dark"] .stat-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .stat-card .stat-number {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .stat-card .stat-label {
+        color: #94A3B8;
+    }
+    
     /* ================================================================
        CARD
        ================================================================ */
@@ -462,6 +614,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .mb-6 { margin-bottom: 1.5rem; }
+    
+    [data-theme="dark"] .card {
+        background: #1E293B;
+        border-color: #334155;
+    }
     
     /* ================================================================
        FILTER FORM
@@ -499,7 +656,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .filter-search .fa-search {
-        color: var(--text-muted);
+        color: var(--text-secondary);
         font-size: 0.85rem;
     }
     
@@ -514,7 +671,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .filter-input::placeholder {
-        color: var(--text-muted);
+        color: var(--text-secondary);
     }
     
     .filter-select {
@@ -533,6 +690,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .filter-select:focus {
         border-color: var(--primary);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+    }
+    
+    [data-theme="dark"] .filter-search {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .filter-input {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .filter-select {
+        background: #1E293B;
+        border-color: #334155;
+        color: #F1F5F9;
     }
     
     /* ================================================================
@@ -561,6 +731,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         white-space: nowrap;
     }
     
+    .data-table thead th:first-child {
+        border-radius: 8px 0 0 0;
+    }
+    
+    .data-table thead th:last-child {
+        border-radius: 0 8px 0 0;
+    }
+    
     .data-table tbody tr:nth-child(even) {
         background: var(--primary-bg);
     }
@@ -573,6 +751,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         background: #D1FAE5;
     }
     
+    [data-theme="dark"] .data-table tbody tr:nth-child(even) {
+        background: #1E293B;
+    }
+    [data-theme="dark"] .data-table tbody tr:nth-child(odd) {
+        background: #1E293B;
+    }
     [data-theme="dark"] .data-table tbody tr:hover {
         background: #1A3A2A;
     }
@@ -588,7 +772,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .data-table td .font-semibold { font-weight: 600; }
     .data-table td .text-sm { font-size: 0.8rem; }
     .data-table td .text-xs { font-size: 0.7rem; }
-    .data-table td .text-muted { color: var(--text-muted); }
+    .data-table td .text-muted { color: var(--text-secondary); }
     .data-table td .text-green-600 { color: #059669; }
     .data-table td .text-blue-600 { color: var(--primary); }
     .data-table td .font-mono { font-family: monospace; }
@@ -628,6 +812,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         cursor: pointer;
         border: none;
         text-decoration: none;
+        min-height: 36px;
     }
     
     .btn-blue {
@@ -710,6 +895,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         padding: 4px 10px;
         font-size: 0.7rem;
         border-radius: 6px;
+        min-height: 30px;
     }
     
     .action-buttons {
@@ -718,41 +904,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         gap: 6px;
         flex-wrap: nowrap;
         justify-content: center;
-    }
-    
-    /* ================================================================
-       PAGE HEADER
-       ================================================================ */
-    .page-header {
-        border-bottom: 3px solid var(--primary);
-        padding-bottom: 12px;
-    }
-    
-    .page-header .page-title {
-        color: var(--primary-dark);
-        font-size: 1.8rem;
-        font-weight: 700;
-    }
-    
-    [data-theme="dark"] .page-header .page-title {
-        color: var(--primary-light);
-    }
-    
-    .page-header .page-subtitle {
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-    }
-    
-    .branch-tag {
-        background: #059669;
-        color: white;
-        padding: 3px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
     }
     
     /* ================================================================
@@ -772,125 +923,70 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-weight: 600;
     }
     
-    /* ================================================================
-       UTILITIES
-       ================================================================ */
-    .text-xs { font-size: 0.75rem; }
-    .text-sm { font-size: 0.875rem; }
-    .text-muted { color: var(--text-muted); }
-    .font-medium { font-weight: 500; }
-    .font-semibold { font-weight: 600; }
-    .font-mono { font-family: monospace; }
-    .text-center { text-align: center; }
-    .py-8 { padding-top: 2rem; padding-bottom: 2rem; }
-    .text-3xl { font-size: 1.875rem; }
-    .block { display: block; }
-    .mb-2 { margin-bottom: 0.5rem; }
-    .ml-2 { margin-left: 0.5rem; }
-    .mr-1 { margin-right: 0.25rem; }
-    .mr-2 { margin-right: 0.5rem; }
-    .gap-2 { gap: 0.5rem; }
-    .gap-3 { gap: 0.75rem; }
-    .gap-4 { gap: 1rem; }
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .items-center { align-items: center; }
-    .justify-between { justify-content: space-between; }
-    .w-full { width: 100%; }
-    .min-w-\[140px\] { min-width: 140px; }
-    .min-w-\[200px\] { min-width: 200px; }
-    
-    /* ================================================================
-       DARK MODE
-       ================================================================ */
-    [data-theme="dark"] .stat-card {
-        background: #1E293B;
+    [data-theme="dark"] .footer {
         border-color: #334155;
-    }
-    [data-theme="dark"] .stat-card .stat-number {
-        color: #F1F5F9;
-    }
-    [data-theme="dark"] .stat-card .stat-label {
         color: #94A3B8;
     }
-    [data-theme="dark"] .card {
-        background: #1E293B;
-        border-color: #334155;
+    
+    /* ================================================================
+       TOAST
+       ================================================================ */
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
     }
-    [data-theme="dark"] .data-table tbody tr:nth-child(even) {
-        background: #1E293B;
-    }
-    [data-theme="dark"] .data-table tbody tr:nth-child(odd) {
-        background: #1E293B;
-    }
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #EF4444; }
+    .toast-custom.info { background: var(--primary); }
+    .toast-custom.warning { background: #D97706; }
     
     /* ================================================================
        RESPONSIVE
        ================================================================ */
+    @media (max-width: 1024px) {
+        .main-content { padding: 16px; }
+    }
+    
     @media (max-width: 768px) {
-        .stats-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        .card {
-            padding: 14px 16px;
-        }
-        .filter-group {
-            flex-direction: column;
-            align-items: stretch;
-        }
-        .filter-search {
-            min-width: 100%;
-        }
-        .filter-select {
-            width: 100%;
-            min-width: 100%;
-        }
-        .stat-card {
-            padding: 14px 16px;
-        }
-        .stat-card .stat-number {
-            font-size: 1.2rem;
-        }
-        .action-buttons {
-            flex-wrap: wrap;
-            justify-content: center;
-        }
-        .data-table {
-            font-size: 0.75rem;
-        }
-        .data-table th,
-        .data-table td {
-            padding: 6px 10px;
-        }
-        .btn-sm {
-            padding: 3px 8px;
-            font-size: 0.6rem;
-        }
-        .page-header .page-title {
-            font-size: 1.2rem;
-        }
-        .filter-form .btn {
-            width: 100%;
-            justify-content: center;
-        }
+        .main-content { padding: 12px; }
+        .stats-grid { grid-template-columns: 1fr 1fr; }
+        .card { padding: 14px 16px; }
+        .filter-group { flex-direction: column; align-items: stretch; }
+        .filter-search { min-width: 100%; }
+        .filter-select { width: 100%; min-width: 100%; }
+        .stat-card { padding: 14px 16px; }
+        .stat-card .stat-number { font-size: 1.2rem; }
+        .action-buttons { flex-wrap: wrap; justify-content: center; }
+        .data-table { font-size: 0.75rem; }
+        .data-table th, .data-table td { padding: 6px 10px; }
+        .btn-sm { padding: 3px 8px; font-size: 0.6rem; }
+        .page-title { font-size: 1.2rem; }
+        .filter-form .btn { width: 100%; justify-content: center; }
+        .page-header { flex-direction: column; }
+        .page-header .btn { width: 100%; justify-content: center; }
     }
     
     @media (max-width: 480px) {
-        .stats-grid {
-            grid-template-columns: 1fr;
-        }
-        .data-table th,
-        .data-table td {
-            padding: 4px 6px;
-            font-size: 0.7rem;
-        }
-        .btn-sm {
-            padding: 2px 6px;
-            font-size: 0.55rem;
-        }
-        .action-buttons {
-            gap: 3px;
-        }
+        .main-content { padding: 8px; }
+        .stats-grid { grid-template-columns: 1fr; }
+        .data-table th, .data-table td { padding: 4px 6px; font-size: 0.7rem; }
+        .btn-sm { padding: 2px 6px; font-size: 0.55rem; }
+        .action-buttons { gap: 3px; }
+        .page-title { font-size: 1rem; }
     }
 </style>
 
@@ -915,8 +1011,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     console.log('%c🔄 Referrals - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c📊 Total: <?= $total_referrals ?> | Pending: <?= $pending_count ?> | Accepted: <?= $accepted_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c✅ Query fixed: Uses visit_id to get patient data', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c✅ Query fixed: Uses created_by and referred_to columns', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

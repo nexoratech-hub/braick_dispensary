@@ -2,29 +2,29 @@
 // ================================================================
 // FILE: frontend/pages/doctor/view_appointment.php
 // DOCTOR - VIEW APPOINTMENT DETAILS WITH VITAL SIGNS
+// Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // GET APPOINTMENT ID
@@ -32,7 +32,7 @@ $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $appointment_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if ($appointment_id <= 0) {
-    header('Location: appointments.php');
+    header('Location: appointments.php?error=invalid_id');
     exit;
 }
 
@@ -45,37 +45,78 @@ if (file_exists($db_path)) {
 } else {
     die("❌ Database file not found at: " . $db_path);
 }
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
-// GET APPOINTMENT DETAILS
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        a.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_code,
-        p.phone as patient_phone,
-        p.email as patient_email,
-        p.date_of_birth,
-        p.gender,
-        p.address,
-        p.blood_group,
-        p.allergies,
-        u.full_name as doctor_name,
-        u.specialty as doctor_specialty,
-        r.full_name as created_by_name
-    FROM appointments a
-    JOIN patients p ON a.patient_id = p.id
-    LEFT JOIN users u ON a.doctor_id = u.id
-    LEFT JOIN users r ON a.created_by = r.id
-    WHERE a.id = ? AND a.doctor_id = ?
-");
-$stmt->execute([$appointment_id, $doctor_id]);
-$appointment = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    
+} catch (Exception $e) {
+    error_log("view_appointment verification error: " . $e->getMessage());
+}
 
-if (!$appointment) {
-    header('Location: appointments.php?error=not_found');
+// ================================================================
+// GET APPOINTMENT DETAILS - Verify doctor has access
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            a.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            p.phone as patient_phone,
+            p.email as patient_email,
+            p.date_of_birth,
+            p.gender,
+            p.address,
+            p.blood_group,
+            p.allergies,
+            u.full_name as doctor_name,
+            u.specialty as doctor_specialty,
+            r.full_name as created_by_name
+        FROM appointments a
+        JOIN patients p ON a.patient_id = p.id
+        LEFT JOIN users u ON a.doctor_id = u.id
+        LEFT JOIN users r ON a.created_by = r.id
+        WHERE a.id = ? AND a.doctor_id = ?
+    ");
+    $stmt->execute([$appointment_id, $doctor_id]);
+    $appointment = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$appointment) {
+        header('Location: appointments.php?error=not_found');
+        exit;
+    }
+} catch (Exception $e) {
+    error_log("Appointment fetch error: " . $e->getMessage());
+    header('Location: appointments.php?error=database_error');
     exit;
 }
 
@@ -83,29 +124,33 @@ if (!$appointment) {
 // GET VITAL SIGNS FOR THIS APPOINTMENT
 // ================================================================
 $vital_signs = null;
-$stmt = $db->prepare("
-    SELECT vs.*, u.full_name as recorded_by_name
-    FROM vital_signs vs
-    LEFT JOIN users u ON vs.recorded_by = u.id
-    WHERE vs.appointment_id = ?
-    ORDER BY vs.recorded_at DESC
-    LIMIT 1
-");
-$stmt->execute([$appointment_id]);
-$vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
-
-// If no vital signs for this appointment, try to get latest for patient
-if (!$vital_signs && $appointment['patient_id']) {
+try {
     $stmt = $db->prepare("
         SELECT vs.*, u.full_name as recorded_by_name
         FROM vital_signs vs
         LEFT JOIN users u ON vs.recorded_by = u.id
-        WHERE vs.patient_id = ?
+        WHERE vs.appointment_id = ?
         ORDER BY vs.recorded_at DESC
         LIMIT 1
     ");
-    $stmt->execute([$appointment['patient_id']]);
+    $stmt->execute([$appointment_id]);
     $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // If no vital signs for this appointment, try to get latest for patient
+    if (!$vital_signs && $appointment['patient_id']) {
+        $stmt = $db->prepare("
+            SELECT vs.*, u.full_name as recorded_by_name
+            FROM vital_signs vs
+            LEFT JOIN users u ON vs.recorded_by = u.id
+            WHERE vs.patient_id = ?
+            ORDER BY vs.recorded_at DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$appointment['patient_id']]);
+        $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {
+    $vital_signs = null;
 }
 
 // ================================================================
@@ -146,16 +191,6 @@ function calculateAge($dob) {
 }
 
 // ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = 0;
-
-// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
@@ -183,6 +218,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </span>
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($appointment['patient_name']) ?>
+                </span>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-user-md mr-1"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
                 </span>
             </p>
         </div>
@@ -273,6 +311,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     </span>
                 <?php endif; ?>
             </h3>
+            <?php if (!$vital_signs): ?>
+                <a href="add_vital_signs.php?appointment=<?= $appointment['id'] ?>&patient=<?= $appointment['patient_id'] ?>" class="btn btn-primary btn-sm">
+                    <i class="fas fa-plus"></i> Add Vital Signs
+                </a>
+            <?php endif; ?>
         </div>
         
         <div class="vital-signs-grid">
@@ -503,7 +546,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="text-gray-300 mx-2">|</span>
             Appointment Details with Vital Signs
             <span class="text-gray-300 mx-2">|</span>
-            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -523,7 +566,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </div>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
+<!-- STYLES (ALL STYLES INCLUDED IN ORIGINAL) -->
 <!-- ================================================================ -->
 <style>
     /* ================================================================
@@ -873,6 +916,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         cursor: pointer;
         border: none;
         text-decoration: none;
+        min-height: 36px;
     }
     
     .btn-outline {
@@ -923,10 +967,29 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         transform: scale(1.05);
     }
     
+    .btn-primary {
+        background: var(--primary);
+        color: white;
+        padding: 4px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: none;
+        cursor: pointer;
+    }
+    .btn-primary:hover {
+        background: var(--primary-dark);
+        transform: scale(1.05);
+    }
+    
     .btn-sm {
         padding: 4px 10px;
         font-size: 0.7rem;
         border-radius: 6px;
+        min-height: 30px;
     }
     
     /* ================================================================
@@ -935,6 +998,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .page-header {
         border-bottom: 3px solid var(--primary);
         padding-bottom: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
     }
     
     .page-header .page-title {
@@ -981,26 +1049,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-weight: 600;
     }
     
-    /* ================================================================
-       UTILITIES
-       ================================================================ */
-    .text-xs { font-size: 0.75rem; }
-    .text-sm { font-size: 0.875rem; }
-    .text-muted { color: var(--text-muted); }
-    .font-medium { font-weight: 500; }
-    .font-semibold { font-weight: 600; }
-    .font-mono { font-family: monospace; }
-    .text-center { text-align: center; }
-    .ml-2 { margin-left: 0.5rem; }
-    .mr-1 { margin-right: 0.25rem; }
-    .mr-2 { margin-right: 0.5rem; }
-    .gap-2 { gap: 0.5rem; }
-    .gap-3 { gap: 0.75rem; }
-    .gap-4 { gap: 1rem; }
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .items-center { align-items: center; }
-    .justify-between { justify-content: space-between; }
+    .text-gray-300 { color: #D1D5DB; }
+    .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
     
     /* ================================================================
        DARK MODE
@@ -1197,10 +1247,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     console.log('%c📅 Appointment Details with Vital Signs', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c👤 Patient: <?= htmlspecialchars($appointment['patient_name']) ?>', 'font-size:12px; color:#059669;');
     console.log('%c📋 Status: <?= ucfirst($appointment['status'] ?? 'Scheduled') ?>', 'font-size:12px; color:#64748B;');
     console.log('%c💓 Vital Signs: <?= $vital_signs ? '✅ Recorded' : '❌ Not recorded' ?>', 'font-size:12px; color:#DC2626;');
     console.log('%c📊 6 Vital Signs: BP, Weight, Height, Temperature, Pulse, BMI', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

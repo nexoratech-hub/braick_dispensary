@@ -6,29 +6,55 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    // User is not logged in - redirect to login
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    // User is not a doctor - redirect to their dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$doctor_username = $_SESSION['username'] ?? 'dr.john';
+$doctor_email = $_SESSION['email'] ?? 'john@braick.com';
+$doctor_phone = $_SESSION['phone'] ?? '+255 700 000 011';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF ADMIN VIEWING DOCTOR PAGE, USE THEIR BRANCH
+// ================================================================
+if ($_SESSION['role'] === 'admin') {
+    // Admin can view all, but we'll use branch filter
+    $doctor_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $doctor_branch_id;
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -36,12 +62,19 @@ $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
 $date_filter = isset($_GET['date']) ? trim($_GET['date']) : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$message = isset($_GET['message']) ? trim($_GET['message']) : '';
+$message_type = isset($_GET['type']) ? trim($_GET['type']) : 'info';
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
 // GET APPOINTMENTS FOR THIS DOCTOR
@@ -127,6 +160,11 @@ try {
 }
 
 // ================================================================
+// GET TODAY'S DATE FOR DEFAULT FILTER
+// ================================================================
+$today_date = date('Y-m-d');
+
+// ================================================================
 // FUNCTIONS
 // ================================================================
 function getStatusBadgeClass($status) {
@@ -137,6 +175,17 @@ function getStatusBadgeClass($status) {
         case 'scheduled': return 'badge-warning';
         case 'pending': return 'badge-warning';
         default: return 'badge-warning';
+    }
+}
+
+function getStatusIcon($status) {
+    switch ($status) {
+        case 'completed': return 'fa-check-double';
+        case 'confirmed': return 'fa-check-circle';
+        case 'cancelled': return 'fa-times-circle';
+        case 'scheduled': return 'fa-clock';
+        case 'pending': return 'fa-hourglass-half';
+        default: return 'fa-clock';
     }
 }
 
@@ -154,10 +203,19 @@ function time_ago($timestamp) {
 }
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// PROFILE PICTURE URL
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
+// ================================================================
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -298,6 +356,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <td class="text-sm"><?= htmlspecialchars($appt['created_by_name'] ?? 'N/A') ?></td>
                                 <td>
                                     <span class="badge <?= getStatusBadgeClass($appt['status']) ?>">
+                                        <i class="fas <?= getStatusIcon($appt['status']) ?>"></i>
                                         <?= ucfirst($appt['status'] ?? 'Scheduled') ?>
                                     </span>
                                 </td>
@@ -432,8 +491,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .update-badge {
-        background: rgba(255,255,255,0.1);
-        color: #93C5FD;
+        background: rgba(11, 94, 215, 0.1);
+        color: var(--primary);
         padding: 4px 14px;
         border-radius: 20px;
         font-size: 0.7rem;
@@ -441,6 +500,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         display: inline-flex;
         align-items: center;
         gap: 6px;
+        border: 1px solid rgba(11, 94, 215, 0.15);
     }
     .update-badge .fa-spin { animation: fa-spin 2s infinite linear; }
     @keyframes fa-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -889,8 +949,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <?php endif; ?>
 
     console.log('%c📅 Appointments - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
     console.log('%c📊 Total: <?= $total_appointments ?> | Scheduled: <?= $scheduled_count ?> | Confirmed: <?= $confirmed_count ?>', 'font-size:12px; color:#059669;');
     console.log('%c🔄 Auto-update active every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:12px; color:#7C3AED;');
 </script>
 
 <!-- ================================================================ -->

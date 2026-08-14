@@ -2,27 +2,26 @@
 // ================================================================
 // FILE: frontend/pages/doctor/view_file.php
 // DOCTOR - VIEW FILE IN BROWSER (FIXED FOR ALL PATHS)
+// Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
+$doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
 // GET DOCUMENT ID
@@ -43,21 +42,60 @@ if (file_exists($db_path)) {
 } else {
     die("❌ Database file not found");
 }
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
-// GET DOCUMENT DETAILS
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
 // ================================================================
-$stmt = $db->prepare("
-    SELECT id, file_path, file_name, file_type, doctor_id, document_name 
-    FROM patient_documents 
-    WHERE id = ? AND doctor_id = ?
-");
-$stmt->execute([$document_id, $doctor_id]);
-$document = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, status FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $_SESSION['full_name'] = $doctor_name;
+    
+} catch (Exception $e) {
+    error_log("view_file verification error: " . $e->getMessage());
+}
 
-if (!$document) {
-    die('Document not found or access denied');
+// ================================================================
+// GET DOCUMENT DETAILS - Verify doctor has access
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        SELECT id, file_path, file_name, file_type, doctor_id, document_name, patient_id 
+        FROM patient_documents 
+        WHERE id = ? AND doctor_id = ?
+    ");
+    $stmt->execute([$document_id, $doctor_id]);
+    $document = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$document) {
+        // Check if document exists but belongs to another doctor
+        $stmt = $db->prepare("SELECT id, doctor_id FROM patient_documents WHERE id = ?");
+        $stmt->execute([$document_id]);
+        $doc_check = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($doc_check) {
+            die('Access denied: This document belongs to another doctor.');
+        }
+        die('Document not found');
+    }
+} catch (Exception $e) {
+    error_log("Document fetch error: " . $e->getMessage());
+    die('Error retrieving document');
 }
 
 $file_name = $document['file_name'];
@@ -72,19 +110,16 @@ $base_url_path = '/dispensary_system/frontend/assets/uploads/documents/';
 // Try multiple path formats
 $paths_to_try = [];
 
-// 1. If file_path contains the full path with documen... (truncated)
-// Extract just the filename from file_path if it contains a filename
+// 1. If file_path contains the full path with filename
 $filename_from_path = basename($file_path_db);
 if (!empty($filename_from_path) && strpos($filename_from_path, '.') !== false) {
-    // Use the filename from the path
     $paths_to_try[] = $base_upload_path . $filename_from_path;
     $paths_to_try[] = $base_upload_path . $file_name;
 } else {
-    // Use the stored file_name
     $paths_to_try[] = $base_upload_path . $file_name;
 }
 
-// 2. Try with the full path as stored (if it has a valid extension)
+// 2. Try with the full path as stored
 if (strpos($file_path_db, '.') !== false) {
     $clean_path = str_replace('/dispensary_system/', '', $file_path_db);
     $paths_to_try[] = 'C:/xampp/htdocs/dispensary_system/' . $clean_path;
@@ -97,6 +132,15 @@ $paths_to_try[] = $base_upload_path . $file_name;
 // 4. Try with the file_path as is
 $paths_to_try[] = $file_path_db;
 
+// 5. Try alternative base path (without C:/xampp/htdocs)
+$alt_base = 'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/';
+$paths_to_try[] = $alt_base . $file_name;
+
+// 6. Try with the full server path from file_path
+if (!empty($file_path_db) && strpos($file_path_db, 'C:/') === 0) {
+    $paths_to_try[] = $file_path_db;
+}
+
 // Find which path exists
 $found_path = '';
 foreach ($paths_to_try as $path) {
@@ -107,7 +151,7 @@ foreach ($paths_to_try as $path) {
 }
 
 // ================================================================
-// IF FILE NOT FOUND - SHOW DEBUG INFO
+// IF FILE NOT FOUND - SHOW DEBUG INFO (only in development)
 // ================================================================
 if (empty($found_path)) {
     ?>
@@ -216,12 +260,28 @@ if (empty($found_path)) {
                 border-radius: 4px;
                 font-size: 0.8rem;
             }
+            .debug-container .doctor-info {
+                background: #E8F0FE;
+                border-radius: 8px;
+                padding: 12px 16px;
+                margin: 12px 0;
+                border: 1px solid #BFDBFE;
+            }
+            .debug-container .doctor-info .label {
+                font-weight: 600;
+                color: #0B5ED7;
+            }
         </style>
     </head>
     <body>
         <div class="debug-container">
             <h2>🔍 File Not Found</h2>
             <p>The file could not be located on the server.</p>
+            
+            <div class="doctor-info">
+                <p><span class="label">👨‍⚕️ Doctor:</span> <?= htmlspecialchars($doctor_name) ?></p>
+                <p><span class="label">🆔 Doctor ID:</span> <?= $doctor_id ?></p>
+            </div>
             
             <div class="file-info">
                 <p><span class="label">Document ID:</span> <?= $document_id ?></p>
@@ -310,7 +370,24 @@ switch ($file_extension) {
         header('Content-Type: image/svg+xml');
         break;
     case 'txt':
+    case 'sql':
         header('Content-Type: text/plain');
+        break;
+    case 'doc':
+        header('Content-Type: application/msword');
+        break;
+    case 'docx':
+        header('Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        break;
+    case 'xls':
+        header('Content-Type: application/vnd.ms-excel');
+        break;
+    case 'xlsx':
+        header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        break;
+    case 'zip':
+    case 'rar':
+        header('Content-Type: application/zip');
         break;
     default:
         header('Content-Type: application/octet-stream');

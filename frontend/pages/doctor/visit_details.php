@@ -5,31 +5,28 @@
 // Shows: Patient Info, Vital Signs (6), Symptoms, Lab Tests, Results,
 //        Diagnosis, Medications, Procedures, Tools, Bills
 // WITH PDF DOWNLOAD - Beautiful Design with Logo
+// Session-based login (NO BYPASS)
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // GET PARAMETERS
@@ -37,7 +34,7 @@ $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 $visit_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if ($visit_id <= 0) {
-    header('Location: my_patients.php');
+    header('Location: my_patients.php?error=invalid_visit');
     exit;
 }
 
@@ -45,39 +42,89 @@ if ($visit_id <= 0) {
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
-// GET VISIT DETAILS WITH PATIENT INFO
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
 // ================================================================
-$stmt = $db->prepare("
-    SELECT v.*, 
-           p.id as patient_id,
-           p.full_name as patient_name,
-           p.patient_id as patient_code,
-           p.phone,
-           p.email,
-           p.date_of_birth,
-           p.gender,
-           p.address,
-           p.blood_group,
-           p.allergies,
-           p.emergency_contact,
-           p.created_at as patient_registered,
-           u.full_name as doctor_name,
-           u.specialty as doctor_specialty,
-           b.name as branch_name
-    FROM visits v
-    JOIN patients p ON v.patient_id = p.id
-    LEFT JOIN users u ON v.doctor_id = u.id
-    LEFT JOIN branches b ON v.branch_id = b.id
-    WHERE v.id = ?
-");
-$stmt->execute([$visit_id]);
-$visit = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    
+} catch (Exception $e) {
+    error_log("visit_details verification error: " . $e->getMessage());
+}
 
-if (!$visit) {
-    header('Location: my_patients.php?error=visit_not_found');
+// ================================================================
+// GET VISIT DETAILS WITH PATIENT INFO - Verify doctor has access
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        SELECT v.*, 
+               p.id as patient_id,
+               p.full_name as patient_name,
+               p.patient_id as patient_code,
+               p.phone,
+               p.email,
+               p.date_of_birth,
+               p.gender,
+               p.address,
+               p.blood_group,
+               p.allergies,
+               p.emergency_contact,
+               p.created_at as patient_registered,
+               u.full_name as doctor_name,
+               u.specialty as doctor_specialty,
+               b.name as branch_name
+        FROM visits v
+        JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN branches b ON v.branch_id = b.id
+        WHERE v.id = ? AND v.doctor_id = ?
+    ");
+    $stmt->execute([$visit_id, $doctor_id]);
+    $visit = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$visit) {
+        // Check if visit exists but belongs to another doctor
+        $stmt = $db->prepare("SELECT id, doctor_id FROM visits WHERE id = ?");
+        $stmt->execute([$visit_id]);
+        $visit_check = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($visit_check) {
+            header('Location: my_patients.php?error=access_denied');
+            exit;
+        }
+        header('Location: my_patients.php?error=visit_not_found');
+        exit;
+    }
+} catch (Exception $e) {
+    error_log("Visit fetch error: " . $e->getMessage());
+    header('Location: my_patients.php?error=database_error');
     exit;
 }
 
@@ -89,7 +136,7 @@ $patient_id = $visit['patient_id'];
 $vital_signs = [];
 try {
     $stmt = $db->prepare("
-        SELECT temperature, blood_pressure, pulse_rate, weight, height, bmi, recorded_at 
+        SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic, pulse_rate, weight, height, bmi, recorded_at 
         FROM vital_signs 
         WHERE visit_id = ? 
         ORDER BY recorded_at DESC 
@@ -97,6 +144,13 @@ try {
     ");
     $stmt->execute([$visit_id]);
     $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Format blood pressure for display
+    if ($vital_signs && isset($vital_signs['blood_pressure_systolic']) && isset($vital_signs['blood_pressure_diastolic'])) {
+        $vital_signs['blood_pressure'] = $vital_signs['blood_pressure_systolic'] . '/' . $vital_signs['blood_pressure_diastolic'];
+    } else {
+        $vital_signs['blood_pressure'] = 'N/A';
+    }
 } catch (Exception $e) {
     $vital_signs = [];
 }
@@ -275,6 +329,9 @@ include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
+<!-- ================================================================ -->
+<!-- MAIN CONTENT (HTML REMAINS THE SAME) -->
+<!-- ================================================================ -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -285,6 +342,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
     <style>
+        /* All styles remain the same as in your original file */
         /* ================================================================
            BLUE THEME - MAIN STYLES
            ================================================================ */
@@ -1083,6 +1141,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span class="separator">|</span>
                 Date: <strong><?= date('M d, Y h:i A', strtotime($visit['created_at'])) ?></strong>
                 <span class="branch-badge"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($visit['branch_name'] ?? 'N/A') ?></span>
+                <span class="separator">|</span>
+                <span class="branch-badge"><i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($doctor_name) ?></span>
             </p>
         </div>
         <div class="page-header-right" style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -1498,6 +1558,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
             <span class="text-gray-300 mx-2">|</span>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1850,6 +1912,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     });
 
     console.log('%c📋 Visit Details - Full History', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
     console.log('%c🆔 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Status: <?= ucfirst($visit['status'] ?? 'Pending') ?>', 'font-size:13px; color:#D97706;');
@@ -1858,6 +1921,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c💊 Medications: <?= count($prescriptions) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c💰 Bill Total: TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏥 Braick Logo included in PDF', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -5,21 +5,42 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// CHECK SESSION
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Sarah Mwamba';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_role = $_SESSION['role'];
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET PRESCRIPTION ID
@@ -32,33 +53,52 @@ if ($prescription_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found");
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
 }
-$db = Database::getInstance()->getConnection();
 
 // ================================================================
 // GET PRESCRIPTION DETAILS
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        pr.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_code,
-        u.full_name as doctor_name,
-        v.visit_number
-    FROM prescriptions pr
-    JOIN patients p ON pr.patient_id = p.id
-    JOIN users u ON pr.doctor_id = u.id
-    LEFT JOIN visits v ON pr.visit_id = v.id
-    WHERE pr.id = ? AND pr.doctor_id = ? AND pr.status = 'pending'
-");
-$stmt->execute([$prescription_id, $doctor_id]);
+if ($is_admin) {
+    // Admin can edit any prescription
+    $stmt = $db->prepare("
+        SELECT 
+            pr.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            u.full_name as doctor_name,
+            v.visit_number
+        FROM prescriptions pr
+        JOIN patients p ON pr.patient_id = p.id
+        JOIN users u ON pr.doctor_id = u.id
+        LEFT JOIN visits v ON pr.visit_id = v.id
+        WHERE pr.id = ? AND pr.status = 'pending'
+    ");
+    $stmt->execute([$prescription_id]);
+} else {
+    // Doctor can only edit their own prescriptions
+    $stmt = $db->prepare("
+        SELECT 
+            pr.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            u.full_name as doctor_name,
+            v.visit_number
+        FROM prescriptions pr
+        JOIN patients p ON pr.patient_id = p.id
+        JOIN users u ON pr.doctor_id = u.id
+        LEFT JOIN visits v ON pr.visit_id = v.id
+        WHERE pr.id = ? AND pr.doctor_id = ? AND pr.status = 'pending'
+    ");
+    $stmt->execute([$prescription_id, $doctor_id]);
+}
 $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$prescription) {
@@ -83,9 +123,10 @@ $stmt = $db->prepare("
     SELECT id, name, strength, unit, category 
     FROM medications 
     WHERE status = 'active' 
+    AND (branch_id IS NULL OR branch_id = ?)
     ORDER BY name
 ");
-$stmt->execute([]);
+$stmt->execute([$doctor_branch_id]);
 $medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
@@ -99,52 +140,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $notes = trim($_POST['notes'] ?? '');
     $status = $_POST['status'] ?? 'pending';
     
-    // Update prescription
-    $stmt = $db->prepare("
-        UPDATE prescriptions 
-        SET diagnosis = ?, notes = ?, status = ?, updated_at = NOW()
-        WHERE id = ? AND doctor_id = ?
-    ");
-    
-    if ($stmt->execute([$diagnosis, $notes, $status, $prescription_id, $doctor_id])) {
-        // Update items if needed
-        if (isset($_POST['items']) && is_array($_POST['items'])) {
-            foreach ($_POST['items'] as $item_id => $item_data) {
-                $stmt = $db->prepare("
-                    UPDATE prescription_items 
-                    SET medication_name = ?, dosage = ?, frequency = ?, 
-                        quantity = ?, duration = ?, instructions = ?
-                    WHERE id = ? AND prescription_id = ?
-                ");
-                $stmt->execute([
-                    $item_data['medication_name'],
-                    $item_data['dosage'],
-                    $item_data['frequency'],
-                    $item_data['quantity'],
-                    $item_data['duration'],
-                    $item_data['instructions'],
-                    $item_id,
-                    $prescription_id
-                ]);
-            }
+    // Check if prescription can be edited (not dispensed)
+    if ($prescription['status'] === 'dispensed' && $status !== 'dispensed') {
+        $message = 'Cannot edit a dispensed prescription!';
+        $message_type = 'error';
+    } else {
+        if ($is_admin) {
+            // Admin can update any prescription
+            $stmt = $db->prepare("
+                UPDATE prescriptions 
+                SET diagnosis = ?, notes = ?, status = ?, updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$diagnosis, $notes, $status, $prescription_id]);
+        } else {
+            // Doctor can only update their own prescriptions
+            $stmt = $db->prepare("
+                UPDATE prescriptions 
+                SET diagnosis = ?, notes = ?, status = ?, updated_at = NOW()
+                WHERE id = ? AND doctor_id = ?
+            ");
+            $stmt->execute([$diagnosis, $notes, $status, $prescription_id, $doctor_id]);
         }
         
-        $message = 'Prescription updated successfully!';
-        $message_type = 'success';
-        
-        // Refresh data
-        $stmt = $db->prepare("SELECT * FROM prescriptions WHERE id = ?");
-        $stmt->execute([$prescription_id]);
-        $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        $stmt = $db->prepare("SELECT * FROM prescription_items WHERE prescription_id = ?");
-        $stmt->execute([$prescription_id]);
-        $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        echo '<script>setTimeout(function(){ window.location.href = "view_prescription.php?id=' . $prescription_id . '&updated=1"; }, 1500);</script>';
-    } else {
-        $message = 'Failed to update prescription!';
-        $message_type = 'error';
+        if ($stmt->rowCount() > 0 || true) { // Allow even if no changes
+            // Update items if needed
+            if (isset($_POST['items']) && is_array($_POST['items'])) {
+                foreach ($_POST['items'] as $item_id => $item_data) {
+                    $stmt = $db->prepare("
+                        UPDATE prescription_items 
+                        SET medication_name = ?, dosage = ?, frequency = ?, 
+                            quantity = ?, duration = ?, instructions = ?
+                        WHERE id = ? AND prescription_id = ?
+                    ");
+                    $stmt->execute([
+                        $item_data['medication_name'] ?? '',
+                        $item_data['dosage'] ?? '',
+                        $item_data['frequency'] ?? '',
+                        (int)($item_data['quantity'] ?? 0),
+                        $item_data['duration'] ?? '',
+                        $item_data['instructions'] ?? '',
+                        $item_id,
+                        $prescription_id
+                    ]);
+                }
+            }
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'prescription_updated', ?, NOW())
+                ");
+                $stmt->execute([
+                    $doctor_id,
+                    $doctor_branch_id,
+                    "Prescription #" . $prescription['prescription_number'] . " updated" . 
+                    ($is_admin ? " (Admin)" : "") . 
+                    " | Patient: " . $prescription['patient_name']
+                ]);
+            } catch (Exception $e) {}
+            
+            $message = '✅ Prescription updated successfully!';
+            $message_type = 'success';
+            
+            // Refresh data
+            $stmt = $db->prepare("SELECT * FROM prescriptions WHERE id = ?");
+            $stmt->execute([$prescription_id]);
+            $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            $stmt = $db->prepare("SELECT * FROM prescription_items WHERE prescription_id = ?");
+            $stmt->execute([$prescription_id]);
+            $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            echo '<script>setTimeout(function(){ window.location.href = "view_prescription.php?id=' . $prescription_id . '&updated=1"; }, 1500);</script>';
+        } else {
+            $message = 'Failed to update prescription!';
+            $message_type = 'error';
+        }
     }
 }
 
@@ -158,8 +231,21 @@ $total_branches = 0;
 $pending_lab_tests = 0;
 $pending_prescriptions = 0;
 
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
+// ================================================================
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -171,6 +257,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div>
             <h1 class="page-title">
                 <i class="fas fa-edit mr-2" style="color: #0B5ED7;"></i> Edit Prescription
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Update prescription details
@@ -180,6 +269,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($prescription['patient_name']) ?>
                 </span>
+                <?php if ($is_admin): ?>
+                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                        <i class="fas fa-user-shield mr-1"></i> Admin Editing
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="flex gap-2">
@@ -223,6 +317,16 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <span class="text-xs text-gray-400">Date</span>
                         <p class="font-semibold"><?= date('M d, Y', strtotime($prescription['created_at'])) ?></p>
                     </div>
+                    <?php if ($is_admin): ?>
+                    <div>
+                        <span class="text-xs text-gray-400">Status</span>
+                        <p class="font-semibold">
+                            <span class="status-badge <?= $prescription['status'] === 'pending' ? 'badge-warning' : ($prescription['status'] === 'dispensed' ? 'badge-success' : 'badge-danger') ?>">
+                                <?= ucfirst($prescription['status'] ?? 'Pending') ?>
+                            </span>
+                        </p>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -249,9 +353,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </label>
                 <select name="status" class="form-control">
                     <option value="pending" <?= $prescription['status'] === 'pending' ? 'selected' : '' ?>>Pending</option>
-                    <option value="dispensed" <?= $prescription['status'] === 'dispensed' ? 'selected' : '' ?>>Dispensed</option>
+                    <?php if ($is_admin || $prescription['status'] !== 'dispensed'): ?>
+                        <option value="dispensed" <?= $prescription['status'] === 'dispensed' ? 'selected' : '' ?>>Dispensed</option>
+                    <?php endif; ?>
                     <option value="cancelled" <?= $prescription['status'] === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
                 </select>
+                <?php if ($prescription['status'] === 'dispensed' && !$is_admin): ?>
+                    <p class="text-xs text-red-500 mt-1"><i class="fas fa-info-circle"></i> Cannot change status - already dispensed</p>
+                <?php endif; ?>
             </div>
 
             <!-- Medication Items -->
@@ -268,8 +377,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
                                 <div>
                                     <label class="text-xs text-gray-400">Medication</label>
-                                    <input type="text" name="items[<?= $item['id'] ?>][medication_name]" 
-                                           class="form-control" value="<?= htmlspecialchars($item['medication_name'] ?? '') ?>">
+                                    <?php if ($prescription['status'] === 'dispensed'): ?>
+                                        <input type="text" name="items[<?= $item['id'] ?>][medication_name]" 
+                                               class="form-control" value="<?= htmlspecialchars($item['medication_name'] ?? '') ?>" readonly style="background:var(--gray-100);">
+                                    <?php else: ?>
+                                        <input type="text" name="items[<?= $item['id'] ?>][medication_name]" 
+                                               class="form-control" value="<?= htmlspecialchars($item['medication_name'] ?? '') ?>">
+                                    <?php endif; ?>
                                 </div>
                                 <div>
                                     <label class="text-xs text-gray-400">Dosage</label>
@@ -284,7 +398,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <div>
                                     <label class="text-xs text-gray-400">Quantity</label>
                                     <input type="number" name="items[<?= $item['id'] ?>][quantity]" 
-                                           class="form-control" value="<?= $item['quantity'] ?? '' ?>">
+                                           class="form-control" value="<?= $item['quantity'] ?? '' ?>" min="0">
                                 </div>
                                 <div>
                                     <label class="text-xs text-gray-400">Duration</label>
@@ -306,7 +420,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 
             <!-- Form Actions -->
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">
+                <button type="submit" class="btn btn-primary" <?= $prescription['status'] === 'dispensed' && !$is_admin ? 'disabled' : '' ?>>
                     <i class="fas fa-save"></i> Update Prescription
                 </button>
                 <a href="view_prescription.php?id=<?= $prescription_id ?>" class="btn btn-outline">
@@ -323,6 +437,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Edit Prescription
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -334,6 +452,56 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- STYLES -->
 <!-- ================================================================ -->
 <style>
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 24px 28px;
+        min-height: calc(100vh - 68px);
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: all 0.3s ease;
+    }
+    
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 3px solid var(--primary);
+    }
+    
+    .page-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    
+    .page-title i { color: var(--primary); }
+    .page-badge {
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: var(--primary-bg);
+        color: var(--primary);
+        padding: 2px 14px;
+        border-radius: 20px;
+    }
+    .page-subtitle {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        margin-top: 4px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+    
     .edit-card {
         background: var(--bg-card);
         border-radius: 20px;
@@ -387,6 +555,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
     }
     
+    .form-control:disabled,
+    .form-control[readonly] {
+        opacity: 0.7;
+        cursor: not-allowed;
+        background: var(--gray-100);
+    }
+    
     .item-row {
         background: var(--bg-body);
         border-radius: 12px;
@@ -423,6 +598,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         min-height: 44px;
     }
     
+    .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none !important;
+    }
+    
     .btn-primary {
         background: linear-gradient(135deg, var(--primary), var(--primary-dark));
         color: white;
@@ -430,7 +611,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         flex: 1;
     }
     
-    .btn-primary:hover {
+    .btn-primary:hover:not(:disabled) {
         transform: translateY(-2px);
         box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4);
     }
@@ -454,10 +635,59 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         min-height: 34px;
     }
     
+    .status-badge {
+        display: inline-block;
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 3px 14px;
+        border-radius: 20px;
+        line-height: 1.4;
+        text-align: center;
+        min-width: 60px;
+        border: 1px solid transparent;
+    }
+    
+    .badge-warning {
+        background: #FEF3C7;
+        color: #D97706;
+        border-color: #FDE68A;
+    }
+    
+    .badge-success {
+        background: #D1FAE5;
+        color: #059669;
+        border-color: #A7F3D0;
+    }
+    
+    .badge-danger {
+        background: #FEE2E2;
+        color: #DC2626;
+        border-color: #FCA5A5;
+    }
+    
+    [data-theme="dark"] .badge-warning {
+        background: #3D2E0A;
+        color: #FBBF24;
+        border-color: #78350F;
+    }
+    
+    [data-theme="dark"] .badge-success {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #065F46;
+    }
+    
+    [data-theme="dark"] .badge-danger {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: #7F1D1D;
+    }
+    
     .text-xs { font-size: 0.75rem; }
     .text-sm { font-size: 0.875rem; }
     .text-gray-400 { color: var(--text-muted); }
     .text-gray-500 { color: var(--text-secondary); }
+    .text-red-500 { color: #EF4444; }
     .text-purple-600 { color: #7C3AED; }
     .text-blue-600 { color: var(--primary); }
     .font-semibold { font-weight: 600; }
@@ -474,6 +704,33 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .flex-wrap { flex-wrap: wrap; }
     .gap-4 { gap: 1rem; }
     .gap-2 { gap: 0.5rem; }
+    .gap-3 { gap: 0.75rem; }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    
+    .bg-green-100 { background: #D1FAE5; }
+    .text-green-700 { color: #059669; }
+    .border-green-200 { border-color: #A7F3D0; }
+    .bg-red-100 { background: #FEE2E2; }
+    .text-red-700 { color: #DC2626; }
+    .border-red-200 { border-color: #FCA5A5; }
+    .bg-blue-100 { background: #E8F0FE; }
+    .text-blue-700 { color: #0B5ED7; }
+    .border-blue-200 { border-color: #BFDBFE; }
+    .bg-green-100 { background: #D1FAE5; }
+    .text-green-700 { color: #059669; }
+    .border-green-200 { border-color: #A7F3D0; }
+    .bg-red-100 { background: #FEE2E2; }
+    .text-red-700 { color: #DC2626; }
+    .border-red-200 { border-color: #FCA5A5; }
     
     [data-theme="dark"] .bg-green-100 { background: #1A3A2A; }
     [data-theme="dark"] .text-green-700 { color: #34D399; }
@@ -481,6 +738,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     [data-theme="dark"] .bg-red-100 { background: #3A1A1A; }
     [data-theme="dark"] .text-red-700 { color: #F87171; }
     [data-theme="dark"] .border-red-200 { border-color: #3A1A1A; }
+    [data-theme="dark"] .bg-blue-100 { background: #1E3A5F; }
+    [data-theme="dark"] .text-blue-700 { color: #6EA8FE; }
+    [data-theme="dark"] .border-blue-200 { border-color: #1E3A5F; }
+    
+    @media (max-width: 1024px) {
+        .main-content { margin-left: 0; padding: 16px; }
+    }
     
     @media (max-width: 768px) {
         .edit-card { padding: 18px 16px; }
@@ -489,6 +753,18 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .form-actions { flex-direction: column; }
         .form-actions .btn { width: 100%; justify-content: center; }
         .btn-primary { flex: none; }
+        .page-title { font-size: 1.2rem; }
+        .page-header { flex-direction: column; }
+        .page-header .btn-sm { width: 100%; justify-content: center; }
+        .info-bar .flex { flex-direction: column; gap: 8px; }
+    }
+    
+    @media (max-width: 480px) {
+        .main-content { padding: 10px; }
+        .edit-card { padding: 12px; }
+        .item-row { padding: 10px; }
+        .form-control { font-size: 0.8rem; padding: 8px 10px; }
+        .page-subtitle { flex-direction: column; align-items: flex-start; gap: 4px; }
     }
 </style>
 

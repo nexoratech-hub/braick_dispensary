@@ -4,31 +4,47 @@
 // SERVICES MANAGEMENT - SINGLE PAGE WITH TABS
 // Procedures, Tools, Lab Tests
 // WITH BRANCH FILTERING - NO EDIT/DELETE BUTTONS
+// WITH DOCTOR NAME ON EACH SERVICE
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET BRANCH NAME
@@ -77,7 +93,7 @@ function generateProcedureCode($db, $branch_id) {
 }
 
 // ================================================================
-// ADD PROCEDURE - NO CODE INPUT (AUTO-GENERATED)
+// ADD PROCEDURE - WITH CREATED_BY (DOCTOR NAME)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_procedure'])) {
     $procedure_name = trim($_POST['procedure_name'] ?? '');
@@ -100,6 +116,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_procedure'])) {
                 ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NOW())
             ");
             $stmt->execute([$procedure_name, $procedure_code, $category, $doctor_branch_id, $price, $description, $doctor_id]);
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'procedure_added', ?, NOW())
+                ");
+                $stmt->execute([
+                    $doctor_id,
+                    $doctor_branch_id,
+                    "Added procedure: $procedure_name (Code: $procedure_code) by " . $doctor_name
+                ]);
+            } catch (Exception $e) {}
+            
             $message = "✅ Procedure added successfully! Code: " . $procedure_code;
             $message_type = 'success';
         } catch (Exception $e) {
@@ -110,7 +140,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_procedure'])) {
 }
 
 // ================================================================
-// ADD TOOL - NO PROCEDURE NAME (ONLY TOOL NAME + PRICE)
+// ADD TOOL - WITH CREATED_BY (DOCTOR NAME)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_tool'])) {
     $tool_name = trim($_POST['tool_name'] ?? '');
@@ -123,10 +153,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_tool'])) {
         try {
             $stmt = $db->prepare("
                 INSERT INTO procedure_tools (
-                    tool_name, branch_id, price, is_active, created_at
-                ) VALUES (?, ?, ?, 1, NOW())
+                    tool_name, branch_id, price, is_active, created_by, created_at
+                ) VALUES (?, ?, ?, 1, ?, NOW())
             ");
-            $stmt->execute([$tool_name, $doctor_branch_id, $price]);
+            $stmt->execute([$tool_name, $doctor_branch_id, $price, $doctor_id]);
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'tool_added', ?, NOW())
+                ");
+                $stmt->execute([
+                    $doctor_id,
+                    $doctor_branch_id,
+                    "Added tool: $tool_name by " . $doctor_name
+                ]);
+            } catch (Exception $e) {}
+            
             $message = "✅ Tool added successfully!";
             $message_type = 'success';
         } catch (Exception $e) {
@@ -137,7 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_tool'])) {
 }
 
 // ================================================================
-// ADD LAB TEST - WITH CATEGORY DROPDOWN
+// ADD LAB TEST - WITH CREATED_BY (DOCTOR NAME)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
     $test_name = trim($_POST['test_name'] ?? '');
@@ -151,21 +195,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
         try {
             $stmt = $db->prepare("
                 INSERT INTO lab_tests_catalog (
-                    test_name, category, branch_id, price, is_active, created_at
-                ) VALUES (?, ?, ?, ?, 1, NOW())
+                    test_name, category, branch_id, price, is_active, created_by, created_at
+                ) VALUES (?, ?, ?, ?, 1, ?, NOW())
             ");
-            $stmt->execute([$test_name, $category, $doctor_branch_id, $price]);
+            $stmt->execute([$test_name, $category, $doctor_branch_id, $price, $doctor_id]);
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'lab_test_added', ?, NOW())
+                ");
+                $stmt->execute([
+                    $doctor_id,
+                    $doctor_branch_id,
+                    "Added lab test: $test_name by " . $doctor_name
+                ]);
+            } catch (Exception $e) {}
+            
             $message = "✅ Lab test added successfully!";
             $message_type = 'success';
         } catch (Exception $e) {
-            // If branch_id column doesn't exist, try without it
+            // If branch_id or created_by column doesn't exist, try without it
             try {
                 $stmt = $db->prepare("
                     INSERT INTO lab_tests_catalog (
-                        test_name, category, price, is_active, created_at
-                    ) VALUES (?, ?, ?, 1, NOW())
+                        test_name, category, price, is_active, created_by, created_at
+                    ) VALUES (?, ?, ?, 1, ?, NOW())
                 ");
-                $stmt->execute([$test_name, $category, $price]);
+                $stmt->execute([$test_name, $category, $price, $doctor_id]);
+                
+                // Log activity
+                try {
+                    $stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                        VALUES (?, ?, 'lab_test_added', ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $doctor_id,
+                        $doctor_branch_id,
+                        "Added lab test: $test_name by " . $doctor_name
+                    ]);
+                } catch (Exception $e2) {}
+                
                 $message = "✅ Lab test added successfully!";
                 $message_type = 'success';
             } catch (Exception $e2) {
@@ -177,40 +249,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
 }
 
 // ================================================================
-// FETCH DATA - WITH BRANCH FILTERING
+// FETCH DATA - WITH BRANCH FILTERING AND DOCTOR NAMES
 // ================================================================
 
-// Procedures (only for this branch)
+// Procedures (only for this branch) with doctor name
 $procedures = [];
 try {
     $stmt = $db->prepare("
-        SELECT * FROM procedures 
-        WHERE branch_id = ? OR branch_id IS NULL 
-        ORDER BY procedure_name
+        SELECT p.*, u.full_name as created_by_name 
+        FROM procedures p
+        LEFT JOIN users u ON p.created_by = u.id
+        WHERE p.branch_id = ? OR p.branch_id IS NULL 
+        ORDER BY p.procedure_name
     ");
     $stmt->execute([$doctor_branch_id]);
     $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $procedures = []; }
 
-// Tools (only for this branch) - now without procedure_name requirement
+// Tools (only for this branch) with doctor name
 $tools = [];
 try {
     $stmt = $db->prepare("
-        SELECT * FROM procedure_tools 
-        WHERE branch_id = ? OR branch_id IS NULL 
-        ORDER BY tool_name
+        SELECT t.*, u.full_name as created_by_name 
+        FROM procedure_tools t
+        LEFT JOIN users u ON t.created_by = u.id
+        WHERE t.branch_id = ? OR t.branch_id IS NULL 
+        ORDER BY t.tool_name
     ");
     $stmt->execute([$doctor_branch_id]);
     $tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $tools = []; }
 
-// Lab Tests (only for this branch)
+// Lab Tests (only for this branch) with doctor name
 $lab_tests = [];
 try {
     $stmt = $db->prepare("
-        SELECT * FROM lab_tests_catalog 
-        WHERE branch_id = ? OR branch_id IS NULL 
-        ORDER BY test_name
+        SELECT l.*, u.full_name as created_by_name 
+        FROM lab_tests_catalog l
+        LEFT JOIN users u ON l.created_by = u.id
+        WHERE l.branch_id = ? OR l.branch_id IS NULL 
+        ORDER BY l.test_name
     ");
     $stmt->execute([$doctor_branch_id]);
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -235,18 +313,28 @@ $lab_categories = [
 ];
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Services Management - Braick Dispensary</title>
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
@@ -351,6 +439,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             background: #1E3A5F;
             color: var(--primary-light);
             border-color: var(--primary);
+        }
+        
+        .admin-badge {
+            display: inline-block;
+            background: #FEE2E2;
+            color: #DC2626;
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border: 1px solid #DC2626;
+        }
+        [data-theme="dark"] .admin-badge {
+            background: #3A1A1A;
+            color: #F87171;
+            border-color: #F87171;
         }
         
         .stats-grid {
@@ -534,6 +638,21 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         [data-theme="dark"] tr:nth-child(even) td {
             background: var(--gray-750);
+        }
+        
+        .doctor-name-tag {
+            display: inline-block;
+            font-size: 0.65rem;
+            color: var(--primary);
+            background: var(--primary-bg);
+            padding: 1px 10px;
+            border-radius: 12px;
+            border: 1px solid var(--primary-light);
+        }
+        [data-theme="dark"] .doctor-name-tag {
+            background: #1E3A5F;
+            color: var(--primary-light);
+            border-color: var(--primary);
         }
         
         /* VIEW BUTTON */
@@ -747,6 +866,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .tabs { flex-direction: column; }
             .tab-btn { flex: none; }
             .table-container { overflow-x: auto; }
+            .page-header { flex-direction: column; align-items: flex-start; }
         }
     </style>
 </head>
@@ -759,12 +879,23 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-cog"></i> Services Management
+                <?php if ($is_admin): ?>
+                    <span class="admin-badge"><i class="fas fa-user-shield"></i> Admin</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Manage <strong>Procedures</strong>, <strong>Tools</strong> and <strong>Lab Tests</strong>
                 <span class="branch-badge">
                     <i class="fas fa-store"></i> <?= htmlspecialchars($branch_name) ?>
                 </span>
+                <span style="font-size:0.75rem;color:var(--gray-400);">
+                    <i class="fas fa-user-md"></i> <?= htmlspecialchars($doctor_name) ?>
+                </span>
+                <?php if ($is_admin): ?>
+                    <span style="font-size:0.75rem;color:#DC2626;">
+                        <i class="fas fa-user-shield"></i> Admin Mode - Can manage all services
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -836,11 +967,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <thead>
                         <tr>
                             <th style="width:5%;">#</th>
-                            <th style="width:30%;">Procedure Name</th>
-                            <th style="width:15%;">Code</th>
-                            <th style="width:20%;">Category</th>
-                            <th style="width:15%;text-align:right;">Price (TSh)</th>
-                            <th style="width:10%;text-align:center;">Status</th>
+                            <th style="width:20%;">Procedure Name</th>
+                            <th style="width:12%;">Code</th>
+                            <th style="width:15%;">Category</th>
+                            <th style="width:12%;text-align:right;">Price (TSh)</th>
+                            <th style="width:12%;text-align:center;">Status</th>
+                            <th style="width:14%;">Added By</th>
                             <th style="width:5%;text-align:center;">View</th>
                         </tr>
                     </thead>
@@ -857,6 +989,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <td style="text-align:center;">
                                     <span class="badge <?= $proc['is_active'] ? 'badge-success' : 'badge-danger' ?>">
                                         <?= $proc['is_active'] ? 'Active' : 'Inactive' ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="doctor-name-tag">
+                                        <i class="fas fa-user-md"></i> 
+                                        <?= htmlspecialchars($proc['created_by_name'] ?? 'Unknown') ?>
                                     </span>
                                 </td>
                                 <td style="text-align:center;">
@@ -894,9 +1032,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <thead>
                         <tr>
                             <th style="width:5%;">#</th>
-                            <th style="width:40%;">Tool Name</th>
-                            <th style="width:25%;text-align:right;">Price (TSh)</th>
-                            <th style="width:15%;text-align:center;">Status</th>
+                            <th style="width:30%;">Tool Name</th>
+                            <th style="width:20%;text-align:right;">Price (TSh)</th>
+                            <th style="width:12%;text-align:center;">Status</th>
+                            <th style="width:18%;">Added By</th>
                             <th style="width:15%;text-align:center;">View</th>
                         </tr>
                     </thead>
@@ -911,6 +1050,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <td style="text-align:center;">
                                     <span class="badge <?= $tool['is_active'] ? 'badge-success' : 'badge-danger' ?>">
                                         <?= $tool['is_active'] ? 'Active' : 'Inactive' ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="doctor-name-tag">
+                                        <i class="fas fa-user-md"></i> 
+                                        <?= htmlspecialchars($tool['created_by_name'] ?? 'Unknown') ?>
                                     </span>
                                 </td>
                                 <td style="text-align:center;">
@@ -948,11 +1093,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <thead>
                         <tr>
                             <th style="width:5%;">#</th>
-                            <th style="width:35%;">Test Name</th>
-                            <th style="width:25%;">Category</th>
-                            <th style="width:20%;text-align:right;">Price (TSh)</th>
+                            <th style="width:25%;">Test Name</th>
+                            <th style="width:18%;">Category</th>
+                            <th style="width:15%;text-align:right;">Price (TSh)</th>
                             <th style="width:10%;text-align:center;">Status</th>
-                            <th style="width:5%;text-align:center;">View</th>
+                            <th style="width:17%;">Added By</th>
+                            <th style="width:10%;text-align:center;">View</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -973,6 +1119,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <td style="text-align:center;">
                                     <span class="badge <?= $test['is_active'] ? 'badge-success' : 'badge-danger' ?>">
                                         <?= $test['is_active'] ? 'Active' : 'Inactive' ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="doctor-name-tag">
+                                        <i class="fas fa-user-md"></i> 
+                                        <?= htmlspecialchars($test['created_by_name'] ?? 'Unknown') ?>
                                     </span>
                                 </td>
                                 <td style="text-align:center;">
@@ -998,7 +1150,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <p>
             <span style="color:var(--primary);font-weight:600;">Braick Dispensary</span> 
             Services Management &copy; <?= date('Y') ?> | 
-            Branch: <?= htmlspecialchars($branch_name) ?>
+            Branch: <?= htmlspecialchars($branch_name) ?> |
+            <?php if ($is_admin): ?>
+                <span style="color:#DC2626;">👑 Admin Mode</span> |
+            <?php endif; ?>
+            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
         </p>
     </footer>
 </main>
@@ -1010,6 +1166,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <div class="modal">
         <h3 class="modal-title">
             <i class="fas fa-syringe"></i> Add Procedure
+            <span style="font-size:0.7rem;font-weight:400;color:var(--gray-500);margin-left:8px;">
+                by <?= htmlspecialchars($doctor_name) ?>
+            </span>
         </h3>
         <form method="POST">
             <div class="form-group">
@@ -1032,6 +1191,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <i class="fas fa-info-circle"></i> 
                 Procedure code will be generated automatically: <strong id="previewCode">PROC-<?= date('Y') ?>-001</strong>
             </div>
+            <div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:12px;">
+                <i class="fas fa-user-md"></i> Will be added by: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+            </div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-danger" onclick="closeModal('procedureModal')">Cancel</button>
                 <button type="submit" name="add_procedure" class="btn btn-primary">Add Procedure</button>
@@ -1047,6 +1209,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <div class="modal">
         <h3 class="modal-title">
             <i class="fas fa-tools"></i> Add Tool
+            <span style="font-size:0.7rem;font-weight:400;color:var(--gray-500);margin-left:8px;">
+                by <?= htmlspecialchars($doctor_name) ?>
+            </span>
         </h3>
         <form method="POST">
             <div class="form-group">
@@ -1056,6 +1221,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="form-group">
                 <label class="form-label">Price (TSh) <span style="color:red;">*</span></label>
                 <input type="number" name="price" class="form-control" required min="0" step="100" placeholder="e.g. 500">
+            </div>
+            <div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:12px;">
+                <i class="fas fa-user-md"></i> Will be added by: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             </div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-danger" onclick="closeModal('toolModal')">Cancel</button>
@@ -1072,6 +1240,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <div class="modal">
         <h3 class="modal-title">
             <i class="fas fa-microscope"></i> Add Lab Test
+            <span style="font-size:0.7rem;font-weight:400;color:var(--gray-500);margin-left:8px;">
+                by <?= htmlspecialchars($doctor_name) ?>
+            </span>
         </h3>
         <form method="POST">
             <div class="form-group">
@@ -1095,6 +1266,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="form-group">
                 <label class="form-label">Price (TSh) <span style="color:red;">*</span></label>
                 <input type="number" name="price" class="form-control" required min="0" step="100" placeholder="e.g. 5000">
+            </div>
+            <div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:12px;">
+                <i class="fas fa-user-md"></i> Will be added by: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             </div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-danger" onclick="closeModal('labTestModal')">Cancel</button>
@@ -1170,7 +1344,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     document.addEventListener('DOMContentLoaded', function() {
         var select = document.getElementById('labCategorySelect');
         var manual = document.getElementById('labCategoryManual');
-        var nameField = document.querySelector('input[name="test_name"]');
         
         if (select && manual) {
             select.addEventListener('change', function() {
@@ -1182,10 +1355,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     manual.style.display = 'none';
                     manual.required = false;
                     manual.value = '';
-                    // If a category is selected, update the hidden input
-                    if (this.value) {
-                        // We'll handle this in form submission
-                    }
                 }
             });
         }
@@ -1217,6 +1386,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <div style="font-size:0.7rem;color:var(--gray-500);">Description</div>
                 <div>${escapeHtml(data.description || 'No description')}</div>
             </div>
+            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:0.7rem;color:var(--gray-500);">Added By</div>
+                <div><span class="doctor-name-tag"><i class="fas fa-user-md"></i> ${escapeHtml(data.created_by_name || 'Unknown')}</span></div>
+            </div>
             <div style="padding:8px 0;">
                 <div style="font-size:0.7rem;color:var(--gray-500);">Status</div>
                 <div><span class="badge ${data.is_active ? 'badge-success' : 'badge-danger'}">${data.is_active ? 'Active' : 'Inactive'}</span></div>
@@ -1235,6 +1408,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
                 <div style="font-size:0.7rem;color:var(--gray-500);">Price</div>
                 <div style="font-size:1.2rem;font-weight:700;color:var(--success);">TSh ${Number(data.price).toLocaleString()}</div>
+            </div>
+            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:0.7rem;color:var(--gray-500);">Added By</div>
+                <div><span class="doctor-name-tag"><i class="fas fa-user-md"></i> ${escapeHtml(data.created_by_name || 'Unknown')}</span></div>
             </div>
             <div style="padding:8px 0;">
                 <div style="font-size:0.7rem;color:var(--gray-500);">Status</div>
@@ -1259,6 +1436,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <div style="font-size:0.7rem;color:var(--gray-500);">Price</div>
                 <div style="font-size:1.2rem;font-weight:700;color:var(--success);">TSh ${Number(data.price).toLocaleString()}</div>
             </div>
+            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
+                <div style="font-size:0.7rem;color:var(--gray-500);">Added By</div>
+                <div><span class="doctor-name-tag"><i class="fas fa-user-md"></i> ${escapeHtml(data.created_by_name || 'Unknown')}</span></div>
+            </div>
             <div style="padding:8px 0;">
                 <div style="font-size:0.7rem;color:var(--gray-500);">Status</div>
                 <div><span class="badge ${data.is_active ? 'badge-success' : 'badge-danger'}">${data.is_active ? 'Active' : 'Inactive'}</span></div>
@@ -1280,25 +1461,31 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     document.addEventListener('DOMContentLoaded', function() {
         var nameField = document.querySelector('input[name="procedure_name"]');
         if (nameField) {
-            // Show preview code
             var count = <?= count($procedures) ?>;
             var nextNum = String(count + 1).padStart(3, '0');
             document.getElementById('previewCode').textContent = 'PROC-<?= date('Y') ?>-' + nextNum;
         }
     });
     
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+    
     console.log('%c⚙️ Services Management - ' + '<?= htmlspecialchars($branch_name) ?>', 'font-size:16px; font-weight:bold; color:#7C3AED;');
+    console.log('%c👤 User: <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Can manage all services', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c📋 Procedures: <?= count($procedures) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c🔧 Tools: <?= count($tools) ?>', 'font-size:12px; color:#D97706;');
     console.log('%c🧪 Lab Tests: <?= count($lab_tests) ?>', 'font-size:12px; color:#0D9488;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $doctor_branch_id ?>)', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c✅ Changes applied:', 'font-size:12px; color:#34D399;');
-    console.log('%c   - Procedure Code auto-generated', 'font-size:11px; color:#34D399;');
-    console.log('%c   - Tools: Only Tool Name + Price (no Procedure Name)', 'font-size:11px; color:#34D399;');
-    console.log('%c   - Lab Tests: Category dropdown with manual option', 'font-size:11px; color:#34D399;');
-    console.log('%c   - Table headers: Blue background', 'font-size:11px; color:#34D399;');
-    console.log('%c   - View button added (no edit/delete)', 'font-size:11px; color:#34D399;');
-    console.log('%c   - Services filtered by branch', 'font-size:11px; color:#34D399;');
+    console.log('%c✅ Each service shows the doctor who added it', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Table headers: Blue background', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ View button added (no edit/delete)', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

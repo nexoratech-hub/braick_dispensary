@@ -2,29 +2,29 @@
 // ================================================================
 // FILE: frontend/pages/doctor/view_prescription.php
 // DOCTOR - VIEW SINGLE PRESCRIPTION (BEAUTIFUL CSS)
+// Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // GET PRESCRIPTION ID
@@ -32,7 +32,7 @@ $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $prescription_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if ($prescription_id <= 0) {
-    header('Location: view_prescriptions.php');
+    header('Location: view_prescriptions.php?error=invalid_id');
     exit;
 }
 
@@ -45,47 +45,103 @@ if (file_exists($db_path)) {
 } else {
     die("❌ Database file not found at: " . $db_path);
 }
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
-// GET PRESCRIPTION DETAILS
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        pr.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_code,
-        p.phone,
-        p.email,
-        p.date_of_birth,
-        p.gender,
-        u.full_name as doctor_name,
-        u.specialty as doctor_specialty,
-        v.visit_number,
-        v.diagnosis as visit_diagnosis
-    FROM prescriptions pr
-    JOIN patients p ON pr.patient_id = p.id
-    JOIN users u ON pr.doctor_id = u.id
-    LEFT JOIN visits v ON pr.visit_id = v.id
-    WHERE pr.id = ? AND pr.doctor_id = ?
-");
-$stmt->execute([$prescription_id, $doctor_id]);
-$prescription = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    
+} catch (Exception $e) {
+    error_log("view_prescription verification error: " . $e->getMessage());
+}
 
-if (!$prescription) {
-    header('Location: view_prescriptions.php?error=not_found');
+// ================================================================
+// GET PRESCRIPTION DETAILS - Verify doctor has access
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            pr.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            p.phone,
+            p.email,
+            p.date_of_birth,
+            p.gender,
+            u.full_name as doctor_name,
+            u.specialty as doctor_specialty,
+            v.visit_number,
+            v.diagnosis as visit_diagnosis
+        FROM prescriptions pr
+        JOIN patients p ON pr.patient_id = p.id
+        JOIN users u ON pr.doctor_id = u.id
+        LEFT JOIN visits v ON pr.visit_id = v.id
+        WHERE pr.id = ? AND pr.doctor_id = ?
+    ");
+    $stmt->execute([$prescription_id, $doctor_id]);
+    $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$prescription) {
+        // Check if prescription exists but belongs to another doctor
+        $stmt = $db->prepare("SELECT id, doctor_id FROM prescriptions WHERE id = ?");
+        $stmt->execute([$prescription_id]);
+        $prescription_check = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($prescription_check) {
+            header('Location: view_prescriptions.php?error=access_denied');
+            exit;
+        }
+        header('Location: view_prescriptions.php?error=not_found');
+        exit;
+    }
+} catch (Exception $e) {
+    error_log("Prescription fetch error: " . $e->getMessage());
+    header('Location: view_prescriptions.php?error=database_error');
     exit;
 }
 
 // ================================================================
 // GET PRESCRIPTION ITEMS
 // ================================================================
-$stmt = $db->prepare("
-    SELECT * FROM prescription_items 
-    WHERE prescription_id = ?
-");
-$stmt->execute([$prescription_id]);
-$items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$items = [];
+try {
+    $stmt = $db->prepare("
+        SELECT * FROM prescription_items 
+        WHERE prescription_id = ?
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$prescription_id]);
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $items = [];
+}
 
 // ================================================================
 // GET STATUS BADGE CLASS
@@ -126,16 +182,6 @@ function calculateAge($dob) {
 }
 
 // ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = 0;
-
-// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
@@ -162,6 +208,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </span>
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($prescription['patient_name']) ?>
+                </span>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-user-md mr-1"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
                 </span>
             </p>
         </div>
@@ -390,7 +439,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="text-gray-300 mx-2">|</span>
             Prescription Details
             <span class="text-gray-300 mx-2">|</span>
-            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -776,6 +825,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         cursor: pointer;
         border: none;
         text-decoration: none;
+        min-height: 36px;
     }
     
     .btn-outline {
@@ -794,6 +844,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         padding: 4px 10px;
         font-size: 0.7rem;
         border-radius: 6px;
+        min-height: 30px;
     }
     
     /* ================================================================
@@ -802,6 +853,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .page-header {
         border-bottom: 3px solid var(--primary);
         padding-bottom: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
     }
     
     .page-header .page-title {
@@ -845,35 +901,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-weight: 600;
     }
     
-    /* ================================================================
-       UTILITIES
-       ================================================================ */
-    .text-xs { font-size: 0.75rem; }
-    .text-sm { font-size: 0.875rem; }
-    .text-gray-400 { color: var(--text-muted); }
-    .text-gray-500 { color: var(--text-secondary); }
-    .text-blue-600 { color: var(--primary); }
-    .text-green-600 { color: #059669; }
-    .text-green-500 { color: #059669; }
-    .text-red-500 { color: #EF4444; }
-    .font-semibold { font-weight: 600; }
-    .font-bold { font-weight: 700; }
-    .font-mono { font-family: monospace; }
-    .gap-2 { gap: 0.5rem; }
-    .gap-3 { gap: 0.75rem; }
-    .gap-4 { gap: 1rem; }
-    .gap-6 { gap: 1.5rem; }
-    .ml-2 { margin-left: 0.5rem; }
-    .mr-1 { margin-right: 0.25rem; }
-    .mr-2 { margin-right: 0.5rem; }
-    .mb-6 { margin-bottom: 1.5rem; }
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .items-center { align-items: center; }
-    .items-start { align-items: flex-start; }
-    .justify-between { justify-content: space-between; }
-    .text-center { text-align: center; }
-    .text-right { text-align: right; }
+    .text-gray-300 { color: #D1D5DB; }
+    .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
     
     /* ================================================================
        DARK MODE
@@ -1099,9 +1128,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     console.log('%c💊 Prescription Details - <?= htmlspecialchars($prescription['prescription_number']) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c📋 Patient: <?= htmlspecialchars($prescription['patient_name']) ?>', 'font-size:12px; color:#059669;');
     console.log('%c💊 Items: <?= count($items) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c📋 Status: <?= ucfirst($prescription['status'] ?? 'Pending') ?>', 'font-size:12px; color:#64748B;');
+    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -8,42 +8,55 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// FORCE SESSION - Doctor Only
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database and helpers
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
-$db = Database::getInstance()->getConnection();
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
 
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'];
-$selected_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+$doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
-// GET DOCTOR PROFILE PICTURE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-$profile_pic = '';
-$stmt = $db->prepare("SELECT profile_pic FROM users WHERE id = ? AND role = 'doctor'");
-$stmt->execute([$doctor_id]);
-$user_data = $stmt->fetch(PDO::FETCH_ASSOC);
-if ($user_data && !empty($user_data['profile_pic'])) {
-    $profile_pic = $user_data['profile_pic'];
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
 }
-$_SESSION['profile_pic'] = $profile_pic;
 
 // ================================================================
 // VARIABLES
@@ -55,12 +68,38 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $offset = ($page - 1) * $per_page;
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
+$error = isset($_GET['error']) ? trim($_GET['error']) : '';
+
+// Show error message
+if ($error === 'invalid_patient') {
+    $message = '⚠️ Invalid patient selected. Please try again.';
+    $message_type = 'error';
+} elseif ($error === 'patient_not_found') {
+    $message = '⚠️ Patient not found.';
+    $message_type = 'error';
+} elseif ($error === 'database_error') {
+    $message = '⚠️ Database error occurred. Please try again.';
+    $message_type = 'error';
+}
+
+// Show success messages
+if (isset($_GET['success']) && $_GET['success'] === 'referral') {
+    $message = '✅ Patient referred successfully!';
+    $message_type = 'success';
+}
 
 // ================================================================
 // GET DOCTOR'S PATIENTS
 // ================================================================
-$where_clause = " WHERE p.assigned_doctor_id = ?";
-$params = [$doctor_id];
+if ($is_admin) {
+    // Admin can see all patients
+    $where_clause = " WHERE 1=1";
+    $params = [];
+} else {
+    // Doctor can only see their patients
+    $where_clause = " WHERE p.assigned_doctor_id = ?";
+    $params = [$doctor_id];
+}
 
 // Search filter
 if (!empty($search)) {
@@ -107,9 +146,9 @@ $sql = "
     ORDER BY p.created_at DESC
     LIMIT ? OFFSET ?
 ";
-$stmt = $db->prepare($sql);
 $params[] = $per_page;
 $params[] = $offset;
+$stmt = $db->prepare($sql);
 $stmt->execute($params);
 $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -117,35 +156,60 @@ $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // GET STATISTICS
 // ================================================================
 
-// Total patients assigned to this doctor
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE assigned_doctor_id = ?");
-$stmt->execute([$doctor_id]);
-$total_assigned = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+if ($is_admin) {
+    // Admin stats - all patients
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients");
+    $stmt->execute();
+    $total_assigned = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Active patients (with at least one visit)
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT p.id) as total 
-    FROM patients p 
-    INNER JOIN visits v ON p.id = v.patient_id 
-    WHERE p.assigned_doctor_id = ?
-");
-$stmt->execute([$doctor_id]);
-$active_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT p.id) as total 
+        FROM patients p 
+        INNER JOIN visits v ON p.id = v.patient_id 
+    ");
+    $stmt->execute();
+    $active_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Patients with pending visits
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT p.id) as total 
-    FROM patients p 
-    INNER JOIN visits v ON p.id = v.patient_id 
-    WHERE p.assigned_doctor_id = ? AND v.status IN ('pending', 'assigned', 'with_doctor')
-");
-$stmt->execute([$doctor_id]);
-$pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT p.id) as total 
+        FROM patients p 
+        INNER JOIN visits v ON p.id = v.patient_id 
+        WHERE v.status IN ('pending', 'assigned', 'with_doctor')
+    ");
+    $stmt->execute();
+    $pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Total visits for this doctor
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE doctor_id = ?");
-$stmt->execute([$doctor_id]);
-$total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits");
+    $stmt->execute();
+    $total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} else {
+    // Doctor stats - only their patients
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE assigned_doctor_id = ?");
+    $stmt->execute([$doctor_id]);
+    $total_assigned = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT p.id) as total 
+        FROM patients p 
+        INNER JOIN visits v ON p.id = v.patient_id 
+        WHERE p.assigned_doctor_id = ?
+    ");
+    $stmt->execute([$doctor_id]);
+    $active_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT p.id) as total 
+        FROM patients p 
+        INNER JOIN visits v ON p.id = v.patient_id 
+        WHERE p.assigned_doctor_id = ? AND v.status IN ('pending', 'assigned', 'with_doctor')
+    ");
+    $stmt->execute([$doctor_id]);
+    $pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE doctor_id = ?");
+    $stmt->execute([$doctor_id]);
+    $total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+}
 
 // ================================================================
 // LOGO PATH
@@ -153,10 +217,10 @@ $total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
-include_once '../../components/doctor_header.php';
-include_once '../../components/doctor_sidebar.php';
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -861,81 +925,35 @@ include_once '../../components/doctor_sidebar.php';
     [data-theme="dark"] .toast-custom {
         box-shadow: 0 8px 30px rgba(0,0,0,0.4);
     }
+    
+    /* Alert Styles */
+    .alert {
+        padding: 12px 16px;
+        border-radius: 10px;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.9rem;
+        border: 1px solid transparent;
+        animation: slideDown 0.3s ease;
+    }
+    
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .alert-success { background: #D1FAE5; color: #059669; border-color: #059669; }
+    .alert-error { background: #FEE2E2; color: #DC2626; border-color: #DC2626; }
+    .alert-warning { background: #FEF3C7; color: #D97706; border-color: #D97706; }
+    .alert-info { background: #E8F0FE; color: #0B5ED7; border-color: #0B5ED7; }
+    
+    [data-theme="dark"] .alert-success { background: #1A3A2A; color: #34D399; border-color: #34D399; }
+    [data-theme="dark"] .alert-error { background: #3A1A1A; color: #F87171; border-color: #F87171; }
+    [data-theme="dark"] .alert-warning { background: #3D2E0A; color: #FBBF24; border-color: #FBBF24; }
+    [data-theme="dark"] .alert-info { background: #1E3A5F; color: #6EA8FE; border-color: #6EA8FE; }
 </style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    
-    <!-- Left Side -->
-    <div class="flex items-center gap-3 flex-1 min-w-0">
-        <button id="sidebarToggle" class="sidebar-toggle-btn" aria-label="Toggle Sidebar">
-            <i class="fas fa-bars"></i>
-        </button>
-        
-        <a href="dashboard.php" class="flex items-center gap-2 shrink-0" style="color:var(--text-primary);">
-            <i class="fas fa-home text-primary"></i>
-            <span class="font-semibold text-sm hidden sm:inline">Dashboard</span>
-        </a>
-    </div>
-    
-    <!-- Search Bar -->
-    <div class="search-wrapper">
-        <i class="fas fa-search text-gray-400 ml-3"></i>
-        <input type="text" id="searchInput" placeholder="Search patients by name, ID or phone...">
-        <button id="searchBtn" class="search-btn">
-            <i class="fas fa-search mr-1"></i><span>Search</span>
-        </button>
-    </div>
-    
-    <!-- Right Side -->
-    <div class="flex items-center gap-3 shrink-0">
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="statusToggle" class="status-toggle <?= $is_online ? '' : 'offline' ?>" title="Toggle Online Status">
-            <span class="status-dot <?= $is_online ? 'online' : 'offline' ?>" id="statusDot"></span>
-            <span class="status-text" id="statusText"><?= $is_online ? 'Online' : 'Offline' ?></span>
-            <span class="status-spinner"></span>
-        </button>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn" id="notifBtn" title="Notifications">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot" id="notifDot" style="display: none;"></span>
-        </button>
-        
-        <a href="profile.php" class="avatar-link" title="Profile">
-            <?php 
-                $show_initial = true;
-                $initial = strtoupper(substr($doctor_name, 0, 1));
-                $avatar_url = '';
-                
-                if (!empty($profile_pic)) {
-                    $file_path = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
-                    if (file_exists($file_path)) {
-                        $avatar_url = '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
-                        $show_initial = false;
-                    }
-                }
-            ?>
-            <?php if ($show_initial): ?>
-                <div class="avatar-placeholder avatar-color-<?= (abs(crc32($doctor_name)) % 7) + 1 ?>">
-                    <?= $initial ?>
-                </div>
-            <?php else: ?>
-                <img src="<?= $avatar_url ?>" alt="Profile" class="avatar-img">
-            <?php endif; ?>
-            <span class="status-ring <?= $is_online ? '' : 'offline' ?>" id="avatarStatusRing"></span>
-        </a>
-        
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -947,6 +965,9 @@ include_once '../../components/doctor_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-users mr-2" style="color: #0B5ED7;"></i> My Patients
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 View and manage your assigned patients
@@ -956,6 +977,11 @@ include_once '../../components/doctor_sidebar.php';
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-user-injured mr-1"></i> <?= $total_assigned ?> Total Patients
                 </span>
+                <?php if ($is_admin): ?>
+                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                        <i class="fas fa-user-shield mr-1"></i> Admin View
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap">
@@ -964,6 +990,16 @@ include_once '../../components/doctor_sidebar.php';
             </a>
         </div>
     </div>
+
+    <!-- ================================================================ -->
+    <!-- MESSAGE -->
+    <!-- ================================================================ -->
+    <?php if ($message): ?>
+        <div class="alert alert-<?= $message_type ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <?= $message ?>
+        </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- STATISTICS CARDS -->
@@ -1153,6 +1189,10 @@ include_once '../../components/doctor_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             My Patients
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1289,7 +1329,7 @@ include_once '../../components/doctor_sidebar.php';
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
+            var branch = '<?= $doctor_branch_id ?>';
             window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
         }
     }
@@ -1300,6 +1340,10 @@ include_once '../../components/doctor_sidebar.php';
     });
 
     console.log('%c🏥 Braick Dispensary - My Patients', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Viewing All Patients', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Total Patients: <?= $total_assigned ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🟢 Active: <?= $active_patients ?> | ⏳ Pending Visits: <?= $pending_visits ?>', 'font-size:13px; color:#0B5ED7;');

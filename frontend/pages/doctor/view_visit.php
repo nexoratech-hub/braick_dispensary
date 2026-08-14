@@ -5,26 +5,43 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Doctor';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET VISIT ID
@@ -75,42 +92,66 @@ function getUserColor($name) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found at: " . $db_path);
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
 }
-$db = Database::getInstance()->getConnection();
 
 // ================================================================
 // GET VISIT DETAILS
 // ================================================================
-$stmt = $db->prepare("
-    SELECT v.*, 
-           p.full_name as patient_name,
-           p.patient_id,
-           p.phone,
-           p.date_of_birth,
-           p.gender,
-           u.full_name as doctor_name,
-           u.specialty as doctor_specialty,
-           r.full_name as receptionist_name,
-           b.name as branch_name
-    FROM visits v
-    LEFT JOIN patients p ON v.patient_id = p.id
-    LEFT JOIN users u ON v.doctor_id = u.id
-    LEFT JOIN users r ON v.receptionist_id = r.id
-    LEFT JOIN branches b ON v.branch_id = b.id
-    WHERE v.id = ?
-");
-$stmt->execute([$visit_id]);
+if ($is_admin) {
+    // Admin can view any visit
+    $stmt = $db->prepare("
+        SELECT v.*, 
+               p.full_name as patient_name,
+               p.patient_id,
+               p.phone,
+               p.date_of_birth,
+               p.gender,
+               u.full_name as doctor_name,
+               u.specialty as doctor_specialty,
+               r.full_name as receptionist_name,
+               b.name as branch_name
+        FROM visits v
+        LEFT JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN users r ON v.receptionist_id = r.id
+        LEFT JOIN branches b ON v.branch_id = b.id
+        WHERE v.id = ?
+    ");
+    $stmt->execute([$visit_id]);
+} else {
+    // Doctor can only view their own visits
+    $stmt = $db->prepare("
+        SELECT v.*, 
+               p.full_name as patient_name,
+               p.patient_id,
+               p.phone,
+               p.date_of_birth,
+               p.gender,
+               u.full_name as doctor_name,
+               u.specialty as doctor_specialty,
+               r.full_name as receptionist_name,
+               b.name as branch_name
+        FROM visits v
+        LEFT JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN users r ON v.receptionist_id = r.id
+        LEFT JOIN branches b ON v.branch_id = b.id
+        WHERE v.id = ? AND v.doctor_id = ?
+    ");
+    $stmt->execute([$visit_id, $doctor_id]);
+}
 $visit = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$visit) {
-    header('Location: my_patients.php');
+    header('Location: my_patients.php?error=visit_not_found');
     exit;
 }
 
@@ -174,6 +215,15 @@ try {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // VARIABLES FOR SIDEBAR
 // ================================================================
 $selected_branch_id = $doctor_branch_id;
@@ -184,10 +234,10 @@ $pending_lab_tests = 0;
 $pending_prescriptions = 0;
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <style>
@@ -683,7 +733,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="notif-dot no-notif"></span>
         </button>
         <a href="profile.php">
-            <img src="/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png" alt="Profile" class="avatar"
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($doctor_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
@@ -699,6 +749,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div>
             <h1 class="page-title">
                 <i class="fas fa-clinic-medical mr-2" style="color: #0B5ED7;"></i> Visit Details
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 View visit information and history
@@ -711,6 +764,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
                     <i class="fas fa-hashtag mr-1"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
                 </span>
+                <?php if ($is_admin): ?>
+                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                        <i class="fas fa-user-shield mr-1"></i> Admin View
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -987,6 +1045,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Visit Details
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
@@ -1092,6 +1154,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     setInterval(updateDateTime, 1000);
 
     console.log('%c👨‍⚕️ View Visit - <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?> (View Only)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Viewing All Visits', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Status: <?= $visit['status'] ?? 'Pending' ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💊 Prescriptions: <?= count($prescriptions) ?>', 'font-size:13px; color:#7C3AED;');

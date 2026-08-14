@@ -5,26 +5,45 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// FORCE SESSION - Doctor Only
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
-
-$db = Database::getInstance()->getConnection();
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
 // ================================================================
-// VARIABLES
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER INFO FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Doctor';
+$user_role = $_SESSION['role'];
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$is_admin = ($_SESSION['role'] === 'admin');
+
+// ================================================================
+// GET PATIENT ID
 // ================================================================
 $patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
@@ -32,19 +51,41 @@ if ($patient_id <= 0) {
     die('Invalid patient ID');
 }
 
-$doctor_id = $_SESSION['user_id'];
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
 // GET PATIENT DATA - Verify doctor has access
 // ================================================================
-$stmt = $db->prepare("
-    SELECT p.*, b.name as branch_name, u.full_name as assigned_doctor_name
-    FROM patients p
-    LEFT JOIN branches b ON p.branch_id = b.id
-    LEFT JOIN users u ON p.assigned_doctor_id = u.id
-    WHERE p.id = ? AND p.assigned_doctor_id = ?
-");
-$stmt->execute([$patient_id, $doctor_id]);
+if ($is_admin) {
+    // Admin can view any patient
+    $stmt = $db->prepare("
+        SELECT p.*, b.name as branch_name, u.full_name as assigned_doctor_name
+        FROM patients p
+        LEFT JOIN branches b ON p.branch_id = b.id
+        LEFT JOIN users u ON p.assigned_doctor_id = u.id
+        WHERE p.id = ?
+    ");
+    $stmt->execute([$patient_id]);
+} else {
+    // Doctor can only view their patients
+    $stmt = $db->prepare("
+        SELECT p.*, b.name as branch_name, u.full_name as assigned_doctor_name
+        FROM patients p
+        LEFT JOIN branches b ON p.branch_id = b.id
+        LEFT JOIN users u ON p.assigned_doctor_id = u.id
+        WHERE p.id = ? AND p.assigned_doctor_id = ?
+    ");
+    $stmt->execute([$patient_id, $user_id]);
+}
 $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$patient) {
@@ -56,13 +97,24 @@ if (!$patient) {
 // ================================================================
 
 // Get all visits
-$stmt = $db->prepare("
-    SELECT v.*, u.full_name as doctor_name
-    FROM visits v
-    LEFT JOIN users u ON v.doctor_id = u.id
-    WHERE v.patient_id = ?
-    ORDER BY v.created_at DESC
-");
+if ($is_admin) {
+    $stmt = $db->prepare("
+        SELECT v.*, u.full_name as doctor_name
+        FROM visits v
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE v.patient_id = ?
+        ORDER BY v.created_at DESC
+    ");
+} else {
+    $stmt = $db->prepare("
+        SELECT v.*, u.full_name as doctor_name
+        FROM visits v
+        LEFT JOIN users u ON v.doctor_id = u.id
+        WHERE v.patient_id = ? AND v.doctor_id = ?
+        ORDER BY v.created_at DESC
+    ");
+    $stmt->execute([$patient_id, $user_id]);
+}
 $stmt->execute([$patient_id]);
 $all_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -77,36 +129,70 @@ $stmt->execute([$patient_id]);
 $all_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get all prescriptions
-$stmt = $db->prepare("
-    SELECT p.*, u.full_name as doctor_name
-    FROM prescriptions p
-    LEFT JOIN users u ON p.doctor_id = u.id
-    WHERE p.patient_id = ?
-    ORDER BY p.created_at DESC
-");
+if ($is_admin) {
+    $stmt = $db->prepare("
+        SELECT p.*, u.full_name as doctor_name
+        FROM prescriptions p
+        LEFT JOIN users u ON p.doctor_id = u.id
+        WHERE p.patient_id = ?
+        ORDER BY p.created_at DESC
+    ");
+} else {
+    $stmt = $db->prepare("
+        SELECT p.*, u.full_name as doctor_name
+        FROM prescriptions p
+        LEFT JOIN users u ON p.doctor_id = u.id
+        WHERE p.patient_id = ? AND p.doctor_id = ?
+        ORDER BY p.created_at DESC
+    ");
+    $stmt->execute([$patient_id, $user_id]);
+}
 $stmt->execute([$patient_id]);
 $all_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get all lab tests
-$stmt = $db->prepare("
-    SELECT lt.*, u.full_name as doctor_name
-    FROM lab_tests lt
-    INNER JOIN visits v ON lt.visit_id = v.id
-    LEFT JOIN users u ON lt.doctor_id = u.id
-    WHERE v.patient_id = ?
-    ORDER BY lt.created_at DESC
-");
+if ($is_admin) {
+    $stmt = $db->prepare("
+        SELECT lt.*, u.full_name as doctor_name
+        FROM lab_tests lt
+        INNER JOIN visits v ON lt.visit_id = v.id
+        LEFT JOIN users u ON lt.doctor_id = u.id
+        WHERE v.patient_id = ?
+        ORDER BY lt.created_at DESC
+    ");
+} else {
+    $stmt = $db->prepare("
+        SELECT lt.*, u.full_name as doctor_name
+        FROM lab_tests lt
+        INNER JOIN visits v ON lt.visit_id = v.id
+        LEFT JOIN users u ON lt.doctor_id = u.id
+        WHERE v.patient_id = ? AND v.doctor_id = ?
+        ORDER BY lt.created_at DESC
+    ");
+    $stmt->execute([$patient_id, $user_id]);
+}
 $stmt->execute([$patient_id]);
 $all_lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get all appointments
-$stmt = $db->prepare("
-    SELECT a.*, u.full_name as doctor_name
-    FROM appointments a
-    LEFT JOIN users u ON a.doctor_id = u.id
-    WHERE a.patient_id = ?
-    ORDER BY a.created_at DESC
-");
+if ($is_admin) {
+    $stmt = $db->prepare("
+        SELECT a.*, u.full_name as doctor_name
+        FROM appointments a
+        LEFT JOIN users u ON a.doctor_id = u.id
+        WHERE a.patient_id = ?
+        ORDER BY a.created_at DESC
+    ");
+} else {
+    $stmt = $db->prepare("
+        SELECT a.*, u.full_name as doctor_name
+        FROM appointments a
+        LEFT JOIN users u ON a.doctor_id = u.id
+        WHERE a.patient_id = ? AND a.doctor_id = ?
+        ORDER BY a.created_at DESC
+    ");
+    $stmt->execute([$patient_id, $user_id]);
+}
 $stmt->execute([$patient_id]);
 $all_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -154,6 +240,22 @@ $total_payments_amount = 0;
 foreach ($all_payments as $payment) {
     $total_payments_amount += $payment['amount'] ?? 0;
 }
+
+// ================================================================
+// LOG ACTIVITY
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+        VALUES (?, ?, 'export_patient_pdf', ?, NOW())
+    ");
+    $stmt->execute([
+        $user_id,
+        $user_branch_id,
+        "Exported patient PDF report for: " . $patient['full_name'] . " (ID: " . $patient['patient_id'] . ")" . 
+        ($is_admin ? " (Admin)" : "")
+    ]);
+} catch (Exception $e) {}
 
 // ================================================================
 // LOGO PATH
@@ -577,6 +679,9 @@ if (file_exists($_SERVER['DOCUMENT_ROOT'] . $logo_path)) {
         <div class="toolbar-title">
             <i class="fas fa-file-pdf"></i>
             Patient Report - <?= htmlspecialchars($patient['full_name']) ?>
+            <?php if ($is_admin): ?>
+                <span style="background:rgba(220,38,38,0.3);padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:600;">👑 Admin</span>
+            <?php endif; ?>
         </div>
         <div class="toolbar-buttons">
             <button onclick="downloadPDF()" class="btn-tool download">
@@ -609,6 +714,11 @@ if (file_exists($_SERVER['DOCUMENT_ROOT'] . $logo_path)) {
             <h1>BRAICK DISPENSARY</h1>
             <p class="subtitle">Quality Healthcare Services • Patient Medical Report</p>
             <p class="report-date">Report Generated: <?= date('l, F d, Y h:i:s A') ?></p>
+            <?php if ($is_admin): ?>
+                <p style="color:#DC2626;font-size:0.7rem;font-weight:600;margin-top:4px;">
+                    <i class="fas fa-user-shield"></i> Generated by Admin
+                </p>
+            <?php endif; ?>
         </div>
         
         <!-- ============================================================ -->
@@ -1045,6 +1155,10 @@ if (file_exists($_SERVER['DOCUMENT_ROOT'] . $logo_path)) {
                 Patient Medical Report
                 <span class="text-gray-300 mx-2">|</span>
                 Generated: <?= date('Y-m-d h:i:s A') ?>
+                <?php if ($is_admin): ?>
+                    <span class="text-gray-300 mx-2">|</span>
+                    <span style="color:#DC2626;">👑 Admin</span>
+                <?php endif; ?>
             </p>
             <p style="margin-top:4px;font-size:0.65rem;color:#CBD5E1;">
                 This is a computer-generated report. No signature is required.
@@ -1114,18 +1228,13 @@ if (file_exists($_SERVER['DOCUMENT_ROOT'] . $logo_path)) {
         }
     });
 
-    // ================================================================
-    // AUTO PRINT ON LOAD (Optional - commented out)
-    // ================================================================
-    // window.onload = function() {
-    //     setTimeout(function() {
-    //         window.print();
-    //     }, 1000);
-    // };
-
     console.log('%c📄 Braick Dispensary - Patient Report', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Full Access', 'font-size:13px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c📊 Visits: <?= $total_visits ?> | Bills: <?= $total_bills ?> | Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔬 Lab Tests: <?= $total_lab_tests ?> | Appointments: <?= $total_appointments ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c❤️ Vital Signs: <?= $total_vital_signs ?> | Payments: <?= $total_payments ?>', 'font-size:13px; color:#EC4899;');

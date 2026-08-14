@@ -5,32 +5,38 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// INCLUDE CONFIG
-// ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to Dr. Sarah Mwamba
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 2;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER INFO FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Dr. Sarah Mwamba';
 $user_role = $_SESSION['role'] ?? 'doctor';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
@@ -40,8 +46,18 @@ $user_email = $_SESSION['email'] ?? 'sarah@braick.com';
 $user_phone = $_SESSION['phone'] ?? '+255 700 000 001';
 $user_specialty = $_SESSION['specialty'] ?? 'Cardiology';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
-$db = getDB();
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
 // UPLOAD DIRECTORY
@@ -64,6 +80,9 @@ $success = false;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
+    // ================================================================
+    // UPDATE PROFILE
+    // ================================================================
     if ($action === 'update_profile') {
         $full_name = trim($_POST['full_name'] ?? '');
         $email = trim($_POST['email'] ?? '');
@@ -109,30 +128,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $db->prepare("SELECT password FROM users WHERE id = ?");
                 $stmt->execute([$user_id]);
                 $user_data = $stmt->fetch();
-                if ($user_data && password_verify($current_password, $user_data['password'])) {
-                    $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+                
+                if ($user_data) {
+                    // Check if password is hashed or plain text
+                    if (str_starts_with($user_data['password'], '$2y$')) {
+                        $password_valid = password_verify($current_password, $user_data['password']);
+                    } else {
+                        $password_valid = ($current_password === $user_data['password']);
+                    }
+                    
+                    if ($password_valid) {
+                        $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+                    } else {
+                        $errors[] = 'Current password is incorrect';
+                    }
                 } else {
-                    $errors[] = 'Current password is incorrect';
+                    $errors[] = 'User not found';
                 }
             }
         }
         
         if (empty($errors)) {
-            // Update profile
-            if (isset($hashed_password)) {
-                $stmt = $db->prepare("
-                    UPDATE users 
-                    SET full_name = ?, email = ?, phone = ?, specialty = ?, password = ?
-                    WHERE id = ?
-                ");
-                $stmt->execute([$full_name, $email, $phone, $specialty, $hashed_password, $user_id]);
+            if ($is_admin) {
+                // Admin can update any profile
+                if (isset($hashed_password)) {
+                    $stmt = $db->prepare("
+                        UPDATE users 
+                        SET full_name = ?, email = ?, phone = ?, specialty = ?, password = ?
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$full_name, $email, $phone, $specialty, $hashed_password, $user_id]);
+                } else {
+                    $stmt = $db->prepare("
+                        UPDATE users 
+                        SET full_name = ?, email = ?, phone = ?, specialty = ?
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$full_name, $email, $phone, $specialty, $user_id]);
+                }
             } else {
-                $stmt = $db->prepare("
-                    UPDATE users 
-                    SET full_name = ?, email = ?, phone = ?, specialty = ?
-                    WHERE id = ?
-                ");
-                $stmt->execute([$full_name, $email, $phone, $specialty, $user_id]);
+                // Doctor can only update their own profile
+                if (isset($hashed_password)) {
+                    $stmt = $db->prepare("
+                        UPDATE users 
+                        SET full_name = ?, email = ?, phone = ?, specialty = ?, password = ?
+                        WHERE id = ? AND role = 'doctor'
+                    ");
+                    $stmt->execute([$full_name, $email, $phone, $specialty, $hashed_password, $user_id]);
+                } else {
+                    $stmt = $db->prepare("
+                        UPDATE users 
+                        SET full_name = ?, email = ?, phone = ?, specialty = ?
+                        WHERE id = ? AND role = 'doctor'
+                    ");
+                    $stmt->execute([$full_name, $email, $phone, $specialty, $user_id]);
+                }
             }
             
             // Update session
@@ -140,6 +190,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['email'] = $email;
             $_SESSION['phone'] = $phone;
             $_SESSION['specialty'] = $specialty;
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'profile_updated', ?, NOW())
+                ");
+                $stmt->execute([
+                    $user_id,
+                    $user_branch_id,
+                    "Profile updated: " . $full_name . ($is_admin ? " (Admin)" : "")
+                ]);
+            } catch (Exception $e) {}
             
             $message = "Profile updated successfully!";
             $message_type = 'success';
@@ -197,6 +260,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['profile_pic'] = $filename;
                     $profile_pic = $filename;
                     
+                    // Log activity
+                    try {
+                        $stmt = $db->prepare("
+                            INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                            VALUES (?, ?, 'profile_picture_updated', ?, NOW())
+                        ");
+                        $stmt->execute([
+                            $user_id,
+                            $user_branch_id,
+                            "Profile picture updated for: " . $user_full_name . ($is_admin ? " (Admin)" : "")
+                        ]);
+                    } catch (Exception $e) {}
+                    
                     $message = "Profile picture updated successfully!";
                     $message_type = 'success';
                     
@@ -224,20 +300,32 @@ $profile_pic_url = !empty($profile_pic)
 // GET STATISTICS FOR SIDEBAR
 // ================================================================
 $total_employees = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-$total_employees = $stmt->fetch()['count'] ?? 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+    $total_employees = $stmt->fetch()['count'] ?? 0;
+} catch (Exception $e) {
+    $total_employees = 0;
+}
 
 $total_doctors = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-$total_doctors = $stmt->fetch()['count'] ?? 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+    $total_doctors = $stmt->fetch()['count'] ?? 0;
+} catch (Exception $e) {
+    $total_doctors = 0;
+}
 
 $total_branches = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-$total_branches = $stmt->fetch()['count'] ?? 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+    $total_branches = $stmt->fetch()['count'] ?? 0;
+} catch (Exception $e) {
+    $total_branches = 0;
+}
 
 $pending_lab_tests = 0;
 try {
-    $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE status = 'pending' AND branch_id = ?");
     $stmt->execute([$user_branch_id]);
     $pending_lab_tests = $stmt->fetch()['count'] ?? 0;
 } catch (Exception $e) {
@@ -259,13 +347,76 @@ try {
 }
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <style>
+    /* ================================================================
+       PAGE-SPECIFIC STYLES
+       ================================================================ */
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 28px 32px;
+        min-height: calc(100vh - 68px);
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    .page-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 3px solid var(--primary);
+    }
+    
+    .page-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    
+    .page-title i { color: var(--primary); }
+    
+    .page-subtitle {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        margin-top: 4px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    .branch-tag {
+        background: #059669;
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
     .form-card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -328,6 +479,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     .form-control::placeholder {
         color: var(--text-secondary);
         opacity: 0.5;
+    }
+    
+    .form-control:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+        background: var(--gray-100);
     }
     
     .form-row {
@@ -516,6 +673,37 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         margin-top: 4px;
     }
     
+    .grid { display: grid; }
+    .grid-cols-1 { grid-template-columns: 1fr; }
+    .gap-4 { gap: 1rem; }
+    .gap-5 { gap: 1.25rem; }
+    .mt-4 { margin-top: 1rem; }
+    .mb-3 { margin-bottom: 0.75rem; }
+    .mb-4 { margin-bottom: 1rem; }
+    .mb-5 { margin-bottom: 1.25rem; }
+    .pt-4 { padding-top: 1rem; }
+    .mr-2 { margin-right: 0.5rem; }
+    .ml-2 { margin-left: 0.5rem; }
+    .border-t { border-top: 2px solid var(--border-color); }
+    .border-gray-200 { border-color: var(--border-color); }
+    .font-semibold { font-weight: 600; }
+    .text-gray-500 { color: var(--text-secondary); }
+    .text-gray-700 { color: var(--text-primary); }
+    .text-sm { font-size: 0.875rem; }
+    .text-blue-600 { color: var(--primary); }
+    
+    .md\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+    .lg\:grid-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+    .lg\:col-span-1 { grid-column: span 1; }
+    .lg\:col-span-2 { grid-column: span 2; }
+    
+    @media (max-width: 1024px) {
+        .main-content { margin-left: 0; padding: 16px; }
+        .lg\:grid-cols-3 { grid-template-columns: 1fr; }
+        .lg\:col-span-1 { grid-column: span 1; }
+        .lg\:col-span-2 { grid-column: span 1; }
+    }
+    
     @media (max-width: 768px) {
         .form-card {
             padding: 16px 18px;
@@ -534,6 +722,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             width: 100%;
             justify-content: center;
         }
+        .md\:grid-cols-2 { grid-template-columns: 1fr; }
+        .page-title { font-size: 1.2rem; }
+        .page-header { flex-direction: column; }
+        .page-header .btn { width: 100%; justify-content: center; }
+    }
+    
+    @media (max-width: 480px) {
+        .main-content { padding: 10px; }
+        .form-card { padding: 12px; }
+        .form-control { font-size: 0.8rem; padding: 6px 10px; }
+        .page-subtitle { flex-direction: column; align-items: flex-start; gap: 4px; }
     }
 </style>
 
@@ -589,12 +788,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-user-edit mr-2" style="color: var(--primary);"></i> Edit Profile
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Update your profile information
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
+                <?php if ($is_admin): ?>
+                    <span class="branch-tag ml-2" style="background:#DC2626;">
+                        <i class="fas fa-user-shield"></i> Admin
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -629,7 +836,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <input type="hidden" name="action" value="update_avatar">
                     
                     <div class="avatar-upload">
-                        <?php if (!empty($profile_pic)): ?>
+                        <?php if (!empty($profile_pic) && file_exists($upload_dir . $profile_pic)): ?>
                             <img src="<?= $profile_pic_url ?>" alt="Profile" class="current-avatar">
                         <?php else: ?>
                             <div class="avatar-placeholder">
@@ -776,6 +983,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Edit Profile
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -944,6 +1155,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
     console.log('%c👨‍⚕️ Braick - Doctor Edit Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Can Edit Profile', 'font-size:13px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c📁 Upload Dir: <?= $upload_dir ?>', 'font-size:13px; color:#64748B;');
     console.log('%c✅ Specialty: <?= htmlspecialchars($user_specialty) ?>', 'font-size:13px; color:#0B5ED7;');
 </script>

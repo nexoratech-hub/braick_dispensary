@@ -2,29 +2,29 @@
 // ================================================================
 // FILE: frontend/pages/doctor/view_lab_test.php
 // DOCTOR - VIEW LAB TEST (CLEAN CSS - NO EDIT)
+// Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
-$doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // GET LAB TEST ID
@@ -33,7 +33,7 @@ $test_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $visit_id = isset($_GET['visit_id']) ? (int)$_GET['visit_id'] : 0;
 
 if ($test_id <= 0) {
-    header('Location: lab_results.php');
+    header('Location: lab_results.php?error=invalid_id');
     exit;
 }
 
@@ -46,32 +46,84 @@ if (file_exists($db_path)) {
 } else {
     die("❌ Database file not found at: " . $db_path);
 }
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
-// GET LAB TEST DETAILS
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        lt.*,
-        v.visit_number,
-        v.patient_id,
-        v.diagnosis as visit_diagnosis,
-        p.full_name as patient_name,
-        p.patient_id as patient_code,
-        u.full_name as doctor_name,
-        u.specialty as doctor_specialty
-    FROM lab_tests lt
-    LEFT JOIN visits v ON lt.visit_id = v.id
-    LEFT JOIN patients p ON v.patient_id = p.id
-    LEFT JOIN users u ON lt.doctor_id = u.id
-    WHERE lt.id = ? AND lt.doctor_id = ?
-");
-$stmt->execute([$test_id, $doctor_id]);
-$test = $stmt->fetch(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    
+} catch (Exception $e) {
+    error_log("view_lab_test verification error: " . $e->getMessage());
+}
 
-if (!$test) {
-    header('Location: lab_results.php?error=not_found');
+// ================================================================
+// GET LAB TEST DETAILS - Verify doctor has access
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            lt.*,
+            v.visit_number,
+            v.patient_id,
+            v.diagnosis as visit_diagnosis,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            u.full_name as doctor_name,
+            u.specialty as doctor_specialty,
+            tech.full_name as technician_name
+        FROM lab_tests lt
+        LEFT JOIN visits v ON lt.visit_id = v.id
+        LEFT JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN users u ON lt.doctor_id = u.id
+        LEFT JOIN users tech ON lt.lab_technician_id = tech.id
+        WHERE lt.id = ? AND lt.doctor_id = ?
+    ");
+    $stmt->execute([$test_id, $doctor_id]);
+    $test = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$test) {
+        // Check if test exists but belongs to another doctor
+        $stmt = $db->prepare("SELECT id, doctor_id FROM lab_tests WHERE id = ?");
+        $stmt->execute([$test_id]);
+        $test_check = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($test_check) {
+            header('Location: lab_results.php?error=access_denied');
+            exit;
+        }
+        header('Location: lab_results.php?error=not_found');
+        exit;
+    }
+} catch (Exception $e) {
+    error_log("Lab test fetch error: " . $e->getMessage());
+    header('Location: lab_results.php?error=database_error');
     exit;
 }
 
@@ -80,10 +132,15 @@ if (!$test) {
 // ================================================================
 $test_items = [];
 try {
-    $stmt = $db->prepare("SELECT * FROM lab_test_items WHERE lab_test_id = ?");
+    $stmt = $db->prepare("
+        SELECT * FROM lab_test_items 
+        WHERE lab_test_id = ? 
+        ORDER BY id ASC
+    ");
     $stmt->execute([$test_id]);
     $test_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
+    // Table might not exist
     $test_items = [];
 }
 
@@ -116,16 +173,6 @@ try {
 }
 
 // ================================================================
-// VARIABLES FOR SIDEBAR
-// ================================================================
-$selected_branch_id = $doctor_branch_id;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
-$pending_lab_tests = 0;
-$pending_prescriptions = 0;
-
-// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
@@ -156,6 +203,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($test['patient_name']) ?>
                     </span>
                 <?php endif; ?>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-user-md mr-1"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
+                </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap">
@@ -193,6 +243,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <span class="meta-item">
                         <i class="fas fa-clinic-medical"></i>
                         Visit: <?= htmlspecialchars($test['visit_number']) ?>
+                    </span>
+                <?php endif; ?>
+                <?php if ($test['technician_name']): ?>
+                    <span class="meta-item">
+                        <i class="fas fa-user"></i>
+                        Technician: <?= htmlspecialchars($test['technician_name']) ?>
                     </span>
                 <?php endif; ?>
             </div>
@@ -252,6 +308,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         </span>
                     </span>
                 </div>
+                <?php if ($test['price'] && $test['price'] > 0): ?>
+                    <div class="info-row">
+                        <span class="info-label">Test Price</span>
+                        <span class="info-value font-semibold">TSh <?= number_format($test['price'], 0) ?></span>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -361,9 +423,24 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <?php endif; ?>
 
     <!-- ================================================================ -->
+    <!-- IN PROGRESS MESSAGE -->
+    <!-- ================================================================ -->
+    <?php if (($test['status'] ?? '') === 'in_progress'): ?>
+    <div class="pending-message" style="background: #E8F0FE; border-color: #BFDBFE;">
+        <div class="pending-message-icon" style="background: #0B5ED7;">
+            <i class="fas fa-spinner fa-spin"></i>
+        </div>
+        <div>
+            <p class="pending-message-title" style="color: #0B5ED7;">Test In Progress</p>
+            <p class="pending-message-text" style="color: #1E3A5F;">This test is currently being processed by the laboratory.</p>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
     <!-- NO RESULTS MESSAGE -->
     <!-- ================================================================ -->
-    <?php if (empty($test_items) && empty($test['results']) && ($test['status'] ?? '') !== 'pending'): ?>
+    <?php if (empty($test_items) && empty($test['results']) && ($test['status'] ?? '') !== 'pending' && ($test['status'] ?? '') !== 'in_progress'): ?>
     <div class="no-results">
         <i class="fas fa-file-alt"></i>
         <p>No results recorded for this test yet</p>
@@ -377,7 +454,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="text-gray-300 mx-2">|</span>
             Lab Test Details
             <span class="text-gray-300 mx-2">|</span>
-            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -761,6 +838,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         cursor: pointer;
         border: none;
         text-decoration: none;
+        min-height: 36px;
     }
     
     .btn-outline {
@@ -779,6 +857,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         padding: 4px 10px;
         font-size: 0.7rem;
         border-radius: 6px;
+        min-height: 30px;
     }
     
     /* ================================================================
@@ -787,6 +866,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .page-header {
         border-bottom: 3px solid var(--primary);
         padding-bottom: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
     }
     
     .page-header .page-title {
@@ -833,34 +917,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-weight: 600;
     }
     
-    /* ================================================================
-       UTILITIES
-       ================================================================ */
-    .text-xs { font-size: 0.75rem; }
-    .text-sm { font-size: 0.875rem; }
-    .text-gray-400 { color: var(--text-muted); }
-    .text-gray-500 { color: var(--text-secondary); }
-    .text-blue-600 { color: var(--primary); }
-    .text-green-600 { color: #059669; }
-    .text-green-500 { color: #059669; }
-    .font-semibold { font-weight: 600; }
-    .font-bold { font-weight: 700; }
-    .font-mono { font-family: monospace; }
-    .gap-2 { gap: 0.5rem; }
-    .gap-3 { gap: 0.75rem; }
-    .gap-4 { gap: 1rem; }
-    .gap-6 { gap: 1.5rem; }
-    .ml-2 { margin-left: 0.5rem; }
-    .mr-1 { margin-right: 0.25rem; }
-    .mr-2 { margin-right: 0.5rem; }
-    .mb-6 { margin-bottom: 1.5rem; }
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .items-center { align-items: center; }
-    .items-start { align-items: flex-start; }
-    .justify-between { justify-content: space-between; }
-    .text-right { text-align: right; }
-    .text-center { text-align: center; }
+    .text-gray-300 { color: #D1D5DB; }
+    .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
     
     /* ================================================================
        DARK MODE
@@ -1047,9 +1105,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     console.log('%c🧪 View Lab Test - <?= htmlspecialchars($test['test_name'] ?? 'Lab Test') ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c📋 Patient: <?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
     console.log('%c📋 Status: <?= ucfirst($test['status'] ?? 'Pending') ?>', 'font-size:12px; color:#64748B;');
     console.log('%c🔒 Doctor: View Only - No Edit Button', 'font-size:12px; color:#EF4444;');
+    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

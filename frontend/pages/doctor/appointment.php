@@ -9,24 +9,18 @@
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+    header('Location: ../login.php');
+    exit;
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 
@@ -42,6 +36,34 @@ $filter_date = isset($_GET['date']) ? trim($_GET['date']) : date('Y-m-d');
 // ================================================================
 require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, is_online, status FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: ../login.php');
+        exit;
+    }
+    
+    // Update session with latest data
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['is_online'] = $doctor_data['is_online'] ?? 0;
+    
+} catch (Exception $e) {
+    error_log("Appointment doctor verification error: " . $e->getMessage());
+    // Continue with session data
+}
 
 // ================================================================
 // GET DOCTOR'S PATIENTS (for dropdown)
@@ -1191,6 +1213,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <?php endif; ?>
     
     console.log('%c📅 Appointments - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c📊 Total Appointments: <?= $stats['total'] ?>', 'font-size:12px; color:#059669;');
     console.log('%c📋 Showing: <?= count($appointments) ?> appointments', 'font-size:12px; color:#64748B;');
 </script>

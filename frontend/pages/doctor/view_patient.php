@@ -8,28 +8,43 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET PATIENT ID
@@ -42,31 +57,56 @@ if ($patient_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
 
 // ================================================================
 // GET PATIENT DETAILS - INCLUDING MARITAL STATUS
 // ================================================================
 $patient = null;
 try {
-    $stmt = $db->prepare("
-        SELECT p.*, 
-               b.name as branch_name,
-               u.full_name as doctor_name,
-               u.specialty as doctor_specialty,
-               (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
-               (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
-               (SELECT COUNT(*) FROM lab_tests lt JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests,
-               (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id) as total_appointments
-        FROM patients p
-        LEFT JOIN branches b ON p.branch_id = b.id
-        LEFT JOIN users u ON p.assigned_doctor_id = u.id
-        WHERE p.id = ?
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_admin) {
+        // Admin can view any patient
+        $stmt = $db->prepare("
+            SELECT p.*, 
+                   b.name as branch_name,
+                   u.full_name as doctor_name,
+                   u.specialty as doctor_specialty,
+                   (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
+                   (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
+                   (SELECT COUNT(*) FROM lab_tests lt JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests,
+                   (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id) as total_appointments
+            FROM patients p
+            LEFT JOIN branches b ON p.branch_id = b.id
+            LEFT JOIN users u ON p.assigned_doctor_id = u.id
+            WHERE p.id = ?
+        ");
+        $stmt->execute([$patient_id]);
+    } else {
+        // Doctor can only view their own patients
+        $stmt = $db->prepare("
+            SELECT p.*, 
+                   b.name as branch_name,
+                   u.full_name as doctor_name,
+                   u.specialty as doctor_specialty,
+                   (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
+                   (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
+                   (SELECT COUNT(*) FROM lab_tests lt JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests,
+                   (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id) as total_appointments
+            FROM patients p
+            LEFT JOIN branches b ON p.branch_id = b.id
+            LEFT JOIN users u ON p.assigned_doctor_id = u.id
+            WHERE p.id = ? AND p.assigned_doctor_id = ?
+        ");
+        $stmt->execute([$patient_id, $doctor_id]);
+    }
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$patient) {
@@ -84,18 +124,33 @@ try {
 $visits = [];
 $last_visit = null;
 try {
-    $stmt = $db->prepare("
-        SELECT v.*, 
-               u.full_name as doctor_name,
-               u.specialty as doctor_specialty,
-               (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
-               (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
-        FROM visits v
-        LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE v.patient_id = ?
-        ORDER BY v.created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            SELECT v.*, 
+                   u.full_name as doctor_name,
+                   u.specialty as doctor_specialty,
+                   (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
+                   (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+            FROM visits v
+            LEFT JOIN users u ON v.doctor_id = u.id
+            WHERE v.patient_id = ?
+            ORDER BY v.created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT v.*, 
+                   u.full_name as doctor_name,
+                   u.specialty as doctor_specialty,
+                   (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
+                   (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+            FROM visits v
+            LEFT JOIN users u ON v.doctor_id = u.id
+            WHERE v.patient_id = ? AND v.doctor_id = ?
+            ORDER BY v.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $doctor_id]);
+    }
     $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // Get last visit (first one since ORDER BY DESC)
@@ -180,18 +235,33 @@ foreach ($visits as $visit) {
 // ================================================================
 $diagnoses = [];
 try {
-    $stmt = $db->prepare("
-        SELECT v.id, v.visit_number, v.created_at, v.diagnosis, v.symptoms, v.treatment, 
-               v.complaint, v.notes, v.follow_up_date,
-               u.full_name as doctor_name,
-               (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
-               (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
-        FROM visits v
-        LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE v.patient_id = ? AND v.diagnosis IS NOT NULL AND v.diagnosis != ''
-        ORDER BY v.created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            SELECT v.id, v.visit_number, v.created_at, v.diagnosis, v.symptoms, v.treatment, 
+                   v.complaint, v.notes, v.follow_up_date,
+                   u.full_name as doctor_name,
+                   (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
+                   (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+            FROM visits v
+            LEFT JOIN users u ON v.doctor_id = u.id
+            WHERE v.patient_id = ? AND v.diagnosis IS NOT NULL AND v.diagnosis != ''
+            ORDER BY v.created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT v.id, v.visit_number, v.created_at, v.diagnosis, v.symptoms, v.treatment, 
+                   v.complaint, v.notes, v.follow_up_date,
+                   u.full_name as doctor_name,
+                   (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
+                   (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+            FROM visits v
+            LEFT JOIN users u ON v.doctor_id = u.id
+            WHERE v.patient_id = ? AND v.doctor_id = ? AND v.diagnosis IS NOT NULL AND v.diagnosis != ''
+            ORDER BY v.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $doctor_id]);
+    }
     $diagnoses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $diagnoses = [];
@@ -202,20 +272,37 @@ try {
 // ================================================================
 $prescriptions = [];
 try {
-    $stmt = $db->prepare("
-        SELECT p.*, 
-               u.full_name as doctor_name,
-               GROUP_CONCAT(DISTINCT pi.medication_name SEPARATOR ', ') as medications_list,
-               COUNT(pi.id) as medications_count
-        FROM prescriptions p
-        LEFT JOIN users u ON p.doctor_id = u.id
-        LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
-        WHERE p.patient_id = ?
-        GROUP BY p.id
-        ORDER BY p.created_at DESC
-        LIMIT 50
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            SELECT p.*, 
+                   u.full_name as doctor_name,
+                   GROUP_CONCAT(DISTINCT pi.medication_name SEPARATOR ', ') as medications_list,
+                   COUNT(pi.id) as medications_count
+            FROM prescriptions p
+            LEFT JOIN users u ON p.doctor_id = u.id
+            LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+            WHERE p.patient_id = ?
+            GROUP BY p.id
+            ORDER BY p.created_at DESC
+            LIMIT 50
+        ");
+        $stmt->execute([$patient_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT p.*, 
+                   u.full_name as doctor_name,
+                   GROUP_CONCAT(DISTINCT pi.medication_name SEPARATOR ', ') as medications_list,
+                   COUNT(pi.id) as medications_count
+            FROM prescriptions p
+            LEFT JOIN users u ON p.doctor_id = u.id
+            LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+            WHERE p.patient_id = ? AND p.doctor_id = ?
+            GROUP BY p.id
+            ORDER BY p.created_at DESC
+            LIMIT 50
+        ");
+        $stmt->execute([$patient_id, $doctor_id]);
+    }
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $prescriptions = [];
@@ -226,19 +313,35 @@ try {
 // ================================================================
 $lab_tests = [];
 try {
-    $stmt = $db->prepare("
-        SELECT lt.*, 
-               u.full_name as doctor_name,
-               lab.full_name as lab_technician_name,
-               v.patient_id
-        FROM lab_tests lt
-        JOIN visits v ON lt.visit_id = v.id
-        LEFT JOIN users u ON lt.doctor_id = u.id
-        LEFT JOIN users lab ON lt.lab_technician_id = lab.id
-        WHERE v.patient_id = ?
-        ORDER BY lt.created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            SELECT lt.*, 
+                   u.full_name as doctor_name,
+                   lab.full_name as lab_technician_name,
+                   v.patient_id
+            FROM lab_tests lt
+            JOIN visits v ON lt.visit_id = v.id
+            LEFT JOIN users u ON lt.doctor_id = u.id
+            LEFT JOIN users lab ON lt.lab_technician_id = lab.id
+            WHERE v.patient_id = ?
+            ORDER BY lt.created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT lt.*, 
+                   u.full_name as doctor_name,
+                   lab.full_name as lab_technician_name,
+                   v.patient_id
+            FROM lab_tests lt
+            JOIN visits v ON lt.visit_id = v.id
+            LEFT JOIN users u ON lt.doctor_id = u.id
+            LEFT JOIN users lab ON lt.lab_technician_id = lab.id
+            WHERE v.patient_id = ? AND v.doctor_id = ?
+            ORDER BY lt.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $doctor_id]);
+    }
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $lab_tests = [];
@@ -367,16 +470,29 @@ try {
 // ================================================================
 $appointments = [];
 try {
-    $stmt = $db->prepare("
-        SELECT a.*, 
-               u.full_name as doctor_name,
-               u.specialty as doctor_specialty
-        FROM appointments a
-        LEFT JOIN users u ON a.doctor_id = u.id
-        WHERE a.patient_id = ?
-        ORDER BY a.appointment_date DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            SELECT a.*, 
+                   u.full_name as doctor_name,
+                   u.specialty as doctor_specialty
+            FROM appointments a
+            LEFT JOIN users u ON a.doctor_id = u.id
+            WHERE a.patient_id = ?
+            ORDER BY a.appointment_date DESC
+        ");
+        $stmt->execute([$patient_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT a.*, 
+                   u.full_name as doctor_name,
+                   u.specialty as doctor_specialty
+            FROM appointments a
+            LEFT JOIN users u ON a.doctor_id = u.id
+            WHERE a.patient_id = ? AND a.doctor_id = ?
+            ORDER BY a.appointment_date DESC
+        ");
+        $stmt->execute([$patient_id, $doctor_id]);
+    }
     $appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $appointments = [];
@@ -471,10 +587,19 @@ function time_ago($timestamp) {
 }
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// PROFILE PICTURE URL
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
+// ================================================================
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -1023,6 +1148,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <h1 class="page-title">
                 <i class="fas fa-user-circle"></i> Patient History
                 <span class="page-badge"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
                 <?php if (count($visits) > 0): ?>
                     <span class="page-badge" style="background:#D1FAE5;color:#059669;">
                         <i class="fas fa-clock"></i> Last Visit: <?= date('M d, Y', strtotime($visits[0]['created_at'] ?? 'now')) ?>
@@ -1043,6 +1171,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="status-badge badge-purple">
                     <i class="fas fa-clinic-medical"></i> <?= count($visits) ?> Total Visits
                 </span>
+                <?php if ($is_admin): ?>
+                    <span class="status-badge badge-danger">
+                        <i class="fas fa-user-shield"></i> Admin View
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="page-header-right no-print">
@@ -1571,6 +1704,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="separator">|</span>
             Patient History - <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>
+            <?php if ($is_admin): ?>
+                <span class="separator">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="separator">|</span>
             <?= count($visits) ?> Visits | <?= count($diagnoses) ?> Diagnoses | <?= count($prescriptions) ?> Prescriptions | <?= count($lab_tests) ?> Lab Tests | <?= count($procedures) ?> Procedures | <?= count($tools) ?> Tools | <?= count($bills) ?> Bills
             <span class="separator">|</span>
@@ -1654,8 +1791,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     // ================================================================
     // DARK MODE - Controlled by header
     // ================================================================
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
     
     console.log('%c👤 Patient History - <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Viewing All Patients', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c📋 Patient ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
     console.log('%c💍 Marital Status: <?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c📊 Total Visits: <?= count($visits) ?>', 'font-size:12px; color:#64748B;');

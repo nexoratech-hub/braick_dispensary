@@ -5,37 +5,54 @@
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO FROM SESSION
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Doctor';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found at: " . $db_path);
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
 }
-$db = Database::getInstance()->getConnection();
 
 // ================================================================
 // GET SEARCH PARAMETERS
@@ -45,28 +62,46 @@ $type_filter = isset($_GET['type']) ? $_GET['type'] : '';
 $patient_filter = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 
 // ================================================================
-// GET DOCUMENTS - Only for patients of this doctor
+// GET DOCUMENTS
 // ================================================================
-$sql = "
-    SELECT 
-        pd.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_code,
-        u.full_name as doctor_name,
-        v.visit_number
-    FROM patient_documents pd
-    JOIN patients p ON pd.patient_id = p.id
-    LEFT JOIN users u ON pd.doctor_id = u.id
-    LEFT JOIN visits v ON pd.visit_id = v.id
-    WHERE pd.doctor_id = ?
-    AND p.id IN (
-        SELECT DISTINCT patient_id 
-        FROM visits 
-        WHERE doctor_id = ?
-    )
-";
-
-$params = [$doctor_id, $doctor_id];
+if ($is_admin) {
+    // Admin can see all documents
+    $sql = "
+        SELECT 
+            pd.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            u.full_name as doctor_name,
+            v.visit_number
+        FROM patient_documents pd
+        JOIN patients p ON pd.patient_id = p.id
+        LEFT JOIN users u ON pd.doctor_id = u.id
+        LEFT JOIN visits v ON pd.visit_id = v.id
+        WHERE 1=1
+    ";
+    $params = [];
+} else {
+    // Doctor can only see documents for their patients
+    $sql = "
+        SELECT 
+            pd.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            u.full_name as doctor_name,
+            v.visit_number
+        FROM patient_documents pd
+        JOIN patients p ON pd.patient_id = p.id
+        LEFT JOIN users u ON pd.doctor_id = u.id
+        LEFT JOIN visits v ON pd.visit_id = v.id
+        WHERE pd.doctor_id = ?
+        AND p.id IN (
+            SELECT DISTINCT patient_id 
+            FROM visits 
+            WHERE doctor_id = ?
+        )
+    ";
+    $params = [$doctor_id, $doctor_id];
+}
 
 if (!empty($search)) {
     $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pd.document_name LIKE ?)";
@@ -116,14 +151,25 @@ foreach ($documents as $doc) {
 // ================================================================
 // GET PATIENTS FOR FILTER
 // ================================================================
-$stmt = $db->prepare("
-    SELECT DISTINCT p.id, p.full_name, p.patient_id
-    FROM patients p
-    JOIN visits v ON p.id = v.patient_id
-    WHERE v.doctor_id = ?
-    ORDER BY p.full_name
-");
-$stmt->execute([$doctor_id]);
+if ($is_admin) {
+    // Admin can see all patients
+    $stmt = $db->prepare("
+        SELECT DISTINCT p.id, p.full_name, p.patient_id
+        FROM patients p
+        ORDER BY p.full_name
+    ");
+    $stmt->execute();
+} else {
+    // Doctor can only see their patients
+    $stmt = $db->prepare("
+        SELECT DISTINCT p.id, p.full_name, p.patient_id
+        FROM patients p
+        JOIN visits v ON p.id = v.patient_id
+        WHERE v.doctor_id = ?
+        ORDER BY p.full_name
+    ");
+    $stmt->execute([$doctor_id]);
+}
 $patients_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
@@ -205,6 +251,15 @@ function time_ago($timestamp) {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // VARIABLES FOR SIDEBAR
 // ================================================================
 $selected_branch_id = $doctor_branch_id;
@@ -215,10 +270,10 @@ $pending_lab_tests = 0;
 $pending_prescriptions = 0;
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -231,6 +286,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div>
             <h1 class="page-title">
                 <i class="fas fa-file-medical mr-2" style="color: #0B5ED7;"></i> Patient Documents
+                <?php if ($is_admin): ?>
+                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 View and manage documents for your patients
@@ -248,6 +306,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-user-md mr-1"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
                 </span>
+                <?php if ($is_admin): ?>
+                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                        <i class="fas fa-user-shield mr-1"></i> Admin View
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -316,6 +379,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         <div class="filter-info">
             <i class="fas fa-info-circle text-blue-600"></i>
             <span class="text-sm text-gray-500">Showing documents for <strong>your patients</strong> only (Dr. <?= htmlspecialchars($doctor_name) ?>)</span>
+            <?php if ($is_admin): ?>
+                <span class="text-sm text-red-500 ml-2">
+                    <i class="fas fa-user-shield"></i> Admin - Viewing all documents
+                </span>
+            <?php endif; ?>
         </div>
         <form method="GET" class="filter-form">
             <div class="filter-group">
@@ -457,6 +525,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Patient Documents
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#DC2626;">👑 Admin Mode</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
@@ -560,6 +632,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     
     .filter-info .text-blue-600 { color: var(--primary); }
     .filter-info .text-gray-500 { color: var(--text-secondary); }
+    .filter-info .text-red-500 { color: #DC2626; }
+    .ml-2 { margin-left: 0.5rem; }
     
     /* ================================================================
        CARD
@@ -878,6 +952,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-weight: 700;
     }
     
+    .page-badge {
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: var(--primary-bg);
+        color: var(--primary);
+        padding: 2px 14px;
+        border-radius: 20px;
+    }
+    
     [data-theme="dark"] .page-header .page-title {
         color: var(--primary-light);
     }
@@ -986,6 +1069,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     [data-theme="dark"] .filter-info .text-gray-500 {
         color: #94A3B8;
+    }
+    [data-theme="dark"] .filter-info .text-red-500 {
+        color: #F87171;
     }
     [data-theme="dark"] .footer {
         border-color: #334155;
@@ -1102,9 +1188,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 3500);
     }
 
+    // ================================================================
+    // DARK MODE
+    // ================================================================
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+
     console.log('%c📄 Patient Documents - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
+    <?php if ($is_admin): ?>
+    console.log('%c👑 Admin Mode - Viewing All Documents', 'font-size:12px; color:#DC2626;');
+    <?php endif; ?>
     console.log('%c📊 Total: <?= $total_documents ?> | Verified: <?= $verified_count ?> | Pending: <?= $unverified_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🔒 Doctor ID: <?= $doctor_id ?> - Only your patients', 'font-size:12px; color:#0B5ED7;');
     console.log('%c📤 Upload button is visible at top right', 'font-size:12px; color:#059669;');
 </script>
 

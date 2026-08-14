@@ -1,32 +1,25 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/upload_document.php
-// DOCTOR - UPLOAD PATIENT DOCUMENTS (FIXED DOWNLOAD)
-// DOWNLOAD USES PHYSICAL PATH WITH ALTERNATIVE PATHS
+// DOCTOR - UPLOAD PATIENT DOCUMENTS (ALL FILES ALLOWED)
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
 
@@ -43,6 +36,29 @@ require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, status FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    
+} catch (Exception $e) {
+    error_log("Upload document verification error: " . $e->getMessage());
+}
+
+// ================================================================
 // GET PATIENT DETAILS
 // ================================================================
 $patient = null;
@@ -53,20 +69,6 @@ if ($patient_id > 0) {
         $patient = $stmt->fetch(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         $patient = null;
-    }
-}
-
-// ================================================================
-// GET VISIT DETAILS
-// ================================================================
-$visit = null;
-if ($visit_id > 0) {
-    try {
-        $stmt = $db->prepare("SELECT * FROM visits WHERE id = ? AND doctor_id = ?");
-        $stmt->execute([$visit_id, $doctor_id]);
-        $visit = $stmt->fetch(PDO::FETCH_ASSOC);
-    } catch (Exception $e) {
-        $visit = null;
     }
 }
 
@@ -141,7 +143,7 @@ if (!is_dir($upload_dir_physical)) {
 }
 
 // ================================================================
-// HANDLE FILE UPLOAD
+// HANDLE FILE UPLOAD - ALL FILES ALLOWED
 // ================================================================
 $message = '';
 $message_type = '';
@@ -166,34 +168,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_document'])) {
         $errors[] = "Please select document type";
     }
     
-    // Handle file upload
+    // Handle file upload - ALL FILES ALLOWED
     $file_uploaded = false;
     $file_name = '';
     $file_path = '';
     $file_size = 0;
     $file_type = '';
+    $file_extension = '';
     
     if (isset($_FILES['document_file']) && $_FILES['document_file']['error'] === UPLOAD_ERR_OK) {
         $file = $_FILES['document_file'];
-        $allowed_types = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-        $max_size = 10 * 1024 * 1024; // 10MB
+        $max_size = 50 * 1024 * 1024; // 50MB
         
-        if (!in_array($file['type'], $allowed_types)) {
-            $errors[] = "File type not allowed. Allowed: PDF, JPEG, PNG, GIF, DOC, DOCX";
-        }
+        // Get file extension
+        $file_extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        
         if ($file['size'] > $max_size) {
-            $errors[] = "File size must be less than 10MB";
+            $errors[] = "File size must be less than 50MB";
         }
         
         if (empty($errors)) {
-            $file_extension = pathinfo($file['name'], PATHINFO_EXTENSION);
-            $file_name = 'doc_' . $patient_id_post . '_' . time() . '.' . $file_extension;
+            // Use original filename with timestamp to avoid duplicates
+            $file_name = 'doc_' . $patient_id_post . '_' . time() . '_' . uniqid() . '.' . $file_extension;
             
             $file_path_relative = $upload_dir_relative . $file_name;
             $file_path_physical = $upload_dir_physical . $file_name;
             
             $file_size = $file['size'];
-            $file_type = $file['type'];
+            $file_type = $file['type'] ?: $file_extension;
             
             if (move_uploaded_file($file['tmp_name'], $file_path_physical)) {
                 $file_uploaded = true;
@@ -424,6 +426,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?>
                 </span>
+                <span class="separator">|</span>
+                <span class="status-badge badge-success">
+                    <i class="fas fa-check-circle"></i> All files supported
+                </span>
             </p>
         </div>
         <div class="page-header-right">
@@ -538,14 +544,16 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                             </label>
                             <div id="filePreview" style="display:none; margin-top:10px; padding:10px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-body);">
                                 <div id="previewContent">
-                                    <i class="fas fa-file-pdf" style="font-size:2rem; color:#EF4444;"></i>
+                                    <i class="fas fa-file" style="font-size:2rem; color:#94A3B8;"></i>
                                     <span id="previewFileName" style="margin-left:10px; font-weight:500;"></span>
                                     <span id="previewFileSize" style="margin-left:10px; font-size:0.8rem; color:var(--text-secondary);"></span>
                                 </div>
                             </div>
                         </div>
-                        <small class="text-xs text-gray-400">
-                            Allowed: PDF, JPEG, PNG, GIF, DOC, DOCX (Max 10MB)
+                        <small class="text-xs file-support-hint">
+                            <i class="fas fa-check-circle" style="color:#059669;"></i>
+                            <strong style="color:#059669;">All file types are supported</strong>
+                            <span style="color:var(--text-secondary);">(PDF, JPEG, PNG, GIF, DOC, DOCX, SQL, ZIP, and more) | Max: 50MB</span>
                         </small>
                     </div>
                     
@@ -611,6 +619,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                         <span class="document-type"><?= ucfirst(str_replace('_', ' ', $doc['document_type'])) ?></span>
                                         <span class="document-date"><?= date('M d, Y', strtotime($doc['upload_date'])) ?></span>
                                         <span class="document-size"><?= formatFileSize($doc['file_size'] ?? 0) ?></span>
+                                        <?php if ($doc['file_type']): ?>
+                                            <span class="document-ext"><?= strtoupper($doc['file_type']) ?></span>
+                                        <?php endif; ?>
                                     </div>
                                     <?php if (!empty($doc['description'])): ?>
                                         <div class="document-desc"><?= htmlspecialchars($doc['description']) ?></div>
@@ -638,23 +649,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                         </span>
                                     <?php endif; ?>
                                     
-                                    <!-- DOWNLOAD - Direct file link with multiple path attempts -->
+                                    <!-- DOWNLOAD -->
                                     <?php if ($file_exists): ?>
-                                        <?php
-                                        // Try multiple download URLs
-                                        $download_urls = [
-                                            $doc['file_path'],
-                                            '/dispensary_system/frontend/assets/uploads/documents/' . $doc['file_name'],
-                                            'http://localhost/dispensary_system/frontend/assets/uploads/documents/' . $doc['file_name']
-                                        ];
-                                        $download_url = $download_urls[0];
-                                        ?>
-                                        <a href="<?= $download_url ?>" download="<?= $doc['file_name'] ?>" class="btn btn-success btn-sm" title="Download Document">
+                                        <a href="<?= $doc['file_path'] ?>" download="<?= $doc['file_name'] ?>" class="btn btn-success btn-sm" title="Download Document">
                                             <i class="fas fa-download"></i>
                                         </a>
                                     <?php endif; ?>
                                     
-                                    <!-- Verify Button (only if not verified) -->
+                                    <!-- Verify Button -->
                                     <?php if (!$is_verified): ?>
                                         <form method="POST" action="" style="display:inline;">
                                             <input type="hidden" name="verify_document" value="1">
@@ -726,6 +728,34 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 </div>
             </div>
 
+            <!-- Supported File Types Info -->
+            <div class="consultation-card supported-types">
+                <h3 class="card-title">
+                    <i class="fas fa-check-circle" style="color:#059669;"></i> Supported File Types
+                </h3>
+                <div class="supported-types-grid">
+                    <span class="type-tag">📄 PDF</span>
+                    <span class="type-tag">🖼️ JPEG</span>
+                    <span class="type-tag">🖼️ PNG</span>
+                    <span class="type-tag">🎞️ GIF</span>
+                    <span class="type-tag">📝 DOC</span>
+                    <span class="type-tag">📝 DOCX</span>
+                    <span class="type-tag">📊 XLS</span>
+                    <span class="type-tag">📊 XLSX</span>
+                    <span class="type-tag">📑 CSV</span>
+                    <span class="type-tag">📄 TXT</span>
+                    <span class="type-tag">🗄️ SQL</span>
+                    <span class="type-tag">📦 ZIP</span>
+                    <span class="type-tag">📦 RAR</span>
+                    <span class="type-tag">🎬 MP4</span>
+                    <span class="type-tag">🎵 MP3</span>
+                    <span class="type-tag">📁 And more...</span>
+                </div>
+                <p class="text-xs text-muted mt-2">
+                    <i class="fas fa-info-circle"></i> All file types are accepted. Maximum file size: <strong>50 MB</strong>
+                </p>
+            </div>
+
         </div>
     </div>
 
@@ -756,9 +786,77 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </div>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
+<!-- FULL CSS - LIGHT & DARK MODE -->
 <!-- ================================================================ -->
 <style>
+    /* ================================================================
+       ROOT VARIABLES
+       ================================================================ */
+    :root {
+        --primary: #0B5ED7;
+        --primary-dark: #0A4CA8;
+        --primary-light: #6EA8FE;
+        --primary-bg: #E8F0FE;
+        --success: #059669;
+        --success-dark: #047857;
+        --success-light: #34D399;
+        --success-bg: #D1FAE5;
+        --danger: #DC2626;
+        --danger-dark: #B91C1C;
+        --danger-light: #F87171;
+        --danger-bg: #FEE2E2;
+        --warning: #D97706;
+        --warning-bg: #FEF3C7;
+        --white: #FFFFFF;
+        --gray-50: #F8FAFC;
+        --gray-100: #F1F5F9;
+        --gray-200: #E2E8F0;
+        --gray-300: #CBD5E1;
+        --gray-400: #94A3B8;
+        --gray-500: #64748B;
+        --gray-600: #475569;
+        --gray-700: #334155;
+        --gray-800: #1E293B;
+        --gray-900: #0F172A;
+        --bg-body: #F1F5F9;
+        --bg-card: #FFFFFF;
+        --bg-nav: #FFFFFF;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --border-color: #E2E8F0;
+        --shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.07);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.1);
+    }
+    
+    [data-theme="dark"] {
+        --bg-body: #0F172A;
+        --bg-card: #1E293B;
+        --bg-nav: #1E293B;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --border-color: #334155;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.4);
+    }
+    
+    /* ================================================================
+       BASE STYLES
+       ================================================================ */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg-body); }
+    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+    
     /* ================================================================
        MAIN CONTENT
        ================================================================ */
@@ -767,9 +865,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         margin-top: 68px;
         padding: 24px 28px;
         min-height: calc(100vh - 68px);
-        background: var(--bg-body);
-        color: var(--text-primary);
         transition: all 0.3s ease;
+        background: var(--bg-body);
     }
     
     /* ================================================================
@@ -787,6 +884,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .page-header-left { flex: 1; }
+    
     .page-title {
         font-size: 1.6rem;
         font-weight: 700;
@@ -797,6 +895,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         flex-wrap: wrap;
     }
     .page-title i { color: var(--primary); }
+    
     .page-badge {
         font-size: 0.7rem;
         font-weight: 600;
@@ -805,6 +904,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         padding: 2px 14px;
         border-radius: 20px;
     }
+    
     .page-subtitle {
         font-size: 0.9rem;
         color: var(--text-secondary);
@@ -814,11 +914,6 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         align-items: center;
         gap: 8px;
     }
-    .separator { color: var(--border-color); margin: 0 4px; }
-    .ml-2 { margin-left: 8px; }
-    .text-xs { font-size: 0.75rem; }
-    .opacity-70 { opacity: 0.7; }
-    .text-gray-400 { color: var(--text-secondary); }
     
     .page-header-right {
         display: flex;
@@ -826,6 +921,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         align-items: center;
         flex-wrap: wrap;
     }
+    
+    .separator { color: var(--border-color); margin: 0 4px; }
+    .ml-2 { margin-left: 8px; }
+    .mt-2 { margin-top: 8px; }
+    .mr-1 { margin-right: 4px; }
+    .mr-2 { margin-right: 8px; }
+    .text-xs { font-size: 0.75rem; }
+    .text-sm { font-size: 0.85rem; }
+    .opacity-70 { opacity: 0.7; }
     
     /* ================================================================
        BADGES & TAGS
@@ -862,7 +966,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         display: inline-block;
         font-size: 0.6rem;
         font-weight: 600;
-        padding: 1px 10px;
+        padding: 2px 12px;
         border-radius: 12px;
         border: 1px solid transparent;
     }
@@ -933,7 +1037,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     .consultation-card:hover {
         border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
+        box-shadow: var(--shadow-md);
     }
     
     .card-title {
@@ -955,6 +1059,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
        FORM
        ================================================================ */
     .form-group { margin-bottom: 14px; }
+    
     .form-label {
         display: block;
         font-size: 0.75rem;
@@ -980,7 +1085,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border-color: var(--primary);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
     }
-    .form-control::placeholder { color: var(--text-secondary); opacity: 0.6; }
+    .form-control::placeholder {
+        color: var(--text-secondary);
+        opacity: 0.6;
+    }
     select.form-control { appearance: auto; cursor: pointer; }
     textarea.form-control { resize: vertical; min-height: 60px; }
     
@@ -1021,6 +1129,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: var(--text-secondary);
     }
     
+    .file-support-hint {
+        display: block;
+        margin-top: 6px;
+        font-size: 0.75rem;
+    }
+    .file-support-hint i {
+        margin-right: 4px;
+    }
+    
     #filePreview {
         background: var(--bg-body);
         border: 1px solid var(--border-color);
@@ -1033,9 +1150,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         align-items: center;
         gap: 10px;
     }
-    #previewContent i {
-        font-size: 2rem;
-    }
+    #previewContent i { font-size: 2rem; }
     #previewFileName {
         font-weight: 500;
         color: var(--text-primary);
@@ -1062,6 +1177,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border: none;
         text-decoration: none;
         background: transparent;
+        min-height: 40px;
     }
     .btn-primary {
         background: var(--primary);
@@ -1100,7 +1216,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border-color: var(--primary);
         color: var(--primary);
     }
-    .btn-sm { padding: 4px 12px; font-size: 0.7rem; border-radius: 6px; }
+    .btn-sm {
+        padding: 4px 12px;
+        font-size: 0.7rem;
+        border-radius: 6px;
+        min-height: 32px;
+    }
     .btn-sm.disabled {
         opacity: 0.5;
         cursor: not-allowed;
@@ -1168,7 +1289,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .document-meta {
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
+        gap: 6px;
         font-size: 0.7rem;
         color: var(--text-secondary);
         margin-top: 2px;
@@ -1195,6 +1316,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         gap: 4px;
         flex-shrink: 0;
         flex-wrap: wrap;
+        align-items: center;
     }
     
     /* ================================================================
@@ -1219,6 +1341,41 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: var(--text-primary);
         padding: 2px 0;
     }
+    
+    /* ================================================================
+       SUPPORTED TYPES
+       ================================================================ */
+    .supported-types-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .type-tag {
+        background: var(--primary-bg);
+        color: var(--primary);
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        border: 1px solid rgba(11, 94, 215, 0.15);
+        transition: all 0.3s ease;
+    }
+    .type-tag:hover {
+        background: var(--primary);
+        color: white;
+        transform: scale(1.05);
+    }
+    [data-theme="dark"] .type-tag {
+        background: #1E3A5F;
+        color: #6EA8FE;
+        border-color: #1E3A5F;
+    }
+    [data-theme="dark"] .type-tag:hover {
+        background: #6EA8FE;
+        color: #0F172A;
+    }
+    
+    .text-muted { color: var(--text-secondary); }
     
     /* ================================================================
        EMPTY STATE
@@ -1278,7 +1435,72 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-size: 0.7rem;
         color: var(--text-secondary);
     }
-    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    .footer .footer-brand {
+        color: var(--primary);
+        font-weight: 600;
+    }
+    .text-gray-300 { color: #D1D5DB; }
+    .mx-2 { margin: 0 8px; }
+    
+    /* ================================================================
+       DARK MODE OVERRIDES
+       ================================================================ */
+    [data-theme="dark"] .consultation-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .consultation-card:hover {
+        border-color: #6EA8FE;
+    }
+    [data-theme="dark"] .document-item:hover {
+        background: #0F172A;
+    }
+    [data-theme="dark"] .document-meta span {
+        background: #0F172A;
+    }
+    [data-theme="dark"] .file-label {
+        background: #0F172A;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .file-label:hover {
+        border-color: #6EA8FE;
+        background: #1E3A5F;
+    }
+    [data-theme="dark"] #filePreview {
+        background: #0F172A;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .page-title {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .page-subtitle {
+        color: #94A3B8;
+    }
+    [data-theme="dark"] .form-control {
+        background: #1E293B;
+        border-color: #334155;
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .form-control:focus {
+        border-color: #6EA8FE;
+        box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.15);
+    }
+    [data-theme="dark"] .footer {
+        border-color: #334155;
+        color: #64748B;
+    }
+    [data-theme="dark"] .empty-state i {
+        color: #334155;
+    }
+    [data-theme="dark"] .empty-state h3 {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .info-value {
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .document-name {
+        color: #F1F5F9;
+    }
     
     /* ================================================================
        RESPONSIVE
@@ -1293,34 +1515,114 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     @media (max-width: 768px) {
-        .main-content { margin-left: 0; padding: 12px; }
-        .page-header { flex-direction: column; }
-        .page-header-right { width: 100%; }
-        .page-header-right .btn { flex: 1; justify-content: center; }
-        .consultation-card { padding: 12px 14px; }
-        .page-title { font-size: 1.2rem; }
-        .form-actions { flex-direction: column; }
-        .form-actions .btn { width: 100%; justify-content: center; }
-        .document-item { flex-direction: column; align-items: flex-start; gap: 8px; }
-        .document-actions { width: 100%; justify-content: flex-start; }
-        .quick-info-grid { grid-template-columns: 1fr; }
-        .page-subtitle { flex-direction: column; align-items: flex-start; gap: 4px; }
+        .main-content {
+            margin-left: 0;
+            padding: 12px;
+        }
+        .page-header {
+            flex-direction: column;
+        }
+        .page-header-right {
+            width: 100%;
+        }
+        .page-header-right .btn {
+            flex: 1;
+            justify-content: center;
+        }
+        .consultation-card {
+            padding: 12px 14px;
+        }
+        .page-title {
+            font-size: 1.2rem;
+        }
+        .form-actions {
+            flex-direction: column;
+        }
+        .form-actions .btn {
+            width: 100%;
+            justify-content: center;
+        }
+        .document-item {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        .document-actions {
+            width: 100%;
+            justify-content: flex-start;
+        }
+        .quick-info-grid {
+            grid-template-columns: 1fr;
+        }
+        .page-subtitle {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 4px;
+        }
         .separator { display: none; }
+        .supported-types-grid {
+            justify-content: center;
+        }
     }
     
     @media (max-width: 480px) {
-        .file-label { flex-direction: column; text-align: center; }
-        .document-meta { flex-direction: column; gap: 4px; }
-        #filePreview #previewContent { flex-wrap: wrap; }
+        .file-label {
+            flex-direction: column;
+            text-align: center;
+        }
+        .document-meta {
+            flex-direction: column;
+            gap: 4px;
+        }
+        #filePreview #previewContent {
+            flex-wrap: wrap;
+        }
+        .page-title {
+            font-size: 1rem;
+        }
+        .page-badge {
+            font-size: 0.6rem;
+            padding: 1px 10px;
+        }
+        .type-tag {
+            font-size: 0.6rem;
+            padding: 2px 10px;
+        }
+        .btn-sm {
+            padding: 3px 8px;
+            font-size: 0.6rem;
+            min-height: 26px;
+        }
     }
     
     @media print {
-        .top-nav, .sidebar, .btn, .footer { display: none !important; }
-        .main-content { margin: 0 !important; padding: 20px !important; }
-        .consultation-card { border: 1px solid #ddd !important; box-shadow: none !important; page-break-inside: avoid; }
-        .page-header { border-bottom: 2px solid #0B5ED7 !important; }
-        .file-upload-wrapper { display: none !important; }
-        .form-actions { display: none !important; }
+        .top-nav, .sidebar, .btn, .footer {
+            display: none !important;
+        }
+        .main-content {
+            margin: 0 !important;
+            padding: 20px !important;
+        }
+        .consultation-card {
+            border: 1px solid #ddd !important;
+            box-shadow: none !important;
+            page-break-inside: avoid;
+        }
+        .page-header {
+            border-bottom: 2px solid #0B5ED7 !important;
+        }
+        .file-upload-wrapper {
+            display: none !important;
+        }
+        .form-actions {
+            display: none !important;
+        }
+        .document-actions .btn {
+            display: none !important;
+        }
+        .supported-types {
+            display: none !important;
+        }
     }
 </style>
 
@@ -1349,15 +1651,33 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             
             var icon = previewContent.querySelector('i');
             var fileType = file.type;
-            if (fileType === 'application/pdf') {
+            var ext = file.name.split('.').pop().toLowerCase();
+            
+            // Set icon based on file type/extension
+            if (fileType === 'application/pdf' || ext === 'pdf') {
                 icon.className = 'fas fa-file-pdf';
                 icon.style.color = '#EF4444';
-            } else if (fileType.startsWith('image/')) {
+            } else if (fileType.startsWith('image/') || ['jpg','jpeg','png','gif','bmp','webp','svg'].includes(ext)) {
                 icon.className = 'fas fa-file-image';
                 icon.style.color = '#059669';
-            } else if (fileType === 'application/msword' || fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            } else if (fileType === 'application/msword' || fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || ['doc','docx'].includes(ext)) {
                 icon.className = 'fas fa-file-word';
                 icon.style.color = '#0B5ED7';
+            } else if (fileType === 'application/vnd.ms-excel' || fileType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || ['xls','xlsx','csv'].includes(ext)) {
+                icon.className = 'fas fa-file-excel';
+                icon.style.color = '#059669';
+            } else if (ext === 'sql') {
+                icon.className = 'fas fa-database';
+                icon.style.color = '#7C3AED';
+            } else if (['zip','rar','7z','tar','gz'].includes(ext)) {
+                icon.className = 'fas fa-file-archive';
+                icon.style.color = '#D97706';
+            } else if (['mp4','avi','mov','wmv','flv','mkv'].includes(ext)) {
+                icon.className = 'fas fa-file-video';
+                icon.style.color = '#EF4444';
+            } else if (['mp3','wav','aac','flac','ogg'].includes(ext)) {
+                icon.className = 'fas fa-file-audio';
+                icon.style.color = '#7C3AED';
             } else {
                 icon.className = 'fas fa-file';
                 icon.style.color = '#94A3B8';
@@ -1369,7 +1689,23 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     });
 
     // ================================================================
-    // DARK MODE
+    // DARK MODE - LISTEN FOR CHANGES FROM HEADER
+    // ================================================================
+    document.addEventListener('darkModeChanged', function(e) {
+        var isDark = e.detail && e.detail.isDark;
+        var html = document.documentElement;
+        
+        if (isDark) {
+            html.setAttribute('data-theme', 'dark');
+        } else {
+            html.removeAttribute('data-theme');
+        }
+        
+        console.log('🌙 Dark mode synced: ' + (isDark ? 'ON ✅' : 'OFF'));
+    });
+
+    // ================================================================
+    // CHECK INITIAL DARK MODE
     // ================================================================
     if (localStorage.getItem('darkMode') === 'true') {
         document.documentElement.setAttribute('data-theme', 'dark');
@@ -1404,10 +1740,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 500);
     <?php endif; ?>
 
+    // ================================================================
+    // CONSOLE LOG
+    // ================================================================
     console.log('%c📄 Upload Document - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
     console.log('%c📁 Documents: <?= count($documents) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c✅ All file types supported (PDF, JPEG, PNG, GIF, DOC, DOCX, SQL, ZIP, etc.)', 'font-size:12px; color:#059669;');
     console.log('%c📂 Upload Directory: C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/', 'font-size:12px; color:#34D399;');
-    console.log('%c⬇️ Download uses multiple path attempts', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📊 Max file size: 50MB', 'font-size:12px; color:#D97706;');
 </script>
 
 </body>

@@ -1,0 +1,3003 @@
+-- phpMyAdmin SQL Dump
+-- version 5.2.1
+-- https://www.phpmyadmin.net/
+--
+-- Host: 127.0.0.1
+-- Generation Time: Aug 13, 2026 at 01:53 PM
+-- Server version: 10.4.32-MariaDB
+-- PHP Version: 8.2.12
+
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET NAMES utf8mb4 */;
+
+--
+-- Database: `dispensary_db`
+--
+
+DELIMITER $$
+--
+-- Procedures
+--
+CREATE DEFINER=`root`@`localhost` PROCEDURE `calculate_visit_total` (IN `visit_id_param` INT)   BEGIN
+    DECLARE reg_fee DECIMAL(10,2) DEFAULT 0;
+    DECLARE consult_fee DECIMAL(10,2) DEFAULT 0;
+    DECLARE lab_fees DECIMAL(10,2) DEFAULT 0;
+    DECLARE pharm_fees DECIMAL(10,2) DEFAULT 0;
+    DECLARE other_fees DECIMAL(10,2) DEFAULT 0;
+    DECLARE total DECIMAL(10,2) DEFAULT 0;
+    DECLARE discount DECIMAL(10,2) DEFAULT 0;
+    DECLARE discount_percent DECIMAL(5,2) DEFAULT 0;
+    
+    -- Get visit fees and discount
+    SELECT 
+        registration_fee,
+        consultation_fee,
+        lab_fees_total,
+        pharmacy_fees_total,
+        other_fees_total,
+        discount_percent
+    INTO reg_fee, consult_fee, lab_fees, pharm_fees, other_fees, discount_percent
+    FROM visits 
+    WHERE id = visit_id_param;
+    
+    -- Calculate total
+    SET total = IFNULL(reg_fee, 0) + IFNULL(consult_fee, 0) + IFNULL(lab_fees, 0) + IFNULL(pharm_fees, 0) + IFNULL(other_fees, 0);
+    
+    -- Calculate discount amount
+    SET discount = (total * IFNULL(discount_percent, 0)) / 100;
+    
+    -- Update visit total and discount
+    UPDATE visits 
+    SET 
+        visit_total = total,
+        total_discount = discount
+    WHERE id = visit_id_param;
+    
+    SELECT total as subtotal, discount as discount_amount, (total - discount) as grand_total;
+END$$
+
+--
+-- Functions
+--
+CREATE DEFINER=`root`@`localhost` FUNCTION `generate_service_code` (`p_category` VARCHAR(20), `p_branch_id` INT) RETURNS VARCHAR(20) CHARSET utf8mb4 COLLATE utf8mb4_general_ci DETERMINISTIC BEGIN
+            DECLARE prefix VARCHAR(10);
+            DECLARE next_number INT;
+            DECLARE new_code VARCHAR(20);
+            DECLARE category_prefix VARCHAR(10);
+            
+            CASE p_category
+                WHEN 'registration' THEN SET category_prefix = 'REG';
+                WHEN 'consultation' THEN SET category_prefix = 'CONS';
+                WHEN 'lab_test' THEN SET category_prefix = 'LAB';
+                WHEN 'medication' THEN SET category_prefix = 'MED';
+                WHEN 'procedure' THEN SET category_prefix = 'PROC';
+                WHEN 'other' THEN SET category_prefix = 'OTHR';
+                ELSE SET category_prefix = 'SVC';
+            END CASE;
+            
+            SET prefix = CONCAT(category_prefix, '-', LPAD(p_branch_id, 2, '0'));
+            
+            SELECT IFNULL(MAX(CAST(SUBSTRING_INDEX(service_code, '-', -1) AS UNSIGNED)), 0) + 1
+            INTO next_number
+            FROM service_fees
+            WHERE service_code LIKE CONCAT(prefix, '-%');
+            
+            IF next_number IS NULL OR next_number = 0 THEN
+                SET next_number = 1;
+            END IF;
+            
+            SET new_code = CONCAT(prefix, '-', LPAD(next_number, 3, '0'));
+            
+            RETURN new_code;
+        END$$
+
+DELIMITER ;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `activity_logs`
+--
+
+CREATE TABLE `activity_logs` (
+  `id` int(11) NOT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `action` varchar(255) NOT NULL,
+  `details` text DEFAULT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `activity_logs`
+--
+
+INSERT INTO `activity_logs` (`id`, `user_id`, `branch_id`, `patient_id`, `action`, `details`, `ip_address`, `user_agent`, `created_at`) VALUES
+(227, 6, NULL, NULL, 'patient_registered', 'New patient registered: ADAM CLISTOPHER (ID: P-2026-0008) in Dodoma - Visit: VIS-20260727-0063 (No bill created)', NULL, NULL, '2026-07-27 14:31:39'),
+(228, 6, NULL, NULL, 'patient_registered', 'New patient registered: KELVIN P. KIMARO (ID: P-2026-0009) in Dodoma - Visit: VIS-20260727-0064 (No bill created)', NULL, NULL, '2026-07-27 17:44:55'),
+(229, 6, NULL, NULL, 'patient_registered', 'New patient registered: MUSSA MONGI (ID: P-2026-0010) in Dodoma - Visit: VIS-20260727-0065 (No bill created)', NULL, NULL, '2026-07-27 18:19:37'),
+(230, 6, NULL, NULL, 'patient_registered', 'New patient registered: MSAFIR JUMA (ID: P-2026-0011) in Dodoma - Visit: VIS-20260729-0066 (No bill created)', NULL, NULL, '2026-07-29 08:54:04'),
+(231, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-29 09:23:04'),
+(232, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-29 09:32:35'),
+(233, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-29 09:42:28'),
+(234, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-29 09:42:35'),
+(235, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MUSSA WAMBURA (ID: P-2026-0012) - Visit: VIS-20260729-0067', NULL, NULL, '2026-07-29 09:43:50'),
+(236, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260729-0067 auto-completed', NULL, NULL, '2026-07-29 09:51:09'),
+(237, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260729-0067-636 confirmed - Bill #BILL-PRES-20260729-0067 sent to Cashier', NULL, NULL, '2026-07-29 10:00:12'),
+(238, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260729-0066-755 confirmed - Bill #BILL-PRES-20260729-0066 sent to Cashier', NULL, NULL, '2026-07-29 10:44:09'),
+(239, 5, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260729-0055-923 confirmed - Status: PENDING → CONFIRMED | Bill #BILL-PRES-20260729-0055 sent to Cashier | Branch: Dodoma', NULL, NULL, '2026-07-29 10:57:54'),
+(240, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: KELVIN P. NASHON (ID: P-2026-0013) - Visit: VIS-20260729-0068', NULL, NULL, '2026-07-29 11:03:36'),
+(241, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260729-0068-831 confirmed - Status: PENDING → CONFIRMED | Bill #BILL-PRES-20260729-0068 sent to Cashier | Branch: Dodoma', NULL, NULL, '2026-07-29 11:04:34'),
+(242, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260729-0055-923 auto-dispensed after payment (Bill: BILL-PRES-20260729-0055)', NULL, NULL, '2026-07-29 11:12:15'),
+(243, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260729-0068-831 auto-dispensed after payment (Bill: BILL-PRES-20260729-0068)', NULL, NULL, '2026-07-29 11:12:15'),
+(244, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260729-0066-755 auto-dispensed after payment (Bill: BILL-PRES-20260729-0066)', NULL, NULL, '2026-07-29 11:14:36'),
+(245, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260729-0068 auto-completed', NULL, NULL, '2026-07-29 14:06:51'),
+(246, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 11:02:07'),
+(247, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 11:02:25'),
+(248, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 11:12:23'),
+(249, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 11:12:36'),
+(250, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 11:18:33'),
+(251, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 11:21:34'),
+(252, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 11:21:46'),
+(253, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 11:22:12'),
+(254, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 11:23:13'),
+(255, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 11:23:19'),
+(256, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 11:39:50'),
+(257, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 11:49:17'),
+(258, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 12:03:05'),
+(259, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 12:03:22'),
+(260, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 12:09:20'),
+(261, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 12:16:27'),
+(262, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260730-1470 auto-completed', NULL, NULL, '2026-07-30 12:21:30'),
+(263, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 12:27:30'),
+(264, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 12:27:35'),
+(265, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 12:33:24'),
+(266, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 12:33:29'),
+(267, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 12:33:37'),
+(268, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 12:42:35'),
+(269, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JUMA ALL JUMA (ID: P-2026-0014) - Visit: VIS-20260730-0069', NULL, NULL, '2026-07-30 12:42:44'),
+(270, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-30 12:48:05'),
+(271, 6, NULL, NULL, 'appointment_created', 'New appointment created for patient ID: 67 with doctor ID: 7', NULL, NULL, '2026-07-30 12:48:52'),
+(272, 6, NULL, NULL, 'appointment_created', 'New appointment created for patient ID: 67 with doctor ID: 7', NULL, NULL, '2026-07-30 12:54:39'),
+(273, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-30 12:54:53'),
+(274, 6, NULL, NULL, 'appointment_created', 'New appointment created for patient ID: 67 with doctor ID: 5', NULL, NULL, '2026-07-30 12:56:12'),
+(275, 5, NULL, NULL, 'appointment_confirmed', 'Appointment #7 confirmed for patient: MUSSA WAMBURA', NULL, NULL, '2026-07-30 12:56:45'),
+(276, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 7 status changed to confirmed', NULL, NULL, '2026-07-30 12:58:22'),
+(277, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 7 status changed to confirmed', NULL, NULL, '2026-07-30 12:58:24'),
+(278, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 7 status changed to confirmed', NULL, NULL, '2026-07-30 13:02:50'),
+(279, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 7 status changed to confirmed', NULL, NULL, '2026-07-30 13:02:52'),
+(280, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 5 status changed to confirmed', NULL, NULL, '2026-07-30 13:16:39'),
+(281, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 5 status changed to confirmed', NULL, NULL, '2026-07-30 13:16:41'),
+(282, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 7 status changed to confirmed', NULL, NULL, '2026-07-30 13:36:08'),
+(283, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 7 status changed to confirmed', NULL, NULL, '2026-07-30 13:37:08'),
+(284, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 7 status changed to confirmed', NULL, NULL, '2026-07-30 13:37:11'),
+(285, 6, NULL, NULL, 'patient_registered', 'New patient registered: SALOME SANGA (ID: P-2026-0015) in Dodoma - Visit: VIS-20260730-0070 (No bill created)', NULL, NULL, '2026-07-30 14:52:16'),
+(286, 6, NULL, NULL, 'patient_registered', 'New patient registered: WINIFRIDA SAMWEL (ID: P-2026-0016) in Dodoma - Visit: VIS-20260730-0071 (No bill created)', NULL, NULL, '2026-07-30 14:53:44'),
+(287, 6, NULL, NULL, 'patient_registered', 'New patient registered: JUDITH SOLOMONI (ID: P-2026-0017) in Dodoma - Visit: VIS-20260730-0072 (No bill created)', NULL, NULL, '2026-07-30 14:55:01'),
+(288, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-07-31 13:41:17'),
+(289, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-07-31 13:41:18'),
+(290, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260729-9152 auto-completed', NULL, NULL, '2026-08-01 12:25:14'),
+(291, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260730-0069 auto-completed', NULL, NULL, '2026-08-01 13:56:38'),
+(292, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260730-0070 auto-completed', NULL, NULL, '2026-08-01 13:56:38'),
+(293, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260730-0068-209 confirmed - Bill #BILL-PRES-20260801-0068', NULL, NULL, '2026-08-01 13:59:27'),
+(294, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260801-0070-317 confirmed - Bill #BILL-PRES-20260801-0070', NULL, NULL, '2026-08-01 13:59:31'),
+(295, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260730-0068-209 auto-dispensed after payment (Bill: BILL-PRES-20260801-0068)', NULL, NULL, '2026-08-01 14:01:00'),
+(296, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260801-0070-782 auto-dispensed after payment (Bill: BILL-PRES-20260801-0070)', NULL, NULL, '2026-08-01 14:01:00'),
+(297, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260801-0070-317 auto-dispensed after payment (Bill: BILL-PRES-20260801-0070)', NULL, NULL, '2026-08-01 14:01:00'),
+(298, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-01 14:02:49'),
+(299, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-01 14:03:02'),
+(300, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-01 14:03:39'),
+(301, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-01 14:13:12'),
+(302, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JACKSON MYULW (ID: P-2026-0018) - Visit: VIS-20260801-0073', NULL, NULL, '2026-08-01 14:21:42'),
+(303, 6, NULL, NULL, 'patient_registered', 'New patient registered: JACKSON MYULA (ID: P-2026-0001) in Dodoma - Visit: VIS-20260803-0074 (No bill created)', NULL, NULL, '2026-08-03 09:49:24'),
+(304, 11, NULL, NULL, 'patient_registered', 'New patient registered: MAGRETH MSAFIRI (ID: P-2026-0002) in Dodoma - Visit: VIS-20260803-0075 (No bill created)', NULL, NULL, '2026-08-03 09:53:21'),
+(305, 6, NULL, NULL, 'patient_registered', 'New patient registered: JACKSON MYULA (ID: P-2026-0001) in Dodoma - Visit: VIS-20260803-0076 (No bill created)', NULL, NULL, '2026-08-03 10:16:47'),
+(306, 6, NULL, NULL, 'patient_registered', 'New patient registered: MAGRETH MSAFIRI (ID: P-2026-0002) in Dodoma - Visit: VIS-20260803-0077 (No bill created)', NULL, NULL, '2026-08-03 11:07:20'),
+(307, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JACKSON MYULA (ID: P-2026-0001) - Visit: VIS-20260803-0078', NULL, NULL, '2026-08-03 11:52:36'),
+(308, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-03 11:55:06'),
+(309, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-03 11:55:07'),
+(310, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-03 11:55:18'),
+(311, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-03 11:55:18'),
+(312, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MAGRETH MSAFIRI (ID: P-2026-0002) - Visit: VIS-20260803-0079', NULL, NULL, '2026-08-03 12:06:56'),
+(313, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JACKSON MYULA (ID: P-2026-0001) - Visit: VIS-20260803-0080', NULL, NULL, '2026-08-03 12:16:01'),
+(314, 6, NULL, NULL, 'patient_registered', 'New patient registered: JACKSON MYULA (ID: P-2026-0001) in Dodoma - Visit: VIS-20260803-0081 (No bill created)', NULL, NULL, '2026-08-03 12:29:22'),
+(315, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MAGRETH MSAFIRI (ID: P-2026-0001) - Visit: VIS-20260803-0082', NULL, NULL, '2026-08-03 12:32:45'),
+(316, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MUSSA MONGI (ID: P-2026-0002) - Visit: VIS-20260803-0083', NULL, NULL, '2026-08-03 12:41:40'),
+(317, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MSAFIR JUMA (ID: P-2026-0003) - Visit: VIS-20260803-0084', NULL, NULL, '2026-08-03 17:27:50'),
+(318, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JACKSON MYULA (ID: P-2026-0001) - Visit: VIS-20260803-0085', NULL, NULL, '2026-08-03 17:39:45'),
+(319, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JACKSON MYULA (ID: P-2026-0001) - Visit: VIS-20260803-0086', NULL, NULL, '2026-08-03 17:42:36'),
+(320, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MAGRETH MSAFIRI (ID: P-2026-0001) - Visit: VIS-20260803-0087', NULL, NULL, '2026-08-03 17:51:02'),
+(321, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JACKSON MYULA (ID: P-2026-0001) - Visit: VIS-20260803-0088', NULL, NULL, '2026-08-03 17:59:36'),
+(322, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260803-0088 auto-completed', NULL, NULL, '2026-08-03 18:15:43'),
+(323, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260803-0088-171 confirmed - Bill #BILL-PRES-20260803-0088', NULL, NULL, '2026-08-03 18:16:08'),
+(324, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260803-0088-171 auto-dispensed after payment (Bill: BILL-PRES-20260803-0088)', NULL, NULL, '2026-08-03 18:16:41'),
+(325, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260804-0088-788 confirmed - Bill #BILL-PRES-20260804-0088', NULL, NULL, '2026-08-04 17:35:05'),
+(326, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260804-0088-788 auto-dispensed after payment (Bill: BILL-PRES-20260804-0088)', NULL, NULL, '2026-08-04 17:36:31'),
+(327, 6, NULL, NULL, 'patient_registered', 'New patient registered: MAGRETH MSAFIRI (ID: P-2026-0002) in Dodoma - Visit: VIS-20260804-0089 (No doctor assigned)', NULL, NULL, '2026-08-04 18:17:03'),
+(328, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MAGRETH MSAFIRI (ID: P-2026-0003) - Visit: VIS-20260804-0090', NULL, NULL, '2026-08-04 18:25:36'),
+(329, 11, NULL, NULL, 'user_login', 'User logged in: Rose Mwangi (Role: reception)', NULL, NULL, '2026-08-06 11:36:58'),
+(330, 11, NULL, NULL, 'appointment_created', 'New appointment created for patient ID: 88 with doctor ID: 7', NULL, NULL, '2026-08-06 11:45:17'),
+(331, 11, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 8 status changed from scheduled to confirmed', NULL, NULL, '2026-08-06 11:45:40'),
+(332, 11, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 8 status changed from confirmed to confirmed', NULL, NULL, '2026-08-06 11:45:44'),
+(333, 6, NULL, NULL, 'appointment_status_updated', 'Appointment ID: 8 status changed from confirmed to confirmed', NULL, NULL, '2026-08-06 12:05:44'),
+(334, 11, NULL, NULL, 'user_login', 'User logged in: Rose Mwangi (Role: reception)', NULL, NULL, '2026-08-06 14:24:16'),
+(335, 11, NULL, NULL, 'user_login', 'User logged in: Rose Mwangi (Role: reception)', NULL, NULL, '2026-08-06 14:24:50'),
+(336, 11, NULL, NULL, 'user_login', 'User logged in: Rose Mwangi (Role: reception)', NULL, NULL, '2026-08-06 16:22:19'),
+(337, 11, NULL, NULL, 'user_login', 'User logged in: Rose Mwangi (Role: reception)', NULL, NULL, '2026-08-06 16:22:29'),
+(338, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:45:25'),
+(339, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:45:36'),
+(340, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:45:37'),
+(341, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:45:38'),
+(342, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:45:44'),
+(343, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:45:45'),
+(344, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:45:51'),
+(345, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:45:54'),
+(346, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:45:57'),
+(347, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:45:58'),
+(348, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:45:59'),
+(349, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:00'),
+(350, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:46:01'),
+(351, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:01'),
+(352, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:46:01'),
+(353, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:01'),
+(354, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:46:02'),
+(355, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:02'),
+(356, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:46:02'),
+(357, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:03'),
+(358, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:46:03'),
+(359, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:06'),
+(360, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:46:07'),
+(361, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:12'),
+(362, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:46:24'),
+(363, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:45'),
+(364, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:46:50'),
+(365, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:46:53'),
+(366, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:49:39'),
+(367, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:51:48'),
+(368, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:51:50'),
+(369, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:51:51'),
+(370, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:51:53'),
+(371, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:53:15'),
+(372, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:53:42'),
+(373, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 11:53:45'),
+(374, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 11:59:10'),
+(375, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 12:00:50'),
+(376, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 12:02:41'),
+(377, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 12:02:47'),
+(378, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-08 12:26:32'),
+(379, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-08 12:26:37'),
+(382, 4, 1, NULL, 'doctor_removed_from_patient', 'Doctor REMOVED from patient: MAGRETH MSAFIRI (ID: P-2026-0003) - Removed doctor: Dr. John Mushi | Patient now has NO assigned doctor', NULL, NULL, '2026-08-08 14:20:43'),
+(390, 4, 1, NULL, 'doctor_removed_from_patient', 'Doctor REMOVED from patient: MAGRETH MSAFIRI (ID: P-2026-0002) - Removed doctor: Dr. David Mwanga | Patient now has NO assigned doctor', NULL, NULL, '2026-08-08 16:24:29'),
+(392, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260810-0091 auto-completed', NULL, NULL, '2026-08-10 12:33:14'),
+(394, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260810-0091-853 confirmed - Bill #BILL-PRES-20260810-0091', NULL, NULL, '2026-08-10 15:47:34'),
+(395, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260810-0092-691 confirmed - Bill #BILL-PRES-20260810-0092', NULL, NULL, '2026-08-10 15:47:40'),
+(396, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260810-0092 auto-completed', NULL, NULL, '2026-08-10 15:52:35'),
+(397, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260810-0091-853 auto-dispensed after payment (Bill: BILL-PRES-20260810-0091)', NULL, NULL, '2026-08-10 16:03:48'),
+(398, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260810-0092-691 auto-dispensed after payment (Bill: BILL-PRES-20260810-0092)', NULL, NULL, '2026-08-10 16:03:48'),
+(401, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: offline', NULL, NULL, '2026-08-10 16:33:40'),
+(402, 5, NULL, NULL, 'doctor_status_changed', 'Dr. Dr. John Mushi changed status to: online', NULL, NULL, '2026-08-10 16:34:20'),
+(405, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260812-0093-994 confirmed - Bill #BILL-PRES-20260812-0093', NULL, NULL, '2026-08-12 08:51:43'),
+(406, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260812-0092-673 confirmed - Bill #BILL-PRES-20260812-0092 - Price: 1500.00, Qty: 30', NULL, NULL, '2026-08-12 09:11:44'),
+(407, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260812-0092-673 auto-dispensed after payment (Bill: BILL-PRES-20260812-0092) - Price: 1500.00, Qty: 30', NULL, NULL, '2026-08-12 09:12:31'),
+(408, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260812-8225 auto-completed', NULL, NULL, '2026-08-12 09:13:58'),
+(413, 6, NULL, NULL, 'patient_registered', 'New patient registered: JACKSON MYULA (ID: P-2026-0001) in Dodoma - Visit: VIS-20260812-0094 (No doctor assigned)', NULL, NULL, '2026-08-12 10:55:49'),
+(414, 9, NULL, NULL, 'prescription_confirmed', 'Prescription #PRES-20260812-0094-928 confirmed - Bill #BILL-PRES-20260812-0094 - Price: 1500.00, Qty: 30', NULL, NULL, '2026-08-12 11:00:49'),
+(415, 9, NULL, NULL, 'prescription_auto_dispensed', 'Prescription #PRES-20260812-0094-928 auto-dispensed after payment (Bill: BILL-PRES-20260812-0094) - Price: 1500.00, Qty: 30', NULL, NULL, '2026-08-12 11:01:16'),
+(416, 5, NULL, NULL, 'consultation_auto_completed', 'Consultation #VIS-20260812-0094 auto-completed', NULL, NULL, '2026-08-12 14:53:41'),
+(417, 6, NULL, NULL, 'patient_registered', 'New patient registered: MARCALLISTER ALEXZANDER (ID: P-2026-0002) in Dodoma - Visit: VIS-20260813-0095 (No doctor assigned)', NULL, NULL, '2026-08-13 08:57:18'),
+(418, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JACKSON MYULA (ID: P-2026-0001) - Visit: VIS-20260813-0096 - Type: New Patient', NULL, NULL, '2026-08-13 09:25:43'),
+(419, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: KELVIN P. NASHON (ID: P-2026-0002) - Visit: VIS-20260813-0097 - Type: New Patient', NULL, NULL, '2026-08-13 09:31:10'),
+(420, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MUSSA WAMBURA (ID: P-2026-0003) - Visit: VIS-20260813-0098 - Type: New Patient', NULL, NULL, '2026-08-13 09:54:10'),
+(421, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: ANGEL MUSSA (ID: P-2026-0004) - Visit: VIS-20260813-0099 - Type: New Patient', NULL, NULL, '2026-08-13 10:01:33'),
+(422, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: JACKSON MYULA (ID: P-2026-0001) - Visit: VIS-20260813-0100 - Type: New Patient', NULL, NULL, '2026-08-13 10:07:20'),
+(423, 6, NULL, NULL, 'patient_registered_with_doctor', 'New patient registered and assigned to doctor ID #5: MUSSA MONGI (ID: P-2026-0002) - Visit: VIS-20260813-0101 - Type: New Patient', NULL, NULL, '2026-08-13 10:13:16');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `appointments`
+--
+
+CREATE TABLE `appointments` (
+  `id` int(11) NOT NULL,
+  `visit_id` int(11) DEFAULT NULL,
+  `patient_id` int(11) NOT NULL,
+  `doctor_id` int(11) NOT NULL,
+  `assigned_at` timestamp NULL DEFAULT NULL,
+  `appointment_date` datetime NOT NULL,
+  `purpose` text DEFAULT NULL,
+  `visit_type` enum('new','follow-up','emergency') DEFAULT 'new',
+  `status` enum('scheduled','confirmed','completed','cancelled') DEFAULT 'scheduled',
+  `notes` text DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `bill_items`
+--
+
+CREATE TABLE `bill_items` (
+  `id` int(11) NOT NULL,
+  `bill_id` int(11) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `item_type` enum('registration','consultation','lab_test','medication','procedure','tool','other') NOT NULL DEFAULT 'other',
+  `item_id` int(11) DEFAULT NULL,
+  `item_name` varchar(100) NOT NULL,
+  `quantity` int(11) DEFAULT 1,
+  `unit_price` decimal(10,2) NOT NULL,
+  `total_price` decimal(10,2) NOT NULL,
+  `payment_status` enum('pending','paid','partial','cancelled') DEFAULT 'pending',
+  `is_paid` tinyint(1) DEFAULT 0,
+  `status` varchar(20) DEFAULT 'pending',
+  `paid_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `amount` decimal(10,2) DEFAULT 0.00,
+  `description` varchar(255) DEFAULT NULL,
+  `department` varchar(50) DEFAULT NULL,
+  `service_type` varchar(50) DEFAULT NULL,
+  `reference_id` int(11) DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `bill_items`
+--
+
+INSERT INTO `bill_items` (`id`, `bill_id`, `patient_id`, `branch_id`, `item_type`, `item_id`, `item_name`, `quantity`, `unit_price`, `total_price`, `payment_status`, `is_paid`, `status`, `paid_at`, `created_at`, `amount`, `description`, `department`, `service_type`, `reference_id`, `updated_at`) VALUES
+(564, 193, NULL, NULL, 'consultation', NULL, 'Consultation (New patient)', 1, 10000.00, 10000.00, 'pending', 0, 'pending', NULL, '2026-08-13 10:07:20', 0.00, NULL, NULL, NULL, NULL, NULL),
+(565, 194, NULL, NULL, 'consultation', NULL, 'Consultation (New patient)', 1, 10000.00, 10000.00, 'pending', 0, 'pending', NULL, '2026-08-13 10:13:16', 0.00, NULL, NULL, NULL, NULL, NULL);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `branches`
+--
+
+CREATE TABLE `branches` (
+  `id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `location` varchar(255) NOT NULL,
+  `phone` varchar(20) DEFAULT NULL,
+  `email` varchar(100) DEFAULT NULL,
+  `logo` varchar(255) DEFAULT NULL,
+  `status` enum('active','inactive') DEFAULT 'active',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `branches`
+--
+
+INSERT INTO `branches` (`id`, `name`, `location`, `phone`, `email`, `logo`, `status`, `created_at`, `updated_at`) VALUES
+(1, 'Dodoma', 'Dodoma City, Tanzania', '+255 700 000 001', 'dodoma@braick.com', NULL, 'active', '2026-07-16 11:29:23', '2026-08-12 16:23:54'),
+(2, 'Arusha', 'Arusha City, Tanzania', '+255 700 000 002', 'arusha@braick.com', NULL, 'active', '2026-07-16 11:29:23', '2026-07-16 11:29:23'),
+(3, 'Dar es Salaam', 'Dar es Salaam, Tanzania', '+255 700 000 003', 'dar@braick.com', NULL, 'active', '2026-07-16 11:29:23', '2026-07-16 11:29:23'),
+(4, 'MBEYA', 'SOWETO', '0746526241', 'braickdispensary@gmail.com', NULL, 'active', '2026-08-11 16:22:00', '2026-08-12 16:23:54');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `departments`
+--
+
+CREATE TABLE `departments` (
+  `id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `description` text DEFAULT NULL,
+  `head_of_department` varchar(100) DEFAULT NULL,
+  `status` enum('active','inactive') DEFAULT 'active',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `departments`
+--
+
+INSERT INTO `departments` (`id`, `name`, `description`, `head_of_department`, `status`, `created_at`, `updated_at`) VALUES
+(1, 'Medical Department', 'Handles all medical consultations and treatments', NULL, 'active', '2026-07-16 11:37:31', '2026-07-16 11:37:31'),
+(2, 'Laboratory Department', 'Handles all laboratory tests and results', NULL, 'active', '2026-07-16 11:37:31', '2026-07-16 11:37:31'),
+(3, 'Pharmacy Department', 'Handles medicine dispensing and inventory', NULL, 'active', '2026-07-16 11:37:31', '2026-07-16 11:37:31'),
+(4, 'Reception Department', 'Handles patient registration and appointments', NULL, 'active', '2026-07-16 11:37:31', '2026-07-16 11:37:31'),
+(5, 'Finance Department', 'Handles billing, payments and financial records', NULL, 'active', '2026-07-16 11:37:31', '2026-07-16 11:37:31'),
+(6, 'Administration Department', 'Handles administrative tasks and management', NULL, 'active', '2026-07-16 11:37:31', '2026-07-16 11:37:31'),
+(7, 'IT Department', 'Handles system maintenance and support', NULL, 'active', '2026-07-16 11:37:31', '2026-07-16 11:37:31');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `doctor_status`
+--
+
+CREATE TABLE `doctor_status` (
+  `id` int(11) NOT NULL,
+  `doctor_id` int(11) NOT NULL,
+  `is_online` tinyint(1) DEFAULT 0,
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `employee_departments`
+--
+
+CREATE TABLE `employee_departments` (
+  `user_id` int(11) NOT NULL,
+  `department_id` int(11) NOT NULL,
+  `assigned_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `employee_roles`
+--
+
+CREATE TABLE `employee_roles` (
+  `user_id` int(11) NOT NULL,
+  `role_id` int(11) NOT NULL,
+  `assigned_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `expenses`
+--
+
+CREATE TABLE `expenses` (
+  `id` int(11) NOT NULL,
+  `expense_number` varchar(50) NOT NULL,
+  `category` varchar(100) NOT NULL,
+  `description` text NOT NULL,
+  `amount` decimal(10,2) NOT NULL,
+  `payment_method` enum('cash','m-pesa','airtel_money','tigo_pesa','bank','card','other') DEFAULT 'cash',
+  `payment_date` date NOT NULL,
+  `status` enum('pending','paid','cancelled') DEFAULT 'pending',
+  `receipt_number` varchar(50) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `created_by` int(11) NOT NULL,
+  `branch_id` int(11) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `inventory_categories`
+--
+
+CREATE TABLE `inventory_categories` (
+  `id` int(11) NOT NULL,
+  `category_name` varchar(100) NOT NULL,
+  `category_code` varchar(20) NOT NULL,
+  `description` text DEFAULT NULL,
+  `is_active` tinyint(1) DEFAULT 1,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `lab_billing_items`
+--
+
+CREATE TABLE `lab_billing_items` (
+  `id` int(11) NOT NULL,
+  `request_id` int(11) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `bill_id` int(11) NOT NULL,
+  `test_id` int(11) NOT NULL,
+  `test_name` varchar(100) NOT NULL,
+  `quantity` int(11) DEFAULT 1,
+  `unit_price` decimal(10,2) NOT NULL,
+  `total_price` decimal(10,2) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `lab_requests`
+--
+
+CREATE TABLE `lab_requests` (
+  `id` int(11) NOT NULL,
+  `request_number` varchar(50) NOT NULL,
+  `visit_id` int(11) NOT NULL,
+  `patient_id` int(11) NOT NULL,
+  `doctor_id` int(11) DEFAULT NULL,
+  `lab_technician_id` int(11) DEFAULT NULL,
+  `status` enum('pending','accepted','in_progress','completed','cancelled') DEFAULT 'pending',
+  `notes` text DEFAULT NULL,
+  `results` text DEFAULT NULL,
+  `reference_range` varchar(255) DEFAULT NULL,
+  `interpretation` text DEFAULT NULL,
+  `result_added_by` int(11) DEFAULT NULL,
+  `result_added_at` datetime DEFAULT NULL,
+  `lab_total` decimal(10,2) DEFAULT 0.00,
+  `requested_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `accepted_at` timestamp NULL DEFAULT NULL,
+  `completed_at` timestamp NULL DEFAULT NULL,
+  `cancelled_at` timestamp NULL DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `lab_request_items`
+--
+
+CREATE TABLE `lab_request_items` (
+  `id` int(11) NOT NULL,
+  `request_id` int(11) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `test_id` int(11) NOT NULL,
+  `test_name` varchar(100) NOT NULL,
+  `price` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `status` enum('pending','in_progress','completed','cancelled') DEFAULT 'pending',
+  `result` text DEFAULT NULL,
+  `reference_range` varchar(100) DEFAULT NULL,
+  `comments` text DEFAULT NULL,
+  `performed_by` int(11) DEFAULT NULL,
+  `completed_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `lab_request_items`
+--
+
+INSERT INTO `lab_request_items` (`id`, `request_id`, `patient_id`, `test_id`, `test_name`, `price`, `status`, `result`, `reference_range`, `comments`, `performed_by`, `completed_at`, `created_at`, `updated_at`) VALUES
+(98, 13, NULL, 3, 'Blood Glucose (Random)', 8000.00, 'pending', NULL, NULL, NULL, NULL, NULL, '2026-07-27 17:45:12', '2026-07-27 17:45:12'),
+(99, 14, NULL, 3, 'Blood Glucose (Random)', 8000.00, 'pending', NULL, NULL, NULL, NULL, NULL, '2026-07-27 18:19:57', '2026-07-27 18:19:57');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `lab_result_templates`
+--
+
+CREATE TABLE `lab_result_templates` (
+  `id` int(11) NOT NULL,
+  `template_name` varchar(100) NOT NULL,
+  `test_type` varchar(50) NOT NULL,
+  `category` enum('ultrasound','blood_test','urinalysis','radiology','microbiology','other') DEFAULT 'other',
+  `template_html` longtext NOT NULL,
+  `is_active` tinyint(1) DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `lab_result_templates`
+--
+
+INSERT INTO `lab_result_templates` (`id`, `template_name`, `test_type`, `category`, `template_html`, `is_active`, `created_at`, `updated_at`) VALUES
+(5, 'Obstetric Ultrasound (Twin - 2/3 Trimester)', 'Obstetric Ultrasound - Twin', 'ultrasound', '<div class=\"ultrasound-report\">\r\n    <div class=\"report-header\">\r\n        <div style=\"display:flex;align-items:center;justify-content:center;gap:15px;margin-bottom:10px;\">\r\n            <img src=\"/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png\" alt=\"Braick Dispensary\" style=\"height:60px;width:auto;max-height:60px;\" onerror=\"this.style.display=\'none\'\">\r\n            <div>\r\n                <h2 style=\"color:#0B5ED7;font-size:22px;margin:0;\">BRAICK DISPENSARY</h2>\r\n                <p style=\"font-size:12px;color:#666;margin:0;\">Quality Healthcare Services</p>\r\n            </div>\r\n        </div>\r\n        <h3 style=\"font-size:16px;color:#333;margin:0;\">ULTRASOUND REPORT – ABDOMEN AND PELVIS</h3>\r\n    </div>\r\n    \r\n    <div class=\"patient-info\">\r\n        <p><strong>Patient Name:</strong> {patient_name}</p>\r\n        <p><strong>Age/Sex:</strong> {age} yrs / {gender}</p>\r\n        <p><strong>Date of Exam:</strong> {exam_date}</p>\r\n    </div>\r\n    \r\n    <div class=\"findings\">\r\n        <h4>FINDINGS</h4>\r\n        <p><strong>Liver:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"liver\" placeholder=\"e.g. Appeared normal in size, shape, homogeneous echo pattern\"></p>\r\n        <p><strong>Gallbladder:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"gallbladder\" placeholder=\"e.g. Appears normal, well distended, no stones\"></p>\r\n        <p><strong>Pancreas:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"pancreas\" placeholder=\"e.g. Appeared normal in size and shape\"></p>\r\n        <p><strong>Spleen:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"spleen\" placeholder=\"e.g. Appeared normal in size, shape and echotexture\"></p>\r\n        <p><strong>Peritoneum:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"peritoneum\" placeholder=\"e.g. No free fluid noted\"></p>\r\n        <p><strong>Kidneys:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"kidneys\" placeholder=\"e.g. Both kidneys normal\"></p>\r\n        <p><strong>Urinary Bladder:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"bladder\" placeholder=\"e.g. Appears normal, well-distended\"></p>\r\n        <p><strong>Uterus:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"uterus\" placeholder=\"e.g. Appears normal in size and homogeneous echo pattern\"></p>\r\n        <p><strong>Right Ovary:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"right_ovary\" placeholder=\"e.g. Appears normal in size and appearance\"></p>\r\n        <p><strong>Left Ovary:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"left_ovary\" placeholder=\"e.g. Appears normal in size and appearance\"></p>\r\n        <p><strong>Pouch of Douglas:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"pouch_douglas\" placeholder=\"e.g. Free fluid seen\"></p>\r\n    </div>\r\n    \r\n    <div class=\"conclusion\">\r\n        <h4>IMPRESSION</h4>\r\n        <textarea class=\"form-control conclusion-field\" rows=\"2\" placeholder=\"Enter impression...\"></textarea>\r\n    </div>\r\n    \r\n    <div class=\"report-footer\">\r\n        <span>Technician: <input type=\"text\" class=\"form-control\" style=\"display:inline-block;width:auto;border:none;border-bottom:1px solid #ddd;padding:0 8px;\" placeholder=\"Technician Name\"></span>\r\n        <span>Date: {report_date}</span>\r\n    </div>\r\n</div>', 1, '2026-07-27 14:20:54', '2026-07-27 15:01:08'),
+(6, 'Obstetric Ultrasound (Single - 2/3 Trimester)', 'Obstetric Ultrasound - Single', 'ultrasound', '<div class=\"ultrasound-report\">\r\n    <div class=\"report-header\">\r\n        <div style=\"display:flex;align-items:center;justify-content:center;gap:15px;margin-bottom:10px;\">\r\n            <img src=\"/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png\" alt=\"Braick Dispensary\" style=\"height:60px;width:auto;max-height:60px;\" onerror=\"this.style.display=\'none\'\">\r\n            <div>\r\n                <h2 style=\"color:#0B5ED7;font-size:22px;margin:0;\">BRAICK DISPENSARY</h2>\r\n                <p style=\"font-size:12px;color:#666;margin:0;\">Quality Healthcare Services</p>\r\n            </div>\r\n        </div>\r\n        <h3 style=\"font-size:16px;color:#333;margin:0;\">OBSTETRIC ULTRASOUND REPORT</h3>\r\n    </div>\r\n    \r\n    <div class=\"patient-info\">\r\n        <p><strong>Patient Name:</strong> {patient_name}</p>\r\n        <p><strong>Age/Sex:</strong> {age} yrs / {gender}</p>\r\n        <p><strong>Date of Exam:</strong> {exam_date}</p>\r\n    </div>\r\n    \r\n    <div class=\"findings\">\r\n        <h4>FINDINGS</h4>\r\n        <p><strong>Presentation and Lie:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"presentation\" placeholder=\"e.g. single viable intrauterine fetus, in cephalic presentation\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Placenta:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"placenta\" placeholder=\"e.g. placenta is posterior, placenta calcification\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Fetal Activity:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"fetal_activity\" placeholder=\"e.g. seen\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Amniotic Fluid:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"amniotic_fluid\" placeholder=\"e.g. adequate\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Anatomical Structures:</strong> <textarea class=\"form-control placeholder-field\" data-placeholder=\"anatomical_structures\" rows=\"2\" placeholder=\"Describe anatomical structures...\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></textarea></p>\r\n        <p><strong>Maternal Kidney:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"maternal_kidney\" placeholder=\"e.g. appeared normal\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n    </div>\r\n    \r\n    <div class=\"biometry\">\r\n        <h4>BIOMETRY</h4>\r\n        <div style=\"overflow-x:auto;\">\r\n            <table>\r\n                <thead>\r\n                    <tr>\r\n                        <th>Parameter</th>\r\n                        <th>Measurement</th>\r\n                    </tr>\r\n                </thead>\r\n                <tbody>\r\n                    <tr><td><strong>BPD</strong></td><td><input type=\"text\" class=\"form-control table-field\" placeholder=\"mm\" style=\"width:150px;\"></td></tr>\r\n                    <tr><td><strong>HC</strong></td><td><input type=\"text\" class=\"form-control table-field\" placeholder=\"mm\" style=\"width:150px;\"></td></tr>\r\n                    <tr><td><strong>AC</strong></td><td><input type=\"text\" class=\"form-control table-field\" placeholder=\"mm\" style=\"width:150px;\"></td></tr>\r\n                    <tr><td><strong>FL</strong></td><td><input type=\"text\" class=\"form-control table-field\" placeholder=\"mm\" style=\"width:150px;\"></td></tr>\r\n                    <tr><td><strong>GA</strong></td><td><input type=\"text\" class=\"form-control table-field\" placeholder=\"e.g. 39W+3D\" style=\"width:150px;\"></td></tr>\r\n                    <tr><td><strong>EDD</strong></td><td><input type=\"text\" class=\"form-control table-field\" placeholder=\"DD/MM/YYYY\" style=\"width:150px;\"></td></tr>\r\n                </tbody>\r\n            </table>\r\n        </div>\r\n    </div>\r\n    \r\n    <div class=\"conclusion\">\r\n        <h4>CONCLUSION</h4>\r\n        <textarea class=\"form-control conclusion-field\" rows=\"2\" placeholder=\"Enter conclusion...\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></textarea>\r\n    </div>\r\n    \r\n    <div class=\"report-footer\">\r\n        <span>Technician: <input type=\"text\" class=\"form-control\" style=\"display:inline-block;width:auto;border:none;border-bottom:1px solid #ddd;padding:0 8px;\" placeholder=\"Technician Name\"></span>\r\n        <span>Date: {report_date}</span>\r\n    </div>\r\n</div>', 1, '2026-07-27 14:20:54', '2026-07-27 15:01:08'),
+(7, 'Obstetric Ultrasound (Early Pregnancy)', 'Obstetric Ultrasound - Early', 'ultrasound', '<div class=\"ultrasound-report\">\r\n    <div class=\"report-header\">\r\n        <div style=\"display:flex;align-items:center;justify-content:center;gap:15px;margin-bottom:10px;\">\r\n            <img src=\"/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png\" alt=\"Braick Dispensary\" style=\"height:60px;width:auto;max-height:60px;\" onerror=\"this.style.display=\'none\'\">\r\n            <div>\r\n                <h2 style=\"color:#0B5ED7;font-size:22px;margin:0;\">BRAICK DISPENSARY</h2>\r\n                <p style=\"font-size:12px;color:#666;margin:0;\">Quality Healthcare Services</p>\r\n            </div>\r\n        </div>\r\n        <h3 style=\"font-size:16px;color:#333;margin:0;\">OBSTETRIC ULTRASOUND REPORT</h3>\r\n    </div>\r\n    \r\n    <div class=\"patient-info\">\r\n        <p><strong>Patient Name:</strong> {patient_name}</p>\r\n        <p><strong>Age/Sex:</strong> {age} yrs / {gender}</p>\r\n        <p><strong>Date of Exam:</strong> {exam_date}</p>\r\n    </div>\r\n    \r\n    <div class=\"findings\">\r\n        <h4>FINDINGS</h4>\r\n        <p><strong>Embryo:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"embryo\" placeholder=\"e.g. single viable intrauterine embryo\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>CRL (Crown Rump Length):</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"crl\" placeholder=\"e.g. 31.57mm\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Gestational Age (GA):</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"ga\" placeholder=\"e.g. 10W+2D\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Fetal Pole:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"fetal_pole\" placeholder=\"e.g. seen\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Yolk Sac:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"yolk_sac\" placeholder=\"e.g. seen\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Myometrium:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"myometrium\" placeholder=\"e.g. no myometrial masses seen\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Cervix:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"cervix\" placeholder=\"e.g. normal and closed\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Adnexal Areas:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"adnexa\" placeholder=\"e.g. looked normal\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Pouch of Douglas:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"pouch_douglas\" placeholder=\"e.g. no fluid seen\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Maternal Organs:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"maternal_organs\" placeholder=\"e.g. normal\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n    </div>\r\n    \r\n    <div class=\"conclusion\">\r\n        <h4>CONCLUSION</h4>\r\n        <textarea class=\"form-control conclusion-field\" rows=\"2\" placeholder=\"Enter conclusion...\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></textarea>\r\n    </div>\r\n    \r\n    <div class=\"report-footer\">\r\n        <span>Technician: <input type=\"text\" class=\"form-control\" style=\"display:inline-block;width:auto;border:none;border-bottom:1px solid #ddd;padding:0 8px;\" placeholder=\"Technician Name\"></span>\r\n        <span>Date: {report_date}</span>\r\n    </div>\r\n</div>', 1, '2026-07-27 14:20:54', '2026-07-27 15:01:08'),
+(8, 'Abdominal Ultrasound (Male)', 'Abdominal Ultrasound - Male', 'ultrasound', '<div class=\"ultrasound-report\">\r\n    <div class=\"report-header\">\r\n        <div style=\"display:flex;align-items:center;justify-content:center;gap:15px;margin-bottom:10px;\">\r\n            <img src=\"/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png\" alt=\"Braick Dispensary\" style=\"height:60px;width:auto;max-height:60px;\" onerror=\"this.style.display=\'none\'\">\r\n            <div>\r\n                <h2 style=\"color:#0B5ED7;font-size:22px;margin:0;\">BRAICK DISPENSARY</h2>\r\n                <p style=\"font-size:12px;color:#666;margin:0;\">Quality Healthcare Services</p>\r\n            </div>\r\n        </div>\r\n        <h3 style=\"font-size:16px;color:#333;margin:0;\">ULTRASOUND REPORT – ABDOMEN AND PELVIS</h3>\r\n    </div>\r\n    \r\n    <div class=\"patient-info\">\r\n        <p><strong>Patient Name:</strong> {patient_name}</p>\r\n        <p><strong>Age/Sex:</strong> {age} yrs / {gender}</p>\r\n        <p><strong>Date of Exam:</strong> {exam_date}</p>\r\n    </div>\r\n    \r\n    <div class=\"findings\">\r\n        <h4>FINDINGS</h4>\r\n        <p><strong>Liver:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"liver\" placeholder=\"e.g. Appears normal in size, shape, homogeneous echo pattern\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Gallbladder:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"gallbladder\" placeholder=\"e.g. Appears normal, well distended, no stones\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Pancreas:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"pancreas\" placeholder=\"e.g. Appears normal in size and shape\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Spleen:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"spleen\" placeholder=\"e.g. Appears normal in size, shape and echotexture\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Peritoneum:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"peritoneum\" placeholder=\"e.g. No free fluid noted\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Kidneys:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"kidneys\" placeholder=\"e.g. Both kidneys normal\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Urinary Bladder:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"bladder\" placeholder=\"e.g. Appears normal, well-distended\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Prostate:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"prostate\" placeholder=\"e.g. Appears normal in size, shape and echotexture\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n    </div>\r\n    \r\n    <div class=\"conclusion\">\r\n        <h4>IMPRESSION/CONCLUSION</h4>\r\n        <textarea class=\"form-control conclusion-field\" rows=\"2\" placeholder=\"Enter impression...\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></textarea>\r\n    </div>\r\n    \r\n    <div class=\"report-footer\">\r\n        <span>Technician: <input type=\"text\" class=\"form-control\" style=\"display:inline-block;width:auto;border:none;border-bottom:1px solid #ddd;padding:0 8px;\" placeholder=\"Technician Name\"></span>\r\n        <span>Date: {report_date}</span>\r\n    </div>\r\n</div>', 1, '2026-07-27 14:20:54', '2026-07-27 15:01:08'),
+(9, 'Abdominal Ultrasound (Female)', 'Abdominal Ultrasound - Female', 'ultrasound', '<div class=\"ultrasound-report\">\r\n    <div class=\"report-header\">\r\n        <div style=\"display:flex;align-items:center;justify-content:center;gap:15px;margin-bottom:10px;\">\r\n            <img src=\"/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png\" alt=\"Braick Dispensary\" style=\"height:60px;width:auto;max-height:60px;\" onerror=\"this.style.display=\'none\'\">\r\n            <div>\r\n                <h2 style=\"color:#0B5ED7;font-size:22px;margin:0;\">BRAICK DISPENSARY</h2>\r\n                <p style=\"font-size:12px;color:#666;margin:0;\">Quality Healthcare Services</p>\r\n            </div>\r\n        </div>\r\n        <h3 style=\"font-size:16px;color:#333;margin:0;\">ULTRASOUND REPORT – ABDOMEN AND PELVIS</h3>\r\n    </div>\r\n    \r\n    <div class=\"patient-info\">\r\n        <p><strong>Patient Name:</strong> {patient_name}</p>\r\n        <p><strong>Age/Sex:</strong> {age} yrs / {gender}</p>\r\n        <p><strong>Date of Exam:</strong> {exam_date}</p>\r\n    </div>\r\n    \r\n    <div class=\"findings\">\r\n        <h4>FINDINGS</h4>\r\n        <p><strong>Liver:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"liver\" placeholder=\"e.g. Appeared normal in size, shape, homogeneous echo pattern\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Gallbladder:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"gallbladder\" placeholder=\"e.g. Appears normal, well distended, no stones\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Pancreas:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"pancreas\" placeholder=\"e.g. Appeared normal in size and shape\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Spleen:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"spleen\" placeholder=\"e.g. Appeared normal in size, shape and echotexture\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Peritoneum:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"peritoneum\" placeholder=\"e.g. No free fluid noted\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Kidneys:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"kidneys\" placeholder=\"e.g. Both kidneys normal\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Urinary Bladder:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"bladder\" placeholder=\"e.g. Appears normal, well-distended\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Uterus:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"uterus\" placeholder=\"e.g. Appears normal in size and homogeneous echo pattern\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Right Ovary:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"right_ovary\" placeholder=\"e.g. Appears normal in size and appearance\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Left Ovary:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"left_ovary\" placeholder=\"e.g. Appears normal in size and appearance\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n        <p><strong>Pouch of Douglas:</strong> <input type=\"text\" class=\"form-control placeholder-field\" data-placeholder=\"pouch_douglas\" placeholder=\"e.g. Free fluid seen\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></p>\r\n    </div>\r\n    \r\n    <div class=\"conclusion\">\r\n        <h4>IMPRESSION</h4>\r\n        <textarea class=\"form-control conclusion-field\" rows=\"2\" placeholder=\"Enter impression...\" style=\"width:100%;border:1px solid #ddd;border-radius:4px;padding:4px 8px;\"></textarea>\r\n    </div>\r\n    \r\n    <div class=\"report-footer\">\r\n        <span>Technician: <input type=\"text\" class=\"form-control\" style=\"display:inline-block;width:auto;border:none;border-bottom:1px solid #ddd;padding:0 8px;\" placeholder=\"Technician Name\"></span>\r\n        <span>Date: {report_date}</span>\r\n    </div>\r\n</div>', 1, '2026-07-27 14:20:54', '2026-07-27 15:01:09');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `lab_tests`
+--
+
+CREATE TABLE `lab_tests` (
+  `id` int(11) NOT NULL,
+  `visit_id` int(11) NOT NULL,
+  `doctor_id` int(11) DEFAULT NULL,
+  `lab_technician_id` int(11) DEFAULT NULL,
+  `test_name` varchar(100) NOT NULL,
+  `test_price` decimal(10,2) DEFAULT 0.00,
+  `test_type` varchar(50) DEFAULT NULL,
+  `sample_type` varchar(50) DEFAULT NULL,
+  `test_date` date DEFAULT NULL,
+  `results` text DEFAULT NULL,
+  `reference_range` varchar(100) DEFAULT NULL,
+  `interpretation` text DEFAULT NULL,
+  `performed_by` int(11) DEFAULT NULL,
+  `status` enum('pending','in_progress','completed','cancelled') DEFAULT 'pending',
+  `bill_created` tinyint(1) DEFAULT 0,
+  `notes` text DEFAULT NULL,
+  `technician_id` int(11) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `completed_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `result_template_id` int(11) DEFAULT NULL,
+  `formatted_result` longtext DEFAULT NULL,
+  `printed_at` timestamp NULL DEFAULT NULL,
+  `printed_by` int(11) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `lab_tests_catalog`
+--
+
+CREATE TABLE `lab_tests_catalog` (
+  `id` int(11) NOT NULL,
+  `test_name` varchar(100) NOT NULL,
+  `test_code` varchar(20) DEFAULT NULL,
+  `category` varchar(50) DEFAULT NULL,
+  `price` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `description` text DEFAULT NULL,
+  `reference_range` varchar(100) DEFAULT NULL,
+  `is_active` tinyint(1) DEFAULT 1,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `lab_tests_catalog`
+--
+
+INSERT INTO `lab_tests_catalog` (`id`, `test_name`, `test_code`, `category`, `price`, `description`, `reference_range`, `is_active`, `branch_id`, `created_by`, `created_at`, `updated_at`) VALUES
+(1, 'Complete Blood Count (CBC)', 'CBC-001', 'Hematology', 15000.00, 'Full blood count including RBC, WBC, hemoglobin, platelets', 'RBC: 4.5-5.5M, WBC: 4.5-11K, HGB: 13-17g/dL, PLT: 150-400K', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(2, 'Blood Glucose (Fasting)', 'GLU-001', 'Biochemistry', 8000.00, 'Fasting blood sugar test', '70-100 mg/dL (Fasting)', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(3, 'Blood Glucose (Random)', 'GLU-002', 'Biochemistry', 8000.00, 'Random blood sugar test', '70-140 mg/dL', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(4, 'Lipid Profile', 'LIP-001', 'Biochemistry', 20000.00, 'Total cholesterol, HDL, LDL, Triglycerides', 'Total: <200, LDL: <100, HDL: >40, TG: <150', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(5, 'Liver Function Test (LFT)', 'LFT-001', 'Biochemistry', 25000.00, 'AST, ALT, ALP, Total Bilirubin, Direct Bilirubin', 'AST: 10-40, ALT: 7-56, ALP: 44-147, T.Bili: 0.1-1.2', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(6, 'Renal Function Test (RFT)', 'RFT-001', 'Biochemistry', 20000.00, 'Creatinine, BUN, Uric Acid, Electrolytes', 'Creatinine: 0.6-1.2, BUN: 7-20, Uric Acid: 3.5-7.2', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(7, 'Urinalysis', 'UNA-001', 'Urinalysis', 10000.00, 'Complete urine analysis with microscopy', 'pH: 4.5-8.0, Protein: Negative, Glucose: Negative', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(8, 'Malaria Rapid Test', 'MAL-001', 'Infectious Diseases', 5000.00, 'Rapid diagnostic test for malaria (Pf/Pv)', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(9, 'Malaria Microscopy', 'MAL-002', 'Infectious Diseases', 10000.00, 'Microscopic examination for malaria parasites', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(10, 'COVID-19 Rapid Antigen Test', 'COV-001', 'Infectious Diseases', 15000.00, 'Rapid antigen test for COVID-19', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(11, 'COVID-19 PCR Test', 'COV-002', 'Molecular', 50000.00, 'RT-PCR test for COVID-19', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(12, 'Typhoid Test (Widal)', 'TYPH-001', 'Infectious Diseases', 12000.00, 'Widal test for typhoid fever', 'O: <1:80, H: <1:160', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(13, 'Dengue Test', 'DEN-001', 'Infectious Diseases', 15000.00, 'Dengue NS1 antigen test', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(14, 'HIV Rapid Test', 'HIV-001', 'Infectious Diseases', 8000.00, 'Rapid HIV antibody test', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(15, 'HIV ELISA', 'HIV-002', 'Infectious Diseases', 25000.00, 'ELISA test for HIV', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(16, 'Pregnancy Test (Urine)', 'PRE-001', 'Urinalysis', 5000.00, 'Urine pregnancy test (HCG)', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(17, 'Pregnancy Test (Blood - Beta HCG)', 'PRE-002', 'Hormone', 20000.00, 'Quantitative blood HCG test', 'Negative: <5 mIU/mL', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(18, 'Tuberculosis (TB) Skin Test', 'TB-001', 'Infectious Diseases', 10000.00, 'Mantoux tuberculin skin test', '0-4mm: Negative, 5-9mm: Indeterminate', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(19, 'Tuberculosis (TB) GeneXpert', 'TB-002', 'Molecular', 45000.00, 'GeneXpert MTB/RIF test', 'Negative/Positive/RIF Resistance', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(20, 'Sputum AFB', 'SPUT-001', 'Microbiology', 12000.00, 'Acid-fast bacilli smear test', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(21, 'Blood Culture', 'CULT-001', 'Microbiology', 30000.00, 'Blood culture and sensitivity', 'No growth/Pathogen isolated', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(22, 'Urine Culture', 'CULT-002', 'Microbiology', 25000.00, 'Urine culture and sensitivity', 'No growth/Pathogen isolated', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(23, 'Stool Analysis', 'STL-001', 'Parasitology', 10000.00, 'Complete stool examination', 'Normal/Abnormal', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(24, 'Helicobacter Pylori Test', 'HP-001', 'Infectious Diseases', 15000.00, 'H. pylori antigen test', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(25, 'Thyroid Function Test (TFT)', 'THY-001', 'Hormone', 30000.00, 'TSH, T3, T4', 'TSH: 0.4-4.0, Free T4: 0.8-1.8', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(26, 'Vitamin D Test', 'VITD-001', 'Nutrition', 25000.00, '25-Hydroxy Vitamin D test', 'Deficient: <20, Insufficient: 20-29, Sufficient: >30', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(27, 'Vitamin B12 Test', 'VITB12-001', 'Nutrition', 20000.00, 'Vitamin B12 level', '200-900 pg/mL', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(28, 'Ferritin Test', 'FERR-001', 'Nutrition', 18000.00, 'Ferritin iron stores test', 'Male: 24-336, Female: 11-307 ng/mL', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(29, 'Hepatitis B Surface Antigen (HBsAg)', 'HEP-001', 'Infectious Diseases', 15000.00, 'Hepatitis B surface antigen test', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(30, 'Hepatitis C Antibody (Anti-HCV)', 'HEP-002', 'Infectious Diseases', 15000.00, 'Hepatitis C antibody test', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(31, 'STI Panel', 'STI-001', 'Infectious Diseases', 35000.00, 'Syphilis (RPR/VDRL), Chlamydia, Gonorrhea', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(32, 'Syphilis RPR/VDRL', 'SYPH-001', 'Infectious Diseases', 10000.00, 'RPR/VDRL test for syphilis', 'Non-reactive/Reactive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(33, 'Influenza Rapid Test', 'FLU-001', 'Infectious Diseases', 12000.00, 'Rapid influenza A/B test', 'Negative/Positive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(34, 'CD4 Count', 'CD4-001', 'Immunology', 30000.00, 'CD4 T-cell count (HIV monitoring)', '>500 cells/mm³ (Normal)', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(35, 'Viral Load HIV', 'VL-001', 'Molecular', 50000.00, 'HIV viral load quantification', '<20 copies/mL (Undetectable)', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(36, 'Chest X-Ray', 'XRAY-001', 'Radiology', 35000.00, 'Chest X-Ray imaging', 'Normal/Abnormal', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(37, 'Abdominal Ultrasound', 'US-001', 'Radiology', 50000.00, 'Abdominal ultrasound scan', 'Normal/Abnormal', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(38, 'Pelvic Ultrasound', 'US-002', 'Radiology', 45000.00, 'Pelvic ultrasound', 'Normal/Abnormal', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(39, 'Obstetric Ultrasound', 'US-003', 'Radiology', 55000.00, 'Obstetric ultrasound scan', 'Normal/Abnormal', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(40, 'ECG (Electrocardiogram)', 'ECG-001', 'Cardiology', 15000.00, '12-lead ECG', 'Normal/Abnormal', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(41, 'Echocardiogram', 'ECHO-001', 'Cardiology', 60000.00, 'Cardiac ultrasound', 'Normal/Abnormal', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(42, 'Pulmonary Function Test (PFT)', 'PFT-001', 'Pulmonology', 25000.00, 'Spirometry/Lung function test', 'Normal/Obstructive/Restrictive', 1, 1, 1, '2026-07-18 16:18:37', '2026-07-27 13:14:25'),
+(43, 'Ultrasound - Abdomen & Pelvis', 'US-004', 'Radiology', 65000.00, 'Combined abdominal and pelvic ultrasound', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(44, 'Ultrasound - Thyroid', 'US-005', 'Radiology', 40000.00, 'Thyroid ultrasound scan', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(45, 'Ultrasound - Breast', 'US-006', 'Radiology', 45000.00, 'Breast ultrasound examination', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(46, 'Ultrasound - Scrotal', 'US-007', 'Radiology', 40000.00, 'Scrotal/testicular ultrasound', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(47, 'Ultrasound - Renal', 'US-008', 'Radiology', 45000.00, 'Renal/kidney ultrasound', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(48, 'Ultrasound - Liver/Biliary', 'US-009', 'Radiology', 40000.00, 'Liver and biliary tree ultrasound', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(49, 'Ultrasound - Musculoskeletal', 'US-010', 'Radiology', 50000.00, 'MSK ultrasound for joints and soft tissue', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(50, 'Ultrasound - Doppler', 'US-011', 'Radiology', 55000.00, 'Doppler ultrasound for vascular assessment', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(51, 'Ultrasound - 3D/4D Obstetric', 'US-012', 'Radiology', 80000.00, '3D/4D obstetric ultrasound', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25'),
+(52, 'Ultrasound - Transvaginal', 'US-013', 'Radiology', 50000.00, 'Transvaginal pelvic ultrasound', 'Normal/Abnormal', 1, 1, 1, '2026-07-27 13:13:54', '2026-07-27 13:14:25');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `lab_test_type_mapping`
+--
+
+CREATE TABLE `lab_test_type_mapping` (
+  `id` int(11) NOT NULL,
+  `test_name_pattern` varchar(100) NOT NULL,
+  `template_id` int(11) NOT NULL,
+  `is_exact_match` tinyint(1) DEFAULT 0,
+  `priority` int(11) DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `lab_test_type_mapping`
+--
+
+INSERT INTO `lab_test_type_mapping` (`id`, `test_name_pattern`, `template_id`, `is_exact_match`, `priority`) VALUES
+(1, 'Obstetric Ultrasound', 1, 0, 10),
+(2, 'Obstetric Ultrasound - Twin', 1, 1, 20),
+(3, 'Obstetric Ultrasound - Single', 2, 1, 20),
+(4, 'Obstetric Ultrasound - Early', 3, 1, 20),
+(5, 'Abdominal Ultrasound', 4, 1, 20),
+(6, 'Ultrasound - Abdomen', 4, 0, 10),
+(7, 'Ultrasound - Pelvis', 4, 0, 10);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `medications`
+--
+
+CREATE TABLE `medications` (
+  `id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `strength` varchar(50) DEFAULT NULL,
+  `unit` varchar(20) DEFAULT NULL,
+  `category` varchar(50) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `description` text DEFAULT NULL,
+  `status` enum('active','inactive') DEFAULT 'active',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `medications`
+--
+
+INSERT INTO `medications` (`id`, `name`, `strength`, `unit`, `category`, `branch_id`, `description`, `status`, `created_at`, `updated_at`) VALUES
+(1, 'Paracetamol', '500mg', 'Tablets', 'Pain Relief', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(2, 'Amoxicillin', '250mg', 'Capsules', 'Antibiotic', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(3, 'Amoxicillin', '500mg', 'Capsules', 'Antibiotic', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(4, 'Ciprofloxacin', '500mg', 'Tablets', 'Antibiotic', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(5, 'Metformin', '850mg', 'Tablets', 'Diabetes', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(6, 'Metformin', '500mg', 'Tablets', 'Diabetes', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(7, 'Lisinopril', '10mg', 'Tablets', 'Blood Pressure', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(8, 'Amlodipine', '5mg', 'Tablets', 'Blood Pressure', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(9, 'Omeprazole', '20mg', 'Capsules', 'Stomach', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(10, 'Pantoprazole', '40mg', 'Tablets', 'Stomach', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(11, 'Atorvastatin', '20mg', 'Tablets', 'Cholesterol', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(12, 'Rosuvastatin', '10mg', 'Tablets', 'Cholesterol', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(13, 'Doxycycline', '100mg', 'Capsules', 'Antibiotic', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(14, 'Glibenclamide', '5mg', 'Tablets', 'Diabetes', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(15, 'Enalapril', '5mg', 'Tablets', 'Blood Pressure', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(16, 'Artemether/Lumefantrine', '20/120mg', 'Tablets', 'Antimalarial', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(17, 'Quinine', '300mg', 'Tablets', 'Antimalarial', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(18, 'Ibuprofen', '400mg', 'Tablets', 'Pain Relief', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(19, 'Diclofenac', '50mg', 'Tablets', 'Pain Relief', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(20, 'Cetirizine', '10mg', 'Tablets', 'Allergy', NULL, NULL, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `medications_inventory`
+--
+
+CREATE TABLE `medications_inventory` (
+  `id` int(11) NOT NULL,
+  `medication_name` varchar(100) NOT NULL,
+  `category` varchar(50) DEFAULT NULL,
+  `unit` varchar(20) DEFAULT NULL,
+  `quantity` int(11) DEFAULT 0,
+  `reorder_level` int(11) DEFAULT 10,
+  `unit_cost` decimal(10,2) DEFAULT 0.00,
+  `selling_price` decimal(10,2) DEFAULT 0.00,
+  `supplier` varchar(100) DEFAULT NULL,
+  `expiry_date` date DEFAULT NULL,
+  `batch_number` varchar(50) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `status` enum('active','inactive') DEFAULT 'active',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `medications_inventory`
+--
+
+INSERT INTO `medications_inventory` (`id`, `medication_name`, `category`, `unit`, `quantity`, `reorder_level`, `unit_cost`, `selling_price`, `supplier`, `expiry_date`, `batch_number`, `branch_id`, `status`, `created_at`, `updated_at`) VALUES
+(1, 'Paracetamol 500mg', 'Pain Relief', 'Tablets', 479, 50, 100.00, 200.00, 'Dodoma Pharma', NULL, NULL, 1, 'active', '2026-07-16 11:30:25', '2026-08-01 14:01:00'),
+(2, 'Amoxicillin 250mg', 'Antibiotic', 'Capsules', 110, 30, 500.00, 800.00, 'Dodoma Pharma', NULL, NULL, 1, 'active', '2026-07-16 11:30:25', '2026-07-29 11:09:05'),
+(3, 'Amoxicillin 500mg', 'Antibiotic', 'Capsules', 188, 20, 800.00, 1200.00, 'Dodoma Pharma', NULL, NULL, 1, 'active', '2026-07-16 11:30:25', '2026-07-23 15:47:42'),
+(4, 'Metformin 850mg', 'Diabetes', 'Tablets', 130, 15, 400.00, 600.00, 'Dodoma Pharma', NULL, NULL, 1, 'active', '2026-07-16 11:30:25', '2026-07-23 10:27:04'),
+(5, 'Artemether/Lumefantrine', 'Antimalarial', 'Tablets', 80, 20, 300.00, 500.00, 'Dodoma Pharma', NULL, NULL, 1, 'active', '2026-07-16 11:30:25', '2026-07-23 15:48:00'),
+(6, 'Omeprazole 20mg', 'Stomach', 'Capsules', 80, 15, 200.00, 350.00, 'Dodoma Pharma', NULL, NULL, 1, 'active', '2026-07-16 11:30:25', '2026-07-23 17:31:49'),
+(7, 'Lisinopril 10mg', 'Blood Pressure', 'Tablets', 49, 10, 250.00, 400.00, 'Dodoma Pharma', NULL, NULL, 1, 'active', '2026-07-16 11:30:25', '2026-07-22 15:52:40'),
+(8, 'Amlodipine 5mg', 'Blood Pressure', 'Tablets', 5, 10, 300.00, 450.00, 'Dodoma Pharma', NULL, NULL, 1, 'active', '2026-07-16 11:30:25', '2026-07-27 13:08:14'),
+(9, 'Paracetamol 500mg', 'Pain Relief', 'Tablets', 400, 40, 120.00, 250.00, 'Arusha Pharma', NULL, NULL, 2, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(10, 'Amoxicillin 250mg', 'Antibiotic', 'Capsules', 250, 25, 550.00, 900.00, 'Arusha Pharma', NULL, NULL, 2, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(11, 'Ciprofloxacin 500mg', 'Antibiotic', 'Tablets', 100, 15, 700.00, 1000.00, 'Arusha Pharma', NULL, NULL, 2, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(12, 'Metformin 500mg', 'Diabetes', 'Tablets', 120, 15, 300.00, 500.00, 'Arusha Pharma', NULL, NULL, 2, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(13, 'Ibuprofen 400mg', 'Pain Relief', 'Tablets', 200, 20, 150.00, 250.00, 'Arusha Pharma', NULL, NULL, 2, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(14, 'Cetirizine 10mg', 'Allergy', 'Tablets', 150, 15, 100.00, 200.00, 'Arusha Pharma', NULL, NULL, 2, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(15, 'Doxycycline 100mg', 'Antibiotic', 'Capsules', 80, 10, 400.00, 600.00, 'Arusha Pharma', NULL, NULL, 2, 'active', '2026-07-16 11:30:25', '2026-07-16 11:30:25'),
+(16, 'Panadol', '', 'tablets', 300, 20, 200.00, 400.00, '', '2026-07-25', 'BATCH-20260720-GRW2CJ', 1, 'inactive', '2026-07-20 07:24:16', '2026-07-20 07:25:24'),
+(17, 'ALBENDERZOL', 'Antibiotics', 'box', -200, 10, 2000.00, 4000.00, '', '2028-06-20', 'BATCH-20260720-X0JR5F', 1, 'active', '2026-07-20 07:27:21', '2026-08-12 11:01:16'),
+(18, 'ALBENDERZOL', 'Antihistamines', 'box', 260, 50, 900.00, 1500.00, '', '2026-09-27', 'BATCH-20260727-TDB4I1', 1, 'active', '2026-07-27 11:27:47', '2026-08-10 16:03:48'),
+(19, 'MSETO', 'Antibiotics', 'box', 199, 10, 2000.00, 3500.00, 'JAMES', '2027-02-28', 'BATCH-20260729-OXLOFN', 1, 'active', '2026-07-29 10:56:48', '2026-07-29 11:12:15'),
+(20, 'Panadol', 'Painkillers', 'tablets', 2000, 299, 200.00, 500.00, 'JAMES', '2026-08-12', 'BATCH-20260810-X3M5F8', 1, 'active', '2026-08-10 16:11:01', '2026-08-10 16:11:01'),
+(21, 'ZENCOF', 'Antivirals', 'box', 400, 70, 10.00, 50.00, 'MUSSA', '2027-09-12', 'BATCH-20260811-5C3H0Y', 1, 'active', '2026-08-11 16:11:35', '2026-08-11 16:11:35');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `notifications`
+--
+
+CREATE TABLE `notifications` (
+  `id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `title` varchar(255) NOT NULL,
+  `message` text NOT NULL,
+  `type` enum('info','success','warning','danger') DEFAULT 'info',
+  `link` varchar(255) DEFAULT NULL,
+  `is_read` tinyint(1) DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `notifications`
+--
+
+INSERT INTO `notifications` (`id`, `user_id`, `branch_id`, `patient_id`, `title`, `message`, `type`, `link`, `is_read`, `created_at`) VALUES
+(200, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0074-2866 (TSh 10,000) for patient ID #74', '', 'cashier_dashboard.php', 0, '2026-08-03 09:49:57'),
+(201, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0075-3916 (TSh 10,000) for patient ID #75', '', 'cashier_dashboard.php', 0, '2026-08-03 09:54:38'),
+(202, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0076-9598 (TSh 10,000) for patient ID #76', '', 'cashier_dashboard.php', 0, '2026-08-03 10:16:59'),
+(203, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0077-6622 (TSh 10,000) for patient ID #77', '', 'cashier_dashboard.php', 0, '2026-08-03 11:07:35'),
+(204, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0078-5223 (TSh 10,000) for patient ID #78', '', 'cashier_dashboard.php', 0, '2026-08-03 11:52:36'),
+(205, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-03 11:55:06'),
+(206, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-03 11:55:06'),
+(207, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-03 11:55:07'),
+(208, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-03 11:55:07'),
+(209, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-03 11:55:18'),
+(210, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-03 11:55:18'),
+(211, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-03 11:55:18'),
+(212, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-03 11:55:18'),
+(213, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0079-4491 (TSh 10,000) for patient ID #79', '', 'cashier_dashboard.php', 0, '2026-08-03 12:06:56'),
+(214, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0080-1691 (TSh 10,000) for patient ID #80', '', 'cashier_dashboard.php', 0, '2026-08-03 12:16:01'),
+(215, 5, NULL, NULL, 'Lab Update', 'Lab test \'Blood Glucose (Random)\' is now in_progress for visit #119', '', '/frontend/pages/doctor/consultation.php?visit_id=119', 1, '2026-08-03 12:19:08'),
+(216, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0081-8516 (TSh 10,000) for patient ID #81', '', 'cashier_dashboard.php', 0, '2026-08-03 12:29:39'),
+(217, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0082-3320 (TSh 10,000) for patient ID #82', '', 'cashier_dashboard.php', 0, '2026-08-03 12:32:45'),
+(218, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0083-6001 (TSh 10,000) for patient ID #83', '', 'cashier_dashboard.php', 0, '2026-08-03 12:41:40'),
+(219, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0084-4455 (TSh 10,000) for patient ID #84', '', 'cashier_dashboard.php', 0, '2026-08-03 17:27:50'),
+(220, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0085-8506 (TSh 10,000) for patient ID #85', '', 'cashier_dashboard.php', 0, '2026-08-03 17:39:45'),
+(221, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0086-2149 (TSh 10,000) for patient ID #86', '', 'cashier_dashboard.php', 0, '2026-08-03 17:42:36'),
+(222, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0087-9359 (TSh 10,000) for patient ID #87', '', 'cashier_dashboard.php', 0, '2026-08-03 17:51:02'),
+(223, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260803-0088-1802 (TSh 10,000) for patient ID #88', '', 'cashier_dashboard.php', 0, '2026-08-03 17:59:36'),
+(224, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260804-0088-1039 (TSh 10,000) for patient ID #88', '', 'cashier_dashboard.php', 0, '2026-08-04 17:12:08'),
+(225, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260804-0090-9019 (TSh 10,000) for patient ID #90', '', 'cashier_dashboard.php', 0, '2026-08-04 18:25:36'),
+(226, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260806-0088-3161 (TSh 30,000) for patient ID #88', '', 'cashier_dashboard.php', 0, '2026-08-06 11:46:11'),
+(227, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:25'),
+(228, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:25'),
+(229, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:36'),
+(230, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:36'),
+(231, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:37'),
+(232, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:37'),
+(233, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:38'),
+(234, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:38'),
+(235, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:44'),
+(236, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:44'),
+(237, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:45'),
+(238, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:45'),
+(239, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:51'),
+(240, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:51'),
+(241, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:54'),
+(242, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:54'),
+(243, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:57'),
+(244, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:57'),
+(245, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:58'),
+(246, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:58'),
+(247, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:45:59'),
+(248, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:45:59'),
+(249, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:00'),
+(250, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:00'),
+(251, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:01'),
+(252, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:01'),
+(253, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:01'),
+(254, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:01'),
+(255, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:01'),
+(256, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:01'),
+(257, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:01'),
+(258, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:01'),
+(259, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:02'),
+(260, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:02'),
+(261, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:02'),
+(262, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:02'),
+(263, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:02'),
+(264, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:02'),
+(265, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:03'),
+(266, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:03'),
+(267, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:03'),
+(268, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:03'),
+(269, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:06'),
+(270, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:06'),
+(271, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:07'),
+(272, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:07'),
+(273, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:12'),
+(274, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:12'),
+(275, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:24'),
+(276, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:24'),
+(277, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:45'),
+(278, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:45'),
+(279, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:50'),
+(280, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:50'),
+(281, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:46:53'),
+(282, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:46:53'),
+(283, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:49:39'),
+(284, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:49:39'),
+(285, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:51:48'),
+(286, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:51:48'),
+(287, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:51:50'),
+(288, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:51:50'),
+(289, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:51:51'),
+(290, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:51:51'),
+(291, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:51:53'),
+(292, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:51:53'),
+(293, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:53:15'),
+(294, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:53:15'),
+(295, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:53:42'),
+(296, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:53:42'),
+(297, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:53:45'),
+(298, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:53:45'),
+(299, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 11:59:10'),
+(300, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 11:59:10'),
+(301, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 12:00:50'),
+(302, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 12:00:50'),
+(303, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 12:02:41'),
+(304, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 12:02:41'),
+(305, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 12:02:47'),
+(306, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 12:02:47'),
+(307, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 12:26:32'),
+(308, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 12:26:32'),
+(309, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-08 12:26:37'),
+(310, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-08 12:26:37'),
+(311, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260808-0089-4875 (TSh 10,000) for patient ID #89', '', 'cashier_dashboard.php', 0, '2026-08-08 13:02:46'),
+(316, 11, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-10 16:33:40'),
+(317, 4, NULL, NULL, 'Doctor Status: 🔴 Offline', 'Dr. Dr. John Mushi is now OFFLINE.', 'warning', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-10 16:33:40'),
+(318, 11, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-08-10 16:34:20'),
+(319, 4, NULL, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr. John Mushi is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-08-10 16:34:20'),
+(322, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260812-0094-3441 (TSh 10,000) for patient ID #94', '', 'cashier_dashboard.php', 0, '2026-08-12 10:56:29'),
+(323, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260813-0096-5242 (TSh 10,000) for patient ID #96', '', 'cashier_dashboard.php', 0, '2026-08-13 09:25:43'),
+(324, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260813-0097-6773 (TSh 10,000) for patient ID #97', '', 'cashier_dashboard.php', 0, '2026-08-13 09:31:10'),
+(325, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260813-0098-8142 (TSh 10,000) for patient ID #98', '', 'cashier_dashboard.php', 0, '2026-08-13 09:54:10'),
+(326, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260813-0099-3862 (TSh 10,000) for patient ID #99', '', 'cashier_dashboard.php', 0, '2026-08-13 10:01:33'),
+(327, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260813-0100-9987 (TSh 10,000) for patient ID #100', '', 'cashier_dashboard.php', 0, '2026-08-13 10:07:20'),
+(328, 10, NULL, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260813-0101-5352 (TSh 10,000) for patient ID #101', '', 'cashier_dashboard.php', 0, '2026-08-13 10:13:16');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `otc_sales`
+--
+
+CREATE TABLE `otc_sales` (
+  `id` int(11) NOT NULL,
+  `sale_number` varchar(50) NOT NULL,
+  `customer_name` varchar(100) DEFAULT 'Walk-in Customer',
+  `customer_phone` varchar(20) DEFAULT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `total_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `discount_amount` decimal(10,2) DEFAULT 0.00,
+  `net_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `bill_id` int(11) DEFAULT NULL,
+  `payment_method` enum('cash','card','m-pesa','other') DEFAULT 'cash',
+  `payment_status` enum('paid','pending','partial') DEFAULT 'paid',
+  `sold_by` int(11) NOT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `otc_sales`
+--
+
+INSERT INTO `otc_sales` (`id`, `sale_number`, `customer_name`, `customer_phone`, `patient_id`, `total_amount`, `discount_amount`, `net_amount`, `bill_id`, `payment_method`, `payment_status`, `sold_by`, `branch_id`, `notes`, `created_at`, `updated_at`) VALUES
+(3, 'OTC-20260727-4945', 'JACKSON', '', NULL, 8000.00, 500.00, 7500.00, NULL, 'm-pesa', 'pending', 5, 1, 'OTC Sale - Bill sent to Cashier', '2026-07-27 11:11:54', '2026-07-27 11:11:54'),
+(4, 'OTC-20260727-3152', 'JACKSON', '', NULL, 24000.00, 2500.00, 21500.00, NULL, 'cash', 'paid', 5, 1, 'OTC Sale - Bill sent to Cashier', '2026-07-27 12:52:40', '2026-07-27 12:55:06'),
+(5, 'OTC-20260727-0734', 'ADELA', '', NULL, 8000.00, 900.00, 7100.00, NULL, 'cash', 'paid', 9, 1, 'OTC Sale - Bill sent to Cashier', '2026-07-27 13:06:15', '2026-07-27 13:06:39'),
+(6, 'OTC-20260727-5987', 'KELVIN', '', NULL, 25050.00, 3000.00, 22050.00, NULL, '', 'paid', 5, 1, 'OTC Sale - Bill sent to Cashier', '2026-07-27 13:08:14', '2026-07-27 13:08:34');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `otc_sale_items`
+--
+
+CREATE TABLE `otc_sale_items` (
+  `id` int(11) NOT NULL,
+  `sale_id` int(11) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `inventory_id` int(11) NOT NULL,
+  `medicine_name` varchar(100) NOT NULL,
+  `quantity` int(11) NOT NULL,
+  `unit_price` decimal(10,2) NOT NULL,
+  `total_price` decimal(10,2) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `patients`
+--
+
+CREATE TABLE `patients` (
+  `id` int(11) NOT NULL,
+  `patient_id` varchar(50) NOT NULL,
+  `full_name` varchar(100) NOT NULL,
+  `date_of_birth` date DEFAULT NULL,
+  `gender` enum('Male','Female','Other') DEFAULT NULL,
+  `marital_status` varchar(20) DEFAULT NULL,
+  `phone` varchar(20) DEFAULT NULL,
+  `email` varchar(100) DEFAULT NULL,
+  `address` text DEFAULT NULL,
+  `emergency_contact` varchar(20) DEFAULT NULL,
+  `blood_group` varchar(5) DEFAULT NULL,
+  `allergies` text DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `assigned_doctor_id` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `patients`
+--
+
+INSERT INTO `patients` (`id`, `patient_id`, `full_name`, `date_of_birth`, `gender`, `marital_status`, `phone`, `email`, `address`, `emergency_contact`, `blood_group`, `allergies`, `branch_id`, `created_by`, `assigned_doctor_id`, `created_at`, `updated_at`) VALUES
+(100, 'P-2026-0001', 'JACKSON MYULA', '2001-09-10', 'Male', 'Single', '0623693303', 'jacksonmyula773@gmail.com', 'TANZANIA', '', 'AB+', 'Aspirin, Soy', 1, 6, 5, '2026-08-13 10:07:20', '2026-08-13 10:07:20'),
+(101, 'P-2026-0002', 'MUSSA MONGI', '2002-10-10', 'Male', '', '0623693300', 'musamongi@gmail.com', 'TANZANIA', '', 'O+', 'Codeine', 1, 6, 5, '2026-08-13 10:13:16', '2026-08-13 10:13:16');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `patient_bills`
+--
+
+CREATE TABLE `patient_bills` (
+  `id` int(11) NOT NULL,
+  `bill_number` varchar(50) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `visit_id` int(11) DEFAULT NULL,
+  `prescription_id` int(11) DEFAULT NULL,
+  `registration_fee` decimal(10,2) DEFAULT 0.00,
+  `consultation_fee` decimal(10,2) DEFAULT 0.00,
+  `lab_fees` decimal(10,2) DEFAULT 0.00,
+  `medication_fees` decimal(10,2) DEFAULT 0.00,
+  `other_fees` decimal(10,2) DEFAULT 0.00,
+  `subtotal` decimal(10,2) DEFAULT 0.00,
+  `discount_percent` decimal(5,2) DEFAULT 0.00,
+  `discount_amount` decimal(10,2) DEFAULT 0.00,
+  `total_amount` decimal(10,2) DEFAULT 0.00,
+  `paid_amount` decimal(10,2) DEFAULT 0.00,
+  `balance` decimal(10,2) DEFAULT 0.00,
+  `status` enum('pending','partial','paid','cancelled') DEFAULT 'pending',
+  `created_by` int(11) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `patient_bills`
+--
+
+INSERT INTO `patient_bills` (`id`, `bill_number`, `patient_id`, `visit_id`, `prescription_id`, `registration_fee`, `consultation_fee`, `lab_fees`, `medication_fees`, `other_fees`, `subtotal`, `discount_percent`, `discount_amount`, `total_amount`, `paid_amount`, `balance`, `status`, `created_by`, `branch_id`, `created_at`, `updated_at`) VALUES
+(193, 'BILL-20260813-0100-9987', 100, 142, NULL, 0.00, 10000.00, 0.00, 0.00, 0.00, 10000.00, 0.00, 0.00, 10000.00, 0.00, 10000.00, 'pending', 6, 1, '2026-08-13 10:07:20', '2026-08-13 10:07:20'),
+(194, 'BILL-20260813-0101-5352', 101, 143, NULL, 0.00, 10000.00, 0.00, 0.00, 0.00, 10000.00, 0.00, 0.00, 10000.00, 0.00, 10000.00, 'pending', 6, 1, '2026-08-13 10:13:16', '2026-08-13 10:13:16');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `patient_documents`
+--
+
+CREATE TABLE `patient_documents` (
+  `id` int(11) NOT NULL,
+  `patient_id` int(11) NOT NULL,
+  `doctor_id` int(11) DEFAULT NULL,
+  `visit_id` int(11) DEFAULT NULL,
+  `document_number` varchar(50) NOT NULL,
+  `document_name` varchar(255) NOT NULL,
+  `document_type` enum('medical_record','referral_letter','lab_result','prescription','x_ray','scan','insurance','id_document','other') NOT NULL,
+  `file_name` varchar(255) NOT NULL,
+  `file_path` varchar(500) NOT NULL,
+  `file_size` int(11) DEFAULT NULL,
+  `file_type` varchar(100) DEFAULT NULL,
+  `description` text DEFAULT NULL,
+  `uploaded_by` int(11) DEFAULT NULL,
+  `upload_date` timestamp NOT NULL DEFAULT current_timestamp(),
+  `is_verified` tinyint(1) DEFAULT 0,
+  `verified_by` int(11) DEFAULT NULL,
+  `verified_date` timestamp NULL DEFAULT NULL,
+  `status` enum('active','archived','deleted') DEFAULT 'active',
+  `branch_id` int(11) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `payments`
+--
+
+CREATE TABLE `payments` (
+  `id` int(11) NOT NULL,
+  `receipt_number` varchar(50) NOT NULL,
+  `bill_id` int(11) NOT NULL,
+  `patient_id` int(11) NOT NULL,
+  `amount` decimal(10,2) NOT NULL,
+  `payment_method` enum('cash','m-pesa','airtel_money','tigo_pesa','halopesa','bank','card','other') DEFAULT 'cash',
+  `reference_number` varchar(100) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `received_by` int(11) NOT NULL,
+  `branch_id` int(11) NOT NULL,
+  `received_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `permissions`
+--
+
+CREATE TABLE `permissions` (
+  `id` int(11) NOT NULL,
+  `name` varchar(50) NOT NULL,
+  `description` text DEFAULT NULL,
+  `module` varchar(50) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `pharmacy_sales`
+--
+
+CREATE TABLE `pharmacy_sales` (
+  `id` int(11) NOT NULL,
+  `sale_number` varchar(50) NOT NULL,
+  `prescription_id` int(11) DEFAULT NULL,
+  `patient_id` int(11) NOT NULL,
+  `cashier_id` int(11) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `sale_type` enum('indoor','outdoor') NOT NULL,
+  `subtotal` decimal(10,2) NOT NULL,
+  `discount_percent` decimal(5,2) DEFAULT 0.00,
+  `discount_amount` decimal(10,2) DEFAULT 0.00,
+  `total` decimal(10,2) NOT NULL,
+  `payment_method` enum('cash','card','insurance','m-pesa','other') DEFAULT 'cash',
+  `payment_status` enum('pending','paid','cancelled') DEFAULT 'paid',
+  `sale_date` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `prescriptions`
+--
+
+CREATE TABLE `prescriptions` (
+  `id` int(11) NOT NULL,
+  `visit_id` int(11) NOT NULL,
+  `doctor_id` int(11) DEFAULT NULL,
+  `patient_id` int(11) NOT NULL,
+  `pharmacy_id` int(11) DEFAULT NULL,
+  `prescription_number` varchar(50) NOT NULL,
+  `diagnosis` text DEFAULT NULL,
+  `medication` varchar(255) DEFAULT NULL,
+  `dosage` varchar(50) DEFAULT NULL,
+  `frequency` varchar(50) DEFAULT NULL,
+  `duration` varchar(50) DEFAULT NULL,
+  `route` varchar(50) DEFAULT NULL,
+  `quantity` varchar(50) DEFAULT NULL,
+  `instructions` text DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `status` enum('pending','confirmed','dispensed','cancelled') DEFAULT 'pending',
+  `is_indoor` tinyint(1) DEFAULT 1,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `dispensed_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `prescription_items`
+--
+
+CREATE TABLE `prescription_items` (
+  `id` int(11) NOT NULL,
+  `prescription_id` int(11) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `inventory_id` int(11) DEFAULT NULL,
+  `medication_name` varchar(100) NOT NULL,
+  `dosage` varchar(50) DEFAULT NULL,
+  `frequency` varchar(50) DEFAULT NULL,
+  `quantity` int(11) NOT NULL,
+  `duration` varchar(50) DEFAULT NULL,
+  `route` varchar(50) DEFAULT NULL,
+  `instructions` text DEFAULT NULL,
+  `unit_price` decimal(10,2) DEFAULT 0.00,
+  `total_price` decimal(10,2) DEFAULT 0.00,
+  `dispensed_at` timestamp NULL DEFAULT NULL,
+  `dispensed_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `prescription_sales`
+--
+
+CREATE TABLE `prescription_sales` (
+  `id` int(11) NOT NULL,
+  `sale_number` varchar(50) NOT NULL,
+  `prescription_id` int(11) NOT NULL,
+  `patient_id` int(11) NOT NULL,
+  `visit_id` int(11) NOT NULL,
+  `doctor_id` int(11) NOT NULL,
+  `total_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `discount_amount` decimal(10,2) DEFAULT 0.00,
+  `net_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `dispensed_by` int(11) NOT NULL,
+  `status` enum('pending','dispensed','cancelled') DEFAULT 'pending',
+  `payment_method` enum('cash','card','m-pesa','insurance','other') DEFAULT 'cash',
+  `payment_status` enum('pending','paid','partial') DEFAULT 'pending',
+  `notes` text DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `dispensed_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `prescription_sales`
+--
+
+INSERT INTO `prescription_sales` (`id`, `sale_number`, `prescription_id`, `patient_id`, `visit_id`, `doctor_id`, `total_amount`, `discount_amount`, `net_amount`, `dispensed_by`, `status`, `payment_method`, `payment_status`, `notes`, `branch_id`, `created_at`, `dispensed_at`, `updated_at`) VALUES
+(12, 'SALE-20260812-000056', 56, 94, 136, 0, 45000.00, 0.00, 0.00, 9, 'dispensed', 'cash', 'paid', NULL, 1, '2026-08-12 11:01:16', '2026-08-12 11:01:16', '2026-08-12 11:01:16');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `prescription_sale_items`
+--
+
+CREATE TABLE `prescription_sale_items` (
+  `id` int(11) NOT NULL,
+  `sale_id` int(11) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `inventory_id` int(11) NOT NULL,
+  `medicine_name` varchar(100) NOT NULL,
+  `quantity` int(11) NOT NULL,
+  `unit_price` decimal(10,2) NOT NULL,
+  `total_price` decimal(10,2) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `procedures`
+--
+
+CREATE TABLE `procedures` (
+  `id` int(11) NOT NULL,
+  `procedure_name` varchar(100) NOT NULL,
+  `procedure_code` varchar(20) DEFAULT NULL,
+  `category` varchar(50) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `price` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `description` text DEFAULT NULL,
+  `is_active` tinyint(1) DEFAULT 1,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `procedures`
+--
+
+INSERT INTO `procedures` (`id`, `procedure_name`, `procedure_code`, `category`, `branch_id`, `price`, `description`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES
+(1, 'Wound Wash', 'PROC-001', 'Wound Care', 1, 15000.00, 'Cleaning and washing of wounds', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(2, 'Wound Dressing', 'PROC-002', 'Wound Care', 1, 12000.00, 'Wound dressing and bandaging', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(3, 'Minor Surgery', 'PROC-003', 'Surgery', 1, 30000.00, 'Minor surgical procedure', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(4, 'Major Surgery', 'PROC-004', 'Surgery', 1, 80000.00, 'Major surgical procedure', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(5, 'Injection', 'PROC-005', 'Administration', 1, 10000.00, 'Administration of injection', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(6, 'IV Cannulation', 'PROC-006', 'Administration', 1, 15000.00, 'Intravenous cannulation', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(7, 'Suturing', 'PROC-007', 'Surgery', 1, 25000.00, 'Wound suturing', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(8, 'Incision & Drainage', 'PROC-008', 'Surgery', 1, 25000.00, 'Incision and drainage of abscess', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(9, 'Biopsy', 'PROC-009', 'Diagnostic', 1, 40000.00, 'Tissue biopsy procedure', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(10, 'Cauterization', 'PROC-010', 'Surgery', 1, 30000.00, 'Cauterization procedure', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(11, 'Catheterization', 'PROC-011', 'Procedure', 1, 25000.00, 'Urinary catheterization', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(12, 'Chest Tube Insertion', 'PROC-012', 'Surgery', 1, 50000.00, 'Chest tube insertion', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(13, 'Circumcision', 'PROC-013', 'Surgery', 1, 45000.00, 'Male circumcision', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04'),
+(14, 'POP Application', 'PROC-014', 'Orthopedics', 1, 20000.00, 'Plaster of Paris application', 1, NULL, '2026-07-19 14:35:14', '2026-08-10 14:27:04');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `procedure_tools`
+--
+
+CREATE TABLE `procedure_tools` (
+  `id` int(11) NOT NULL,
+  `procedure_name` varchar(100) NOT NULL,
+  `tool_name` varchar(100) NOT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `price` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `is_active` tinyint(1) DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `procedure_tools`
+--
+
+INSERT INTO `procedure_tools` (`id`, `procedure_name`, `tool_name`, `branch_id`, `price`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 'Injection', 'Syringe', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(2, 'Injection', 'Needle', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(3, 'Injection', 'Alcohol Swab', 1, 100.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(4, 'Injection', 'Cotton Wool', 1, 200.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(5, 'Injection', 'Bandage', 1, 400.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(6, 'POP (Plaster of Paris)', 'POP Bandage', 1, 2000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(7, 'POP (Plaster of Paris)', 'Cotton Padding', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(8, 'POP (Plaster of Paris)', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(9, 'POP (Plaster of Paris)', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(10, 'POP (Plaster of Paris)', 'Water Basin', 1, 800.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(11, 'Suturing', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(12, 'Suturing', 'Needle Holder', 1, 1500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(13, 'Suturing', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(14, 'Suturing', 'Tissue Forceps', 1, 1200.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(15, 'Suturing', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(16, 'Wound Dressing', 'Gauze', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(17, 'Wound Dressing', 'Adhesive Tape', 1, 200.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(18, 'Wound Dressing', 'Antiseptic', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(19, 'Wound Dressing', 'Cotton Swab', 1, 150.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(20, 'Wound Dressing', 'Bandage', 1, 400.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(21, 'Incision & Drainage', 'Scalpel', 1, 1500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(22, 'Incision & Drainage', 'Forceps', 1, 1000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(23, 'Incision & Drainage', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(24, 'Incision & Drainage', 'Drainage Tube', 1, 2000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(25, 'Incision & Drainage', 'Gauze', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(26, 'Casting', 'Cast Material', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(27, 'Casting', 'Cotton Padding', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(28, 'Casting', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(29, 'Casting', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(30, 'Casting', 'Water Basin', 1, 800.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(31, 'Biopsy', 'Biopsy Punch', 1, 4000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(32, 'Biopsy', 'Formalin Jar', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(33, 'Biopsy', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(34, 'Biopsy', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(35, 'Biopsy', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(36, 'Cauterization', 'Cautery Pen', 1, 5000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(37, 'Cauterization', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(38, 'Cauterization', 'Gauze', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(39, 'Cauterization', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(40, 'Catheterization', 'Catheter Kit', 1, 3500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(41, 'Catheterization', 'Lubricant', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(42, 'Catheterization', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(43, 'Catheterization', 'Drainage Bag', 1, 2000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(44, 'Chest Tube Insertion', 'Chest Tube', 1, 5000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(45, 'Chest Tube Insertion', 'Scalpel', 1, 1500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(46, 'Chest Tube Insertion', 'Forceps', 1, 1000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(47, 'Chest Tube Insertion', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(48, 'Chest Tube Insertion', 'Drainage System', 1, 4000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(49, 'Joint Aspiration', 'Syringe', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(50, 'Joint Aspiration', 'Needle', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(51, 'Joint Aspiration', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(52, 'Joint Aspiration', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(53, 'Joint Aspiration', 'Specimen Container', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(54, 'Lumbar Puncture', 'Spinal Needle', 1, 2000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(55, 'Lumbar Puncture', 'Manometer', 1, 3000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(56, 'Lumbar Puncture', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(57, 'Lumbar Puncture', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(58, 'Lumbar Puncture', 'Specimen Tubes', 1, 800.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(59, 'Paracentesis', 'Paracentesis Kit', 1, 4000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(60, 'Paracentesis', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(61, 'Paracentesis', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(62, 'Paracentesis', 'Drainage Bag', 1, 2000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(63, 'Thoracentesis', 'Thoracentesis Kit', 1, 4500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(64, 'Thoracentesis', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(65, 'Thoracentesis', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(66, 'Thoracentesis', 'Specimen Container', 1, 500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(67, 'Skin Grafting', 'Graft Knife', 1, 5000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(68, 'Skin Grafting', 'Mesh Dermatome', 1, 8000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(69, 'Skin Grafting', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(70, 'Skin Grafting', 'Bandage', 1, 400.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(71, 'Skin Grafting', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(72, 'Circumcision', 'Circumcision Kit', 1, 5000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(73, 'Circumcision', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(74, 'Circumcision', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(75, 'Circumcision', 'Bandage', 1, 400.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(76, 'Circumcision', 'Gloves', 1, 300.00, 1, '2026-07-19 14:16:07', '2026-08-10 14:27:04'),
+(77, 'Injection', 'Syringe', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(78, 'Injection', 'Needle', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(79, 'Injection', 'Alcohol Swab', 1, 100.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(80, 'Injection', 'Cotton Wool', 1, 200.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(81, 'Injection', 'Bandage', 1, 400.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(82, 'POP (Plaster of Paris)', 'POP Bandage', 1, 2000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(83, 'POP (Plaster of Paris)', 'Cotton Padding', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(84, 'POP (Plaster of Paris)', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(85, 'POP (Plaster of Paris)', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(86, 'POP (Plaster of Paris)', 'Water Basin', 1, 800.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(87, 'Suturing', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(88, 'Suturing', 'Needle Holder', 1, 1500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(89, 'Suturing', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(90, 'Suturing', 'Tissue Forceps', 1, 1200.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(91, 'Suturing', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(92, 'Wound Dressing', 'Gauze', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(93, 'Wound Dressing', 'Adhesive Tape', 1, 200.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(94, 'Wound Dressing', 'Antiseptic', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(95, 'Wound Dressing', 'Cotton Swab', 1, 150.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(96, 'Wound Dressing', 'Bandage', 1, 400.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(97, 'Incision & Drainage', 'Scalpel', 1, 1500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(98, 'Incision & Drainage', 'Forceps', 1, 1000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(99, 'Incision & Drainage', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(100, 'Incision & Drainage', 'Drainage Tube', 1, 2000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(101, 'Incision & Drainage', 'Gauze', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(102, 'Casting', 'Cast Material', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(103, 'Casting', 'Cotton Padding', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(104, 'Casting', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(105, 'Casting', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(106, 'Casting', 'Water Basin', 1, 800.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(107, 'Biopsy', 'Biopsy Punch', 1, 4000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(108, 'Biopsy', 'Formalin Jar', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(109, 'Biopsy', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(110, 'Biopsy', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(111, 'Biopsy', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(112, 'Cauterization', 'Cautery Pen', 1, 5000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(113, 'Cauterization', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(114, 'Cauterization', 'Gauze', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(115, 'Cauterization', 'Scissors', 1, 1000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(116, 'Catheterization', 'Catheter Kit', 1, 3500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(117, 'Catheterization', 'Lubricant', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(118, 'Catheterization', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(119, 'Catheterization', 'Drainage Bag', 1, 2000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(120, 'Chest Tube Insertion', 'Chest Tube', 1, 5000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(121, 'Chest Tube Insertion', 'Scalpel', 1, 1500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(122, 'Chest Tube Insertion', 'Forceps', 1, 1000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(123, 'Chest Tube Insertion', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(124, 'Chest Tube Insertion', 'Drainage System', 1, 4000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(125, 'Joint Aspiration', 'Syringe', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(126, 'Joint Aspiration', 'Needle', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(127, 'Joint Aspiration', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(128, 'Joint Aspiration', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(129, 'Joint Aspiration', 'Specimen Container', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(130, 'Lumbar Puncture', 'Spinal Needle', 1, 2000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(131, 'Lumbar Puncture', 'Manometer', 1, 3000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(132, 'Lumbar Puncture', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(133, 'Lumbar Puncture', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(134, 'Lumbar Puncture', 'Specimen Tubes', 1, 800.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(135, 'Paracentesis', 'Paracentesis Kit', 1, 4000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(136, 'Paracentesis', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(137, 'Paracentesis', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(138, 'Paracentesis', 'Drainage Bag', 1, 2000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(139, 'Thoracentesis', 'Thoracentesis Kit', 1, 4500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(140, 'Thoracentesis', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(141, 'Thoracentesis', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(142, 'Thoracentesis', 'Specimen Container', 1, 500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(143, 'Skin Grafting', 'Graft Knife', 1, 5000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(144, 'Skin Grafting', 'Mesh Dermatome', 1, 8000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(145, 'Skin Grafting', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(146, 'Skin Grafting', 'Bandage', 1, 400.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(147, 'Skin Grafting', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(148, 'Circumcision', 'Circumcision Kit', 1, 5000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(149, 'Circumcision', 'Suture Kit', 1, 3000.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(150, 'Circumcision', 'Local Anesthetic', 1, 2500.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(151, 'Circumcision', 'Bandage', 1, 400.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04'),
+(152, 'Circumcision', 'Gloves', 1, 300.00, 1, '2026-07-19 14:20:34', '2026-08-10 14:27:04');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `receipts`
+--
+
+CREATE TABLE `receipts` (
+  `id` int(11) NOT NULL,
+  `receipt_number` varchar(50) NOT NULL,
+  `payment_id` int(11) NOT NULL,
+  `bill_id` int(11) NOT NULL,
+  `patient_id` int(11) NOT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `receipt_data` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`receipt_data`)),
+  `printed_by` int(11) DEFAULT NULL,
+  `printed_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `downloaded_at` timestamp NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `referrals`
+--
+
+CREATE TABLE `referrals` (
+  `id` int(11) NOT NULL,
+  `referral_number` varchar(50) NOT NULL,
+  `visit_id` int(11) NOT NULL,
+  `patient_id` int(11) NOT NULL,
+  `from_doctor_id` int(11) NOT NULL,
+  `referral_type` enum('internal','external') NOT NULL DEFAULT 'internal',
+  `to_doctor_id` int(11) DEFAULT NULL COMMENT 'Internal referral - doctor within dispensary',
+  `to_hospital_name` varchar(200) DEFAULT NULL COMMENT 'External referral - hospital name',
+  `to_hospital_address` text DEFAULT NULL COMMENT 'External referral - hospital address',
+  `to_hospital_phone` varchar(20) DEFAULT NULL COMMENT 'External referral - hospital phone',
+  `reason` text NOT NULL,
+  `clinical_notes` text DEFAULT NULL,
+  `diagnosis` text DEFAULT NULL,
+  `treatment_given` text DEFAULT NULL,
+  `urgency` enum('routine','urgent','emergency') DEFAULT 'routine',
+  `status` enum('pending','accepted','completed','rejected','cancelled') DEFAULT 'pending',
+  `referral_date` datetime NOT NULL DEFAULT current_timestamp(),
+  `accepted_at` datetime DEFAULT NULL,
+  `completed_at` datetime DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `referral_logs`
+--
+
+CREATE TABLE `referral_logs` (
+  `id` int(11) NOT NULL,
+  `referral_id` int(11) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `action` varchar(50) NOT NULL,
+  `performed_by` int(11) NOT NULL,
+  `notes` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `roles`
+--
+
+CREATE TABLE `roles` (
+  `id` int(11) NOT NULL,
+  `name` varchar(50) NOT NULL,
+  `description` text DEFAULT NULL,
+  `is_custom` tinyint(1) DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `roles`
+--
+
+INSERT INTO `roles` (`id`, `name`, `description`, `is_custom`, `created_at`, `updated_at`) VALUES
+(1, 'admin', 'Super Administrator - Full system access', 0, '2026-07-29 12:52:48', '2026-07-29 12:52:48'),
+(2, 'reception', 'Receptionist - Patient registration and appointments', 0, '2026-07-29 12:52:48', '2026-07-29 12:52:48'),
+(3, 'cashier', 'Cashier - Handle payments and billing', 0, '2026-07-29 12:52:48', '2026-07-29 12:52:48'),
+(4, 'doctor', 'Doctor - Patient consultation and prescriptions', 0, '2026-07-29 12:52:48', '2026-07-29 12:52:48'),
+(5, 'laboratory', 'Laboratory Technician - Lab tests and results', 0, '2026-07-29 12:52:48', '2026-07-29 12:52:48'),
+(6, 'pharmacy', 'Pharmacist - Medicine dispensing and inventory', 0, '2026-07-29 12:52:48', '2026-07-29 12:52:48');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `role_permissions`
+--
+
+CREATE TABLE `role_permissions` (
+  `role_id` int(11) NOT NULL,
+  `permission_id` int(11) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `sale_items`
+--
+
+CREATE TABLE `sale_items` (
+  `id` int(11) NOT NULL,
+  `sale_id` int(11) NOT NULL,
+  `medication_name` varchar(100) NOT NULL,
+  `quantity` int(11) NOT NULL,
+  `unit_price` decimal(10,2) NOT NULL,
+  `total_price` decimal(10,2) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `services`
+--
+
+CREATE TABLE `services` (
+  `id` int(11) NOT NULL,
+  `category_id` int(11) DEFAULT NULL,
+  `service_name` varchar(255) NOT NULL,
+  `description` text DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `price` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `unit` varchar(50) DEFAULT 'each',
+  `is_active` tinyint(1) DEFAULT 1,
+  `display_order` int(11) DEFAULT 0,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `services`
+--
+
+INSERT INTO `services` (`id`, `category_id`, `service_name`, `description`, `branch_id`, `price`, `unit`, `is_active`, `display_order`, `created_by`, `created_at`, `updated_at`) VALUES
+(1, 1, 'Registration Fee', 'New patient registration', 1, 10000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(2, 1, 'Re-registration', 'Existing patient re-registration', 1, 5000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(3, 2, 'General Consultation', 'Standard doctor consultation', 1, 15000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(4, 2, 'Follow-up Consultation', 'Follow-up visit', 1, 10000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(5, 2, 'Consultation-B', 'Emergency visit', 1, 25000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(6, 2, 'Specialist Consultation', 'Specialist doctor visit', 1, 30000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(7, 3, 'Blood Test - Full', 'Complete blood count', 1, 15000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(8, 3, 'Blood Test - Basic', 'Basic blood test', 1, 8000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(9, 3, 'Urine Test', 'Urinalysis', 1, 10000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(10, 3, 'Malaria Test', 'Malaria rapid test', 1, 5000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(11, 3, 'COVID-19 Test', 'COVID-19 rapid test', 1, 15000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(12, 3, 'X-Ray', 'X-Ray imaging', 1, 35000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(13, 3, 'Ultrasound', 'Ultrasound scan', 1, 50000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(14, 4, 'Prescription Charge', 'Prescription handling fee', 1, 5000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(15, 5, 'Minor Procedure', 'Minor medical procedure', 1, 20000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(16, 5, 'Major Procedure', 'Major medical procedure', 1, 50000.00, 'each', 1, 0, NULL, '2026-07-16 11:31:11', '2026-08-10 14:27:04'),
+(17, 2, 'New Patient', '', 1, 10000.00, 'each', 1, 0, 8, '2026-07-29 09:00:39', '2026-07-29 09:00:39'),
+(18, 2, 'FREE OF CHARDE', '', 1, 0.00, 'each', 1, 0, 6, '2026-08-01 13:34:14', '2026-08-01 13:34:14');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `service_categories`
+--
+
+CREATE TABLE `service_categories` (
+  `id` int(11) NOT NULL,
+  `category_name` varchar(100) NOT NULL,
+  `description` text DEFAULT NULL,
+  `icon` varchar(50) DEFAULT 'fa-file-medical',
+  `color` varchar(20) DEFAULT '#0B5ED7',
+  `branch_id` int(11) DEFAULT NULL,
+  `display_order` int(11) DEFAULT 0,
+  `is_active` tinyint(1) DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `service_categories`
+--
+
+INSERT INTO `service_categories` (`id`, `category_name`, `description`, `icon`, `color`, `branch_id`, `display_order`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 'Registration', 'Patient registration services', 'fa-file-medical', '#0B5ED7', NULL, 0, 1, '2026-07-16 11:31:11', '2026-07-16 11:31:11'),
+(2, 'Consultation', 'Doctor consultation services', 'fa-file-medical', '#059669', NULL, 0, 1, '2026-07-16 11:31:11', '2026-07-16 11:31:11'),
+(3, 'Lab Tests', 'Laboratory tests', 'fa-file-medical', '#7C3AED', NULL, 0, 1, '2026-07-16 11:31:11', '2026-07-16 11:31:11'),
+(4, 'Medications', 'Pharmacy medications', 'fa-file-medical', '#D97706', NULL, 0, 1, '2026-07-16 11:31:11', '2026-07-16 11:31:11'),
+(5, 'Procedures', 'Medical procedures', 'fa-file-medical', '#0D9488', NULL, 0, 1, '2026-07-16 11:31:11', '2026-07-16 11:31:11');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `service_fees`
+--
+
+CREATE TABLE `service_fees` (
+  `id` int(11) NOT NULL,
+  `service_name` varchar(100) NOT NULL,
+  `service_code` varchar(20) NOT NULL,
+  `category` enum('registration','consultation','lab_test','medication','procedure','other') NOT NULL,
+  `fee_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `description` text DEFAULT NULL,
+  `is_active` tinyint(1) DEFAULT 1,
+  `branch_id` int(11) DEFAULT NULL,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Triggers `service_fees`
+--
+DELIMITER $$
+CREATE TRIGGER `before_insert_service_fees` BEFORE INSERT ON `service_fees` FOR EACH ROW BEGIN
+            IF NEW.service_code IS NULL OR NEW.service_code = '' THEN
+                SET NEW.service_code = generate_service_code(NEW.category, NEW.branch_id);
+            END IF;
+        END
+$$
+DELIMITER ;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `stock_movements`
+--
+
+CREATE TABLE `stock_movements` (
+  `id` int(11) NOT NULL,
+  `inventory_id` int(11) NOT NULL,
+  `patient_id` int(11) DEFAULT NULL,
+  `sale_type` enum('prescription','otc') NOT NULL,
+  `sale_id` int(11) NOT NULL,
+  `quantity` int(11) NOT NULL,
+  `previous_stock` int(11) NOT NULL,
+  `new_stock` int(11) NOT NULL,
+  `movement_type` enum('out','in') DEFAULT 'out',
+  `performed_by` int(11) NOT NULL,
+  `notes` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `stock_movements`
+--
+
+INSERT INTO `stock_movements` (`id`, `inventory_id`, `patient_id`, `sale_type`, `sale_id`, `quantity`, `previous_stock`, `new_stock`, `movement_type`, `performed_by`, `notes`, `created_at`) VALUES
+(4, 2, NULL, 'otc', 3, 10, 0, 0, 'out', 5, 'OTC Sale - Bill sent to Cashier', '2026-07-27 11:11:54'),
+(5, 2, NULL, 'otc', 4, 30, 0, 0, 'out', 5, 'OTC Sale - Bill sent to Cashier', '2026-07-27 12:52:40'),
+(6, 2, NULL, 'otc', 5, 10, 0, 0, 'out', 9, 'OTC Sale - Bill sent to Cashier', '2026-07-27 13:06:15'),
+(7, 17, NULL, 'otc', 6, 10, 0, 0, 'out', 5, 'OTC Sale - Bill sent to Cashier', '2026-07-27 13:08:14'),
+(8, 8, NULL, 'otc', 6, 1, 0, 0, 'out', 5, 'OTC Sale - Bill sent to Cashier', '2026-07-27 13:08:14'),
+(9, 8, NULL, 'otc', 6, 1, 0, 0, 'out', 5, 'OTC Sale - Bill sent to Cashier', '2026-07-27 13:08:14');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `system_settings`
+--
+
+CREATE TABLE `system_settings` (
+  `id` int(11) NOT NULL,
+  `setting_key` varchar(100) NOT NULL,
+  `setting_value` text DEFAULT NULL,
+  `category` varchar(50) DEFAULT 'general',
+  `description` text DEFAULT NULL,
+  `is_editable` tinyint(1) DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `system_settings`
+--
+
+INSERT INTO `system_settings` (`id`, `setting_key`, `setting_value`, `category`, `description`, `is_editable`, `created_at`, `updated_at`) VALUES
+(1, 'site_name', 'Braick Dispensary', 'general', 'Name of the facility', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58'),
+(2, 'site_logo', '/uploads/braick_logo.png', 'general', 'Logo path', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58'),
+(3, 'registration_fee', '5000.00', 'fees', 'Default registration fee', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58'),
+(4, 'consultation_fee', '10000.00', 'fees', 'Default consultation fee', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58'),
+(5, 'currency', 'TSh', 'general', 'Currency symbol', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58'),
+(6, 'tax_percent', '0.00', 'financial', 'Tax percentage applied to all services', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58'),
+(7, 'max_discount_percent', '20.00', 'financial', 'Maximum discount percentage allowed', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58'),
+(8, 'business_hours_start', '08:00', 'general', 'Business hours start', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58'),
+(9, 'business_hours_end', '18:00', 'general', 'Business hours end', 1, '2026-07-16 11:35:58', '2026-07-16 11:35:58');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `users`
+--
+
+CREATE TABLE `users` (
+  `id` int(11) NOT NULL,
+  `username` varchar(50) NOT NULL,
+  `password` varchar(255) NOT NULL,
+  `full_name` varchar(100) NOT NULL,
+  `email` varchar(100) NOT NULL,
+  `phone` varchar(20) DEFAULT NULL,
+  `role` enum('admin','reception','doctor','laboratory','pharmacy','cashier') NOT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `specialty` varchar(100) DEFAULT NULL,
+  `is_online` tinyint(1) DEFAULT 0,
+  `last_online` timestamp NULL DEFAULT NULL,
+  `profile_pic` varchar(255) DEFAULT NULL,
+  `status` enum('active','inactive') DEFAULT 'active',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `users`
+--
+
+INSERT INTO `users` (`id`, `username`, `password`, `full_name`, `email`, `phone`, `role`, `branch_id`, `specialty`, `is_online`, `last_online`, `profile_pic`, `status`, `created_at`, `updated_at`) VALUES
+(4, 'admin', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'System Admin', 'admin@braick.com', '+255 700 000 000', 'admin', 1, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:40', '2026-08-06 11:27:56'),
+(5, 'dr.john', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Dr. John Mushi', 'john@braick.com', '+255 700 000 011', 'doctor', 1, 'General Medicine', 1, '2026-08-10 16:34:20', 'user_5_1785346769.png', 'active', '2026-07-16 11:29:41', '2026-08-10 16:34:20'),
+(6, 'dr.grace', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Dr. Grace Peter', 'grace@braick.com', '+255 700 000 012', 'doctor', 1, 'Pediatrics', 1, '2026-07-16 15:32:43', 'reception_6_1786036485.png', 'active', '2026-07-16 11:29:41', '2026-08-06 17:14:45'),
+(7, 'dr.david', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Dr. ERICK', 'david@braick.com', '+255 700 000 013', 'doctor', 1, 'Cardiology', 1, '2026-07-16 15:15:56', NULL, 'active', '2026-07-16 11:29:41', '2026-08-10 16:30:52'),
+(8, 'lab.dodoma', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Lab Technician Dodoma', 'lab.dodoma@braick.com', '+255 700 000 014', 'laboratory', 1, NULL, 0, NULL, 'user_8_1784535496.png', 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(9, 'pharm.dodoma', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Pharmacy Dodoma', 'pharm.dodoma@braick.com', '+255 700 000 015', 'pharmacy', 1, NULL, 0, NULL, 'user_9_1786378503.png', 'active', '2026-07-16 11:29:41', '2026-08-10 16:15:03'),
+(10, 'cashier.dodoma', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Rose Mwangi', 'cashier.dodoma@braick.com', '+255 700 000 016', 'cashier', 1, NULL, 0, NULL, 'cashier_10_1784371113.png', 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(11, 'reception.rose', '12345678', 'Rose Mwangi', 'rose@braick.com', '+255 700 000 005', 'reception', 1, NULL, 1, '2026-08-06 16:22:29', 'cashier_11_1785587155.png', 'active', '2026-07-16 11:29:41', '2026-08-06 16:22:29'),
+(12, 'dr.anna', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Dr. Anna Kivuyo', 'anna@braick.com', '+255 700 000 021', 'doctor', 2, 'Obstetrics', 1, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(13, 'dr.peter', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Dr. Peter Lema', 'peter@braick.com', '+255 700 000 022', 'doctor', 2, 'Surgery', 1, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(14, 'lab.arusha', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Lab Technician Arusha', 'lab.arusha@braick.com', '+255 700 000 023', 'laboratory', 2, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(15, 'pharm.arusha', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Pharmacy Arusha', 'pharm.arusha@braick.com', '+255 700 000 024', 'pharmacy', 2, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(16, 'cashier.arusha', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Cashier Arusha', 'cashier.arusha@braick.com', '+255 700 000 025', 'cashier', 2, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(17, 'reception.arusha', '12345678', 'Reception Arusha', 'reception.arusha@braick.com', '+255 700 000 026', 'reception', 2, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:36:34'),
+(18, 'dr.sarah', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Dr. Sarah Mwamba', 'sarah@braick.com', '+255 700 000 031', 'doctor', 3, 'Cardiology', 1, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(19, 'dr.james', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Dr. James Kato', 'james@braick.com', '+255 700 000 032', 'doctor', 3, 'Neurology', 1, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(20, 'dr.mary', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Dr. Mary Ndugu', 'mary@braick.com', '+255 700 000 033', 'doctor', 3, 'Pediatrics', 1, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(21, 'lab.dar', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Lab Technician Dar', 'lab.dar@braick.com', '+255 700 000 034', 'laboratory', 3, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(22, 'pharm.dar', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Pharmacy Dar', 'pharm.dar@braick.com', '+255 700 000 035', 'pharmacy', 3, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(23, 'cashier.dar', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'Cashier Dar', 'cashier.dar@braick.com', '+255 700 000 036', 'cashier', 3, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:27:56'),
+(24, 'reception.dar', '12345678', 'Reception Dar', 'reception.dar@braick.com', '+255 700 000 037', 'reception', 3, NULL, 0, NULL, NULL, 'active', '2026-07-16 11:29:41', '2026-08-06 11:36:34'),
+(25, 'Dr.Wambura', '$2y$10$i2QfPHsF59WUXuTfjmj3Sueyxmhe3kYu5zTDGaKLj6cU4Z1RbIUgi', 'MUSSA WAMBURA', 'wambura@gmail.com', '0746526243', 'doctor', 1, NULL, 0, NULL, NULL, 'inactive', '2026-08-12 10:52:46', '2026-08-12 10:54:25');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `visits`
+--
+
+CREATE TABLE `visits` (
+  `id` int(11) NOT NULL,
+  `visit_number` varchar(50) NOT NULL,
+  `visit_date` datetime NOT NULL DEFAULT current_timestamp(),
+  `patient_id` int(11) NOT NULL,
+  `doctor_id` int(11) DEFAULT NULL,
+  `assigned_at` timestamp NULL DEFAULT NULL,
+  `receptionist_id` int(11) DEFAULT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `visit_type` enum('new','follow-up','emergency') DEFAULT 'new',
+  `status` enum('pending','assigned','with_doctor','lab_test','lab_completed','prescribed','completed','cancelled') DEFAULT 'pending',
+  `symptoms` text DEFAULT NULL,
+  `complaint` text DEFAULT NULL,
+  `diagnosis` text DEFAULT NULL,
+  `treatment` text DEFAULT NULL,
+  `follow_up_date` date DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `referred_to` int(11) DEFAULT NULL,
+  `is_referred` tinyint(1) DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `registration_fee` decimal(10,2) DEFAULT 0.00,
+  `consultation_fee` decimal(10,2) DEFAULT 0.00,
+  `lab_fees_total` decimal(10,2) DEFAULT 0.00,
+  `pharmacy_fees_total` decimal(10,2) DEFAULT 0.00,
+  `other_fees_total` decimal(10,2) DEFAULT 0.00,
+  `visit_total` decimal(10,2) DEFAULT 0.00,
+  `payment_status` enum('pending','partial','paid','cancelled') DEFAULT 'pending',
+  `is_completed` tinyint(1) DEFAULT 0,
+  `completed_at` timestamp NULL DEFAULT NULL,
+  `total_discount` decimal(10,2) DEFAULT 0.00,
+  `discount_percent` decimal(5,2) DEFAULT 0.00
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `visits`
+--
+
+INSERT INTO `visits` (`id`, `visit_number`, `visit_date`, `patient_id`, `doctor_id`, `assigned_at`, `receptionist_id`, `branch_id`, `visit_type`, `status`, `symptoms`, `complaint`, `diagnosis`, `treatment`, `follow_up_date`, `notes`, `referred_to`, `is_referred`, `created_at`, `updated_at`, `registration_fee`, `consultation_fee`, `lab_fees_total`, `pharmacy_fees_total`, `other_fees_total`, `visit_total`, `payment_status`, `is_completed`, `completed_at`, `total_discount`, `discount_percent`) VALUES
+(142, 'VIS-20260813-0100', '2026-08-13 13:07:20', 100, 5, NULL, 6, 1, '', 'assigned', '', '', NULL, NULL, NULL, '', NULL, 0, '2026-08-13 10:07:20', '2026-08-13 10:07:20', 0.00, 10000.00, 0.00, 0.00, 0.00, 0.00, 'pending', 0, NULL, 0.00, 0.00),
+(143, 'VIS-20260813-0101', '2026-08-13 13:13:16', 101, 5, NULL, 6, 1, '', 'assigned', '', '', NULL, NULL, NULL, '', NULL, 0, '2026-08-13 10:13:16', '2026-08-13 10:13:16', 0.00, 10000.00, 0.00, 0.00, 0.00, 0.00, 'pending', 0, NULL, 0.00, 0.00);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `vital_signs`
+--
+
+CREATE TABLE `vital_signs` (
+  `id` int(11) NOT NULL,
+  `patient_id` int(11) NOT NULL,
+  `visit_id` int(11) DEFAULT NULL,
+  `appointment_id` int(11) DEFAULT NULL,
+  `recorded_by` int(11) NOT NULL,
+  `branch_id` int(11) DEFAULT NULL,
+  `temperature` decimal(4,1) DEFAULT NULL COMMENT 'Temperature in Celsius',
+  `blood_pressure_systolic` int(11) DEFAULT NULL COMMENT 'Systolic BP (mmHg)',
+  `blood_pressure_diastolic` int(11) DEFAULT NULL COMMENT 'Diastolic BP (mmHg)',
+  `pulse_rate` int(11) DEFAULT NULL COMMENT 'Pulse rate (bpm)',
+  `respiratory_rate` int(11) DEFAULT NULL COMMENT 'Respiratory rate (breaths/min)',
+  `oxygen_saturation` int(11) DEFAULT NULL COMMENT 'SpO2 (%)',
+  `blood_glucose` decimal(5,1) DEFAULT NULL COMMENT 'Blood glucose (mg/dL)',
+  `weight` decimal(5,2) DEFAULT NULL COMMENT 'Weight (kg)',
+  `height` decimal(5,2) DEFAULT NULL COMMENT 'Height (cm)',
+  `bmi` decimal(4,1) DEFAULT NULL COMMENT 'BMI (calculated)',
+  `muac` decimal(4,1) DEFAULT NULL COMMENT 'MUAC (cm)',
+  `pain_score` int(11) DEFAULT NULL COMMENT 'Pain score (0-10)',
+  `notes` text DEFAULT NULL,
+  `recorded_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Stand-in structure for view `v_patient_visit_fees`
+-- (See below for the actual view)
+--
+CREATE TABLE `v_patient_visit_fees` (
+`patient_id` int(11)
+,`patient_number` varchar(50)
+,`full_name` varchar(100)
+,`phone` varchar(20)
+,`visit_id` int(11)
+,`visit_number` varchar(50)
+,`visit_date` datetime
+,`visit_type` enum('new','follow-up','emergency')
+,`visit_status` enum('pending','assigned','with_doctor','lab_test','lab_completed','prescribed','completed','cancelled')
+,`registration_fee` decimal(10,2)
+,`consultation_fee` decimal(10,2)
+,`lab_fees_total` decimal(10,2)
+,`pharmacy_fees_total` decimal(10,2)
+,`other_fees_total` decimal(10,2)
+,`total_fees` decimal(10,2)
+,`discount_percent` decimal(5,2)
+,`total_discount` decimal(10,2)
+,`net_payable` decimal(11,2)
+,`payment_status` enum('pending','partial','paid','cancelled')
+,`doctor_name` varchar(100)
+,`branch_name` varchar(100)
+);
+
+-- --------------------------------------------------------
+
+--
+-- Stand-in structure for view `v_service_fees_summary`
+-- (See below for the actual view)
+--
+CREATE TABLE `v_service_fees_summary` (
+`category` enum('registration','consultation','lab_test','medication','procedure','other')
+,`total_services` bigint(21)
+,`total_fees` decimal(32,2)
+,`average_fee` decimal(14,6)
+,`min_fee` decimal(10,2)
+,`max_fee` decimal(10,2)
+,`active_services` decimal(22,0)
+);
+
+-- --------------------------------------------------------
+
+--
+-- Structure for view `v_patient_visit_fees`
+--
+DROP TABLE IF EXISTS `v_patient_visit_fees`;
+
+CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v_patient_visit_fees`  AS SELECT `p`.`id` AS `patient_id`, `p`.`patient_id` AS `patient_number`, `p`.`full_name` AS `full_name`, `p`.`phone` AS `phone`, `v`.`id` AS `visit_id`, `v`.`visit_number` AS `visit_number`, `v`.`visit_date` AS `visit_date`, `v`.`visit_type` AS `visit_type`, `v`.`status` AS `visit_status`, `v`.`registration_fee` AS `registration_fee`, `v`.`consultation_fee` AS `consultation_fee`, `v`.`lab_fees_total` AS `lab_fees_total`, `v`.`pharmacy_fees_total` AS `pharmacy_fees_total`, `v`.`other_fees_total` AS `other_fees_total`, `v`.`visit_total` AS `total_fees`, `v`.`discount_percent` AS `discount_percent`, `v`.`total_discount` AS `total_discount`, `v`.`visit_total`- `v`.`total_discount` AS `net_payable`, `v`.`payment_status` AS `payment_status`, `u`.`full_name` AS `doctor_name`, `b`.`name` AS `branch_name` FROM (((`patients` `p` left join `visits` `v` on(`p`.`id` = `v`.`patient_id`)) left join `users` `u` on(`v`.`doctor_id` = `u`.`id`)) left join `branches` `b` on(`v`.`branch_id` = `b`.`id`)) WHERE `v`.`status` <> 'cancelled' ;
+
+-- --------------------------------------------------------
+
+--
+-- Structure for view `v_service_fees_summary`
+--
+DROP TABLE IF EXISTS `v_service_fees_summary`;
+
+CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v_service_fees_summary`  AS SELECT `service_fees`.`category` AS `category`, count(0) AS `total_services`, sum(`service_fees`.`fee_amount`) AS `total_fees`, avg(`service_fees`.`fee_amount`) AS `average_fee`, min(`service_fees`.`fee_amount`) AS `min_fee`, max(`service_fees`.`fee_amount`) AS `max_fee`, sum(case when `service_fees`.`is_active` = 1 then 1 else 0 end) AS `active_services` FROM `service_fees` GROUP BY `service_fees`.`category` ;
+
+--
+-- Indexes for dumped tables
+--
+
+--
+-- Indexes for table `activity_logs`
+--
+ALTER TABLE `activity_logs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `user_id` (`user_id`),
+  ADD KEY `idx_branch_id` (`branch_id`),
+  ADD KEY `idx_activity_logs_patient` (`patient_id`);
+
+--
+-- Indexes for table `appointments`
+--
+ALTER TABLE `appointments`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `patient_id` (`patient_id`),
+  ADD KEY `doctor_id` (`doctor_id`),
+  ADD KEY `created_by` (`created_by`),
+  ADD KEY `branch_id` (`branch_id`),
+  ADD KEY `visit_id` (`visit_id`);
+
+--
+-- Indexes for table `bill_items`
+--
+ALTER TABLE `bill_items`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uk_bill_item` (`bill_id`,`item_name`,`item_type`),
+  ADD KEY `bill_id` (`bill_id`),
+  ADD KEY `idx_branch_id` (`branch_id`),
+  ADD KEY `idx_bill_items_patient` (`patient_id`);
+
+--
+-- Indexes for table `branches`
+--
+ALTER TABLE `branches`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- Indexes for table `departments`
+--
+ALTER TABLE `departments`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `name` (`name`);
+
+--
+-- Indexes for table `doctor_status`
+--
+ALTER TABLE `doctor_status`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `doctor_id` (`doctor_id`);
+
+--
+-- Indexes for table `employee_departments`
+--
+ALTER TABLE `employee_departments`
+  ADD PRIMARY KEY (`user_id`,`department_id`),
+  ADD KEY `department_id` (`department_id`),
+  ADD KEY `assigned_by` (`assigned_by`);
+
+--
+-- Indexes for table `employee_roles`
+--
+ALTER TABLE `employee_roles`
+  ADD PRIMARY KEY (`user_id`,`role_id`),
+  ADD KEY `role_id` (`role_id`),
+  ADD KEY `assigned_by` (`assigned_by`);
+
+--
+-- Indexes for table `expenses`
+--
+ALTER TABLE `expenses`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_branch` (`branch_id`),
+  ADD KEY `idx_status` (`status`),
+  ADD KEY `idx_category` (`category`);
+
+--
+-- Indexes for table `inventory_categories`
+--
+ALTER TABLE `inventory_categories`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `category_code` (`category_code`),
+  ADD KEY `is_active` (`is_active`),
+  ADD KEY `inventory_categories_ibfk_1` (`created_by`);
+
+--
+-- Indexes for table `lab_billing_items`
+--
+ALTER TABLE `lab_billing_items`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `request_id` (`request_id`),
+  ADD KEY `idx_lab_billing_items_patient` (`patient_id`);
+
+--
+-- Indexes for table `lab_requests`
+--
+ALTER TABLE `lab_requests`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `request_number` (`request_number`),
+  ADD KEY `idx_visit` (`visit_id`),
+  ADD KEY `idx_patient` (`patient_id`),
+  ADD KEY `idx_doctor` (`doctor_id`),
+  ADD KEY `idx_status` (`status`),
+  ADD KEY `idx_lab_requests_status` (`status`),
+  ADD KEY `idx_lab_requests_patient` (`patient_id`),
+  ADD KEY `idx_lab_requests_doctor` (`doctor_id`),
+  ADD KEY `idx_lab_requests_date` (`requested_at`);
+
+--
+-- Indexes for table `lab_request_items`
+--
+ALTER TABLE `lab_request_items`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `request_id` (`request_id`),
+  ADD KEY `test_id` (`test_id`),
+  ADD KEY `idx_lab_request_items_status` (`status`),
+  ADD KEY `idx_lab_request_items_patient` (`patient_id`);
+
+--
+-- Indexes for table `lab_result_templates`
+--
+ALTER TABLE `lab_result_templates`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_test_type` (`test_type`);
+
+--
+-- Indexes for table `lab_tests`
+--
+ALTER TABLE `lab_tests`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uk_visit_test` (`visit_id`,`test_name`),
+  ADD UNIQUE KEY `unique_visit_test` (`visit_id`,`test_name`),
+  ADD KEY `visit_id` (`visit_id`),
+  ADD KEY `doctor_id` (`doctor_id`),
+  ADD KEY `lab_technician_id` (`lab_technician_id`),
+  ADD KEY `branch_id` (`branch_id`),
+  ADD KEY `idx_technician_id` (`technician_id`);
+
+--
+-- Indexes for table `lab_tests_catalog`
+--
+ALTER TABLE `lab_tests_catalog`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `test_code` (`test_code`),
+  ADD KEY `idx_branch_id` (`branch_id`);
+
+--
+-- Indexes for table `lab_test_type_mapping`
+--
+ALTER TABLE `lab_test_type_mapping`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `template_id` (`template_id`);
+
+--
+-- Indexes for table `medications`
+--
+ALTER TABLE `medications`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `name_strength_unit` (`name`,`strength`,`unit`),
+  ADD KEY `idx_branch_id` (`branch_id`);
+
+--
+-- Indexes for table `medications_inventory`
+--
+ALTER TABLE `medications_inventory`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `branch_id` (`branch_id`);
+
+--
+-- Indexes for table `notifications`
+--
+ALTER TABLE `notifications`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `user_id` (`user_id`),
+  ADD KEY `idx_branch_id` (`branch_id`),
+  ADD KEY `idx_notifications_patient` (`patient_id`);
+
+--
+-- Indexes for table `otc_sales`
+--
+ALTER TABLE `otc_sales`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `sale_number` (`sale_number`),
+  ADD KEY `idx_customer` (`customer_name`),
+  ADD KEY `idx_date` (`created_at`),
+  ADD KEY `idx_bill_id` (`bill_id`),
+  ADD KEY `idx_otc_sales_patient` (`patient_id`);
+
+--
+-- Indexes for table `otc_sale_items`
+--
+ALTER TABLE `otc_sale_items`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `sale_id` (`sale_id`),
+  ADD KEY `idx_inventory` (`inventory_id`),
+  ADD KEY `idx_otc_sale_items_patient` (`patient_id`);
+
+--
+-- Indexes for table `patients`
+--
+ALTER TABLE `patients`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `patient_id` (`patient_id`),
+  ADD KEY `branch_id` (`branch_id`),
+  ADD KEY `created_by` (`created_by`),
+  ADD KEY `assigned_doctor_id` (`assigned_doctor_id`);
+
+--
+-- Indexes for table `patient_bills`
+--
+ALTER TABLE `patient_bills`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `bill_number` (`bill_number`);
+
+--
+-- Indexes for table `patient_documents`
+--
+ALTER TABLE `patient_documents`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `document_number` (`document_number`),
+  ADD KEY `patient_id` (`patient_id`),
+  ADD KEY `doctor_id` (`doctor_id`),
+  ADD KEY `visit_id` (`visit_id`),
+  ADD KEY `uploaded_by` (`uploaded_by`),
+  ADD KEY `verified_by` (`verified_by`),
+  ADD KEY `branch_id` (`branch_id`);
+
+--
+-- Indexes for table `payments`
+--
+ALTER TABLE `payments`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `receipt_number` (`receipt_number`),
+  ADD KEY `idx_bill` (`bill_id`),
+  ADD KEY `idx_patient` (`patient_id`),
+  ADD KEY `idx_receipt` (`receipt_number`);
+
+--
+-- Indexes for table `permissions`
+--
+ALTER TABLE `permissions`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `name` (`name`);
+
+--
+-- Indexes for table `pharmacy_sales`
+--
+ALTER TABLE `pharmacy_sales`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `sale_number` (`sale_number`),
+  ADD KEY `prescription_id` (`prescription_id`),
+  ADD KEY `patient_id` (`patient_id`),
+  ADD KEY `cashier_id` (`cashier_id`),
+  ADD KEY `branch_id` (`branch_id`);
+
+--
+-- Indexes for table `prescriptions`
+--
+ALTER TABLE `prescriptions`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `prescription_number` (`prescription_number`),
+  ADD KEY `visit_id` (`visit_id`),
+  ADD KEY `doctor_id` (`doctor_id`),
+  ADD KEY `patient_id` (`patient_id`),
+  ADD KEY `pharmacy_id` (`pharmacy_id`),
+  ADD KEY `branch_id` (`branch_id`);
+
+--
+-- Indexes for table `prescription_items`
+--
+ALTER TABLE `prescription_items`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `prescription_id` (`prescription_id`),
+  ADD KEY `idx_prescription_items_patient` (`patient_id`);
+
+--
+-- Indexes for table `prescription_sales`
+--
+ALTER TABLE `prescription_sales`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `sale_number` (`sale_number`),
+  ADD KEY `idx_prescription` (`prescription_id`),
+  ADD KEY `idx_patient` (`patient_id`),
+  ADD KEY `idx_status` (`status`),
+  ADD KEY `idx_date` (`created_at`);
+
+--
+-- Indexes for table `prescription_sale_items`
+--
+ALTER TABLE `prescription_sale_items`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `sale_id` (`sale_id`),
+  ADD KEY `idx_inventory` (`inventory_id`),
+  ADD KEY `idx_prescription_sale_items_patient` (`patient_id`);
+
+--
+-- Indexes for table `procedures`
+--
+ALTER TABLE `procedures`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_procedure_name` (`procedure_name`),
+  ADD KEY `idx_is_active` (`is_active`),
+  ADD KEY `idx_branch_id` (`branch_id`);
+
+--
+-- Indexes for table `procedure_tools`
+--
+ALTER TABLE `procedure_tools`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_branch_id` (`branch_id`);
+
+--
+-- Indexes for table `receipts`
+--
+ALTER TABLE `receipts`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `receipt_number` (`receipt_number`),
+  ADD KEY `payment_id` (`payment_id`),
+  ADD KEY `idx_receipt_number` (`receipt_number`),
+  ADD KEY `idx_branch_id` (`branch_id`);
+
+--
+-- Indexes for table `referrals`
+--
+ALTER TABLE `referrals`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `referral_number` (`referral_number`),
+  ADD KEY `visit_id` (`visit_id`),
+  ADD KEY `patient_id` (`patient_id`),
+  ADD KEY `from_doctor_id` (`from_doctor_id`),
+  ADD KEY `to_doctor_id` (`to_doctor_id`),
+  ADD KEY `status` (`status`),
+  ADD KEY `referral_type` (`referral_type`),
+  ADD KEY `branch_id` (`branch_id`),
+  ADD KEY `created_by` (`created_by`);
+
+--
+-- Indexes for table `referral_logs`
+--
+ALTER TABLE `referral_logs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `referral_id` (`referral_id`),
+  ADD KEY `performed_by` (`performed_by`),
+  ADD KEY `idx_referral_logs_patient` (`patient_id`);
+
+--
+-- Indexes for table `roles`
+--
+ALTER TABLE `roles`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `name` (`name`);
+
+--
+-- Indexes for table `role_permissions`
+--
+ALTER TABLE `role_permissions`
+  ADD PRIMARY KEY (`role_id`,`permission_id`),
+  ADD KEY `permission_id` (`permission_id`);
+
+--
+-- Indexes for table `sale_items`
+--
+ALTER TABLE `sale_items`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `sale_id` (`sale_id`);
+
+--
+-- Indexes for table `services`
+--
+ALTER TABLE `services`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `category_id` (`category_id`),
+  ADD KEY `created_by` (`created_by`),
+  ADD KEY `idx_branch_id` (`branch_id`);
+
+--
+-- Indexes for table `service_categories`
+--
+ALTER TABLE `service_categories`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `category_name` (`category_name`),
+  ADD KEY `idx_branch_id` (`branch_id`);
+
+--
+-- Indexes for table `service_fees`
+--
+ALTER TABLE `service_fees`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `service_code` (`service_code`),
+  ADD KEY `branch_id` (`branch_id`),
+  ADD KEY `category` (`category`),
+  ADD KEY `is_active` (`is_active`);
+
+--
+-- Indexes for table `stock_movements`
+--
+ALTER TABLE `stock_movements`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_inventory` (`inventory_id`),
+  ADD KEY `idx_sale` (`sale_id`),
+  ADD KEY `idx_stock_movements_patient` (`patient_id`);
+
+--
+-- Indexes for table `system_settings`
+--
+ALTER TABLE `system_settings`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `setting_key` (`setting_key`);
+
+--
+-- Indexes for table `users`
+--
+ALTER TABLE `users`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `username` (`username`),
+  ADD UNIQUE KEY `email` (`email`),
+  ADD KEY `branch_id` (`branch_id`);
+
+--
+-- Indexes for table `visits`
+--
+ALTER TABLE `visits`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `visit_number` (`visit_number`),
+  ADD KEY `patient_id` (`patient_id`),
+  ADD KEY `doctor_id` (`doctor_id`),
+  ADD KEY `receptionist_id` (`receptionist_id`),
+  ADD KEY `branch_id` (`branch_id`),
+  ADD KEY `referred_to` (`referred_to`),
+  ADD KEY `idx_visits_patient_status` (`patient_id`,`status`),
+  ADD KEY `idx_visits_doctor_date` (`doctor_id`,`visit_date`),
+  ADD KEY `idx_visits_branch_status` (`branch_id`,`status`);
+
+--
+-- Indexes for table `vital_signs`
+--
+ALTER TABLE `vital_signs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `patient_id` (`patient_id`),
+  ADD KEY `visit_id` (`visit_id`),
+  ADD KEY `appointment_id` (`appointment_id`),
+  ADD KEY `recorded_by` (`recorded_by`),
+  ADD KEY `branch_id` (`branch_id`);
+
+--
+-- AUTO_INCREMENT for dumped tables
+--
+
+--
+-- AUTO_INCREMENT for table `activity_logs`
+--
+ALTER TABLE `activity_logs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=424;
+
+--
+-- AUTO_INCREMENT for table `appointments`
+--
+ALTER TABLE `appointments`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
+
+--
+-- AUTO_INCREMENT for table `bill_items`
+--
+ALTER TABLE `bill_items`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=566;
+
+--
+-- AUTO_INCREMENT for table `branches`
+--
+ALTER TABLE `branches`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+
+--
+-- AUTO_INCREMENT for table `departments`
+--
+ALTER TABLE `departments`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+
+--
+-- AUTO_INCREMENT for table `doctor_status`
+--
+ALTER TABLE `doctor_status`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `expenses`
+--
+ALTER TABLE `expenses`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+
+--
+-- AUTO_INCREMENT for table `inventory_categories`
+--
+ALTER TABLE `inventory_categories`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `lab_billing_items`
+--
+ALTER TABLE `lab_billing_items`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `lab_requests`
+--
+ALTER TABLE `lab_requests`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
+
+--
+-- AUTO_INCREMENT for table `lab_request_items`
+--
+ALTER TABLE `lab_request_items`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=100;
+
+--
+-- AUTO_INCREMENT for table `lab_result_templates`
+--
+ALTER TABLE `lab_result_templates`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+
+--
+-- AUTO_INCREMENT for table `lab_tests`
+--
+ALTER TABLE `lab_tests`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=126;
+
+--
+-- AUTO_INCREMENT for table `lab_tests_catalog`
+--
+ALTER TABLE `lab_tests_catalog`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=53;
+
+--
+-- AUTO_INCREMENT for table `lab_test_type_mapping`
+--
+ALTER TABLE `lab_test_type_mapping`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+
+--
+-- AUTO_INCREMENT for table `medications`
+--
+ALTER TABLE `medications`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=21;
+
+--
+-- AUTO_INCREMENT for table `medications_inventory`
+--
+ALTER TABLE `medications_inventory`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=22;
+
+--
+-- AUTO_INCREMENT for table `notifications`
+--
+ALTER TABLE `notifications`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=329;
+
+--
+-- AUTO_INCREMENT for table `otc_sales`
+--
+ALTER TABLE `otc_sales`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+
+--
+-- AUTO_INCREMENT for table `otc_sale_items`
+--
+ALTER TABLE `otc_sale_items`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+
+--
+-- AUTO_INCREMENT for table `patients`
+--
+ALTER TABLE `patients`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=102;
+
+--
+-- AUTO_INCREMENT for table `patient_bills`
+--
+ALTER TABLE `patient_bills`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=195;
+
+--
+-- AUTO_INCREMENT for table `patient_documents`
+--
+ALTER TABLE `patient_documents`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+
+--
+-- AUTO_INCREMENT for table `payments`
+--
+ALTER TABLE `payments`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=104;
+
+--
+-- AUTO_INCREMENT for table `permissions`
+--
+ALTER TABLE `permissions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `pharmacy_sales`
+--
+ALTER TABLE `pharmacy_sales`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `prescriptions`
+--
+ALTER TABLE `prescriptions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=57;
+
+--
+-- AUTO_INCREMENT for table `prescription_items`
+--
+ALTER TABLE `prescription_items`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=41;
+
+--
+-- AUTO_INCREMENT for table `prescription_sales`
+--
+ALTER TABLE `prescription_sales`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+
+--
+-- AUTO_INCREMENT for table `prescription_sale_items`
+--
+ALTER TABLE `prescription_sale_items`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `procedures`
+--
+ALTER TABLE `procedures`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+
+--
+-- AUTO_INCREMENT for table `procedure_tools`
+--
+ALTER TABLE `procedure_tools`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=153;
+
+--
+-- AUTO_INCREMENT for table `receipts`
+--
+ALTER TABLE `receipts`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
+
+--
+-- AUTO_INCREMENT for table `referrals`
+--
+ALTER TABLE `referrals`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `referral_logs`
+--
+ALTER TABLE `referral_logs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `roles`
+--
+ALTER TABLE `roles`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+
+--
+-- AUTO_INCREMENT for table `sale_items`
+--
+ALTER TABLE `sale_items`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `services`
+--
+ALTER TABLE `services`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+
+--
+-- AUTO_INCREMENT for table `service_categories`
+--
+ALTER TABLE `service_categories`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+
+--
+-- AUTO_INCREMENT for table `service_fees`
+--
+ALTER TABLE `service_fees`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `stock_movements`
+--
+ALTER TABLE `stock_movements`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+
+--
+-- AUTO_INCREMENT for table `system_settings`
+--
+ALTER TABLE `system_settings`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+
+--
+-- AUTO_INCREMENT for table `users`
+--
+ALTER TABLE `users`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=26;
+
+--
+-- AUTO_INCREMENT for table `visits`
+--
+ALTER TABLE `visits`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=144;
+
+--
+-- AUTO_INCREMENT for table `vital_signs`
+--
+ALTER TABLE `vital_signs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=37;
+
+--
+-- Constraints for dumped tables
+--
+
+--
+-- Constraints for table `activity_logs`
+--
+ALTER TABLE `activity_logs`
+  ADD CONSTRAINT `activity_logs_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_activity_logs_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_activity_logs_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `appointments`
+--
+ALTER TABLE `appointments`
+  ADD CONSTRAINT `appointments_ibfk_1` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `appointments_ibfk_2` FOREIGN KEY (`doctor_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `appointments_ibfk_3` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `appointments_ibfk_4` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `bill_items`
+--
+ALTER TABLE `bill_items`
+  ADD CONSTRAINT `bill_items_ibfk_1` FOREIGN KEY (`bill_id`) REFERENCES `patient_bills` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_bill_items_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `doctor_status`
+--
+ALTER TABLE `doctor_status`
+  ADD CONSTRAINT `doctor_status_ibfk_1` FOREIGN KEY (`doctor_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `employee_departments`
+--
+ALTER TABLE `employee_departments`
+  ADD CONSTRAINT `employee_departments_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `employee_departments_ibfk_2` FOREIGN KEY (`department_id`) REFERENCES `departments` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `employee_departments_ibfk_3` FOREIGN KEY (`assigned_by`) REFERENCES `users` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `employee_roles`
+--
+ALTER TABLE `employee_roles`
+  ADD CONSTRAINT `employee_roles_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `employee_roles_ibfk_2` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `employee_roles_ibfk_3` FOREIGN KEY (`assigned_by`) REFERENCES `users` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `inventory_categories`
+--
+ALTER TABLE `inventory_categories`
+  ADD CONSTRAINT `inventory_categories_ibfk_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `lab_billing_items`
+--
+ALTER TABLE `lab_billing_items`
+  ADD CONSTRAINT `fk_lab_billing_items_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `lab_billing_items_ibfk_1` FOREIGN KEY (`request_id`) REFERENCES `lab_requests` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `lab_request_items`
+--
+ALTER TABLE `lab_request_items`
+  ADD CONSTRAINT `fk_lab_request_items_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `lab_request_items_ibfk_2` FOREIGN KEY (`test_id`) REFERENCES `lab_tests_catalog` (`id`);
+
+--
+-- Constraints for table `lab_tests`
+--
+ALTER TABLE `lab_tests`
+  ADD CONSTRAINT `lab_tests_ibfk_1` FOREIGN KEY (`visit_id`) REFERENCES `visits` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `lab_tests_ibfk_2` FOREIGN KEY (`doctor_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `lab_tests_ibfk_3` FOREIGN KEY (`lab_technician_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `lab_tests_ibfk_4` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `lab_tests_catalog`
+--
+ALTER TABLE `lab_tests_catalog`
+  ADD CONSTRAINT `fk_lab_tests_catalog_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_lab_tests_catalog_branch_id` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+--
+-- Constraints for table `medications`
+--
+ALTER TABLE `medications`
+  ADD CONSTRAINT `fk_medications_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `medications_inventory`
+--
+ALTER TABLE `medications_inventory`
+  ADD CONSTRAINT `medications_inventory_ibfk_1` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `notifications`
+--
+ALTER TABLE `notifications`
+  ADD CONSTRAINT `fk_notifications_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `fk_notifications_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `notifications_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `otc_sales`
+--
+ALTER TABLE `otc_sales`
+  ADD CONSTRAINT `fk_otc_sales_bill_id` FOREIGN KEY (`bill_id`) REFERENCES `patient_bills` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_otc_sales_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `otc_sale_items`
+--
+ALTER TABLE `otc_sale_items`
+  ADD CONSTRAINT `fk_otc_sale_items_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `otc_sale_items_ibfk_1` FOREIGN KEY (`sale_id`) REFERENCES `otc_sales` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `patients`
+--
+ALTER TABLE `patients`
+  ADD CONSTRAINT `patients_ibfk_1` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `patients_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `patients_ibfk_3` FOREIGN KEY (`assigned_doctor_id`) REFERENCES `users` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `patient_documents`
+--
+ALTER TABLE `patient_documents`
+  ADD CONSTRAINT `patient_documents_ibfk_1` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `patient_documents_ibfk_2` FOREIGN KEY (`doctor_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `patient_documents_ibfk_3` FOREIGN KEY (`visit_id`) REFERENCES `visits` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `patient_documents_ibfk_4` FOREIGN KEY (`uploaded_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `patient_documents_ibfk_5` FOREIGN KEY (`verified_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `patient_documents_ibfk_6` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `payments`
+--
+ALTER TABLE `payments`
+  ADD CONSTRAINT `payments_ibfk_1` FOREIGN KEY (`bill_id`) REFERENCES `patient_bills` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `pharmacy_sales`
+--
+ALTER TABLE `pharmacy_sales`
+  ADD CONSTRAINT `pharmacy_sales_ibfk_1` FOREIGN KEY (`prescription_id`) REFERENCES `prescriptions` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `pharmacy_sales_ibfk_2` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `pharmacy_sales_ibfk_3` FOREIGN KEY (`cashier_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `pharmacy_sales_ibfk_4` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `prescriptions`
+--
+ALTER TABLE `prescriptions`
+  ADD CONSTRAINT `prescriptions_ibfk_1` FOREIGN KEY (`visit_id`) REFERENCES `visits` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `prescriptions_ibfk_2` FOREIGN KEY (`doctor_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `prescriptions_ibfk_3` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `prescriptions_ibfk_4` FOREIGN KEY (`pharmacy_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `prescriptions_ibfk_5` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `prescription_items`
+--
+ALTER TABLE `prescription_items`
+  ADD CONSTRAINT `fk_prescription_items_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `prescription_items_ibfk_1` FOREIGN KEY (`prescription_id`) REFERENCES `prescriptions` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `prescription_sale_items`
+--
+ALTER TABLE `prescription_sale_items`
+  ADD CONSTRAINT `fk_prescription_sale_items_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `prescription_sale_items_ibfk_1` FOREIGN KEY (`sale_id`) REFERENCES `prescription_sales` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `procedures`
+--
+ALTER TABLE `procedures`
+  ADD CONSTRAINT `fk_procedures_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `procedure_tools`
+--
+ALTER TABLE `procedure_tools`
+  ADD CONSTRAINT `fk_procedure_tools_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `receipts`
+--
+ALTER TABLE `receipts`
+  ADD CONSTRAINT `fk_receipts_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `receipts_ibfk_1` FOREIGN KEY (`payment_id`) REFERENCES `payments` (`id`);
+
+--
+-- Constraints for table `referral_logs`
+--
+ALTER TABLE `referral_logs`
+  ADD CONSTRAINT `fk_referral_logs_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `role_permissions`
+--
+ALTER TABLE `role_permissions`
+  ADD CONSTRAINT `role_permissions_ibfk_1` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `role_permissions_ibfk_2` FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `sale_items`
+--
+ALTER TABLE `sale_items`
+  ADD CONSTRAINT `sale_items_ibfk_1` FOREIGN KEY (`sale_id`) REFERENCES `pharmacy_sales` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `services`
+--
+ALTER TABLE `services`
+  ADD CONSTRAINT `fk_services_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `services_ibfk_1` FOREIGN KEY (`category_id`) REFERENCES `service_categories` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `services_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `service_categories`
+--
+ALTER TABLE `service_categories`
+  ADD CONSTRAINT `fk_service_categories_branch` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `stock_movements`
+--
+ALTER TABLE `stock_movements`
+  ADD CONSTRAINT `fk_stock_movements_patient` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `users`
+--
+ALTER TABLE `users`
+  ADD CONSTRAINT `users_ibfk_1` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `visits`
+--
+ALTER TABLE `visits`
+  ADD CONSTRAINT `visits_ibfk_1` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `visits_ibfk_2` FOREIGN KEY (`doctor_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `visits_ibfk_3` FOREIGN KEY (`receptionist_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `visits_ibfk_4` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `visits_ibfk_5` FOREIGN KEY (`referred_to`) REFERENCES `users` (`id`) ON DELETE SET NULL;
+
+--
+-- Constraints for table `vital_signs`
+--
+ALTER TABLE `vital_signs`
+  ADD CONSTRAINT `vital_signs_ibfk_1` FOREIGN KEY (`patient_id`) REFERENCES `patients` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `vital_signs_ibfk_2` FOREIGN KEY (`visit_id`) REFERENCES `visits` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `vital_signs_ibfk_3` FOREIGN KEY (`appointment_id`) REFERENCES `appointments` (`id`) ON DELETE SET NULL,
+  ADD CONSTRAINT `vital_signs_ibfk_4` FOREIGN KEY (`recorded_by`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `vital_signs_ibfk_5` FOREIGN KEY (`branch_id`) REFERENCES `branches` (`id`) ON DELETE SET NULL;
+COMMIT;
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;

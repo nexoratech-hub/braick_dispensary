@@ -3,32 +3,30 @@
 // FILE: frontend/pages/doctor/prescribe.php
 // DOCTOR - PRESCRIBE MEDICATIONS
 // WITH PATIENT DROPDOWN & VISIT AUTO-LOAD
+// Session-based login (NO BYPASS)
+// FULL CSS WITH DARK MODE SUPPORT
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE DR. JOHN MUSHI (ID: 5) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['doctor_id'] = 5;
-    $_SESSION['full_name'] = 'Dr. John Mushi';
-    $_SESSION['username'] = 'dr.john';
-    $_SESSION['email'] = 'john@braick.com';
-    $_SESSION['phone'] = '+255 700 000 011';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'General Medicine';
-    $_SESSION['profile_pic'] = '';
-    $_SESSION['is_online'] = 1;
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
-$doctor_id = $_SESSION['user_id'] ?? 5;
-$doctor_name = $_SESSION['full_name'] ?? 'Dr. John Mushi';
+// ================================================================
+// GET DOCTOR DATA FROM SESSION
+// ================================================================
+$doctor_id = $_SESSION['user_id'];
+$doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 $doctor_specialty = $_SESSION['specialty'] ?? 'General Medicine';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
 // GET PARAMETERS
@@ -39,7 +37,42 @@ $selected_patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0
 // INCLUDE DATABASE
 // ================================================================
 require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
+// ================================================================
+// VERIFY DOCTOR EXISTS AND IS ACTIVE
+// ================================================================
+try {
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, profile_pic, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt->execute([$doctor_id]);
+    $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$doctor_data || $doctor_data['status'] !== 'active') {
+        session_destroy();
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
+    
+    $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $profile_pic = $doctor_data['profile_pic'] ?? '';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
+    $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['profile_pic'] = $profile_pic;
+    $_SESSION['is_online'] = $is_online;
+    
+} catch (Exception $e) {
+    error_log("prescribe verification error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET DOCTOR'S PATIENTS
@@ -67,8 +100,14 @@ $visits = [];
 
 if ($selected_patient_id > 0) {
     try {
-        $stmt = $db->prepare("SELECT * FROM patients WHERE id = ?");
-        $stmt->execute([$selected_patient_id]);
+        // Verify patient belongs to this doctor
+        $stmt = $db->prepare("
+            SELECT p.* FROM patients p
+            JOIN visits v ON p.id = v.patient_id
+            WHERE p.id = ? AND v.doctor_id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$selected_patient_id, $doctor_id]);
         $selected_patient = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($selected_patient) {
@@ -80,9 +119,14 @@ if ($selected_patient_id > 0) {
             ");
             $stmt->execute([$selected_patient_id, $doctor_id]);
             $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } else {
+            $selected_patient_id = 0;
+            $selected_patient = null;
         }
     } catch (Exception $e) {
         error_log("Patient/Visit fetch error: " . $e->getMessage());
+        $selected_patient = null;
+        $visits = [];
     }
 }
 
@@ -123,8 +167,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (empty($diagnosis)) $errors[] = "Please enter diagnosis";
     if (empty($medications_data)) $errors[] = "Please add at least one medication";
     
+    // Verify patient belongs to this doctor
+    if ($patient_id > 0) {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE patient_id = ? AND doctor_id = ?");
+        $stmt->execute([$patient_id, $doctor_id]);
+        $check = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (($check['count'] ?? 0) == 0) {
+            $errors[] = "Patient not assigned to you";
+        }
+    }
+    
     if (empty($errors)) {
         try {
+            $db->beginTransaction();
+            
             // ================================================================
             // GET OR CREATE BILL
             // ================================================================
@@ -185,7 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 
                 // Get medication details
                 $stmt = $db->prepare("
-                    SELECT medication_name, selling_price, unit 
+                    SELECT medication_name, selling_price, unit, quantity as stock
                     FROM medications_inventory 
                     WHERE id = ? AND status = 'active'
                 ");
@@ -193,6 +249,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $medication = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($medication) {
+                    // Check if enough stock
+                    if (($medication['stock'] ?? 0) < $quantity) {
+                        throw new Exception("Not enough stock for: " . $medication['medication_name']);
+                    }
+                    
                     $unit_price = $medication['selling_price'] ?? 0;
                     $total_price = $unit_price * $quantity;
                     $total_med_fees += $total_price;
@@ -225,6 +286,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     // Update stock
                     $stmt = $db->prepare("UPDATE medications_inventory SET quantity = quantity - ? WHERE id = ?");
                     $stmt->execute([$quantity, $med_id]);
+                    
+                    // Log stock movement
+                    $stmt = $db->prepare("
+                        INSERT INTO stock_movements (inventory_id, sale_type, sale_id, quantity, previous_stock, new_stock, performed_by)
+                        VALUES (?, 'prescription', ?, ?, ?, ?, ?)
+                    ");
+                    $stmt->execute([
+                        $med_id,
+                        $prescription_id,
+                        $quantity,
+                        $medication['stock'],
+                        $medication['stock'] - $quantity,
+                        $doctor_id
+                    ]);
                 }
             }
             
@@ -269,12 +344,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
             
+            // Update visit status to prescribed
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET status = 'prescribed', updated_at = NOW()
+                WHERE id = ? AND doctor_id = ?
+            ");
+            $stmt->execute([$visit_id, $doctor_id]);
+            
+            // Log activity
+            $stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, action, details, created_at) 
+                VALUES (?, 'prescription_created', ?, NOW())
+            ");
+            $stmt->execute([
+                $doctor_id,
+                "Prescription #$prescription_number created for patient ID: $patient_id with " . count($medications_data) . " medications"
+            ]);
+            
+            $db->commit();
+            
             $message = "✅ Prescription created successfully! #: " . $prescription_number;
             $message_type = 'success';
             
             echo '<script>setTimeout(function(){ window.location.href = "view_patient.php?id=' . $patient_id . '"; }, 2000);</script>';
             
         } catch (Exception $e) {
+            $db->rollBack();
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
             error_log("Prescription error: " . $e->getMessage());
@@ -330,15 +426,20 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <span class="text-xs opacity-70">(<?= htmlspecialchars($selected_patient['patient_id'] ?? 'N/A') ?>)</span>
                     </span>
                 <?php endif; ?>
+                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-user-md mr-1"></i> Dr. <?= htmlspecialchars($doctor_name) ?>
+                </span>
             </p>
         </div>
         <div class="page-header-right">
             <a href="my_patients.php" class="btn btn-outline">
                 <i class="fas fa-arrow-left"></i> My Patients
             </a>
-            <a href="consultation.php?patient_id=<?= $selected_patient_id ?>" class="btn btn-primary">
-                <i class="fas fa-stethoscope"></i> Consultation
-            </a>
+            <?php if ($selected_patient_id > 0): ?>
+                <a href="consultation.php?patient_id=<?= $selected_patient_id ?>" class="btn btn-primary">
+                    <i class="fas fa-stethoscope"></i> Consultation
+                </a>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -368,6 +469,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             </div>
             <div class="text-sm text-gray-400">
                 <i class="far fa-calendar-alt mr-1"></i> <?= date('F d, Y') ?>
+                <span class="mx-2">|</span>
+                <span class="text-xs text-green-600">
+                    <i class="fas fa-circle" style="font-size:0.5rem;"></i> <?= $is_online ? 'Online' : 'Offline' ?>
+                </span>
             </div>
         </div>
 
@@ -553,6 +658,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <span class="separator">|</span>
             Prescribe
             <span class="separator">|</span>
+            Dr. <?= htmlspecialchars($doctor_name) ?>
+            <span class="separator">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -571,19 +678,94 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </div>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
+<!-- FULL CSS - LIGHT & DARK MODE -->
 <!-- ================================================================ -->
 <style>
+    /* ================================================================
+       ROOT VARIABLES - LIGHT & DARK MODE
+       ================================================================ */
+    :root {
+        --primary: #0B5ED7;
+        --primary-dark: #0A4CA8;
+        --primary-light: #6EA8FE;
+        --primary-bg: #E8F0FE;
+        --success: #059669;
+        --success-dark: #047857;
+        --success-light: #34D399;
+        --success-bg: #D1FAE5;
+        --danger: #DC2626;
+        --danger-dark: #B91C1C;
+        --danger-light: #F87171;
+        --danger-bg: #FEE2E2;
+        --warning: #D97706;
+        --warning-bg: #FEF3C7;
+        --purple: #7C3AED;
+        --purple-bg: #EDE9FE;
+        --white: #FFFFFF;
+        --gray-50: #F8FAFC;
+        --gray-100: #F1F5F9;
+        --gray-200: #E2E8F0;
+        --gray-300: #CBD5E1;
+        --gray-400: #94A3B8;
+        --gray-500: #64748B;
+        --gray-600: #475569;
+        --gray-700: #334155;
+        --gray-800: #1E293B;
+        --gray-900: #0F172A;
+        --bg-body: #F1F5F9;
+        --bg-card: #FFFFFF;
+        --bg-nav: #FFFFFF;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --border-color: #E2E8F0;
+        --shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.07);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.1);
+    }
+    
+    [data-theme="dark"] {
+        --bg-body: #0F172A;
+        --bg-card: #1E293B;
+        --bg-nav: #1E293B;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --border-color: #334155;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+        --shadow-lg: 0 8px 25px rgba(0,0,0,0.4);
+    }
+    
+    /* ================================================================
+       BASE STYLES
+       ================================================================ */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg-body); }
+    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+    
+    /* ================================================================
+       MAIN CONTENT
+       ================================================================ */
     .main-content {
         margin-left: 270px;
         margin-top: 68px;
         padding: 24px 28px;
         min-height: calc(100vh - 68px);
-        background: var(--bg-body);
-        color: var(--text-primary);
         transition: all 0.3s ease;
+        background: var(--bg-body);
     }
     
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
     .page-header {
         display: flex;
         justify-content: space-between;
@@ -659,6 +841,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         flex-wrap: wrap;
     }
     
+    /* ================================================================
+       ALERT
+       ================================================================ */
     .alert {
         padding: 12px 18px;
         border-radius: 12px;
@@ -679,6 +864,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     [data-theme="dark"] .alert-warning { background: #3D2E0A; color: #FBBF24; border-color: #FBBF24; }
     [data-theme="dark"] .alert-info { background: #1E3A5F; color: #6EA8FE; border-color: #6EA8FE; }
     
+    /* ================================================================
+       PRESCRIPTION CARD
+       ================================================================ */
     .prescription-card {
         background: var(--bg-card);
         border-radius: 20px;
@@ -693,6 +881,17 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
     }
     
+    [data-theme="dark"] .prescription-card {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .prescription-card:hover {
+        border-color: #6EA8FE;
+    }
+    
+    /* ================================================================
+       DOCTOR INFO BAR
+       ================================================================ */
     .doctor-info-bar {
         display: flex;
         flex-wrap: wrap;
@@ -722,6 +921,32 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         flex-shrink: 0;
     }
     
+    .font-semibold { font-weight: 600; }
+    .text-gray-800 { color: #1E293B; }
+    .text-gray-500 { color: #64748B; }
+    .text-gray-400 { color: var(--text-secondary); }
+    .text-green-600 { color: #059669; }
+    .text-yellow-600 { color: #D97706; }
+    .text-xs { font-size: 0.75rem; }
+    .text-sm { font-size: 0.875rem; }
+    .ml-2 { margin-left: 8px; }
+    .mr-1 { margin-right: 4px; }
+    .mx-2 { margin-left: 8px; margin-right: 8px; }
+    .mt-1 { margin-top: 4px; }
+    .mt-2 { margin-top: 8px; }
+    .mt-3 { margin-top: 12px; }
+    .mt-4 { margin-top: 16px; }
+    .mb-2 { margin-bottom: 8px; }
+    .mb-3 { margin-bottom: 12px; }
+    
+    [data-theme="dark"] .text-gray-800 { color: #F1F5F9; }
+    [data-theme="dark"] .text-gray-500 { color: #94A3B8; }
+    [data-theme="dark"] .text-gray-400 { color: #94A3B8; }
+    [data-theme="dark"] .text-green-600 { color: #34D399; }
+    
+    /* ================================================================
+       FORM
+       ================================================================ */
     .form-label {
         display: block;
         font-size: 0.82rem;
@@ -763,17 +988,27 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         cursor: pointer;
     }
     
+    [data-theme="dark"] .form-control {
+        background: #1E293B;
+        border-color: #334155;
+        color: #F1F5F9;
+    }
+    [data-theme="dark"] .form-control:focus {
+        border-color: #6EA8FE;
+        box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.15);
+    }
+    
+    /* ================================================================
+       GRID
+       ================================================================ */
     .grid { display: grid; }
     .grid-cols-1 { grid-template-columns: 1fr; }
     .gap-4 { gap: 1rem; }
-    .mt-2 { margin-top: 0.5rem; }
-    .mt-3 { margin-top: 0.75rem; }
-    .mt-4 { margin-top: 1rem; }
-    .mb-2 { margin-bottom: 0.5rem; }
-    .ml-2 { margin-left: 0.5rem; }
-    .mr-1 { margin-right: 0.25rem; }
     .md\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
     
+    /* ================================================================
+       MEDICATION GRID
+       ================================================================ */
     .med-grid {
         display: grid;
         grid-template-columns: 1.8fr 0.8fr 1.2fr 1.2fr 0.8fr 1fr auto;
@@ -790,6 +1025,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         padding: 7px 10px;
     }
     
+    /* ================================================================
+       BUTTONS
+       ================================================================ */
     .btn-add-med {
         background: linear-gradient(135deg, #059669, #047857);
         color: white;
@@ -855,6 +1093,13 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         min-height: 34px;
     }
     
+    [data-theme="dark"] .btn-primary {
+        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.2);
+    }
+    [data-theme="dark"] .btn-primary:hover {
+        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.3);
+    }
+    
     .form-actions {
         display: flex;
         flex-wrap: wrap;
@@ -864,6 +1109,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border-top: 2px solid var(--border-color);
     }
     
+    /* ================================================================
+       MEDICATION LIST
+       ================================================================ */
     .medication-item {
         background: var(--bg-card);
         border-radius: 10px;
@@ -898,6 +1146,17 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         margin-right: 4px;
     }
     
+    [data-theme="dark"] .medication-item {
+        background: #1E293B;
+        border-color: #334155;
+    }
+    [data-theme="dark"] .medication-item:hover {
+        border-color: #6EA8FE;
+    }
+    [data-theme="dark"] .medication-item .med-details span {
+        background: #0F172A;
+    }
+    
     .btn-remove {
         background: #EF4444;
         color: white;
@@ -916,6 +1175,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         transform: scale(1.05);
     }
     
+    /* ================================================================
+       EMPTY STATE
+       ================================================================ */
     .empty-med-msg {
         text-align: center;
         padding: 20px;
@@ -931,22 +1193,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         margin-bottom: 8px;
     }
     
-    .text-xs { font-size: 0.75rem; }
-    .text-sm { font-size: 0.875rem; }
-    .text-gray-400 { color: var(--text-secondary); }
-    .text-gray-500 { color: var(--text-secondary); }
-    .text-gray-700 { color: var(--text-primary); }
-    .text-yellow-600 { color: #D97706; }
-    .text-primary { color: var(--primary); }
-    .font-semibold { font-weight: 600; }
-    .font-bold { font-weight: 700; }
-    .inline-flex { display: inline-flex; }
-    .items-center { align-items: center; }
-    .justify-between { justify-content: space-between; }
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .gap-4 { gap: 1rem; }
-    
+    /* ================================================================
+       TOAST
+       ================================================================ */
     .toast-custom {
         position: fixed;
         bottom: 24px;
@@ -970,6 +1219,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .toast-custom.info { background: var(--primary); }
     .toast-custom.warning { background: #D97706; }
     
+    /* ================================================================
+       FOOTER
+       ================================================================ */
     .footer {
         padding: 14px 0;
         border-top: 2px solid var(--border-color);
@@ -981,6 +1233,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .footer .footer-brand { color: var(--primary); font-weight: 600; }
     .separator { color: var(--border-color); margin: 0 4px; }
     
+    [data-theme="dark"] .footer {
+        border-color: #334155;
+        color: #94A3B8;
+    }
+    
+    /* ================================================================
+       RESPONSIVE
+       ================================================================ */
     @media (max-width: 992px) {
         .med-grid { grid-template-columns: 1fr 1fr 1fr; }
         .med-grid .btn-add-med { grid-column: span 3; }
@@ -1009,6 +1269,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         .btn { padding: 8px 16px; font-size: 0.78rem; min-height: 38px; }
         .medication-item { flex-direction: column; align-items: flex-start; gap: 8px; }
         .page-subtitle { flex-direction: column; align-items: flex-start; gap: 4px; }
+        .page-title { font-size: 1.1rem; }
     }
     
     @media print {
@@ -1025,8 +1286,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - SYNC WITH HEADER
     // ================================================================
+    document.addEventListener('darkModeChanged', function(e) {
+        var isDark = e.detail && e.detail.isDark;
+        var html = document.documentElement;
+        
+        if (isDark) {
+            html.setAttribute('data-theme', 'dark');
+        } else {
+            html.removeAttribute('data-theme');
+        }
+    });
+    
     if (localStorage.getItem('darkMode') === 'true') {
         document.documentElement.setAttribute('data-theme', 'dark');
     }
@@ -1271,6 +1543,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     <?php endif; ?>
 
     console.log('%c💊 Prescribe - <?= htmlspecialchars($selected_patient['full_name'] ?? 'Not selected') ?>', 'font-size:16px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
     console.log('%c👤 Patient: <?= $selected_patient_id > 0 ? 'Selected' : 'Not selected' ?>', 'font-size:12px; color:#059669;');
     console.log('%c📋 Visits: <?= count($visits) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c💊 Medications available: <?= count($medications) ?>', 'font-size:12px; color:#34D399;');

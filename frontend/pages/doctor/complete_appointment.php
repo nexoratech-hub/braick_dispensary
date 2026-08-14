@@ -1,29 +1,45 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/doctor/complete_appointment.php
-// DOCTOR - COMPLETE APPOINTMENT
+// FILE: frontend/pages/doctor/cancel_appointment.php
+// DOCTOR - CANCEL APPOINTMENT
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE DR. SARAH MWAMBA (ID: 2) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    $_SESSION['user_id'] = 2;
-    $_SESSION['full_name'] = 'Dr. Sarah Mwamba';
-    $_SESSION['username'] = 'dr.sarah';
-    $_SESSION['email'] = 'sarah@braick.com';
-    $_SESSION['phone'] = '+255 700 000 001';
-    $_SESSION['role'] = 'doctor';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['specialty'] = 'Cardiology';
-    $_SESSION['profile_pic'] = '';
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// ================================================================
+// LOGIN PROTECTION
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET DOCTOR INFO
+// ================================================================
 $doctor_id = $_SESSION['user_id'];
 $doctor_name = $_SESSION['full_name'] ?? 'Doctor';
+$doctor_branch_id = $_SESSION['branch_id'] ?? 1;
+$is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
 // GET APPOINTMENT ID
@@ -38,58 +54,110 @@ if ($appointment_id <= 0) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found");
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
 }
-$db = Database::getInstance()->getConnection();
 
 // ================================================================
-// CHECK IF APPOINTMENT EXISTS AND BELONGS TO THIS DOCTOR
+// CHECK IF APPOINTMENT EXISTS
 // ================================================================
-$stmt = $db->prepare("
-    SELECT a.*, p.full_name as patient_name 
-    FROM appointments a
-    JOIN patients p ON a.patient_id = p.id
-    WHERE a.id = ? AND a.doctor_id = ? AND a.status = 'confirmed'
-");
-$stmt->execute([$appointment_id, $doctor_id]);
+if ($is_admin) {
+    $stmt = $db->prepare("
+        SELECT a.*, p.full_name as patient_name, u.full_name as doctor_name 
+        FROM appointments a
+        JOIN patients p ON a.patient_id = p.id
+        LEFT JOIN users u ON a.doctor_id = u.id
+        WHERE a.id = ? AND a.status IN ('scheduled', 'pending', 'confirmed')
+    ");
+    $stmt->execute([$appointment_id]);
+} else {
+    $stmt = $db->prepare("
+        SELECT a.*, p.full_name as patient_name, u.full_name as doctor_name 
+        FROM appointments a
+        JOIN patients p ON a.patient_id = p.id
+        LEFT JOIN users u ON a.doctor_id = u.id
+        WHERE a.id = ? AND a.doctor_id = ? AND a.status IN ('scheduled', 'pending', 'confirmed')
+    ");
+    $stmt->execute([$appointment_id, $doctor_id]);
+}
+
 $appointment = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$appointment) {
-    header('Location: appointments.php?error=not_found_or_not_confirmed');
+    header('Location: appointments.php?error=not_found_or_already_processed');
     exit;
 }
 
 // ================================================================
-// COMPLETE APPOINTMENT
+// GET REASON FOR CANCELLATION
 // ================================================================
-$stmt = $db->prepare("
-    UPDATE appointments 
-    SET status = 'completed', updated_at = NOW()
-    WHERE id = ? AND doctor_id = ?
-");
-$stmt->execute([$appointment_id, $doctor_id]);
+$reason = isset($_POST['reason']) ? trim($_POST['reason']) : '';
+if (empty($reason)) {
+    $reason = 'Cancelled by ' . ($is_admin ? 'admin' : 'doctor');
+}
 
 // ================================================================
-// LOG ACTIVITY
+// CANCEL APPOINTMENT
 // ================================================================
 try {
-    $stmt = $db->prepare("
-        INSERT INTO activity_logs (user_id, action, details, created_at) 
-        VALUES (?, 'appointment_completed', ?, NOW())
-    ");
-    $stmt->execute([
-        $doctor_id,
-        "Appointment #$appointment_id completed for patient: " . $appointment['patient_name']
-    ]);
-} catch (Exception $e) {}
+    $db->beginTransaction();
 
-// ================================================================
-// REDIRECT WITH SUCCESS MESSAGE
-// ================================================================
-header('Location: appointments.php?completed=1&appointment=' . $appointment_id);
-exit;
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            UPDATE appointments 
+            SET status = 'cancelled', 
+                cancelled_at = NOW(),
+                notes = CONCAT(IFNULL(notes, ''), ' [CANCELLED: ', ?, ']'),
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$reason, $appointment_id]);
+    } else {
+        $stmt = $db->prepare("
+            UPDATE appointments 
+            SET status = 'cancelled', 
+                cancelled_at = NOW(),
+                notes = CONCAT(IFNULL(notes, ''), ' [CANCELLED: ', ?, ']'),
+                updated_at = NOW()
+            WHERE id = ? AND doctor_id = ?
+        ");
+        $stmt->execute([$reason, $appointment_id, $doctor_id]);
+    }
+
+    $db->commit();
+
+    // Log activity
+    try {
+        $stmt = $db->prepare("
+            INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+            VALUES (?, ?, 'appointment_cancelled', ?, NOW())
+        ");
+        $stmt->execute([
+            $doctor_id,
+            $doctor_branch_id,
+            "Appointment #$appointment_id cancelled for patient: " . $appointment['patient_name'] . 
+            " | Doctor: " . ($appointment['doctor_name'] ?? $doctor_name) . 
+            " | Reason: " . $reason
+        ]);
+    } catch (Exception $e) {}
+
+    $redirect_url = 'appointments.php?cancelled=1&appointment=' . $appointment_id;
+    if ($is_admin) {
+        $redirect_url .= '&admin=1';
+    }
+    header('Location: ' . $redirect_url);
+    exit;
+
+} catch (Exception $e) {
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
+    error_log("Cancel appointment error: " . $e->getMessage());
+    header('Location: appointments.php?error=cancel_failed');
+    exit;
+}
 ?>
