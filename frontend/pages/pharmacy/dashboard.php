@@ -6,9 +6,11 @@
 // FIXED:
 // 1. Total Stock - EXCLUDES expired medicines (active only)
 // 2. Expired Card - INCLUDES all medicines (active + inactive) that are expired
-// 3. Branch filter - Only Dodoma branch
+// 3. Branch filter - Only selected branch
 // 4. Panadol (inactive + expired) now shows in Expired card
-// WITH LOGIN PROTECTION
+// 5. WITH LOGIN PROTECTION
+// 6. USES PHARMACY HEADER (with date & time)
+// 7. NO AMOUNTS ON CARDS - Clean display
 // ================================================================
 
 // ================================================================
@@ -161,25 +163,23 @@ try {
     // 5. OTC SALES
     // ================================================================
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(net_amount), 0) as total_revenue
+        SELECT COUNT(*) as count
         FROM otc_sales 
         WHERE branch_id = ?
     ");
     $stmt->execute([$user_branch_id]);
     $otc_data = $stmt->fetch(PDO::FETCH_ASSOC);
     $otc_sales_count = $otc_data['count'] ?? 0;
-    $otc_revenue = $otc_data['total_revenue'] ?? 0;
     
     // Today's OTC Sales
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(net_amount), 0) as total_revenue
+        SELECT COUNT(*) as count
         FROM otc_sales 
         WHERE branch_id = ? AND DATE(created_at) = CURDATE()
     ");
     $stmt->execute([$user_branch_id]);
     $otc_today_data = $stmt->fetch(PDO::FETCH_ASSOC);
     $otc_today_count = $otc_today_data['count'] ?? 0;
-    $otc_today_revenue = $otc_today_data['total_revenue'] ?? 0;
     
     // ================================================================
     // 6. DISPENSED PRESCRIPTIONS
@@ -321,9 +321,7 @@ try {
     $expire_soon_list = [];
     $total_prescriptions = 0;
     $otc_sales_count = 0;
-    $otc_revenue = 0;
     $otc_today_count = 0;
-    $otc_today_revenue = 0;
     $dispensed_count = 0;
     $dispensed_today = 0;
     $low_stock_count = 0;
@@ -447,159 +445,14 @@ include_once '../../components/pharmacy_sidebar.php';
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        /* ================================================================
-           MAIN CONTENT
+           MAIN CONTENT OFFSET FOR HEADER
            ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
+            transition: all 0.3s ease;
         }
         
         /* ================================================================
@@ -728,7 +581,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS - 9 CARDS
+           STATS CARDS - 9 CARDS - NO AMOUNTS
            ================================================================ */
         .stats-grid {
             display: grid;
@@ -762,7 +615,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .stat-card .stat-icon {
             font-size: 1.4rem;
             opacity: 0.9;
-            margin-bottom: 4px;
+            margin-bottom: 2px;
             display: block;
         }
         
@@ -986,58 +839,37 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         /* ================================================================
-           RESPONSIVE
+           QUICK ACTIONS
            ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .stats-grid { grid-template-columns: repeat(3, 1fr); }
+        .quick-action {
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            text-decoration: none;
+            display: block;
+            border: 1px solid var(--border-color);
+            background: var(--bg-card);
         }
         
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .stat-card .stat-number { font-size: 1.4rem; }
-            .stat-card { padding: 14px 16px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .quick-action:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+            border-color: var(--primary);
         }
         
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .stat-card .stat-number { font-size: 1.2rem; }
-            .stat-card { padding: 10px 12px; }
-            .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+        .quick-action .icon {
+            font-size: 1.6rem;
+            display: block;
+            margin-bottom: 6px;
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+        .quick-action .label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-primary);
         }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin { to { transform: rotate(360deg); } }
         
         /* ================================================================
            EXPIRE ITEMS
@@ -1102,51 +934,101 @@ include_once '../../components/pharmacy_sidebar.php';
         [data-theme="dark"] .expired-row {
             background: #3A1A1A !important;
         }
+        
+        /* ================================================================
+           GRID
+           ================================================================ */
+        .grid { display: grid; }
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .grid-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .grid-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+        .gap-3 { gap: 12px; }
+        .gap-4 { gap: 16px; }
+        .gap-5 { gap: 20px; }
+        .mt-5 { margin-top: 20px; }
+        .mb-2 { margin-bottom: 8px; }
+        
+        .text-center { text-align: center; }
+        .text-sm { font-size: 0.875rem; }
+        .text-xs { font-size: 0.75rem; }
+        .font-normal { font-weight: 400; }
+        .font-medium { font-weight: 500; }
+        .font-semibold { font-weight: 600; }
+        .font-bold { font-weight: 700; }
+        .text-gray-400 { color: var(--gray-400); }
+        .text-primary { color: var(--primary); }
+        .text-green-500 { color: var(--success); }
+        .text-red-500 { color: var(--danger); }
+        .text-orange-500 { color: var(--warning); }
+        .block { display: block; }
+        .inline-block { display: inline-block; }
+        .py-4 { padding-top: 16px; padding-bottom: 16px; }
+        .py-6 { padding-top: 24px; padding-bottom: 24px; }
+        .text-2xl { font-size: 1.5rem; }
+        .text-3xl { font-size: 1.875rem; }
+        .hover\:underline:hover { text-decoration: underline; }
+        .ml-1 { margin-left: 4px; }
+        .ml-2 { margin-left: 8px; }
+        .mr-1 { margin-right: 4px; }
+        .mr-2 { margin-right: 8px; }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .main-content { margin-left: 0; padding: 16px; }
+            .stats-grid { grid-template-columns: repeat(3, 1fr); }
+            .grid-cols-4 { grid-template-columns: 1fr 1fr; }
+        }
+        
+        @media (max-width: 768px) {
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .stat-card .stat-number { font-size: 1.4rem; }
+            .stat-card { padding: 14px 16px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .grid-cols-2 { grid-template-columns: 1fr; }
+            .grid-cols-3 { grid-template-columns: 1fr 1fr; }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+            .stat-card .stat-number { font-size: 1.2rem; }
+            .stat-card { padding: 10px 12px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+            .grid-cols-4 { grid-template-columns: 1fr 1fr; }
+            .grid-cols-3 { grid-template-columns: 1fr 1fr; }
+        }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        .btn-sm {
+            padding: 2px 10px;
+            font-size: 0.65rem;
+            border-radius: 4px;
+            text-decoration: none;
+            display: inline-block;
+        }
     </style>
 </head>
 <body>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search medications...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1190,7 +1072,7 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - 9 CARDS -->
+    <!-- STATS CARDS - 9 CARDS - NO AMOUNTS -->
     <!-- ================================================================ -->
     <div class="stats-grid">
         
@@ -1239,7 +1121,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <span class="stat-icon">🛒</span>
             <div class="stat-number" id="otcSales"><?= $otc_sales_count ?></div>
             <div class="stat-label">OTC Sales</div>
-            <div class="stat-sub">TSh <?= number_format($otc_revenue, 0) ?> total</div>
+            <div class="stat-sub"><?= $otc_today_count ?> today</div>
             <div class="stat-update"><span class="live-dot"></span> Live</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
@@ -1400,7 +1282,7 @@ include_once '../../components/pharmacy_sidebar.php';
                         <div class="stock-item">
                             <span class="med-name"><?= htmlspecialchars($item['medication_name']) ?></span>
                             <span class="qty out">0 units</span>
-                            <a href="reorder.php?id=<?= $item['id'] ?>" class="btn btn-primary btn-sm" style="padding:2px 10px;font-size:0.65rem;background:var(--primary);color:white;border-radius:4px;text-decoration:none;">
+                            <a href="reorder.php?id=<?= $item['id'] ?>" class="btn-sm" style="background:var(--primary);color:white;">
                                 <i class="fas fa-shopping-cart"></i> Reorder
                             </a>
                         </div>
@@ -1432,7 +1314,7 @@ include_once '../../components/pharmacy_sidebar.php';
                                 <span class="medication block"><?= htmlspecialchars($pres['medication'] ?? 'N/A') ?></span>
                             </div>
                             <span class="status-badge pending">Pending</span>
-                            <a href="dispense.php?id=<?= $pres['id'] ?>" class="btn btn-success btn-sm" style="padding:2px 10px;font-size:0.65rem;background:var(--success);color:white;border-radius:4px;text-decoration:none;">
+                            <a href="dispense.php?id=<?= $pres['id'] ?>" class="btn-sm" style="background:var(--success);color:white;">
                                 <i class="fas fa-prescription"></i> Dispense
                             </a>
                         </div>
@@ -1452,24 +1334,24 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- QUICK ACTIONS -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
-        <a href="new_prescription.php" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#0B5ED7;">📝</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">New Prescription</span>
+        <a href="new_prescription.php" class="quick-action">
+            <span class="icon" style="color:#0B5ED7;">📝</span>
+            <span class="label">New Prescription</span>
         </a>
         
-        <a href="new_otc_sale.php" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#059669;">🛒</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">OTC Sale</span>
+        <a href="new_otc_sale.php" class="quick-action">
+            <span class="icon" style="color:#059669;">🛒</span>
+            <span class="label">OTC Sale</span>
         </a>
         
-        <a href="inventory.php" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#7C3AED;">📦</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Inventory</span>
+        <a href="inventory.php" class="quick-action">
+            <span class="icon" style="color:#7C3AED;">📦</span>
+            <span class="label">Inventory</span>
         </a>
         
-        <a href="reports.php" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#D97706;">📊</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Reports</span>
+        <a href="reports.php" class="quick-action">
+            <span class="icon" style="color:#D97706;">📊</span>
+            <span class="label">Reports</span>
         </a>
     </div>
 
@@ -1479,11 +1361,11 @@ include_once '../../components/pharmacy_sidebar.php';
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400 mx-2">|</span>
             Pharmacy Dashboard
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400 mx-2">|</span>
             <span id="footerTimestamp">● Live</span>
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-400 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1511,88 +1393,6 @@ include_once '../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
@@ -1615,23 +1415,36 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c💊 Braick - Pharmacy Dashboard (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // DARK MODE - SYNC WITH HEADER
+    // ================================================================
+    // Listen for dark mode changes from header
+    document.addEventListener('darkModeChanged', function(e) {
+        var isDark = e.detail && e.detail.isDark;
+        var html = document.documentElement;
+        
+        if (isDark) {
+            html.setAttribute('data-theme', 'dark');
+        } else {
+            html.removeAttribute('data-theme');
+        }
+        
+        console.log('🌙 Dashboard dark mode synced: ' + (isDark ? 'ON ✅' : 'OFF'));
+    });
+
+    console.log('%c💊 Braick - Pharmacy Dashboard (NO AMOUNTS)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📦 Total Stock (excl. expired): <?= $total_stock_items ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🚫 Expired (all): <?= $expired_count ?> (units: <?= $expired_quantity ?>)', 'font-size:13px; color:#DC2626;');
     console.log('%c⏰ Expire Soon: <?= $expire_soon_count ?>', 'font-size:13px; color:#D97706;');
     console.log('%c📋 Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🛒 OTC Sales: <?= $otc_sales_count ?>', 'font-size:13px; color:#0D9488;');
-    console.log('%c✅ Dispensed: <?= $dispensed_count ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🛒 OTC Sales: <?= $otc_sales_count ?> (<?= $otc_today_count ?> today)', 'font-size:13px; color:#0D9488;');
+    console.log('%c✅ Dispensed: <?= $dispensed_count ?> (<?= $dispensed_today ?> today)', 'font-size:13px; color:#059669;');
     console.log('%c⚠️ Low Stock: <?= $low_stock_count ?>', 'font-size:13px; color:#D97706;');
     console.log('%c⏳ Pending: <?= $pending_count ?>', 'font-size:13px; color:#DB2777;');
     console.log('%c🚫 Out of Stock: <?= $out_of_stock_count ?>', 'font-size:13px; color:#6B7280;');
-    console.log('%c✅ Total Stock EXCLUDES expired medicines (active only)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Expired card INCLUDES all medicines (active + inactive)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Panadol (inactive + expired) now shows in Expired card', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Only selected branch', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ NO amounts displayed on cards - Clean view', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

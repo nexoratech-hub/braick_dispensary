@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/components/pharmacy_header.php
 // PHARMACY - SHARED HEADER (DARK MODE FIXED)
+// WITH SIDEBAR TOGGLE BUTTON IN HEADER
 // WITH LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
@@ -70,13 +71,11 @@ $notifications_list = [];
 
 if ($db !== null && $user_id > 0) {
     try {
-        // Get count of unread notifications
         $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
         $stmt->execute([$user_id]);
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         $unread_notifications = $result['total'] ?? 0;
         
-        // Get latest 5 notifications
         $stmt = $db->prepare("
             SELECT id, title, message, type, link, is_read, created_at 
             FROM notifications 
@@ -121,10 +120,8 @@ if (!isset($_SESSION['dark_mode'])) {
     $_SESSION['dark_mode'] = 'light';
 }
 
-// Check if toggle was clicked
 if (isset($_GET['toggle_dark'])) {
     $_SESSION['dark_mode'] = ($_SESSION['dark_mode'] === 'dark') ? 'light' : 'dark';
-    // Redirect back to the same page without the query string
     header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
     exit;
 }
@@ -151,26 +148,21 @@ $dark_mode = $_SESSION['dark_mode'];
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
-            
             --success: #059669;
             --success-dark: #047857;
             --success-light: #34D399;
             --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
             --danger-dark: #B91C1C;
             --danger-light: #F87171;
             --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
             --warning-light: #FBBF24;
-            
             --prescription: #0B5ED7;
             --prescription-bg: #E8F0FE;
             --otc: #059669;
             --otc-bg: #D1FAE5;
-            
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -182,13 +174,11 @@ $dark_mode = $_SESSION['dark_mode'];
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
-            
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
             --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
             --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
-            
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -240,6 +230,70 @@ $dark_mode = $_SESSION['dark_mode'];
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
+        }
+        
+        /* ================================================================
+           SIDEBAR TOGGLE BUTTON IN HEADER
+           ================================================================ */
+        .header-toggle-btn {
+            display: none;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 8px 14px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 2px 12px rgba(11, 94, 215, 0.25);
+            position: relative;
+        }
+        
+        .header-toggle-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.35);
+        }
+        
+        .header-toggle-btn .toggle-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+        
+        [data-theme="dark"] .header-toggle-btn {
+            background: #0A4CA8;
+            box-shadow: 0 2px 12px rgba(10, 76, 168, 0.3);
+        }
+        
+        /* Show toggle button on mobile only */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .header-toggle-btn { display: flex !important; }
+        }
+        
+        @media (max-width: 768px) {
+            .header-toggle-btn {
+                padding: 6px 10px;
+                font-size: 0.8rem;
+                border-radius: 8px;
+            }
+            .header-toggle-btn .toggle-label {
+                font-size: 0.55rem;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .header-toggle-btn {
+                padding: 5px 8px;
+                font-size: 0.7rem;
+                border-radius: 6px;
+            }
+            .header-toggle-btn .toggle-label {
+                display: none;
+            }
         }
         
         .top-nav .search-wrapper {
@@ -329,9 +383,6 @@ $dark_mode = $_SESSION['dark_mode'];
             color: var(--primary);
         }
         
-        /* ================================================================
-           NOTIFICATION BELL WITH DROPDOWN
-           ================================================================ */
         .notif-bell-wrapper {
             position: relative;
         }
@@ -368,7 +419,6 @@ $dark_mode = $_SESSION['dark_mode'];
             50% { transform: scale(1.1); }
         }
         
-        /* Notification Dropdown */
         .notif-dropdown {
             position: absolute;
             top: 50px;
@@ -390,14 +440,8 @@ $dark_mode = $_SESSION['dark_mode'];
         }
         
         @keyframes fadeInDown {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         
         .notif-dropdown .notif-header {
@@ -543,6 +587,7 @@ $dark_mode = $_SESSION['dark_mode'];
             display: flex;
             align-items: center;
             gap: 6px;
+            text-decoration: none;
         }
         
         .dark-toggle-btn:hover {
@@ -961,8 +1006,13 @@ $dark_mode = $_SESSION['dark_mode'];
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
+        
+        <!-- ================================================================ -->
+        <!-- SIDEBAR TOGGLE BUTTON IN HEADER - ONE BUTTON ONLY -->
+        <!-- ================================================================ -->
+        <button class="header-toggle-btn" id="sidebarToggleBtn" aria-label="Toggle Sidebar">
+            <i class="fas fa-bars"></i>
+            <span class="toggle-label">MENU</span>
         </button>
         
         <div class="search-wrapper">
@@ -982,7 +1032,7 @@ $dark_mode = $_SESSION['dark_mode'];
         <span class="datetime" id="currentDateTime"></span>
         
         <!-- ================================================================ -->
-        <!-- DARK MODE TOGGLE - FIXED: Using link instead of button -->
+        <!-- DARK MODE TOGGLE -->
         <!-- ================================================================ -->
         <a href="?toggle_dark=1" class="dark-toggle-btn" id="darkModeLink">
             <i id="darkIcon" class="fas <?= $dark_mode === 'dark' ? 'fa-sun' : 'fa-moon' ?>"></i>
@@ -1030,7 +1080,6 @@ $dark_mode = $_SESSION['dark_mode'];
                                 <span class="notif-item-time">
                                     <i class="far fa-clock mr-1"></i>
                                     <?php 
-                                        // Simple time ago function
                                         $time = strtotime($notif['created_at']);
                                         $diff = time() - $time;
                                         if ($diff < 60) {
@@ -1070,9 +1119,120 @@ $dark_mode = $_SESSION['dark_mode'];
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - All functionality -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // SIDEBAR TOGGLE - FROM HEADER BUTTON ONLY
+    // ================================================================
+    (function() {
+        function initToggle() {
+            var toggleBtn = document.getElementById('sidebarToggleBtn');
+            var sidebar = document.getElementById('sidebar');
+            var overlay = document.getElementById('sidebarOverlay');
+            var closeBtn = document.getElementById('sidebarCloseBtn');
+            
+            if (!toggleBtn) {
+                console.error('❌ Toggle button not found!');
+                return;
+            }
+            
+            if (!sidebar) {
+                console.error('❌ Sidebar not found!');
+                return;
+            }
+            
+            // Create overlay if not exists
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'sidebarOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+                document.body.appendChild(overlay);
+                console.log('✅ Sidebar overlay created');
+            }
+            
+            function openSidebar() {
+                sidebar.classList.add('open');
+                overlay.style.display = 'block';
+                overlay.classList.add('active');
+                document.body.style.overflow = 'hidden';
+                // Update toggle button icon
+                toggleBtn.innerHTML = '<i class="fas fa-times"></i><span class="toggle-label">CLOSE</span>';
+                console.log('🔓 Sidebar opened');
+            }
+            
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                overlay.style.display = 'none';
+                overlay.classList.remove('active');
+                document.body.style.overflow = '';
+                // Update toggle button icon
+                toggleBtn.innerHTML = '<i class="fas fa-bars"></i><span class="toggle-label">MENU</span>';
+                console.log('🔒 Sidebar closed');
+            }
+            
+            function toggleSidebar() {
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                } else {
+                    openSidebar();
+                }
+            }
+            
+            // Toggle button click
+            toggleBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🔘 Header toggle clicked!');
+                toggleSidebar();
+            });
+            
+            // Close button inside sidebar
+            if (closeBtn) {
+                closeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeSidebar();
+                });
+                console.log('✅ Close button attached');
+            }
+            
+            // Overlay click
+            if (overlay) {
+                overlay.addEventListener('click', function(e) {
+                    if (e.target === overlay) {
+                        closeSidebar();
+                    }
+                });
+                console.log('✅ Overlay click handler attached');
+            }
+            
+            // ESC key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            // Resize auto-close
+            window.addEventListener('resize', function() {
+                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            console.log('✅ Header toggle button initialized!');
+            console.log('🔘 Toggle button:', toggleBtn);
+            console.log('📱 Window width:', window.innerWidth);
+        }
+        
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initToggle);
+        } else {
+            initToggle();
+        }
+    })();
+
     // ================================================================
     // TOGGLE NOTIFICATION DROPDOWN
     // ================================================================
@@ -1083,7 +1243,6 @@ $dark_mode = $_SESSION['dark_mode'];
         }
     }
 
-    // Close dropdown when clicking outside
     document.addEventListener('click', function(e) {
         var wrapper = document.querySelector('.notif-bell-wrapper');
         var dropdown = document.getElementById('notifDropdown');
@@ -1117,9 +1276,6 @@ $dark_mode = $_SESSION['dark_mode'];
         .catch(error => console.error('Error:', error));
     }
 
-    // ================================================================
-    // MARK ALL NOTIFICATIONS AS READ
-    // ================================================================
     function markAllRead(event) {
         if (event) event.preventDefault();
         
@@ -1139,7 +1295,7 @@ $dark_mode = $_SESSION['dark_mode'];
     }
 
     // ================================================================
-    // SEARCH FUNCTIONALITY
+    // SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
@@ -1180,37 +1336,14 @@ $dark_mode = $_SESSION['dark_mode'];
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // SIDEBAR TOGGLE (Mobile)
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var sidebar = document.getElementById('sidebar');
-        var sidebarToggle = document.getElementById('sidebarToggle');
-        
-        if (sidebarToggle && sidebar) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('open');
-            });
-        }
-        
-        document.addEventListener('click', function(e) {
-            if (window.innerWidth <= 1024) {
-                if (sidebar && sidebarToggle) {
-                    if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                        sidebar.classList.remove('open');
-                    }
-                }
-            }
-        });
-    });
-
     console.log('%c💊 Braick Dispensary - Pharmacy Header', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c🌙 Dark Mode: <?= $dark_mode ?>', 'font-size:12px; color:#D97706;');
     console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c✅ Dark mode toggles via page reload (Session based)', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ ONE toggle button in header only', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Click MENU button to toggle sidebar', 'font-size:12px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
 </script>
 </body>

@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
 // PHARMACY - SHARED SIDEBAR (FIXED)
-// WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
+// WITH FLOATING TOGGLE BUTTON - WORKS WHEN SIDEBAR IS HIDDEN
 // FULLY RESPONSIVE - ALL DEVICES
 // WITH LOGIN PROTECTION
 // ================================================================
@@ -10,10 +10,12 @@
 // 1. Removed "Dispensing" menu item
 // 2. Added "Expired Stock" menu item
 // 3. Changed "Pending Prescriptions" to "Prescriptions"
-// 4. Auto-update every 3 seconds from database
-// 5. Self-contained AJAX
-// 6. Added sidebar toggle working with header
-// 7. Added login protection
+// 4. REMOVED "Reports" menu item
+// 5. Auto-update every 3 seconds from database
+// 6. Self-contained AJAX
+// 7. Added FLOATING toggle button for sidebar
+// 8. Added login protection
+// 9. Fixed sidebar toggle working with header
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -125,7 +127,6 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $today_otc = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
     } catch (Exception $e) {
-        // Keep counts as 0
         error_log("Pharmacy sidebar stats error: " . $e->getMessage());
     }
 }
@@ -164,7 +165,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_pharmacy_sidebar_data') {
     header('Content-Type: application/json');
     
-    // Check if user is logged in for AJAX requests
     if (!isset($_SESSION['user_id'])) {
         echo json_encode(['success' => false, 'error' => 'Not logged in']);
         exit;
@@ -183,12 +183,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     if ($db !== null) {
         try {
-            // Pending Prescriptions
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
             $stmt->execute([$branch_id]);
             $response['pending_prescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // Low Stock Medicines
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM medications_inventory 
@@ -197,7 +195,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$branch_id]);
             $response['low_stock'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // Expired Medicines (active + inactive)
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM medications_inventory 
@@ -208,7 +205,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$branch_id]);
             $response['expired'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // Today's Dispensed Prescriptions
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM prescriptions 
@@ -217,7 +213,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$branch_id]);
             $response['today_prescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // Today's OTC Sales
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM otc_sales 
@@ -266,7 +261,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
-    /* Sidebar Open State - CRITICAL: !important ensures it works */
     .sidebar.open {
         transform: translateX(0) !important;
     }
@@ -276,6 +270,106 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
     .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
     .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
+    
+    /* ================================================================
+       FLOATING TOGGLE BUTTON - Visible when sidebar is hidden
+       ================================================================ */
+    .sidebar-toggle-float {
+        position: fixed;
+        top: 76px;
+        left: 16px;
+        z-index: 10000;
+        background: #0B4EA8;
+        color: white;
+        border: none;
+        border-radius: 12px;
+        padding: 12px 14px;
+        font-size: 1.2rem;
+        cursor: pointer;
+        box-shadow: 0 4px 20px rgba(11, 78, 168, 0.4);
+        transition: all 0.3s ease;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 2px solid rgba(255,255,255,0.15);
+    }
+    
+    .sidebar-toggle-float:hover {
+        transform: scale(1.05);
+        background: #0A3D7A;
+        box-shadow: 0 6px 30px rgba(11, 78, 168, 0.5);
+    }
+    
+    .sidebar-toggle-float .badge-float {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        background: #EF4444;
+        color: white;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        font-size: 0.5rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid #0B4EA8;
+        animation: pulse-badge 2s infinite;
+    }
+    
+    .sidebar-toggle-float .toggle-label {
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+    }
+    
+    [data-theme="dark"] .sidebar-toggle-float {
+        background: #0A3D7A;
+        box-shadow: 0 4px 20px rgba(10, 61, 122, 0.4);
+    }
+    
+    [data-theme="dark"] .sidebar-toggle-float .badge-float {
+        border-color: #0A3D7A;
+    }
+    
+    /* Show floating button only on mobile when sidebar is closed */
+    @media (max-width: 1024px) {
+        .sidebar-toggle-float {
+            display: flex;
+        }
+        .sidebar.open ~ .sidebar-toggle-float,
+        .sidebar.open + .sidebar-toggle-float {
+            display: none !important;
+        }
+    }
+    
+    @media (max-width: 768px) {
+        .sidebar-toggle-float {
+            top: 72px;
+            left: 12px;
+            padding: 10px 12px;
+            font-size: 1rem;
+            border-radius: 10px;
+        }
+        .sidebar-toggle-float .toggle-label {
+            font-size: 0.6rem;
+        }
+    }
+    
+    @media (max-width: 480px) {
+        .sidebar-toggle-float {
+            top: 68px;
+            left: 8px;
+            padding: 8px 10px;
+            font-size: 0.9rem;
+            border-radius: 8px;
+        }
+        .sidebar-toggle-float .toggle-label {
+            display: none;
+        }
+    }
     
     /* ================================================================
        OVERLAY - For mobile
@@ -461,31 +555,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         animation: pulse-badge 2s infinite;
     }
     
-    .sidebar-link .badge.green {
-        background: #059669;
-    }
-    
-    .sidebar-link .badge.orange {
-        background: #D97706;
-    }
-    
-    .sidebar-link .badge.blue {
-        background: #0B5ED7;
-    }
-    
+    .sidebar-link .badge.green { background: #059669; }
+    .sidebar-link .badge.orange { background: #D97706; }
+    .sidebar-link .badge.blue { background: #0B5ED7; }
     .sidebar-link .badge.red {
         background: #DC2626;
         animation: pulse-badge 2s infinite;
     }
     
-    .sidebar-link:hover .badge {
-        background: rgba(255,255,255,0.25);
-    }
-    
-    .sidebar-link.active .badge {
-        background: rgba(255,255,255,0.25);
-        color: white;
-    }
+    .sidebar-link:hover .badge { background: rgba(255,255,255,0.25); }
+    .sidebar-link.active .badge { background: rgba(255,255,255,0.25); color: white; }
     
     @keyframes pulse-badge {
         0%, 100% { transform: scale(1); }
@@ -594,12 +673,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             z-index: 50;
             box-shadow: 4px 0 20px rgba(0,0,0,0.1);
         }
-        #sidebarOverlay {
-            display: none !important;
-        }
-        .sidebar-close-btn {
-            display: none !important;
-        }
+        #sidebarOverlay { display: none !important; }
+        .sidebar-close-btn { display: none !important; }
+        .sidebar-toggle-float { display: none !important; }
     }
     
     /* Tablet and below: Sidebar hidden by default */
@@ -610,42 +686,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             z-index: 9999;
             border-radius: 0 12px 12px 0;
         }
-        .sidebar.open {
-            transform: translateX(0) !important;
-        }
-        #sidebarOverlay {
-            display: none;
-            z-index: 9998;
-        }
-        #sidebarOverlay.active {
-            display: block !important;
-        }
-        .sidebar-brand {
-            padding: 14px 14px 10px;
-        }
-        .sidebar-brand .logo {
-            width: 36px;
-            height: 36px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.85rem;
-        }
-        .sidebar-link {
-            padding: 7px 10px;
-            font-size: 0.75rem;
-            gap: 8px;
-        }
-        .sidebar-link i {
-            width: 18px;
-            font-size: 0.8rem;
-        }
-        .sidebar-link .badge {
-            font-size: 0.55rem;
-            padding: 1px 7px;
-        }
-        .sidebar-status {
-            padding: 8px 14px;
-        }
+        .sidebar.open { transform: translateX(0) !important; }
+        #sidebarOverlay { display: none; z-index: 9998; }
+        #sidebarOverlay.active { display: block !important; }
+        .sidebar-brand { padding: 14px 14px 10px; }
+        .sidebar-brand .logo { width: 36px; height: 36px; }
+        .sidebar-brand .brand-text { font-size: 0.85rem; }
+        .sidebar-link { padding: 7px 10px; font-size: 0.75rem; gap: 8px; }
+        .sidebar-link i { width: 18px; font-size: 0.8rem; }
+        .sidebar-link .badge { font-size: 0.55rem; padding: 1px 7px; }
+        .sidebar-status { padding: 8px 14px; }
+        .sidebar-toggle-float { display: flex !important; }
     }
     
     /* Mobile phones */
@@ -655,44 +706,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             transform: translateX(-100%);
             border-radius: 0 16px 16px 0;
         }
-        .sidebar.open {
-            transform: translateX(0) !important;
-        }
-        .sidebar-brand {
-            padding: 12px 12px 10px;
-        }
-        .sidebar-brand .logo {
-            width: 34px;
-            height: 34px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.8rem;
-        }
-        .sidebar-link {
-            padding: 6px 10px;
-            font-size: 0.7rem;
-            gap: 8px;
-        }
-        .sidebar-link i {
-            width: 16px;
-            font-size: 0.75rem;
-        }
-        .sidebar-link .badge {
-            font-size: 0.5rem;
-            padding: 1px 6px;
-        }
-        .sidebar-nav .nav-label {
-            font-size: 0.45rem;
-        }
-        .sidebar-status {
-            padding: 6px 12px;
-        }
-        .sidebar-status .status-text {
-            font-size: 0.6rem;
-        }
-        .sidebar-status .status-time {
-            font-size: 0.5rem;
-        }
+        .sidebar.open { transform: translateX(0) !important; }
+        .sidebar-brand { padding: 12px 12px 10px; }
+        .sidebar-brand .logo { width: 34px; height: 34px; }
+        .sidebar-brand .brand-text { font-size: 0.8rem; }
+        .sidebar-link { padding: 6px 10px; font-size: 0.7rem; gap: 8px; }
+        .sidebar-link i { width: 16px; font-size: 0.75rem; }
+        .sidebar-link .badge { font-size: 0.5rem; padding: 1px 6px; }
+        .sidebar-nav .nav-label { font-size: 0.45rem; }
+        .sidebar-status { padding: 6px 12px; }
+        .sidebar-status .status-text { font-size: 0.6rem; }
+        .sidebar-status .status-time { font-size: 0.5rem; }
+        .sidebar-toggle-float { top: 72px; left: 12px; padding: 10px 12px; font-size: 1rem; }
+        .sidebar-toggle-float .toggle-label { font-size: 0.6rem; }
     }
     
     /* Small phones */
@@ -703,50 +729,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             transform: translateX(-100%);
             border-radius: 0 20px 20px 0;
         }
-        .sidebar.open {
-            transform: translateX(0) !important;
-        }
-        .sidebar-brand {
-            padding: 10px 10px 8px;
-        }
-        .sidebar-brand .logo {
-            width: 30px;
-            height: 30px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.75rem;
-        }
-        .sidebar-link {
-            padding: 5px 8px;
-            font-size: 0.65rem;
-            gap: 6px;
-        }
-        .sidebar-link i {
-            width: 14px;
-            font-size: 0.7rem;
-        }
-        .sidebar-link .badge {
-            font-size: 0.45rem;
-            padding: 1px 5px;
-            min-width: 16px;
-        }
-        .sidebar-nav .nav-label {
-            font-size: 0.4rem;
-            padding: 0 8px;
-        }
-        .sidebar-status {
-            padding: 4px 10px;
-        }
-        .sidebar-status .status-text {
-            font-size: 0.55rem;
-        }
-        .sidebar-status .status-time {
-            font-size: 0.45rem;
-        }
-        .sidebar-status .status-dot {
-            width: 6px;
-            height: 6px;
-        }
+        .sidebar.open { transform: translateX(0) !important; }
+        .sidebar-brand { padding: 10px 10px 8px; }
+        .sidebar-brand .logo { width: 30px; height: 30px; }
+        .sidebar-brand .brand-text { font-size: 0.75rem; }
+        .sidebar-link { padding: 5px 8px; font-size: 0.65rem; gap: 6px; }
+        .sidebar-link i { width: 14px; font-size: 0.7rem; }
+        .sidebar-link .badge { font-size: 0.45rem; padding: 1px 5px; min-width: 16px; }
+        .sidebar-nav .nav-label { font-size: 0.4rem; padding: 0 8px; }
+        .sidebar-status { padding: 4px 10px; }
+        .sidebar-status .status-text { font-size: 0.55rem; }
+        .sidebar-status .status-time { font-size: 0.45rem; }
+        .sidebar-status .status-dot { width: 6px; height: 6px; }
+        .sidebar-toggle-float { top: 68px; left: 8px; padding: 8px 10px; font-size: 0.9rem; border-radius: 8px; }
+        .sidebar-toggle-float .toggle-label { display: none; }
     }
 </style>
 
@@ -754,6 +750,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 <!-- SIDEBAR OVERLAY (Mobile) -->
 <!-- ================================================================ -->
 <div id="sidebarOverlay"></div>
+
+<!-- ================================================================ -->
+<!-- FLOATING TOGGLE BUTTON - Visible when sidebar is hidden -->
+<!-- ================================================================ -->
+
+    <?php 
+        $total_badges = $pending_prescriptions + $low_stock_count + $expired_count;
+        if ($total_badges > 0): 
+    ?>
+    <span class="badge-float"><?= $total_badges > 9 ? '9+' : $total_badges ?></span>
+    <?php endif; ?>
+</button>
 
 <!-- ================================================================ -->
 <!-- SIDEBAR - PHARMACY -->
@@ -771,7 +779,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <p class="brand-text">Braick Dispensary</p>
                 <p class="brand-sub">Pharmacy Panel</p>
             </div>
-            <!-- Close button for mobile -->
             <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
                 <i class="fas fa-times"></i>
             </button>
@@ -798,7 +805,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <!-- ============================================================ -->
         <div class="nav-label mt-2">Prescription Sales</div>
         
-        <!-- Prescriptions (was: Pending Prescriptions) -->
+        <!-- Prescriptions -->
         <a href="/dispensary_system/frontend/pages/pharmacy/pending_prescriptions.php" class="sidebar-link <?= isActive('pending_prescriptions.php') ?>">
             <i class="fas fa-prescription"></i> Prescriptions
             <?php if ($pending_prescriptions > 0): ?>
@@ -807,8 +814,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <span class="badge" id="sidebarPendingBadge">0</span>
             <?php endif; ?>
         </a>
-        
-        <!-- ✅ REMOVED: Dispensing (imeondolewa) -->
         
         <!-- Prescription History -->
         <a href="/dispensary_system/frontend/pages/pharmacy/prescription_history.php" class="sidebar-link <?= isActive('prescription_history.php') ?>">
@@ -852,7 +857,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- ✅ NEW: Expired Stock -->
+        <!-- Expired Stock -->
         <a href="/dispensary_system/frontend/pages/pharmacy/expired.php" class="sidebar-link <?= isActive('expired.php') ?>">
             <i class="fas fa-skull"></i> Expired Stock
             <?php if ($expired_count > 0): ?>
@@ -860,13 +865,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php else: ?>
                 <span class="badge" id="sidebarExpiredBadge">0</span>
             <?php endif; ?>
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- REPORTS -->
-        <!-- ============================================================ -->
-        <a href="/dispensary_system/frontend/pages/pharmacy/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
-            <i class="fas fa-chart-bar"></i> Reports
         </a>
         
         <!-- ============================================================ -->
@@ -904,17 +902,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
+    // SIDEBAR TOGGLE - WITH FLOATING BUTTON
     // ================================================================
     (function() {
-        // Wait for DOM to be ready
-        function initSidebar() {
-            console.log('🔧 Initializing Pharmacy Sidebar...');
+        function initSidebarToggle() {
+            console.log('🔧 Initializing Pharmacy Sidebar with Floating Toggle...');
             
             var sidebar = document.getElementById('sidebar');
-            var toggleBtn = document.getElementById('sidebarToggle');
+            var floatBtn = document.getElementById('sidebarToggleFloat');
             var closeBtn = document.getElementById('sidebarCloseBtn');
             var overlay = document.getElementById('sidebarOverlay');
+            
+            if (!sidebar) {
+                console.error('❌ Sidebar element not found!');
+                return;
+            }
             
             // Create overlay if not exists
             if (!overlay) {
@@ -925,12 +927,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 console.log('✅ Sidebar overlay created');
             }
             
-            if (!sidebar) {
-                console.error('❌ Sidebar element not found!');
-                return;
-            }
-            
-            // Toggle function
             function openSidebar() {
                 sidebar.classList.add('open');
                 overlay.style.display = 'block';
@@ -956,37 +952,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
             
             // ================================================================
-            // EVENT: Toggle button (hamburger icon from header)
+            // FLOATING TOGGLE BUTTON - Click to open sidebar
             // ================================================================
-            if (toggleBtn) {
-                // Remove all existing listeners to avoid duplicates
-                var newToggle = toggleBtn.cloneNode(true);
-                toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
-                var freshToggle = document.getElementById('sidebarToggle');
-                
-                freshToggle.addEventListener('click', function(e) {
+            if (floatBtn) {
+                floatBtn.addEventListener('click', function(e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    console.log('🔘 Hamburger clicked!');
+                    console.log('🔘 Floating toggle clicked!');
                     toggleSidebar();
                 });
-                console.log('✅ Toggle button attached');
-            } else {
-                console.warn('⚠️ Toggle button not found - trying fallback');
-                // Try to find by class
-                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
-                if (fallbackBtn) {
-                    fallbackBtn.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        toggleSidebar();
-                    });
-                    console.log('✅ Fallback toggle button attached');
-                }
+                console.log('✅ Floating toggle button attached');
             }
             
             // ================================================================
-            // EVENT: Close button (X icon in sidebar)
+            // CLOSE BUTTON - Inside sidebar
             // ================================================================
             if (closeBtn) {
                 closeBtn.addEventListener('click', function(e) {
@@ -998,7 +977,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
             
             // ================================================================
-            // EVENT: Close sidebar when clicking overlay
+            // OVERLAY - Click to close sidebar
             // ================================================================
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
@@ -1010,7 +989,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
             
             // ================================================================
-            // EVENT: Close sidebar with ESC key
+            // ESC KEY - Close sidebar
             // ================================================================
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
@@ -1019,7 +998,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             });
             
             // ================================================================
-            // EVENT: Auto-close on window resize (desktop)
+            // RESIZE - Auto-close on desktop
             // ================================================================
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
@@ -1027,19 +1006,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             });
             
-            console.log('✅ Pharmacy Sidebar fully initialized!');
-            console.log('📱 Sidebar element:', sidebar);
-            console.log('🔘 Toggle button:', document.getElementById('sidebarToggle'));
-            console.log('❌ Close button:', document.getElementById('sidebarCloseBtn'));
+            console.log('✅ Pharmacy Sidebar with Floating Toggle initialized!');
+            console.log('📱 Floating button:', floatBtn);
             console.log('📐 Window width:', window.innerWidth);
             console.log('📱 Is mobile:', window.innerWidth <= 1024);
         }
         
-        // Run on DOM ready
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initSidebar);
+            document.addEventListener('DOMContentLoaded', initSidebarToggle);
         } else {
-            initSidebar();
+            initSidebarToggle();
         }
     })();
 
@@ -1047,7 +1023,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // UPDATE SIDEBAR BADGES (AJAX every 3 seconds)
     // ================================================================
     function updateSidebarBadges(pending, lowStock, expired, todayPrescriptions, todayOtc) {
-        // Update Prescriptions Badge (was: Pending Prescriptions)
+        // Update Prescriptions Badge
         var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge) {
             pendingBadge.textContent = pending;
@@ -1097,6 +1073,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             todayOtcBadge.classList.add('badge-update');
         }
         
+        // Update floating badge
+        var totalBadges = pending + lowStock + expired;
+        var floatBadge = document.querySelector('.sidebar-toggle-float .badge-float');
+        if (floatBadge) {
+            if (totalBadges > 0) {
+                floatBadge.textContent = totalBadges > 9 ? '9+' : totalBadges;
+                floatBadge.style.display = 'flex';
+            } else {
+                floatBadge.style.display = 'none';
+            }
+        }
+        
         // Update status time
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
@@ -1112,7 +1100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 
     // ================================================================
-    // AJAX AUTO-UPDATE (Self-contained - uses same file)
+    // AJAX AUTO-UPDATE
     // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
@@ -1126,7 +1114,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         formData.append('action', 'get_pharmacy_sidebar_data');
         formData.append('branch_id', branchId);
         
-        // Send request to the SAME FILE (self-contained)
         fetch(window.location.href, {
             method: 'POST',
             body: formData
@@ -1150,7 +1137,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             sidebarIsUpdating = false;
         })
         .catch(function(error) {
-            // Silent fail - don't spam console
             sidebarIsUpdating = false;
         });
     }
@@ -1159,11 +1145,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        // Initial update after 1 second
         setTimeout(function() {
             fetchSidebarData();
         }, 1000);
-        // Then every 3 seconds
         sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
         console.log('%c🔄 Pharmacy Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
@@ -1177,7 +1161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 
     // ================================================================
-    // HANDLE PAGE VISIBILITY - PAUSE WHEN HIDDEN
+    // HANDLE PAGE VISIBILITY
     // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
@@ -1197,25 +1181,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     });
 
     // ================================================================
-    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
+    // EXPOSE FUNCTIONS
     // ================================================================
     window.updateSidebarBadges = updateSidebarBadges;
     window.fetchSidebarData = fetchSidebarData;
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
-    console.log('%c💊 Pharmacy Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Pharmacy Sidebar with Floating Toggle Button', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Prescriptions: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Expired: <?= $expired_count ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c📊 Today Rx: <?= $today_sales ?> | Today OTC: <?= $today_otc ?>', 'font-size:12px; color:#9EC5FE;');
-    console.log('%c🔄 Data fetched from the SAME file via AJAX POST', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ NO EXTERNAL API NEEDED - Self-contained', 'font-size:12px; color:#059669;');
-    console.log('%c✅ "Dispensing" REMOVED from menu', 'font-size:12px; color:#DC2626;');
-    console.log('%c✅ "Expired Stock" ADDED to menu', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ "Pending Prescriptions" changed to "Prescriptions"', 'font-size:12px; color:#34D399;');
-    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Floating toggle button visible when sidebar is hidden', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Click ☰ floating button to open sidebar', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Sidebar auto-closes on desktop', 'font-size:12px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
-    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:12px; color:#F87171;');
+    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php', 'font-size:12px; color:#F87171;');
 </script>
