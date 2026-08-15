@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/dashboard.php
-// LABORATORY DASHBOARD - FULL VERSION WITH AUTO-UPDATE
-// FIXED: Beautiful cards with solid colors and reduced opacity
-// FIXED: Modern gradient themes with hover effects
+// LABORATORY DASHBOARD - WITH PHARMACY-STYLE CARDS
+// FIXED: Beautiful cards with fixed height and modern themes
+// FIXED: CSS applied to all cards including top cards
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -44,22 +44,28 @@ try {
 $today = date('Y-m-d');
 $start_of_month = date('Y-m-01');
 
-// 1. Pending Requests
+// 1. Pending Requests (lab_requests with status 'pending')
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
 $stmt->execute([$user_branch_id]);
 $pending = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 2. In Progress Requests
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'in_progress'");
+// 2. In Progress Requests (lab_requests + lab_tests)
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status IN ('accepted', 'in_progress')");
 $stmt->execute([$user_branch_id]);
-$in_progress = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$in_progress_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'in_progress'");
+$stmt->execute([$user_branch_id]);
+$in_progress_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$in_progress = $in_progress_requests + $in_progress_tests;
 
 // 3. Completed Today
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
 $stmt->execute([$user_branch_id, $today]);
 $completed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 4. Today's Tests
+// 4. Today's Tests (completed today)
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM lab_request_items lri
@@ -98,7 +104,20 @@ $total_requests_all = $rate_data['total'] ?? 0;
 $completed_requests = $rate_data['completed'] ?? 0;
 $completion_rate = $total_requests_all > 0 ? round(($completed_requests / $total_requests_all) * 100, 1) : 0;
 
-// 8. Recent Requests (Last 10)
+// 8. Most Requested Tests
+$stmt = $db->prepare("
+    SELECT lri.test_name, COUNT(*) as count 
+    FROM lab_request_items lri
+    JOIN lab_requests lr ON lri.request_id = lr.id
+    WHERE lr.branch_id = ? AND lri.status = 'completed'
+    GROUP BY lri.test_name
+    ORDER BY count DESC
+    LIMIT 5
+");
+$stmt->execute([$user_branch_id]);
+$most_requested = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// 9. Recent Requests (Last 10)
 $stmt = $db->prepare("
     SELECT lr.*, 
            p.full_name as patient_name, p.patient_id,
@@ -115,7 +134,7 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $recent_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 9. Daily Tests Chart (Last 7 days)
+// 10. Daily Tests Chart (Last 7 days)
 $daily_labels = [];
 $daily_tests = [];
 for ($i = 6; $i >= 0; $i--) {
@@ -132,7 +151,7 @@ for ($i = 6; $i >= 0; $i--) {
     $daily_tests[] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
 }
 
-// 10. Monthly Tests Chart (Last 6 months)
+// 11. Monthly Tests Chart (Last 6 months)
 $monthly_labels = [];
 $monthly_tests = [];
 for ($i = 5; $i >= 0; $i--) {
@@ -151,19 +170,6 @@ for ($i = 5; $i >= 0; $i--) {
     $stmt->execute([$user_branch_id, $start, $end]);
     $monthly_tests[] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
 }
-
-// 11. Most Requested Tests
-$stmt = $db->prepare("
-    SELECT lri.test_name, COUNT(*) as count 
-    FROM lab_request_items lri
-    JOIN lab_requests lr ON lri.request_id = lr.id
-    WHERE lr.branch_id = ? AND lri.status = 'completed'
-    GROUP BY lri.test_name
-    ORDER BY count DESC
-    LIMIT 5
-");
-$stmt->execute([$user_branch_id]);
-$most_requested = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -195,113 +201,83 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 
 <style>
     /* ================================================================
-       LABORATORY DASHBOARD STYLES
+       LABORATORY DASHBOARD STYLES - PHARMACY STYLE
        ================================================================ */
     
-    /* Stats Grid - Responsive with fixed height cards */
+    /* Stats Grid - 8 cards in 4 columns */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
-        gap: 18px;
-        margin-bottom: 28px;
+        gap: 16px;
+        margin-bottom: 24px;
     }
     
     /* ================================================================
-       MODERN STAT CARDS - SOLID COLORS WITH OPACITY
+       MODERN STAT CARDS - PHARMACY STYLE WITH FIXED HEIGHT
        ================================================================ */
     .stat-card {
-        border-radius: 16px;
-        padding: 20px 22px;
-        min-height: 130px;
-        max-height: 140px;
-        height: 130px;
-        border: none;
-        transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-        color: white;
+        border-radius: 14px;
+        padding: 18px 20px;
+        transition: all 0.3s ease;
         cursor: pointer;
-        text-decoration: none;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
         position: relative;
         overflow: hidden;
+        color: white;
         box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        text-decoration: none;
+        display: block;
+        min-height: 130px;
+        height: 130px;
+        border: none;
     }
     
-    /* Card themes with solid colors and reduced opacity */
-    .stat-card.orange { 
-        background: #D97706;
-        box-shadow: 0 4px 20px rgba(217, 119, 6, 0.3);
-    }
-    .stat-card.orange .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
-    }
-    
-    .stat-card.blue { 
-        background: #0B5ED7;
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.3);
-    }
-    .stat-card.blue .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
+    /* Animated background circles */
+    .stat-card::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -30%;
+        width: 180px;
+        height: 180px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.6s ease;
     }
     
-    .stat-card.green { 
-        background: #059669;
-        box-shadow: 0 4px 20px rgba(5, 150, 105, 0.3);
-    }
-    .stat-card.green .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
-    }
-    
-    .stat-card.purple { 
-        background: #7C3AED;
-        box-shadow: 0 4px 20px rgba(124, 58, 237, 0.3);
-    }
-    .stat-card.purple .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
+    .stat-card::after {
+        content: '';
+        position: absolute;
+        bottom: -40%;
+        left: -20%;
+        width: 120px;
+        height: 120px;
+        background: rgba(255,255,255,0.04);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.6s ease;
     }
     
-    .stat-card.teal { 
-        background: #0D9488;
-        box-shadow: 0 4px 20px rgba(13, 148, 136, 0.3);
-    }
-    .stat-card.teal .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
+    .stat-card:hover::before {
+        transform: scale(1.3) translate(-20px, -10px);
+        background: rgba(255,255,255,0.1);
     }
     
-    .stat-card.indigo { 
-        background: #4F46E5;
-        box-shadow: 0 4px 20px rgba(79, 70, 229, 0.3);
-    }
-    .stat-card.indigo .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
+    .stat-card:hover::after {
+        transform: scale(1.4) translate(30px, 20px);
+        background: rgba(255,255,255,0.07);
     }
     
-    .stat-card.pink { 
-        background: #DB2777;
-        box-shadow: 0 4px 20px rgba(219, 39, 119, 0.3);
-    }
-    .stat-card.pink .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
+    .stat-card:hover {
+        transform: translateY(-6px) scale(1.01);
+        box-shadow: 0 12px 40px rgba(0,0,0,0.2);
     }
     
-    .stat-card.rose { 
-        background: #E11D48;
-        box-shadow: 0 4px 20px rgba(225, 29, 72, 0.3);
-    }
-    .stat-card.rose .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
+    .stat-card:active {
+        transform: scale(0.97);
     }
     
-    .stat-card.cyan { 
-        background: #0891B2;
-        box-shadow: 0 4px 20px rgba(8, 145, 178, 0.3);
-    }
-    .stat-card.cyan .stat-icon-wrapper {
-        background: rgba(255,255,255,0.15);
-    }
-    
-    /* Card shine effect on hover */
+    /* Card shine effect */
     .stat-card .shine {
         position: absolute;
         top: 0;
@@ -317,52 +293,26 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         left: 100%;
     }
     
-    /* Card hover effects */
-    .stat-card:hover {
-        transform: translateY(-6px) scale(1.01);
-        box-shadow: 0 12px 40px rgba(0,0,0,0.25);
-    }
-    
-    .stat-card:hover .stat-icon-wrapper {
-        background: rgba(255,255,255,0.25);
-        transform: scale(1.08) rotate(-4deg);
-    }
-    
-    .stat-card:active {
-        transform: scale(0.97);
-    }
-    
-    /* Card content */
-    .stat-card .stat-left {
+    .stat-card .stat-content {
+        position: relative;
+        z-index: 1;
         display: flex;
         flex-direction: column;
-        gap: 2px;
-        z-index: 1;
-        flex: 1;
+        height: 100%;
+        justify-content: space-between;
     }
     
-    .stat-card .stat-icon-wrapper {
-        width: 44px;
-        height: 44px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.2rem;
-        color: white;
-        flex-shrink: 0;
-        z-index: 1;
-        backdrop-filter: blur(4px);
-        border: 1px solid rgba(255,255,255,0.1);
-        transition: all 0.3s ease;
+    .stat-card .stat-icon {
+        font-size: 1.4rem;
+        opacity: 0.9;
+        display: block;
     }
     
     .stat-card .stat-number {
         font-size: 1.9rem;
-        font-weight: 800;
+        font-weight: 700;
         color: white;
-        line-height: 1.1;
-        letter-spacing: -0.02em;
+        line-height: 1.2;
         text-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
@@ -374,47 +324,53 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         letter-spacing: 0.04em;
     }
     
-    .stat-card .stat-trend {
+    .stat-card .stat-sub {
         font-size: 0.6rem;
-        font-weight: 600;
-        padding: 2px 12px;
-        border-radius: 20px;
-        background: rgba(255,255,255,0.18);
-        color: white;
-        display: inline-block;
-        backdrop-filter: blur(4px);
-        border: 1px solid rgba(255,255,255,0.08);
-        margin-top: 3px;
-        letter-spacing: 0.02em;
-    }
-    
-    .stat-card .stat-trend i {
-        margin-right: 3px;
-        font-size: 0.55rem;
-    }
-    
-    .stat-card .nav-arrow {
-        opacity: 0;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        font-size: 0.85rem;
-        z-index: 1;
-        transform: translateX(-10px);
         color: rgba(255,255,255,0.6);
+        margin-top: 2px;
+        font-weight: 400;
     }
     
-    .stat-card:hover .nav-arrow {
-        opacity: 1;
+    .stat-card .stat-update {
+        font-size: 0.55rem;
+        color: rgba(255,255,255,0.5);
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .stat-card .stat-update .live-dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34D399;
+        animation: pulse-dot 1.5s infinite;
+    }
+    
+    .stat-card .stat-arrow {
+        position: absolute;
+        bottom: 12px;
+        right: 16px;
+        font-size: 0.7rem;
+        color: rgba(255,255,255,0.4);
+        transition: all 0.3s ease;
+        z-index: 2;
+    }
+    
+    .stat-card:hover .stat-arrow {
         transform: translateX(4px);
+        color: rgba(255,255,255,0.8);
     }
     
-    /* Small decorative dots */
+    /* Decorative dots */
     .stat-card .dot-pattern {
         position: absolute;
         bottom: 8px;
         right: 12px;
         display: flex;
         gap: 4px;
-        opacity: 0.12;
         z-index: 0;
     }
     
@@ -422,190 +378,132 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         width: 5px;
         height: 5px;
         border-radius: 50%;
-        background: white;
-    }
-    
-    /* ================================================================
-       UPDATE BADGE
-       ================================================================ */
-    .update-badge {
         background: rgba(255,255,255,0.12);
-        color: #93C5FD;
-        padding: 4px 16px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 500;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        backdrop-filter: blur(4px);
-        border: 1px solid rgba(255,255,255,0.06);
     }
     
-    .update-badge .fa-spin {
-        animation: fa-spin 2s infinite linear;
+    /* Card Colors - Gradient Themes */
+    .stat-card.orange { 
+        background: linear-gradient(135deg, #F59E0B 0%, #D97706 50%, #B45309 100%);
+        box-shadow: 0 4px 20px rgba(217, 119, 6, 0.3);
     }
     
-    @keyframes fa-spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
+    .stat-card.blue { 
+        background: linear-gradient(135deg, #3B82F6 0%, #0B5ED7 50%, #0A4CA8 100%);
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.3);
+    }
+    
+    .stat-card.green { 
+        background: linear-gradient(135deg, #34D399 0%, #059669 50%, #047857 100%);
+        box-shadow: 0 4px 20px rgba(5, 150, 105, 0.3);
+    }
+    
+    .stat-card.purple { 
+        background: linear-gradient(135deg, #A78BFA 0%, #7C3AED 50%, #6D28D9 100%);
+        box-shadow: 0 4px 20px rgba(124, 58, 237, 0.3);
+    }
+    
+    .stat-card.teal { 
+        background: linear-gradient(135deg, #2DD4BF 0%, #0D9488 50%, #0F766E 100%);
+        box-shadow: 0 4px 20px rgba(13, 148, 136, 0.3);
+    }
+    
+    .stat-card.pink { 
+        background: linear-gradient(135deg, #F472B6 0%, #DB2777 50%, #BE185D 100%);
+        box-shadow: 0 4px 20px rgba(219, 39, 119, 0.3);
+    }
+    
+    .stat-card.indigo { 
+        background: linear-gradient(135deg, #818CF8 0%, #4F46E5 50%, #4338CA 100%);
+        box-shadow: 0 4px 20px rgba(79, 70, 229, 0.3);
+    }
+    
+    .stat-card.rose { 
+        background: linear-gradient(135deg, #FB7185 0%, #E11D48 50%, #BE123C 100%);
+        box-shadow: 0 4px 20px rgba(225, 29, 72, 0.3);
     }
     
     /* ================================================================
-       PAGE HEADER
+       CARDS
        ================================================================ */
-    .page-header {
-        margin-bottom: 28px;
-        padding-bottom: 16px;
-        border-bottom: 3px solid var(--primary);
+    .card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 1px solid var(--border-color);
+        transition: all 0.3s;
+        box-shadow: var(--shadow-sm);
     }
     
-    .page-title {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: var(--text-primary);
+    .card:hover {
+        border-color: var(--primary);
+        box-shadow: var(--shadow-md);
+    }
+    
+    .card-header {
         display: flex;
+        justify-content: space-between;
         align-items: center;
-        flex-wrap: wrap;
-        gap: 10px;
-    }
-    
-    .page-title i {
-        color: var(--primary);
-    }
-    
-    .page-subtitle {
-        color: var(--text-secondary);
-        font-size: 0.95rem;
-        margin-top: 4px;
-        display: flex;
-        align-items: center;
+        margin-bottom: 12px;
         flex-wrap: wrap;
         gap: 8px;
     }
     
-    .branch-tag {
-        background: var(--success);
-        color: white;
-        padding: 3px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
+    .card-title {
+        font-size: 0.9rem;
         font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    /* ================================================================
-       RECENT ITEMS
-       ================================================================ */
-    .recent-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--border-color);
-        transition: background 0.2s ease;
-    }
-    
-    .recent-item:hover {
-        background: var(--table-hover);
-        border-radius: 8px;
-    }
-    
-    .recent-item:last-child {
-        border-bottom: none;
-    }
-    
-    .recent-item .request-info .patient-name {
-        font-weight: 500;
-        font-size: 0.85rem;
         color: var(--text-primary);
     }
     
-    .recent-item .request-info .test-count {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
+    .card-title .title-blue { color: var(--primary); }
+    .card-title .title-green { color: var(--success); }
+    .card-title .title-purple { color: var(--purple); }
+    .card-title .title-orange { color: #D97706; }
+    .card-title .title-red { color: var(--danger); }
     
-    .recent-item .request-status {
-        font-size: 0.6rem;
-        font-weight: 600;
+    /* ================================================================
+       BADGES
+       ================================================================ */
+    .status-badge {
+        display: inline-block;
         padding: 2px 10px;
         border-radius: 12px;
+        font-size: 0.6rem;
+        font-weight: 600;
     }
+    .status-badge.pending { background: #FEF3C7; color: #D97706; }
+    .status-badge.in_progress { background: #E8F0FE; color: #0B5ED7; }
+    .status-badge.completed { background: #D1FAE5; color: #059669; }
+    .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
     
-    .recent-item .request-status.pending {
-        background: #FEF3C7;
-        color: #D97706;
-    }
-    
-    .recent-item .request-status.in_progress {
-        background: #E8F0FE;
-        color: var(--primary);
-    }
-    
-    .recent-item .request-status.completed {
-        background: #D1FAE5;
-        color: #059669;
-    }
-    
-    .recent-item .request-status.cancelled {
-        background: #FEE2E2;
-        color: #DC2626;
-    }
-    
-    [data-theme="dark"] .recent-item .request-status.pending {
-        background: #3D2E0A;
-        color: #FBBF24;
-    }
-    
-    [data-theme="dark"] .recent-item .request-status.in_progress {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    
-    [data-theme="dark"] .recent-item .request-status.completed {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    
-    [data-theme="dark"] .recent-item .request-status.cancelled {
-        background: #3A1A1A;
-        color: #F87171;
-    }
+    [data-theme="dark"] .status-badge.pending { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .status-badge.in_progress { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .status-badge.completed { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .status-badge.cancelled { background: #3A1A1A; color: #F87171; }
     
     /* ================================================================
-       CHART CONTAINER
+       SCROLL CONTAINER
        ================================================================ */
-    .chart-container {
-        height: 200px;
-        max-height: 200px;
+    .scroll-container {
+        max-height: 300px;
+        overflow-y: auto;
     }
     
-    .chart-container canvas {
-        height: 100% !important;
-        max-height: 200px !important;
+    .scroll-container::-webkit-scrollbar {
+        width: 4px;
     }
     
-    /* ================================================================
-       EMPTY STATE
-       ================================================================ */
-    .empty-state {
-        text-align: center;
-        padding: 30px 20px;
-        color: var(--text-secondary);
+    .scroll-container::-webkit-scrollbar-track {
+        background: var(--bg-body);
+        border-radius: 4px;
     }
     
-    .empty-state i {
-        font-size: 2.5rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 10px;
+    .scroll-container::-webkit-scrollbar-thumb {
+        background: var(--primary);
+        border-radius: 4px;
     }
     
     /* ================================================================
-       MOST REQUESTED
+       MOST REQUESTED ITEMS
        ================================================================ */
     .most-requested-item {
         display: flex;
@@ -643,104 +541,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
     
     /* ================================================================
-       BADGE
-       ================================================================ */
-    .badge {
-        display: inline-block;
-        font-size: 0.6rem;
-        font-weight: 600;
-        padding: 2px 10px;
-        border-radius: 12px;
-        color: white;
-    }
-    .badge-yellow { background: #D97706; }
-    .badge-blue { background: #0B5ED7; }
-    .badge-green { background: #059669; }
-    .badge-red { background: #DC2626; }
-    
-    [data-theme="dark"] .badge-yellow { background: #B45309; }
-    [data-theme="dark"] .badge-blue { background: #0A4CA8; }
-    [data-theme="dark"] .badge-green { background: #047857; }
-    [data-theme="dark"] .badge-red { background: #B91C1C; }
-    
-    /* ================================================================
-       BUTTONS
-       ================================================================ */
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 7px 16px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.78rem;
-        transition: all 0.3s;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-    }
-    
-    .btn-blue {
-        background: var(--primary);
-        color: white;
-    }
-    .btn-blue:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: var(--primary);
-        color: var(--primary);
-    }
-    
-    .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
-    
-    /* ================================================================
-       CARD
-       ================================================================ */
-    .card {
-        background: var(--bg-card);
-        border-radius: 14px;
-        padding: 18px 20px;
-        border: 1px solid var(--border-color);
-        transition: all 0.3s;
-        box-shadow: var(--shadow-sm);
-    }
-    
-    .card:hover {
-        border-color: var(--primary);
-        box-shadow: var(--shadow-md);
-    }
-    
-    .card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 12px;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-    
-    .card-title {
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-    
-    .card-title .title-blue { color: var(--primary); }
-    .card-title .title-green { color: #059669; }
-    .card-title .title-purple { color: #7C3AED; }
-    
-    /* ================================================================
-       TABLE
+       RECENT REQUESTS TABLE
        ================================================================ */
     .data-table {
         width: 100%;
@@ -751,18 +552,201 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     .data-table thead th {
         text-align: left;
         padding: 8px 12px;
-        font-weight: 700;
+        font-weight: 600;
         font-size: 0.65rem;
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: var(--text-secondary);
+        background: var(--bg-body);
         border-bottom: 2px solid var(--border-color);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    
+    .data-table tbody tr {
+        transition: all 0.2s ease;
+        border-bottom: 1px solid var(--border-color);
+    }
+    
+    .data-table tbody tr:hover {
+        background: var(--primary-bg);
     }
     
     .data-table tbody td {
         padding: 8px 12px;
-        border-bottom: 1px solid var(--border-color);
+        vertical-align: middle;
         color: var(--text-primary);
+    }
+    
+    .badge {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.6rem;
+        font-weight: 600;
+    }
+    .badge-yellow { background: #FEF3C7; color: #D97706; }
+    .badge-blue { background: #E8F0FE; color: #0B5ED7; }
+    .badge-green { background: #D1FAE5; color: #059669; }
+    .badge-red { background: #FEE2E2; color: #DC2626; }
+    
+    /* ================================================================
+       QUICK ACTIONS
+       ================================================================ */
+    .quick-action {
+        padding: 16px;
+        border-radius: 12px;
+        text-align: center;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        text-decoration: none;
+        display: block;
+        border: 1px solid var(--border-color);
+        background: var(--bg-card);
+    }
+    
+    .quick-action:hover {
+        transform: translateY(-3px);
+        border-color: var(--primary);
+        box-shadow: var(--shadow-md);
+    }
+    
+    .quick-action .icon {
+        font-size: 1.6rem;
+        display: block;
+        margin-bottom: 6px;
+    }
+    
+    .quick-action .label {
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    
+    /* ================================================================
+       PAGE HEADER OVERRIDES
+       ================================================================ */
+    .page-header {
+        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        border-radius: 16px;
+        padding: 24px 32px;
+        margin-bottom: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .page-header::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 300px;
+        height: 300px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+    
+    .page-header .page-title {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .page-header .page-title i {
+        font-size: 2rem;
+        opacity: 0.9;
+    }
+    
+    .page-header .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .page-header .page-subtitle strong {
+        color: white;
+        font-weight: 600;
+    }
+    
+    .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        backdrop-filter: blur(4px);
+    }
+    
+    .header-badge {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .btn-outline-light {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+    }
+    
+    .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    
+    .update-badge-light {
+        background: rgba(255,255,255,0.12);
+        color: rgba(255,255,255,0.8);
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        backdrop-filter: blur(4px);
     }
     
     /* ================================================================
@@ -772,24 +756,28 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         position: fixed;
         bottom: 24px;
         right: 24px;
-        padding: 12px 18px;
+        padding: 14px 20px;
         border-radius: 12px;
         z-index: 999;
-        max-width: 360px;
+        max-width: 400px;
         transform: translateY(100px);
         opacity: 0;
-        transition: all 0.4s ease;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
         color: white;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+        box-shadow: var(--shadow-lg);
     }
     
-    .toast-custom.show { transform: translateY(0); opacity: 1; }
-    .toast-custom.success { background: #059669; }
-    .toast-custom.error { background: #DC2626; }
-    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.show {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    
+    .toast-custom.success { background: var(--success); }
+    .toast-custom.error { background: var(--danger); }
+    .toast-custom.info { background: var(--primary); }
     .toast-custom.warning { background: #D97706; }
     
     /* ================================================================
@@ -798,13 +786,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     .footer {
         padding: 14px 0;
         border-top: 1px solid var(--border-color);
-        margin-top: 20px;
+        margin-top: 24px;
         text-align: center;
         font-size: 0.7rem;
         color: var(--text-secondary);
     }
     
-    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    .footer .footer-brand {
+        color: var(--primary);
+        font-weight: 600;
+    }
     
     /* ================================================================
        RESPONSIVE
@@ -814,15 +805,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             grid-template-columns: repeat(4, 1fr);
             gap: 14px;
         }
-        .stat-card {
-            min-height: 120px;
-            max-height: 130px;
-            height: 120px;
-            padding: 16px 18px;
-        }
-        .stat-card .stat-number {
-            font-size: 1.6rem;
-        }
     }
     
     @media (max-width: 992px) {
@@ -831,16 +813,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 14px;
         }
         .stat-card {
-            min-height: 110px;
-            max-height: 120px;
-            height: 110px;
+            min-height: 120px;
+            height: 120px;
             padding: 14px 16px;
         }
         .stat-card .stat-number {
-            font-size: 1.5rem;
-        }
-        .stat-card .stat-label {
-            font-size: 0.68rem;
+            font-size: 1.6rem;
         }
     }
     
@@ -850,34 +828,29 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 12px;
         }
         .stat-card {
-            min-height: 100px;
-            max-height: 110px;
-            height: 100px;
+            min-height: 110px;
+            height: 110px;
             padding: 12px 14px;
+            border-radius: 12px;
         }
         .stat-card .stat-number {
-            font-size: 1.3rem;
+            font-size: 1.4rem;
         }
         .stat-card .stat-label {
-            font-size: 0.62rem;
+            font-size: 0.65rem;
         }
-        .stat-card .stat-icon-wrapper {
-            width: 36px;
-            height: 36px;
-            font-size: 0.9rem;
+        .stat-card .stat-icon {
+            font-size: 1.2rem;
         }
-        .stat-card .stat-trend {
-            font-size: 0.5rem;
-            padding: 1px 8px;
-        }
-        .stat-card .nav-arrow {
+        .stat-card .stat-arrow {
             display: none;
         }
-        .chart-container {
-            height: 150px;
+        .data-table {
+            font-size: 0.7rem;
         }
-        .page-title {
-            font-size: 1.4rem;
+        .data-table thead th,
+        .data-table tbody td {
+            padding: 4px 8px;
         }
     }
     
@@ -887,32 +860,54 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 10px;
         }
         .stat-card {
-            min-height: 90px;
-            max-height: 100px;
-            height: 90px;
+            min-height: 100px;
+            height: 100px;
             padding: 10px 12px;
-            border-radius: 12px;
+            border-radius: 10px;
         }
         .stat-card .stat-number {
-            font-size: 1.1rem;
+            font-size: 1.2rem;
         }
         .stat-card .stat-label {
             font-size: 0.55rem;
             letter-spacing: 0.02em;
         }
-        .stat-card .stat-icon-wrapper {
-            width: 30px;
-            height: 30px;
-            font-size: 0.75rem;
-            border-radius: 8px;
+        .stat-card .stat-icon {
+            font-size: 1rem;
         }
-        .stat-card .stat-trend {
-            font-size: 0.45rem;
-            padding: 1px 6px;
+        .stat-card .stat-sub {
+            font-size: 0.5rem;
         }
-        .stat-card .stat-left {
-            gap: 1px;
+        .stat-card .stat-update {
+            font-size: 0.5rem;
         }
+        .quick-action {
+            padding: 12px;
+        }
+        .quick-action .icon {
+            font-size: 1.2rem;
+        }
+        .quick-action .label {
+            font-size: 0.6rem;
+        }
+    }
+    
+    /* ================================================================
+       ANIMATIONS
+       ================================================================ */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .animate-fade-in-up {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+    
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.8); }
     }
 </style>
 
@@ -927,212 +922,189 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-flask"></i> Laboratory Dashboard
-                <span class="update-badge" id="updateBadge">
+                <i class="fas fa-flask"></i>
+                Laboratory Dashboard
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">LABORATORY</span>
+                <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-user-circle"></i>
-                Welcome, <strong><?= htmlspecialchars($user_full_name) ?></strong>
-                <span class="branch-tag">
+                <i class="fas fa-user"></i>
+                Welcome back, <strong><?= htmlspecialchars($user_full_name) ?></strong>!
+                
+                <span class="header-badge">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
-                <span class="text-xs text-gray-400">
-                    <i class="fas fa-calendar-day"></i> <?= date('l, F d, Y') ?>
+                
+                <span class="header-badge">
+                    <i class="fas fa-calendar-day"></i> <?= date('F d, Y') ?>
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="pending_requests.php" class="btn btn-blue btn-sm">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="pending_requests.php" class="btn-outline-light">
                 <i class="fas fa-clock"></i> Pending (<span id="statPending"><?= $pending ?></span>)
             </a>
-            <a href="in_progress.php" class="btn btn-outline btn-sm">
+            <a href="in_progress.php" class="btn-outline-light">
                 <i class="fas fa-spinner"></i> In Progress (<span id="statInProgress"><?= $in_progress ?></span>)
             </a>
-            <button onclick="manualRefresh()" class="btn btn-outline btn-sm" id="refreshBtn">
+            <button onclick="window.location.reload()" class="btn-outline-light">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - 8 CARDS WITH FIXED HEIGHT -->
+    <!-- STATS CARDS - 8 CARDS WITH FIXED HEIGHT -->
     <!-- ================================================================ -->
     <div class="stats-grid">
         
-        <!-- 1. Pending Requests -->
+        <!-- 1. Pending Requests - Orange -->
         <a href="pending_requests.php" class="stat-card orange">
             <div class="shine"></div>
-            <div class="stat-left">
-                <span class="stat-label">Pending Requests</span>
-                <span class="stat-number" id="statPendingCard"><?= $pending ?></span>
-                <span class="stat-trend"><i class="fas fa-clock"></i> Awaiting</span>
+            <div class="stat-content">
+                <div>
+                    <span class="stat-icon">⏳</span>
+                    <div class="stat-number" id="statPendingCard"><?= $pending ?></div>
+                    <div class="stat-label">Pending Requests</div>
+                    <div class="stat-sub">Awaiting processing</div>
+                </div>
+                <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
-            <div class="stat-icon-wrapper">
-                <i class="fas fa-clock"></i>
-                <i class="fas fa-chevron-right nav-arrow"></i>
-            </div>
+            <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
             <div class="dot-pattern">
                 <span></span><span></span><span></span>
             </div>
         </a>
         
-        <!-- 2. In Progress -->
+        <!-- 2. In Progress - Blue -->
         <a href="in_progress.php" class="stat-card blue">
             <div class="shine"></div>
-            <div class="stat-left">
-                <span class="stat-label">In Progress</span>
-                <span class="stat-number" id="statInProgressCard"><?= $in_progress ?></span>
-                <span class="stat-trend"><i class="fas fa-spinner"></i> Running</span>
+            <div class="stat-content">
+                <div>
+                    <span class="stat-icon">🔄</span>
+                    <div class="stat-number" id="statInProgressCard"><?= $in_progress ?></div>
+                    <div class="stat-label">In Progress</div>
+                    <div class="stat-sub">Currently running</div>
+                </div>
+                <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
-            <div class="stat-icon-wrapper">
-                <i class="fas fa-spinner"></i>
-                <i class="fas fa-chevron-right nav-arrow"></i>
-            </div>
+            <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
             <div class="dot-pattern">
                 <span></span><span></span><span></span>
             </div>
         </a>
         
-        <!-- 3. Completed Today -->
+        <!-- 3. Completed Today - Green -->
         <a href="completed_requests.php" class="stat-card green">
             <div class="shine"></div>
-            <div class="stat-left">
-                <span class="stat-label">Completed Today</span>
-                <span class="stat-number" id="statCompletedTodayCard"><?= $completed_today ?></span>
-                <span class="stat-trend"><i class="fas fa-check-circle"></i> Done</span>
+            <div class="stat-content">
+                <div>
+                    <span class="stat-icon">✅</span>
+                    <div class="stat-number" id="statCompletedToday"><?= $completed_today ?></div>
+                    <div class="stat-label">Completed Today</div>
+                    <div class="stat-sub">Tests finished</div>
+                </div>
+                <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
-            <div class="stat-icon-wrapper">
-                <i class="fas fa-check-circle"></i>
-                <i class="fas fa-chevron-right nav-arrow"></i>
-            </div>
+            <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
             <div class="dot-pattern">
                 <span></span><span></span><span></span>
             </div>
         </a>
         
-        <!-- 4. Today's Tests -->
+        <!-- 4. Today's Tests - Purple -->
         <a href="results_history.php?filter=today" class="stat-card purple">
             <div class="shine"></div>
-            <div class="stat-left">
-                <span class="stat-label">Today's Tests</span>
-                <span class="stat-number" id="statTodayTestsCard"><?= $today_tests ?></span>
-                <span class="stat-trend"><i class="fas fa-flask"></i> Completed</span>
+            <div class="stat-content">
+                <div>
+                    <span class="stat-icon">🧪</span>
+                    <div class="stat-number" id="statTodayTests"><?= $today_tests ?></div>
+                    <div class="stat-label">Today's Tests</div>
+                    <div class="stat-sub">Completed today</div>
+                </div>
+                <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
-            <div class="stat-icon-wrapper">
-                <i class="fas fa-flask"></i>
-                <i class="fas fa-chevron-right nav-arrow"></i>
-            </div>
+            <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
             <div class="dot-pattern">
                 <span></span><span></span><span></span>
             </div>
         </a>
         
-        <!-- 5. Total Tests -->
+        <!-- 5. Total Tests - Teal -->
         <a href="results_history.php" class="stat-card teal">
             <div class="shine"></div>
-            <div class="stat-left">
-                <span class="stat-label">Total Tests</span>
-                <span class="stat-number" id="statTotalTestsCard"><?= number_format($total_tests) ?></span>
-                <span class="stat-trend"><i class="fas fa-chart-line"></i> All Time</span>
+            <div class="stat-content">
+                <div>
+                    <span class="stat-icon">📊</span>
+                    <div class="stat-number" id="statTotalTests"><?= number_format($total_tests) ?></div>
+                    <div class="stat-label">Total Tests</div>
+                    <div class="stat-sub">All time</div>
+                </div>
+                <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
-            <div class="stat-icon-wrapper">
-                <i class="fas fa-chart-line"></i>
-                <i class="fas fa-chevron-right nav-arrow"></i>
-            </div>
+            <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
             <div class="dot-pattern">
                 <span></span><span></span><span></span>
             </div>
         </a>
         
-        <!-- 6. Total Requests -->
-        <a href="pending_requests.php" class="stat-card indigo">
+        <!-- 6. Total Requests - Pink -->
+        <a href="pending_requests.php" class="stat-card pink">
             <div class="shine"></div>
-            <div class="stat-left">
-                <span class="stat-label">Total Requests</span>
-                <span class="stat-number" id="statTotalRequestsCard"><?= number_format($total_requests) ?></span>
-                <span class="stat-trend"><i class="fas fa-list"></i> All Time</span>
+            <div class="stat-content">
+                <div>
+                    <span class="stat-icon">📋</span>
+                    <div class="stat-number" id="statTotalRequests"><?= number_format($total_requests) ?></div>
+                    <div class="stat-label">Total Requests</div>
+                    <div class="stat-sub">All time</div>
+                </div>
+                <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
-            <div class="stat-icon-wrapper">
-                <i class="fas fa-list"></i>
-                <i class="fas fa-chevron-right nav-arrow"></i>
-            </div>
+            <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
             <div class="dot-pattern">
                 <span></span><span></span><span></span>
             </div>
         </a>
         
-        <!-- 7. Completion Rate -->
-        <a href="completed_requests.php" class="stat-card pink">
+        <!-- 7. Completion Rate - Indigo -->
+        <a href="completed_requests.php" class="stat-card indigo">
             <div class="shine"></div>
-            <div class="stat-left">
-                <span class="stat-label">Completion Rate</span>
-                <span class="stat-number" id="statCompletionRateCard"><?= $completion_rate ?>%</span>
-                <span class="stat-trend"><i class="fas fa-percentage"></i> Success</span>
+            <div class="stat-content">
+                <div>
+                    <span class="stat-icon">📈</span>
+                    <div class="stat-number" id="statCompletionRate"><?= $completion_rate ?>%</div>
+                    <div class="stat-label">Completion Rate</div>
+                    <div class="stat-sub">Success rate</div>
+                </div>
+                <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
-            <div class="stat-icon-wrapper">
-                <i class="fas fa-percentage"></i>
-                <i class="fas fa-chevron-right nav-arrow"></i>
-            </div>
+            <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
             <div class="dot-pattern">
                 <span></span><span></span><span></span>
             </div>
         </a>
         
-        <!-- 8. Avg Tests/Request -->
+        <!-- 8. Avg Tests/Request - Rose -->
         <a href="results_history.php" class="stat-card rose">
             <div class="shine"></div>
-            <div class="stat-left">
-                <span class="stat-label">Avg Tests/Request</span>
-                <span class="stat-number" id="statAvgTestsCard">
-                    <?= $total_requests > 0 ? number_format($total_tests / $total_requests, 1) : '0.0' ?>
-                </span>
-                <span class="stat-trend"><i class="fas fa-calculator"></i> Per Request</span>
+            <div class="stat-content">
+                <div>
+                    <span class="stat-icon">📐</span>
+                    <div class="stat-number" id="statAvgTests">
+                        <?= $total_requests > 0 ? number_format($total_tests / $total_requests, 1) : '0.0' ?>
+                    </div>
+                    <div class="stat-label">Avg Tests/Request</div>
+                    <div class="stat-sub">Per request</div>
+                </div>
+                <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
-            <div class="stat-icon-wrapper">
-                <i class="fas fa-calculator"></i>
-                <i class="fas fa-chevron-right nav-arrow"></i>
-            </div>
+            <span class="stat-arrow"><i class="fas fa-chevron-right"></i></span>
             <div class="dot-pattern">
                 <span></span><span></span><span></span>
             </div>
         </a>
-        
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- CHARTS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
-        
-        <!-- Daily Tests Chart -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-chart-bar title-blue mr-2"></i>
-                    Daily Tests
-                </h3>
-                <span class="text-xs text-gray-400">Last 7 days</span>
-            </div>
-            <div class="chart-container">
-                <canvas id="dailyChart"></canvas>
-            </div>
-        </div>
-        
-        <!-- Monthly Tests Chart -->
-        <div class="card animate-fade-in-up">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-chart-line title-green mr-2"></i>
-                    Monthly Tests
-                </h3>
-                <span class="text-xs text-gray-400">Last 6 months</span>
-            </div>
-            <div class="chart-container">
-                <canvas id="monthlyChart"></canvas>
-            </div>
-        </div>
         
     </div>
 
@@ -1159,8 +1131,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div class="empty-state">
-                        <i class="fas fa-flask"></i>
+                    <div class="text-center py-4 text-gray-400">
+                        <i class="fas fa-flask text-2xl block mb-2"></i>
                         <p>No tests completed yet</p>
                     </div>
                 <?php endif; ?>
@@ -1175,7 +1147,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     Recent Requests
                     <span class="text-sm font-normal text-gray-400">(Last 10)</span>
                 </h3>
-                <a href="pending_requests.php" class="text-xs text-blue-600 hover:underline">View All →</a>
+                <a href="pending_requests.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
             <div class="overflow-x-auto">
@@ -1184,7 +1156,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         <tr>
                             <th>Request #</th>
                             <th>Patient</th>
-                            <th>Visit</th>
                             <th>Doctor</th>
                             <th>Tests</th>
                             <th>Status</th>
@@ -1195,7 +1166,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     <tbody id="recentTableBody">
                         <?php if (count($recent_requests) > 0): ?>
                             <?php foreach ($recent_requests as $req): ?>
-                                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+                                <tr>
                                     <td class="font-mono text-xs font-semibold text-blue-600">
                                         <?= htmlspecialchars($req['request_number'] ?? 'N/A') ?>
                                     </td>
@@ -1203,7 +1174,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                                         <div class="font-medium text-sm"><?= htmlspecialchars($req['patient_name'] ?? 'Unknown') ?></div>
                                         <div class="text-xs text-gray-400"><?= htmlspecialchars($req['patient_id'] ?? 'N/A') ?></div>
                                     </td>
-                                    <td class="font-mono text-xs"><?= htmlspecialchars($req['visit_id'] ?? 'N/A') ?></td>
                                     <td><?= htmlspecialchars($req['doctor_name'] ?? 'N/A') ?></td>
                                     <td>
                                         <?= $req['test_count'] ?? 0 ?> tests
@@ -1212,11 +1182,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <span class="badge <?= 
-                                            ($req['status'] ?? '') === 'pending' ? 'badge-yellow' : 
-                                            (($req['status'] ?? '') === 'in_progress' ? 'badge-blue' : 
-                                            (($req['status'] ?? '') === 'completed' ? 'badge-green' : 'badge-red')) 
-                                        ?>">
+                                        <span class="status-badge <?= $req['status'] ?? 'pending' ?>">
                                             <?= ucfirst(str_replace('_', ' ', $req['status'] ?? 'Pending')) ?>
                                         </span>
                                     </td>
@@ -1230,7 +1196,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="8" class="text-center py-8 text-gray-400">
+                                <td colspan="7" class="text-center py-8 text-gray-400">
                                     <i class="fas fa-flask text-3xl block mb-2"></i>
                                     <p>No laboratory requests yet</p>
                                 </td>
@@ -1244,6 +1210,31 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
+    <!-- QUICK ACTIONS -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
+        <a href="pending_requests.php" class="quick-action">
+            <span class="icon" style="color:#D97706;">⏳</span>
+            <span class="label">Pending Requests</span>
+        </a>
+        
+        <a href="in_progress.php" class="quick-action">
+            <span class="icon" style="color:#0B5ED7;">🔄</span>
+            <span class="label">In Progress</span>
+        </a>
+        
+        <a href="completed_requests.php" class="quick-action">
+            <span class="icon" style="color:#059669;">✅</span>
+            <span class="label">Completed</span>
+        </a>
+        
+        <a href="results_history.php" class="quick-action">
+            <span class="icon" style="color:#7C3AED;">📊</span>
+            <span class="label">Results History</span>
+        </a>
+    </div>
+
+    <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
     <footer class="footer">
@@ -1252,9 +1243,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Laboratory Dashboard
             <span class="text-gray-300 mx-2">|</span>
-            Logged in as: <strong><?= htmlspecialchars($user_full_name) ?></strong>
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span id="footerTimestamp">● Live</span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1266,17 +1255,21 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <!-- TOAST -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle"></i>
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
-        <p id="toastTitle">Notification</p>
-        <p id="toastMessage"></p>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH AUTO-UPDATE -->
+<!-- LABORATORY GLOBAL STATS AUTO-UPDATE -->
 <!-- ================================================================ -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="/dispensary_system/frontend/assets/js/laboratory_global_stats.js"></script>
+
+<!-- ================================================================ -->
+<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
     // ================================================================
     // DARK MODE
@@ -1327,6 +1320,22 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     });
 
     // ================================================================
+    // DATE & TIME
+    // ================================================================
+    function updateDateTime() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
+    }
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
+
+    // ================================================================
     // SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
@@ -1343,25 +1352,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     searchInput?.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') performSearch();
     });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // TOAST
@@ -1386,380 +1376,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // CHARTS - INITIAL RENDER
-    // ================================================================
-    var chartInstances = {
-        daily: null,
-        monthly: null
-    };
-    
-    var dailyLabels = <?= json_encode($daily_labels) ?>;
-    var dailyValues = <?= json_encode($daily_tests) ?>;
-    var monthlyLabels = <?= json_encode($monthly_labels) ?>;
-    var monthlyValues = <?= json_encode($monthly_tests) ?>;
-    
-    function renderDailyChart(labels, values) {
-        var canvas = document.getElementById('dailyChart');
-        if (!canvas) return;
-        var ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        
-        if (chartInstances.daily) {
-            chartInstances.daily.destroy();
-            chartInstances.daily = null;
-        }
-        
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        var gridColor = isDark ? '#334155' : '#E2E8F0';
-        var textColor = isDark ? '#94A3B8' : '#64748B';
-        
-        var defaultLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-        var defaultValues = [0, 0, 0, 0, 0, 0, 0];
-        
-        chartInstances.daily = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: (labels && labels.length > 0) ? labels : defaultLabels,
-                datasets: [{
-                    label: 'Tests Completed',
-                    data: (values && values.length > 0) ? values : defaultValues,
-                    backgroundColor: isDark ? '#6EA8FE' : '#0B5ED7',
-                    borderRadius: 4
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        ticks: { stepSize: 1, color: textColor },
-                        grid: { color: gridColor }
-                    },
-                    x: {
-                        grid: { display: false },
-                        ticks: { color: textColor }
-                    }
-                }
-            }
-        });
-    }
-    
-    function renderMonthlyChart(labels, values) {
-        var canvas = document.getElementById('monthlyChart');
-        if (!canvas) return;
-        var ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        
-        if (chartInstances.monthly) {
-            chartInstances.monthly.destroy();
-            chartInstances.monthly = null;
-        }
-        
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        var gridColor = isDark ? '#334155' : '#E2E8F0';
-        var textColor = isDark ? '#94A3B8' : '#64748B';
-        
-        var defaultLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
-        var defaultValues = [0, 0, 0, 0, 0, 0];
-        
-        chartInstances.monthly = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: (labels && labels.length > 0) ? labels : defaultLabels,
-                datasets: [{
-                    label: 'Tests Completed',
-                    data: (values && values.length > 0) ? values : defaultValues,
-                    borderColor: isDark ? '#34D399' : '#059669',
-                    backgroundColor: isDark ? 'rgba(52, 211, 153, 0.1)' : 'rgba(5, 150, 105, 0.1)',
-                    fill: true,
-                    tension: 0.4,
-                    pointBackgroundColor: isDark ? '#34D399' : '#059669',
-                    pointRadius: 4
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        ticks: { stepSize: 1, color: textColor },
-                        grid: { color: gridColor }
-                    },
-                    x: {
-                        grid: { display: false },
-                        ticks: { color: textColor }
-                    }
-                }
-            }
-        });
-    }
-    
-    // Initial chart render
-    document.addEventListener('DOMContentLoaded', function() {
-        renderDailyChart(dailyLabels, dailyValues);
-        renderMonthlyChart(monthlyLabels, monthlyValues);
-    });
-
-    // ================================================================
-    // AUTO-UPDATE - EVERY 3 SECONDS
-    // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-    var lastHash = null;
-    var updateCount = 0;
-    
-    function fetchAndUpdateStats() {
-        if (isUpdating) return;
-        isUpdating = true;
-        
-        updateCount++;
-        
-        if (updateCount % 3 === 0) {
-            document.getElementById('updateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Checking...';
-        }
-        
-        fetch('get_lab_stats.php?t=' + new Date().getTime())
-            .then(function(response) {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok: ' + response.status);
-                }
-                return response.json();
-            })
-            .then(function(data) {
-                if (data.success) {
-                    if (lastHash !== data.hash) {
-                        lastHash = data.hash;
-                        updateDashboard(data.data);
-                        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + data.data.timestamp;
-                    }
-                    
-                    var now = new Date();
-                    document.getElementById('updateBadge').innerHTML = 
-                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
-                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                }
-                isUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Error fetching stats:', error);
-                document.getElementById('updateBadge').innerHTML = '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Error';
-                isUpdating = false;
-            });
-    }
-    
-    function updateDashboard(data) {
-        var stats = data.stats || {};
-        var charts = data.charts || {};
-        var lists = data.lists || {};
-        
-        // Update stats cards
-        document.getElementById('statPending').textContent = stats.pending || 0;
-        document.getElementById('statInProgress').textContent = stats.in_progress || 0;
-        document.getElementById('statPendingCard').textContent = stats.pending || 0;
-        document.getElementById('statInProgressCard').textContent = stats.in_progress || 0;
-        document.getElementById('statCompletedTodayCard').textContent = stats.completed_today || 0;
-        document.getElementById('statTodayTestsCard').textContent = stats.today_tests || 0;
-        document.getElementById('statTotalTestsCard').textContent = Number(stats.total_tests || 0).toLocaleString();
-        document.getElementById('statTotalRequestsCard').textContent = Number(stats.total_requests || 0).toLocaleString();
-        document.getElementById('statCompletionRateCard').textContent = (stats.completion_rate || 0) + '%';
-        
-        var avg = (stats.total_requests || 0) > 0 ? (stats.total_tests / stats.total_requests) : 0;
-        document.getElementById('statAvgTestsCard').textContent = avg.toFixed(1);
-        
-        // Update charts
-        if (charts.daily_labels && charts.daily_tests) {
-            renderDailyChart(charts.daily_labels, charts.daily_tests);
-        }
-        if (charts.monthly_labels && charts.monthly_tests) {
-            renderMonthlyChart(charts.monthly_labels, charts.monthly_tests);
-        }
-        
-        // Update most requested
-        var mostRequested = document.getElementById('mostRequested');
-        if (mostRequested && lists.most_requested) {
-            var tests = lists.most_requested || [];
-            if (tests.length > 0) {
-                var html = '';
-                tests.forEach(function(test, index) {
-                    html += `
-                        <div class="most-requested-item">
-                            <span class="rank">#${index + 1}</span>
-                            <span class="test-name">${escapeHtml(test.test_name)}</span>
-                            <span class="count">${test.count}</span>
-                        </div>
-                    `;
-                });
-                mostRequested.innerHTML = html;
-            }
-        }
-        
-        // Update recent requests
-        var tableBody = document.getElementById('recentTableBody');
-        if (tableBody && lists.recent_requests) {
-            var requests = lists.recent_requests || [];
-            if (requests.length > 0) {
-                var html = '';
-                requests.forEach(function(req) {
-                    var statusClass = req.status || 'pending';
-                    var statusLabel = capitalize(req.status || 'Pending');
-                    var badgeClass = 'badge-yellow';
-                    if (statusClass === 'in_progress') badgeClass = 'badge-blue';
-                    else if (statusClass === 'completed') badgeClass = 'badge-green';
-                    else if (statusClass === 'cancelled') badgeClass = 'badge-red';
-                    
-                    var testInfo = (req.test_count || 0) + ' tests';
-                    if ((req.completed_count || 0) > 0 && req.status !== 'completed') {
-                        testInfo += ' <span class="text-xs text-gray-400">(' + req.completed_count + ' done)</span>';
-                    }
-                    
-                    html += `
-                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800 transition">
-                            <td class="font-mono text-xs font-semibold text-blue-600">${escapeHtml(req.request_number || 'N/A')}</td>
-                            <td>
-                                <div class="font-medium text-sm">${escapeHtml(req.patient_name || 'Unknown')}</div>
-                                <div class="text-xs text-gray-400">${escapeHtml(req.patient_id || 'N/A')}</div>
-                            </td>
-                            <td class="font-mono text-xs">${escapeHtml(req.visit_id || 'N/A')}</td>
-                            <td>${escapeHtml(req.doctor_name || 'N/A')}</td>
-                            <td>${testInfo}</td>
-                            <td>
-                                <span class="badge ${badgeClass}">${statusLabel}</span>
-                            </td>
-                            <td class="text-sm">${formatDate(req.requested_at)}</td>
-                            <td>
-                                <a href="view_request.php?id=${req.id}" class="btn btn-outline btn-sm">
-                                    <i class="fas fa-eye"></i> View
-                                </a>
-                            </td>
-                        </tr>
-                    `;
-                });
-                tableBody.innerHTML = html;
-            }
-        }
-    }
-    
-    // ================================================================
-    // HELPER FUNCTIONS
-    // ================================================================
-    function escapeHtml(text) {
-        if (!text) return '';
-        var div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-    
-    function capitalize(text) {
-        if (!text) return '';
-        return text.charAt(0).toUpperCase() + text.slice(1);
-    }
-    
-    function formatDate(datetime) {
-        if (!datetime) return 'N/A';
-        var d = new Date(datetime);
-        if (isNaN(d.getTime())) return 'N/A';
-        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    }
-    
-    function manualRefresh() {
-        var btn = document.getElementById('refreshBtn');
-        if (btn) {
-            btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Loading...';
-            btn.disabled = true;
-        }
-        
-        lastHash = null;
-        fetchAndUpdateStats();
-        
-        setTimeout(function() {
-            if (btn) {
-                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
-                btn.disabled = false;
-                showToast('✅ Refreshed', 'Dashboard updated successfully', 'success');
-            }
-        }, 1500);
-    }
-
-    // ================================================================
-    // START AUTO-UPDATE
-    // ================================================================
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        updateInterval = setInterval(fetchAndUpdateStats, 3000);
-        document.getElementById('updateBadge').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Live mode active';
-        fetchAndUpdateStats();
-    }
-
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-            document.getElementById('updateBadge').innerHTML = '<i class="fas fa-pause"></i> Paused';
-        }
-    }
-
-    // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
-    // ================================================================
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
-    });
-
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            searchInput?.focus();
-            searchInput?.select();
-        }
-        if (e.altKey && e.key === 'r') {
-            e.preventDefault();
-            manualRefresh();
-        }
-    });
-
-    // ================================================================
-    // INITIALIZE
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 2000);
-    });
-
-    // ================================================================
-    // EXPOSE FOR CONSOLE
-    // ================================================================
-    window.LabDashboard = {
-        start: startAutoUpdate,
-        stop: stopAutoUpdate,
-        refresh: manualRefresh,
-        renderDaily: renderDailyChart,
-        renderMonthly: renderMonthlyChart
-    };
-
     console.log('%c🧪 Braick - Laboratory Dashboard', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Pending: <?= $pending ?> | In Progress: <?= $in_progress ?> | Completed: <?= $completed_today ?> | Today Tests: <?= $today_tests ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Auto-update: Every 3 seconds (Smart - only when data changes)', 'font-size:13px; color:#34D399;');
-    console.log('%c💡 Type LabDashboard.stop() or LabDashboard.start() to control', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💡 Press Alt+R to refresh manually', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
-    console.log('%c🎨 Beautiful cards with solid colors and reduced opacity', 'font-size:13px; color:#D97706;');
+    console.log('%c📊 Pending: <?= $pending ?> | In Progress: <?= $in_progress ?> | Completed Today: <?= $completed_today ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🧪 Today Tests: <?= $today_tests ?> | Total Tests: <?= $total_tests ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Total Requests: <?= $total_requests ?> | Completion Rate: <?= $completion_rate ?>%', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Dashboard styled like Pharmacy dashboard with beautiful cards', 'font-size:13px; color:#34D399;');
+    console.log('%c🎨 Cards have fixed height (130px) with gradient backgrounds', 'font-size:13px; color:#D97706;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
