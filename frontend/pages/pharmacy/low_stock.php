@@ -2,41 +2,34 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/low_stock.php
 // PHARMACY - LOW STOCK & OUT OF STOCK REPORT
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
-// ================================================================
-// FIXED: Expiring medicines shown FIRST (sorted by expiry date)
-// FIXED: Removed Add and Edit buttons - Only View button remains
-// FIXED: Days remaining calculation fixed
 // ================================================================
 
 session_start();
+
+// ================================================================
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
 
 // ================================================================
 // INCLUDE CONFIG
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to pharm.peter
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Peter Ngalula';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.peter';
-    $_SESSION['email'] = 'peter@braick.com';
-    $_SESSION['phone'] = '+255 700 000 004';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-}
-
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Peter Ngalula';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 $db = getDB();
 
@@ -1401,11 +1394,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     });
 
     console.log('%c💊 Braick - Low Stock Report (Expiring First)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📦 Low Stock: <?= $low_stock_count ?> | Out of Stock: <?= $out_of_stock_count ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c⏰ Expiring Soon: <?= $expiring_soon_count ?> (shown first)', 'font-size:13px; color:#DC2626;');
     console.log('%c⚠️ Total items needing attention: <?= $total_low_stock ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Sorted by: Expiry Date (expiring first) → Quantity ASC → Name ASC', 'font-size:13px; color:#34D399;');
     console.log('%c👁️ Only View button available (Edit and Add removed)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

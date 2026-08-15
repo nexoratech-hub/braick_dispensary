@@ -4,28 +4,28 @@
 // PHARMACY - VIEW PRESCRIPTION DETAILS
 // READ-ONLY MODE - No status update buttons
 // NO VIEW BILL BUTTON
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Pharmacy
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 9;
-    $_SESSION['full_name'] = 'Pharmacy Dodoma';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.dodoma';
-    $_SESSION['is_admin'] = false;
+    header('Location: ../login.php');
+    exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 9;
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Dodoma';
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
 
 // ================================================================
 // PATH SAHIHI
@@ -1213,6 +1213,8 @@ include_once '../../components/pharmacy_sidebar.php';
     }
 
     console.log('%c💊 Braick - View Prescription (READ ONLY - NO VIEW BILL)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Prescription: <?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($prescription['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💊 Status: <?= $prescription['status'] ?? 'pending' ?>', 'font-size:13px; color:#059669;');
@@ -1221,6 +1223,7 @@ include_once '../../components/pharmacy_sidebar.php';
     <?php if ($prescription['status'] === 'dispensed'): ?>
         console.log('%c✅ Dispensed on: <?= formatDate($prescription['dispensed_at']) ?>', 'font-size:13px; color:#059669;');
     <?php endif; ?>
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

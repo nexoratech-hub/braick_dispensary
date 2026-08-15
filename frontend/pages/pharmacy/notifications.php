@@ -2,41 +2,115 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/notifications.php
 // PHARMACY - VIEW NOTIFICATIONS
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Default to Pharmacy Dodoma (ID: 9)
+// SESSION START
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 9;
-    $_SESSION['full_name'] = 'Pharmacy Dodoma';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.dodoma';
-    $_SESSION['email'] = 'pharm.dodoma@braick.com';
-    $_SESSION['phone'] = '+255 700 000 015';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
-require_once __DIR__ . '/../../../backend/config/config.php';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS PHARMACY ACCESS
+// ================================================================
+$allowed_roles = ['pharmacy', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    // Redirect to their own dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_role = $_SESSION['role'] ?? 'pharmacy';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
+$user_email = $_SESSION['email'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($user_username) && !empty($user_username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = getDB();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, email, phone, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$user_username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['email'] = $user['email'];
+                $_SESSION['phone'] = $user['phone'];
+                $_SESSION['profile_pic'] = $user['profile_pic'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $user_email = $user['email'];
+                $user_phone = $user['phone'];
+                $profile_pic = $user['profile_pic'];
+                
+                // Get branch name
+                $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+                $stmt->execute([$user_branch_id]);
+                $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($branch) {
+                    $_SESSION['branch_name'] = $branch['name'];
+                    $user_branch_name = $branch['name'];
+                }
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_id = $_SESSION['user_id'] ?? 9;
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Dodoma';
-
-$db = Database::getInstance()->getConnection();
+$db = getDB();
 
 // ================================================================
 // GET PARAMETERS
 // ================================================================
 $filter = isset($_GET['filter']) ? $_GET['filter'] : 'all'; // all, unread, read
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
 $offset = isset($_GET['page']) ? ((int)$_GET['page'] - 1) * $limit : 0;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
@@ -55,6 +129,12 @@ if ($filter === 'unread') {
     $count_query .= " AND is_read = 0";
 } elseif ($filter === 'read') {
     $count_query .= " AND is_read = 1";
+}
+
+if (!empty($search)) {
+    $count_query .= " AND (title LIKE ? OR message LIKE ?)";
+    $count_params[] = "%$search%";
+    $count_params[] = "%$search%";
 }
 
 $stmt = $db->prepare($count_query);
@@ -84,10 +164,19 @@ if ($filter === 'unread') {
     $query .= " AND is_read = 1";
 }
 
+if (!empty($search)) {
+    $query .= " AND (title LIKE ? OR message LIKE ?)";
+    $params = [$user_id, "%$search%", "%$search%"];
+} else {
+    $params = [$user_id];
+}
+
 $query .= " ORDER BY created_at DESC LIMIT ? OFFSET ?";
+$params[] = $limit;
+$params[] = $offset;
 
 $stmt = $db->prepare($query);
-$stmt->execute([$user_id, $limit, $offset]);
+$stmt->execute($params);
 $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
@@ -112,7 +201,22 @@ if (isset($_GET['mark_all_read'])) {
     ");
     $stmt->execute([$user_id]);
     
-    header('Location: notifications.php');
+    // Log activity
+    try {
+        $stmt = $db->prepare("
+            INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+            VALUES (?, ?, 'notifications_marked_all_read', ?, NOW())
+        ");
+        $stmt->execute([
+            $user_id,
+            $user_branch_id,
+            "User marked all notifications as read (" . $unread_count . " notifications)"
+        ]);
+    } catch (Exception $e) {
+        // Silent fail
+    }
+    
+    header('Location: notifications.php?filter=' . $filter);
     exit;
 }
 
@@ -219,7 +323,10 @@ function getTimeAgo($datetime) {
 // ================================================================
 // LOGO PATH
 // ================================================================
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -235,8 +342,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Notifications - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -1014,7 +1121,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search notifications...">
+            <input type="text" id="searchInput" placeholder="Search notifications..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -1023,7 +1130,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     <div class="flex items-center gap-3">
         <span class="branch-badge-display" style="background:var(--primary-bg);color:var(--primary);padding:4px 14px;border-radius:20px;font-size:0.78rem;font-weight:500;">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime"></span>
@@ -1039,8 +1146,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1071,11 +1178,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
                     <i class="fas fa-check-circle"></i> <?= $total_notifications - $unread_count ?> read
                 </span>
+                <?php if (!empty($search)): ?>
+                    <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                        <i class="fas fa-search"></i> "<?= htmlspecialchars($search) ?>"
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
             <?php if ($unread_count > 0): ?>
-                <a href="?mark_all_read=1" class="btn-outline-light" onclick="return confirm('Mark all notifications as read?')">
+                <a href="?mark_all_read=1&filter=<?= $filter ?>" class="btn-outline-light" onclick="return confirm('Mark all notifications as read?')">
                     <i class="fas fa-check-double"></i> Mark All Read
                 </a>
             <?php endif; ?>
@@ -1089,18 +1201,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- FILTER TABS -->
     <!-- ================================================================ -->
     <div class="filter-tabs">
-        <a href="notifications.php?filter=all" class="filter-tab <?= $filter === 'all' ? 'active' : '' ?>">
+        <a href="notifications.php?filter=all<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+           class="filter-tab <?= $filter === 'all' ? 'active' : '' ?>">
             <i class="fas fa-list"></i> All
             <span class="tab-badge"><?= $total_notifications ?></span>
         </a>
-        <a href="notifications.php?filter=unread" class="filter-tab <?= $filter === 'unread' ? 'active' : '' ?>">
+        <a href="notifications.php?filter=unread<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+           class="filter-tab <?= $filter === 'unread' ? 'active' : '' ?>">
             <i class="fas fa-circle" style="color:#DC2626;font-size:0.6rem;"></i> Unread
             <span class="tab-badge unread-badge"><?= $unread_count ?></span>
         </a>
-        <a href="notifications.php?filter=read" class="filter-tab <?= $filter === 'read' ? 'active' : '' ?>">
+        <a href="notifications.php?filter=read<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
+           class="filter-tab <?= $filter === 'read' ? 'active' : '' ?>">
             <i class="fas fa-check-circle"></i> Read
             <span class="tab-badge"><?= $total_notifications - $unread_count ?></span>
         </a>
+        <?php if (!empty($search)): ?>
+            <a href="notifications.php" class="filter-tab" style="border-color:var(--danger);color:var(--danger);">
+                <i class="fas fa-times"></i> Clear Search
+            </a>
+        <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
@@ -1135,7 +1255,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             <span><i class="far fa-clock"></i> <?= $time_ago ?></span>
                             <?php if (!empty($link) && $link !== '#'): ?>
                                 <span>|</span>
-                                <a href="<?= htmlspecialchars($link) ?>" class="text-blue-600 hover:underline text-xs">View Details</a>
+                                <a href="<?= htmlspecialchars($link) ?>" class="text-blue-600 dark:text-blue-400 hover:underline text-xs">View Details</a>
                             <?php endif; ?>
                         </div>
                         <div class="notif-actions">
@@ -1156,7 +1276,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <i class="fas fa-bell-slash"></i>
                 <h3>No Notifications</h3>
                 <p>
-                    <?php if ($filter === 'unread'): ?>
+                    <?php if (!empty($search)): ?>
+                        No notifications found matching "<strong><?= htmlspecialchars($search) ?></strong>"
+                    <?php elseif ($filter === 'unread'): ?>
                         You have no unread notifications. Great job! 🎉
                     <?php elseif ($filter === 'read'): ?>
                         You have no read notifications yet.
@@ -1174,7 +1296,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php if ($total_pages > 1): ?>
         <div class="pagination">
             <?php if ($page > 1): ?>
-                <a href="?page=<?= $page - 1 ?>&filter=<?= $filter ?>" class="page-link">
+                <a href="?page=<?= $page - 1 ?>&filter=<?= $filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="page-link">
                     <i class="fas fa-chevron-left"></i>
                 </a>
             <?php else: ?>
@@ -1183,15 +1305,35 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </span>
             <?php endif; ?>
             
-            <?php for ($p = 1; $p <= $total_pages; $p++): ?>
-                <a href="?page=<?= $p ?>&filter=<?= $filter ?>" 
+            <?php 
+            $start_page = max(1, $page - 2);
+            $end_page = min($total_pages, $page + 2);
+            
+            if ($start_page > 1): ?>
+                <a href="?page=1&filter=<?= $filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="page-link">1</a>
+                <?php if ($start_page > 2): ?>
+                    <span class="page-link disabled">...</span>
+                <?php endif; ?>
+            <?php endif; ?>
+            
+            <?php for ($p = $start_page; $p <= $end_page; $p++): ?>
+                <a href="?page=<?= $p ?>&filter=<?= $filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" 
                    class="page-link <?= $p === $page ? 'active' : '' ?>">
                     <?= $p ?>
                 </a>
             <?php endfor; ?>
             
+            <?php if ($end_page < $total_pages): ?>
+                <?php if ($end_page < $total_pages - 1): ?>
+                    <span class="page-link disabled">...</span>
+                <?php endif; ?>
+                <a href="?page=<?= $total_pages ?>&filter=<?= $filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="page-link">
+                    <?= $total_pages ?>
+                </a>
+            <?php endif; ?>
+            
             <?php if ($page < $total_pages): ?>
-                <a href="?page=<?= $page + 1 ?>&filter=<?= $filter ?>" class="page-link">
+                <a href="?page=<?= $page + 1 ?>&filter=<?= $filter ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="page-link">
                     <i class="fas fa-chevron-right"></i>
                 </a>
             <?php else: ?>
@@ -1288,8 +1430,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 
     function performSearch() {
         var query = searchInput.value.trim();
+        var filter = '<?= $filter ?>';
         if (query.length > 0) {
-            window.location.href = 'notifications.php?search=' + encodeURIComponent(query);
+            window.location.href = 'notifications.php?search=' + encodeURIComponent(query) + '&filter=' + filter;
         }
     }
     
@@ -1424,11 +1567,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         tabs.forEach(function(tab) {
             var badge = tab.querySelector('.tab-badge');
             if (badge) {
-                if (tab.href.includes('filter=unread')) {
+                if (tab.href && tab.href.includes('filter=unread')) {
                     badge.textContent = unread;
-                } else if (tab.href.includes('filter=read')) {
+                } else if (tab.href && tab.href.includes('filter=read')) {
                     badge.textContent = read;
-                } else {
+                } else if (tab.href && tab.href.includes('filter=all')) {
                     badge.textContent = total;
                 }
             }
@@ -1485,10 +1628,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     });
 
     console.log('%c🔔 Braick Dispensary - Notifications', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📬 Total: <?= $total_notifications ?> | Unread: <?= $unread_count ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📬 Total: <?= $total_notifications ?> | Unread: <?= $unread_count ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔵 Blue Theme Applied', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Login protection added', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

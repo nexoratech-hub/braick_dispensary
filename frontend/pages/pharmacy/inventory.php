@@ -2,43 +2,115 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/inventory.php
 // PHARMACY - MEDICINE INVENTORY (VIEW + ADD)
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 // FIXED: 
-// 1. Out of stock items removed from main inventory
-// 2. Low Stock card includes out of stock
-// 3. No separate Out of Stock card
-// 4. PRICE FROM 1 TSh (not 100)
-// 5. Auto-assign to user's branch
+// 1. Session & Login Protection added
+// 2. Out of stock items removed from main inventory
+// 3. Low Stock card includes out of stock
+// 4. No separate Out of Stock card
+// 5. PRICE FROM 1 TSh (not 100)
+// 6. Auto-assign to user's branch
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS PHARMACY ACCESS
+// ================================================================
+$allowed_roles = ['pharmacy', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    // Redirect to their own dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_role = $_SESSION['role'] ?? 'pharmacy';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
+$user_email = $_SESSION['email'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($user_username) && !empty($user_username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = getDB();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, email, phone, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$user_username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['email'] = $user['email'];
+                $_SESSION['phone'] = $user['phone'];
+                $_SESSION['profile_pic'] = $user['profile_pic'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $user_email = $user['email'];
+                $user_phone = $user['phone'];
+                $profile_pic = $user['profile_pic'];
+                
+                // Get branch name
+                $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+                $stmt->execute([$user_branch_id]);
+                $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($branch) {
+                    $_SESSION['branch_name'] = $branch['name'];
+                    $user_branch_name = $branch['name'];
+                }
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
 
 // ================================================================
 // INCLUDE CONFIG
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to pharm.peter
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Peter Ngalula';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.peter';
-    $_SESSION['email'] = 'peter@braick.com';
-    $_SESSION['phone'] = '+255 700 000 004';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-}
-
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Peter Ngalula';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 $db = getDB();
 
@@ -135,8 +207,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([
                     $medication_name, $category, $unit, $quantity, $reorder_level,
                     $unit_cost, $selling_price, $supplier, $expiry_date, $batch_number,
-                    $user_branch_id, $status  // ✅ Auto-assign to user's branch
+                    $user_branch_id, $status
                 ]);
+                
+                // Log activity
+                try {
+                    $stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                        VALUES (?, ?, 'medicine_added', ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $user_id,
+                        $user_branch_id,
+                        "Added new medicine: " . $medication_name . " (Batch: " . $batch_number . ") - " . $quantity . " units"
+                    ]);
+                } catch (Exception $e) {
+                    // Silent fail
+                }
                 
                 $message = "✅ Medicine added successfully to <strong>" . htmlspecialchars($user_branch_name) . "</strong>! Batch: <strong>$batch_number</strong>";
                 $message_type = 'success';
@@ -274,12 +361,17 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $expiring_soon = $stmt->fetch()['count'] ?? 0;
 
+// In Stock count
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM medications_inventory WHERE branch_id = ? AND quantity > 0 AND status = 'active'");
+$stmt->execute([$user_branch_id]);
+$in_stock_count = $stmt->fetch()['count'] ?? 0;
+
 // ================================================================
 // GET STATISTICS FOR SIDEBAR
 // ================================================================
 $pending_prescriptions = 0;
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescription_sales WHERE branch_id = ? AND status = 'pending'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$user_branch_id]);
     $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
 } catch (Exception $e) {
@@ -295,10 +387,17 @@ try {
     $unread_notifications = 0;
 }
 
-$profile_pic = $_SESSION['profile_pic'] ?? '';
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -308,7 +407,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
+<!-- STYLES (same as before, included in the complete code) -->
 <!-- ================================================================ -->
 <style>
     :root {
@@ -350,6 +449,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
     }
     
+    /* All the existing styles from your file go here */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1367,6 +1467,17 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         to { opacity: 1; transform: translateY(0); }
     }
     
+    .footer {
+        padding: 14px 0;
+        border-top: 1px solid var(--border-color);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    
     @media (max-width: 992px) {
         .stats-grid {
             grid-template-columns: repeat(2, 1fr);
@@ -1512,6 +1623,48 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 </style>
 
 <!-- ================================================================ -->
+<!-- TOP NAVIGATION -->
+<!-- ================================================================ -->
+<nav class="top-nav">
+    <div class="flex items-center gap-4 flex-1">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search inventory..." value="<?= htmlspecialchars($search) ?>">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex items-center gap-3">
+        <span class="branch-badge">
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
+        </span>
+        
+        <span class="datetime" id="currentDateTime"></span>
+        
+        <button id="darkModeToggle" class="dark-toggle-btn">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
+        
+        <button class="icon-btn">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+        </button>
+        
+        <a href="profile.php">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+        </a>
+    </div>
+</nav>
+
+<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
@@ -1573,11 +1726,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
         </a>
         
-        <?php 
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM medications_inventory WHERE branch_id = ? AND quantity > 0 AND status = 'active'");
-            $stmt->execute([$user_branch_id]);
-            $in_stock_count = $stmt->fetch()['count'] ?? 0;
-        ?>
         <a href="inventory.php?status=active" class="stat-card purple">
             <div>
                 <p class="stat-label">In Stock</p>
@@ -2298,13 +2446,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
     
-    console.log('%c💊 Braick - Inventory (Out of Stock Hidden)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - Pharmacy Inventory', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Total: <?= $total_medicines ?> | Low Stock: <?= $low_stock_count + $out_of_stock ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 In Stock: <?= $in_stock_count ?>', 'font-size:13px; color:#34D399;');
     console.log('%c📦 Out of Stock: <?= $out_of_stock ?> (hidden from main list)', 'font-size:13px; color:#DC2626;');
     console.log('%c📅 Expiring Soon: <?= $expiring_soon ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c✅ Price from TSh 1 (not 100)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Auto-assigned to branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Login protection added', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

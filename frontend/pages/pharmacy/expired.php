@@ -2,44 +2,34 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/expired.php
 // PHARMACY - EXPIRED MEDICINES REPORT
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
-// ================================================================
-// FIXED:
-// 1. Shows ALL expired medicines (active + inactive)
-// 2. Only Dodoma branch
-// 3. Sort by expiry date (oldest first)
-// 4. Shows status badge (Active/Inactive)
-// 5. NO EDIT BUTTON - Only View and Delete (Inactive)
 // ================================================================
 
 session_start();
+
+// ================================================================
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
 
 // ================================================================
 // INCLUDE CONFIG
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to pharm.peter
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Peter Ngalula';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.peter';
-    $_SESSION['email'] = 'peter@braick.com';
-    $_SESSION['phone'] = '+255 700 000 004';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-}
-
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Peter Ngalula';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 $db = getDB();
 
@@ -1235,13 +1225,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     });
 
     console.log('%c💊 Braick - Expired Medicines Report', 'font-size:18px; font-weight:bold; color:#DC2626;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🗑️ Total Expired: <?= $total_expired ?> (units: <?= $total_expired_units ?>)', 'font-size:13px; color:#DC2626;');
     console.log('%c⚠️ Active Expired: <?= $active_expired ?> (units: <?= $active_expired_units ?>)', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Inactive Expired: <?= $inactive_expired ?> (units: <?= $inactive_expired_units ?>)', 'font-size:13px; color:#6B7280;');
     console.log('%c✅ Shows ALL expired medicines (active + inactive)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Only Dodoma branch (branch_id=1)', 'font-size:13px; color:#34D399;');
     console.log('%c🚫 NO EDIT button - Only View and Delete (Inactive)', 'font-size:13px; color:#DC2626;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

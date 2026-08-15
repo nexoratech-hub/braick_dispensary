@@ -2,42 +2,35 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/export_pdf.php
 // PHARMACY - EXPORT REPORT AS PDF (WITH PREVIEW)
-// ================================================================
-// FIXED: Added Braick Logo + Proper Margins
-// USAGE: export_pdf.php?type=stock&branch_id=1
-//        export_pdf.php?type=medicines&branch_id=1
-//        export_pdf.php?type=financial&branch_id=1
+// FIXED: Login session - no default user bypass
+// BRAICK DISPENSARY
 // ================================================================
 
 session_start();
+
+// ================================================================
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
+$is_admin = $_SESSION['role'] === 'admin' || ($_SESSION['is_admin'] ?? false);
 
 // ================================================================
 // INCLUDE CONFIG
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to pharm.peter
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Peter Ngalula';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.peter';
-    $_SESSION['email'] = 'peter@braick.com';
-    $_SESSION['phone'] = '+255 700 000 004';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-}
-
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Peter Ngalula';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$is_admin = $_SESSION['is_admin'] ?? false;
 
 $db = getDB();
 
@@ -992,11 +985,14 @@ if ($is_admin) {
     });
 
     console.log('%c📄 Pharmacy Report Preview (With Logo & Margins)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c📊 Report Type: <?= ucfirst($report_type) ?>', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c🖼️ Logo: <?= !empty($logo_base64) ? '✅ Loaded' : '❌ Using fallback' ?>', 'font-size:12px; color:#34D399;');
     console.log('%c📐 Margins: TOP:60px RIGHT:70px BOTTOM:50px LEFT:70px', 'font-size:12px; color:#34D399;');
     console.log('%c⌨️ Ctrl+P - Print | Ctrl+D - Download PDF | Ctrl+B - Back', 'font-size:12px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

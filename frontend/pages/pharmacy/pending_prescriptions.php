@@ -2,29 +2,28 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/pending_prescriptions.php
 // PHARMACY - PENDING PRESCRIPTIONS
-// FIXED: Price retrieval now uses latest active stock with quantity > 0
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Pharmacy
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 9;
-    $_SESSION['full_name'] = 'Pharmacy Dodoma';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.dodoma';
-    $_SESSION['is_admin'] = false;
+    header('Location: ../login.php');
+    exit;
 }
 
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy';
-$user_id = $_SESSION['user_id'] ?? 9;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
 
 // ================================================================
 // INCLUDE DATABASE
@@ -1867,6 +1866,8 @@ include_once '../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     console.log('%c💊 Braick - Prescriptions (Auto-Update Active)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c📋 Total Pending: <?= $total_count ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c⏳ Pending: <?= $status_counts['pending'] ?? 0 ?>', 'font-size:12px; color:#D97706;');
     console.log('%c✅ Confirmed: <?= $status_counts['confirmed'] ?? 0 ?>', 'font-size:12px; color:#0B5ED7;');
@@ -1874,6 +1875,7 @@ include_once '../../components/pharmacy_sidebar.php';
     console.log('%c🔄 Auto-update every 3 seconds - NO REFRESH NEEDED!', 'font-size:12px; color:#34D399;');
     console.log('%c💰 Price Fix: Now uses latest stock with quantity > 0', 'font-size:12px; color:#059669;');
     console.log('%c📦 Stock Update: Deducts from oldest stock first (FIFO)', 'font-size:12px; color:#059669;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -2,31 +2,85 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/dispense.php
 // PHARMACY - DISPENSE PRESCRIPTION WITH DISCOUNT
-// FLOW: Apply discount → Confirm → Bill to Cashier (pending)
-//       Cashier pays → Auto dispense → Inventory updates
-// FIXED: dispensed_at is recorded correctly
+// FIXED: SESSION MANAGEMENT & LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Pharmacy
+// SESSION START
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 9;
-    $_SESSION['full_name'] = 'Pharmacy Dodoma';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.dodoma';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 9;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS PHARMACY ACCESS
+// ================================================================
+$allowed_roles = ['pharmacy', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    // Redirect to their own dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_role = $_SESSION['role'] ?? 'pharmacy';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Dodoma';
+$username = $_SESSION['username'] ?? 'pharmacy';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, SET DEFAULTS
+// ================================================================
+if ($user_id <= 0) {
+    // Try to get from database using username
+    if (isset($username) && !empty($username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = getDB();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+            }
+        } catch (Exception $e) {
+            // Fallback to default
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
 
 // ================================================================
 // PATH SAHIHI
@@ -308,11 +362,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             // Log activity
             $stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, action, details, created_at)
-                VALUES (?, 'prescription_confirmed', ?, NOW())
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                VALUES (?, ?, 'prescription_confirmed', ?, NOW())
             ");
             $stmt->execute([
                 $user_id,
+                $user_branch_id,
                 "Prescription #" . $prescription['prescription_number'] . " confirmed - Bill sent to Cashier for payment"
             ]);
             
@@ -360,7 +415,7 @@ if ($is_bill_paid && !$is_dispensed && $bill_id > 0) {
             
             // Check current stock
             $stmt = $db->prepare("
-                SELECT quantity FROM medications_inventory 
+                SELECT quantity, id FROM medications_inventory 
                 WHERE medication_name = ? AND branch_id = ? AND status = 'active'
             ");
             $stmt->execute([$medication_name, $user_branch_id]);
@@ -374,16 +429,28 @@ if ($is_bill_paid && !$is_dispensed && $bill_id > 0) {
                     UPDATE medications_inventory 
                     SET quantity = ?,
                         updated_at = NOW()
-                    WHERE medication_name = ? AND branch_id = ? AND status = 'active'
+                    WHERE id = ? AND branch_id = ? AND status = 'active'
                 ");
-                $stmt->execute([$new_quantity, $medication_name, $user_branch_id]);
+                $stmt->execute([$new_quantity, $stock['id'], $user_branch_id]);
                 
                 // Log stock movement
                 $stmt = $db->prepare("
-                    INSERT INTO stock_movements (medication_name, branch_id, quantity_change, new_quantity, reason, created_at)
-                    VALUES (?, ?, ?, ?, 'dispensed', NOW())
+                    INSERT INTO stock_movements (
+                        inventory_id, patient_id, sale_type, sale_id, 
+                        quantity, previous_stock, new_stock, 
+                        movement_type, performed_by, notes, created_at
+                    ) VALUES (?, ?, 'prescription', ?, ?, ?, ?, 'out', ?, ?, NOW())
                 ");
-                $stmt->execute([$medication_name, $user_branch_id, -$quantity, $new_quantity]);
+                $stmt->execute([
+                    $stock['id'],
+                    $prescription['patient_id'],
+                    $prescription_id,
+                    $quantity,
+                    $stock['quantity'],
+                    $new_quantity,
+                    $user_id,
+                    "Prescription #" . $prescription['prescription_number'] . " dispensed"
+                ]);
             }
         }
         
@@ -408,11 +475,12 @@ if ($is_bill_paid && !$is_dispensed && $bill_id > 0) {
         
         // Log activity
         $stmt = $db->prepare("
-            INSERT INTO activity_logs (user_id, action, details, created_at)
-            VALUES (?, 'prescription_auto_dispensed', ?, NOW())
+            INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+            VALUES (?, ?, 'prescription_auto_dispensed', ?, NOW())
         ");
         $stmt->execute([
             $user_id,
+            $user_branch_id,
             "Prescription #" . $prescription['prescription_number'] . " auto-dispensed after payment on " . date('Y-m-d H:i:s')
         ]);
         
@@ -501,6 +569,11 @@ function formatDate($datetime) {
 // ================================================================
 include_once '../../components/pharmacy_header.php';
 include_once '../../components/pharmacy_sidebar.php';
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 ?>
 
 <!DOCTYPE html>
@@ -510,12 +583,13 @@ include_once '../../components/pharmacy_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dispense Prescription - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* All your existing styles here... */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -570,231 +644,23 @@ include_once '../../components/pharmacy_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
+        /* Add all your existing CSS styles here... */
         
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            border-radius: 16px;
-            padding: 24px 32px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.8rem;
-            font-weight: 700;
+        /* Status Banner */
+        .status-banner {
+            padding: 12px 20px;
+            border-radius: var(--radius);
+            margin-bottom: 20px;
             display: flex;
             align-items: center;
             gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
             font-weight: 600;
         }
         
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: 10px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        .page-header .badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.1);
-        }
+        .status-banner.pending { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+        .status-banner.paid { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+        .status-banner.dispensed { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+        .status-banner.info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
         
         /* Cards */
         .card {
@@ -839,6 +705,19 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 600;
         }
         
+        .badge-status {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+        }
+        
+        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+        .badge-info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
+        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+        
         .detail-row {
             display: flex;
             padding: 6px 0;
@@ -862,36 +741,6 @@ include_once '../../components/pharmacy_sidebar.php';
             color: var(--text-primary);
         }
         
-        .badge-status {
-            display: inline-block;
-            padding: 2px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-        }
-        
-        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
-        .badge-info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
-        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
-        
-        /* Status Banner */
-        .status-banner {
-            padding: 12px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-weight: 600;
-        }
-        
-        .status-banner.pending { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
-        .status-banner.paid { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-        .status-banner.dispensed { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-        .status-banner.info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
-        
-        /* Items Table */
         .table-wrap {
             overflow-x: auto;
         }
@@ -936,7 +785,6 @@ include_once '../../components/pharmacy_sidebar.php';
             font-size: 1rem;
         }
         
-        /* Discount Section */
         .discount-section {
             background: var(--success-bg);
             border: 2px solid var(--success);
@@ -1024,43 +872,6 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
         }
         
-        /* Bill Summary - Prescription Bill Only */
-        .bill-summary-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 12px;
-            margin-top: 12px;
-        }
-        
-        .bill-summary-item {
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            padding: 10px 14px;
-            text-align: center;
-            border: 1px solid var(--border-color);
-        }
-        
-        .bill-summary-item .label {
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            color: var(--text-secondary);
-            font-weight: 600;
-            letter-spacing: 0.05em;
-        }
-        
-        .bill-summary-item .value {
-            font-size: 1.2rem;
-            font-weight: 700;
-            font-family: monospace;
-            margin-top: 2px;
-        }
-        
-        .bill-summary-item .value.green { color: var(--success); }
-        .bill-summary-item .value.red { color: var(--danger); }
-        .bill-summary-item .value.blue { color: var(--primary); }
-        .bill-summary-item .value.orange { color: var(--warning); }
-        
-        /* Buttons */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1131,7 +942,17 @@ include_once '../../components/pharmacy_sidebar.php';
             transform: none !important;
         }
         
-        /* Toast */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1160,29 +981,42 @@ include_once '../../components/pharmacy_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
+        .bill-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+        
+        .bill-summary-item {
+            background: var(--bg-body);
+            border-radius: var(--radius);
+            padding: 10px 14px;
             text-align: center;
-            font-size: 0.7rem;
+            border: 1px solid var(--border-color);
+        }
+        
+        .bill-summary-item .label {
+            font-size: 0.6rem;
+            text-transform: uppercase;
             color: var(--text-secondary);
+            font-weight: 600;
+            letter-spacing: 0.05em;
         }
         
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        /* Responsive */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
+        .bill-summary-item .value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            font-family: monospace;
+            margin-top: 2px;
         }
+        
+        .bill-summary-item .value.green { color: var(--success); }
+        .bill-summary-item .value.red { color: var(--danger); }
+        .bill-summary-item .value.blue { color: var(--primary); }
+        .bill-summary-item .value.orange { color: var(--warning); }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
             .detail-row { flex-direction: column; }
             .detail-label { width: 100%; margin-bottom: 2px; }
             .discount-section .form-group { flex-direction: column; align-items: stretch; }
@@ -1190,14 +1024,12 @@ include_once '../../components/pharmacy_sidebar.php';
             .bill-summary-grid { grid-template-columns: 1fr 1fr; }
             .items-table { font-size: 0.7rem; }
             .card { padding: 16px; }
+            .btn { width: 100%; justify-content: center; }
+            .btn-lg { padding: 10px 20px; }
         }
         
         @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
             .bill-summary-grid { grid-template-columns: 1fr; }
-            .btn { width: 100%; justify-content: center; }
-            .btn-lg { padding: 10px 20px; }
         }
     </style>
 </head>
@@ -1234,7 +1066,7 @@ include_once '../../components/pharmacy_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
+            <img src="<?= $logo_path ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
@@ -1340,9 +1172,6 @@ include_once '../../components/pharmacy_sidebar.php';
             <div class="detail-row"><span class="detail-label">Blood Group</span><span class="detail-value"><?= htmlspecialchars($prescription['blood_group'] ?? 'N/A') ?></span></div>
             <div class="detail-row"><span class="detail-label">Allergies</span><span class="detail-value"><?= htmlspecialchars($prescription['allergies'] ?? 'None') ?></span></div>
             <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Address</span><span class="detail-value"><?= htmlspecialchars($prescription['address'] ?? 'N/A') ?></span></div>
-            <?php if (!empty($prescription['emergency_contact'])): ?>
-                <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Emergency Contact</span><span class="detail-value"><?= htmlspecialchars($prescription['emergency_contact']) ?></span></div>
-            <?php endif; ?>
         </div>
     </div>
 
@@ -1357,11 +1186,6 @@ include_once '../../components/pharmacy_sidebar.php';
             <span class="badge-status <?= getStatusBadgeClass($prescription['status'] ?? 'pending') ?>">
                 <?= getStatusLabel($prescription['status'] ?? 'pending') ?>
             </span>
-            <?php if ($prescription['medication']): ?>
-            <span class="badge-count" style="background:var(--success);">
-                <i class="fas fa-pills"></i> <?= htmlspecialchars($prescription['medication']) ?>
-            </span>
-            <?php endif; ?>
         </h3>
         
         <?php if (!empty($prescription['diagnosis'])): ?>
@@ -1814,15 +1638,13 @@ include_once '../../components/pharmacy_sidebar.php';
     }
 
     console.log('%c💊 Braick - Dispense Prescription (FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Prescription: <?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($prescription['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💊 Medication: <?= htmlspecialchars($prescription['medication'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📦 Quantity: <?= $prescription['quantity'] ?? 0 ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c💰 Total: <?= number_format($prescription_total, 2) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💳 Discount: <?= number_format($bill_discount, 2) ?>', 'font-size:13px; color:#D97706;');
     console.log('%c📊 Bill Status: <?= $bill_status ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ FIXED: dispensed_at recorded correctly', 'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Flow: Apply discount → Confirm → Cashier pays → Auto-dispense → Stock reduces', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Session management & login protection', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -5,28 +5,28 @@
 // Shows all dispensed and cancelled prescriptions
 // TABLE: Blue theme | Dispensed: Green | Cancelled: Red
 // NO VIEW BILL BUTTON
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Pharmacy
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 9;
-    $_SESSION['full_name'] = 'Pharmacy Dodoma';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.dodoma';
-    $_SESSION['is_admin'] = false;
+    header('Location: ../login.php');
+    exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 9;
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Dodoma';
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
 
 // ================================================================
 // PATH SAHIHI
@@ -270,13 +270,6 @@ include_once '../../components/pharmacy_sidebar.php';
             --border-color: #E2E8F0;
             --shadow: 0 1px 3px rgba(0,0,0,0.06);
             --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
-            --blue-100: #DBEAFE;
-            --blue-200: #BFDBFE;
-            --blue-300: #93C5FD;
-            --blue-400: #60A5FA;
-            --blue-500: #3B82F6;
-            --blue-600: #2563EB;
-            --blue-700: #1D4ED8;
         }
         
         [data-theme="dark"] {
@@ -1301,12 +1294,15 @@ include_once '../../components/pharmacy_sidebar.php';
     }
 
     console.log('%c📋 Braick - Prescription History', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💊 Dispensed (Green): <?= $total_dispensed ?>', 'font-size:13px; color:#059669;');
     console.log('%c❌ Cancelled (Red): <?= $total_cancelled ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c📊 Filter: <?= ucfirst($filter_status) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🚫 Bill button removed from history', 'font-size:13px; color:#DC2626;');
     console.log('%c🔵 Table header: Blue theme', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🟢 Dispensed: Green | 🔴 Cancelled: Red', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

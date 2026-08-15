@@ -2,37 +2,99 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/print_receipt.php
 // PHARMACY - PRINT RECEIPT (FIXED SIZE - 80mm)
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS PHARMACY ACCESS
+// ================================================================
+$allowed_roles = ['pharmacy', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    // Redirect to their own dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_role = $_SESSION['role'] ?? 'pharmacy';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($user_username) && !empty($user_username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = getDB();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$user_username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                
+                // Get branch name
+                $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+                $stmt->execute([$user_branch_id]);
+                $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($branch) {
+                    $_SESSION['branch_name'] = $branch['name'];
+                    $user_branch_name = $branch['name'];
+                }
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
 
 // ================================================================
 // INCLUDE CONFIG
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to pharm.peter
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Peter Ngalula';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.peter';
-    $_SESSION['email'] = 'peter@braick.com';
-    $_SESSION['phone'] = '+255 700 000 004';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-}
-
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Peter Ngalula';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 $db = getDB();
 
@@ -71,7 +133,7 @@ if ($type === 'otc') {
         WHERE os.id = ? AND os.branch_id = ?
     ");
     $stmt->execute([$id, $user_branch_id]);
-    $receipt = $stmt->fetch();
+    $receipt = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($receipt) {
         // Get OTC items
@@ -79,7 +141,7 @@ if ($type === 'otc') {
             SELECT * FROM otc_sale_items WHERE sale_id = ?
         ");
         $stmt->execute([$id]);
-        $items = $stmt->fetchAll();
+        $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $customer_name = $receipt['customer_name'] ?? 'Walk-in Customer';
         $customer_phone = $receipt['customer_phone'] ?? '';
@@ -88,7 +150,7 @@ if ($type === 'otc') {
         $discount_amount = $receipt['discount_amount'] ?? 0;
         $net_amount = $receipt['net_amount'] ?? 0;
         $payment_method = $receipt['payment_method'] ?? 'cash';
-        $sold_by = $receipt['cashier_name'] ?? 'Unknown';
+        $sold_by = $receipt['cashier_name'] ?? $user_full_name;
         $created_at = $receipt['created_at'] ?? date('Y-m-d H:i:s');
         $sale_type = 'OTC Sale';
     }
@@ -106,7 +168,7 @@ if ($type === 'otc') {
         WHERE ps.id = ? AND ps.branch_id = ?
     ");
     $stmt->execute([$id, $user_branch_id]);
-    $receipt = $stmt->fetch();
+    $receipt = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($receipt) {
         // Get prescription items
@@ -114,7 +176,7 @@ if ($type === 'otc') {
             SELECT * FROM prescription_sale_items WHERE sale_id = ?
         ");
         $stmt->execute([$id]);
-        $items = $stmt->fetchAll();
+        $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $customer_name = $receipt['patient_name'] ?? 'Unknown Patient';
         $customer_phone = $receipt['phone'] ?? '';
@@ -139,7 +201,7 @@ if (!$receipt) {
 $branch = null;
 $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
 $stmt->execute([$user_branch_id]);
-$branch = $stmt->fetch();
+$branch = $stmt->fetch(PDO::FETCH_ASSOC);
 
 // ================================================================
 // CALCULATE TOTALS
@@ -159,7 +221,7 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Receipt - <?= $sale_number ?></title>
+    <title>Receipt - <?= htmlspecialchars($sale_number) ?></title>
     
     <style>
         /* ================================================================
@@ -579,7 +641,7 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
         <div class="receipt-title">
             <span class="sale-type-badge <?= $type ?>"><?= $sale_type ?></span>
             <br>
-            <?= $sale_number ?>
+            <?= htmlspecialchars($sale_number) ?>
         </div>
     </div>
 
@@ -668,7 +730,7 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
         <div class="thank-you">Thank You!</div>
         <div>This is a computer generated receipt</div>
         <div class="small"><?= date('Y') ?> &copy; Braick Dispensary</div>
-        <div class="small">Receipt #: <?= $sale_number ?></div>
+        <div class="small">Receipt #: <?= htmlspecialchars($sale_number) ?></div>
     </div>
 
     <!-- ================================================================ -->
@@ -713,10 +775,13 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
     // };
     
     console.log('%c🧾 Braick - Receipt (FIXED 80mm SIZE)', 'font-size:16px; font-weight:bold; color:#065F46;');
-    console.log('%c📋 Sale #: <?= $sale_number ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:12px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c📋 Sale #: <?= htmlspecialchars($sale_number) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c📐 Width: 80mm (Fixed)', 'font-size:12px; color:#64748B;');
     console.log('%c💰 Total: TSh <?= number_format($grand_total) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c🖨️ Click Print - size will remain 80mm', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Login protection added', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

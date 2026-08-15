@@ -2,41 +2,34 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
 // PHARMACY - NEW OTC SALE (WITH DISCOUNT - AMOUNT INPUT)
-// ================================================================
-// FIXED: Insert items into otc_sale_items table
-// DISCOUNT: Enter amount in TSh (not percentage)
-// BILL: Sent to Cashier for payment
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
+
+// ================================================================
 // INCLUDE CONFIG
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to pharm.peter
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Peter Ngalula';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.peter';
-    $_SESSION['email'] = 'peter@braick.com';
-    $_SESSION['phone'] = '+255 700 000 004';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-}
-
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Peter Ngalula';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 $db = getDB();
 
@@ -1717,11 +1710,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     // CONSOLE
     // ================================================================
     console.log('%c💊 Braick - New OTC Sale (FIXED - Inserts otc_sale_items)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Medicines in stock: <?= count($medicines) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Discount: Enter amount in TSh (not percentage)', 'font-size:13px; color:#F59E0B;');
     console.log('%c💳 Bill sent to Cashier for payment', 'font-size:13px; color:#059669;');
     console.log('%c✅ otc_sale_items now inserted correctly', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

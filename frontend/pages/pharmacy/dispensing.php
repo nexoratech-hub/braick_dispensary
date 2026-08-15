@@ -2,37 +2,34 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/dispensing.php
 // PHARMACY - DISPENSING (Process Prescriptions)
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
+
+// ================================================================
 // INCLUDE CONFIG
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to pharm.peter
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 5;
-    $_SESSION['full_name'] = 'Peter Ngalula';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.peter';
-    $_SESSION['email'] = 'peter@braick.com';
-    $_SESSION['phone'] = '+255 700 000 004';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-}
-
-$user_id = $_SESSION['user_id'] ?? 5;
-$user_full_name = $_SESSION['full_name'] ?? 'Peter Ngalula';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 $db = getDB();
 
@@ -246,310 +243,794 @@ include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
-<style>
-    /* ================================================================
-       DISPENSING STYLES
-       ================================================================ */
+<!-- REST OF THE HTML REMAINS THE SAME -->
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dispensing - Braick Dispensary</title>
     
-    .prescription-detail-card {
-        background: var(--bg-card);
-        border-radius: 16px;
-        padding: 24px 28px;
-        border: 2px solid var(--border-color);
-        margin-bottom: 20px;
-    }
+    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
     
-    .prescription-detail-card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
-    }
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
-    .prescription-detail-card .detail-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin-bottom: 16px;
-        padding-bottom: 12px;
-        border-bottom: 2px solid var(--border-color);
-    }
-    
-    .prescription-detail-card .detail-header .sale-number {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        font-family: monospace;
-    }
-    
-    .prescription-detail-card .detail-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr 1fr;
-        gap: 16px;
-        margin-bottom: 16px;
-    }
-    
-    .prescription-detail-card .detail-grid .info-item .label {
-        font-size: 0.6rem;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-    
-    .prescription-detail-card .detail-grid .info-item .value {
-        font-size: 0.95rem;
-        font-weight: 500;
-        color: var(--text-primary);
-    }
-    
-    .items-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.85rem;
-        margin-bottom: 16px;
-    }
-    
-    .items-table th {
-        text-align: left;
-        padding: 8px 12px;
-        font-weight: 600;
-        color: var(--text-secondary);
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        background: var(--bg-body);
-        border-bottom: 2px solid var(--border-color);
-    }
-    
-    .items-table td {
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-    }
-    
-    .items-table tr:hover td {
-        background: var(--table-hover);
-    }
-    
-    .items-table .stock-ok {
-        color: #059669;
-        font-weight: 600;
-    }
-    
-    .items-table .stock-error {
-        color: #DC2626;
-        font-weight: 600;
-    }
-    
-    .items-table .text-right {
-        text-align: right;
-    }
-    
-    .total-summary {
-        background: var(--bg-body);
-        border-radius: 10px;
-        padding: 16px 20px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 10px;
-    }
-    
-    .total-summary .total-label {
-        font-weight: 600;
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-    }
-    
-    .total-summary .total-amount {
-        font-size: 1.3rem;
-        font-weight: 700;
-        color: var(--primary);
-    }
-    
-    .pending-list-card {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 16px 20px;
-        border: 2px solid var(--border-color);
-    }
-    
-    .pending-list-card .list-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border-color);
-        transition: background 0.2s ease;
-        cursor: pointer;
-        text-decoration: none;
-        color: var(--text-primary);
-    }
-    
-    .pending-list-card .list-item:hover {
-        background: var(--primary-bg);
-        border-radius: 8px;
-    }
-    
-    .pending-list-card .list-item:last-child {
-        border-bottom: none;
-    }
-    
-    .pending-list-card .list-item .item-info .patient-name {
-        font-weight: 500;
-        font-size: 0.85rem;
-    }
-    
-    .pending-list-card .list-item .item-info .sale-number {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-        font-family: monospace;
-    }
-    
-    .pending-list-card .list-item .item-amount {
-        font-weight: 600;
-        color: var(--primary);
-    }
-    
-    .btn-dispense-large {
-        background: #059669;
-        color: white;
-        padding: 10px 30px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.95rem;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .btn-dispense-large:hover {
-        background: #047857;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
-    
-    .btn-dispense-large:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        transform: none;
-    }
-    
-    .btn-cancel-large {
-        background: #EF4444;
-        color: white;
-        padding: 10px 30px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.95rem;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .btn-cancel-large:hover {
-        background: #DC2626;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-    }
-    
-    .btn-outline-large {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-        padding: 8px 24px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.9rem;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .btn-outline-large:hover {
-        border-color: var(--primary);
-        color: var(--primary);
-        transform: translateY(-2px);
-    }
-    
-    .empty-state {
-        text-align: center;
-        padding: 40px 20px;
-        color: var(--text-secondary);
-    }
-    
-    .empty-state i {
-        font-size: 3rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 12px;
-    }
-    
-    .empty-state .sub {
-        font-size: 0.8rem;
-        margin-top: 4px;
-    }
-    
-    .action-buttons {
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
-        margin-top: 16px;
-        padding-top: 16px;
-        border-top: 2px solid var(--border-color);
-    }
-    
-    @media (max-width: 768px) {
-        .prescription-detail-card .detail-grid {
-            grid-template-columns: 1fr 1fr;
+    <style>
+        /* ================================================================
+           ROOT VARIABLES
+           ================================================================ */
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            --success: #059669;
+            --success-dark: #047857;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --radius: 10px;
+            --radius-lg: 14px;
+            --transition: all 0.3s ease;
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --bg-nav: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
         }
-        .prescription-detail-card {
-            padding: 16px 18px;
+        
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --bg-nav: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+            --primary: #3B82F6;
+            --primary-dark: #2563EB;
+            --primary-bg: #1E3A5F;
         }
-        .action-buttons {
-            flex-direction: column;
-            align-items: stretch;
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
         }
-        .action-buttons .btn-dispense-large,
-        .action-buttons .btn-cancel-large,
-        .action-buttons .btn-outline-large {
+        
+        /* ================================================================
+           TOP NAV
+           ================================================================ */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
+        }
+        
+        .top-nav .search-wrapper:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
+        
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
             width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .top-nav .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .top-nav .search-wrapper .search-btn {
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .top-nav .search-wrapper .search-btn:hover {
+            background: var(--primary-dark);
+        }
+        
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .top-nav .avatar:hover {
+            border-color: var(--primary);
+            transform: scale(1.05);
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
             justify-content: center;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
         }
-        .total-summary {
-            flex-direction: column;
-            text-align: center;
+        
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: var(--primary);
         }
-        .pending-list-card .list-item {
-            flex-direction: column;
-            align-items: flex-start;
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .dark-toggle-btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-card);
+        }
+        
+        .dark-toggle-btn i { font-size: 0.9rem; }
+        
+        .branch-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        [data-theme="dark"] .branch-badge {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+        
+        [data-theme="dark"] .main-content {
+            background: var(--gray-900);
+            color: var(--gray-100);
+        }
+        
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            background: var(--primary-gradient);
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 28px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 4px 25px rgba(11, 94, 215, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .page-header .page-title {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .page-title i {
+            font-size: 2rem;
+            opacity: 0.9;
+        }
+        
+        .page-header .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .branch-tag {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
             gap: 4px;
+            backdrop-filter: blur(4px);
         }
-    }
-    
-    @media (max-width: 480px) {
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 16px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.78rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-outline {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(4px);
+        }
+        
+        .btn-outline:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
+        
+        /* ================================================================
+           PRESCRIPTION DETAIL CARD
+           ================================================================ */
+        .prescription-detail-card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px 28px;
+            border: 2px solid var(--border-color);
+            margin-bottom: 20px;
+            box-shadow: var(--shadow);
+        }
+        
+        .prescription-detail-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+        }
+        
+        [data-theme="dark"] .prescription-detail-card {
+            background: var(--gray-800);
+            border-color: var(--gray-700);
+        }
+        
+        .prescription-detail-card .detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .prescription-detail-card .detail-header .sale-number {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            font-family: monospace;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+        }
+        .badge-pending { background: var(--warning-bg); color: var(--warning); }
+        .badge-dispensed { background: var(--success-bg); color: var(--success); }
+        .badge-cancelled { background: var(--danger-bg); color: var(--danger); }
+        
+        [data-theme="dark"] .badge-pending { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .badge-dispensed { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .badge-cancelled { background: #3A1A1A; color: #F87171; }
+        
         .prescription-detail-card .detail-grid {
-            grid-template-columns: 1fr;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
         }
+        
+        .prescription-detail-card .detail-grid .info-item .label {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .prescription-detail-card .detail-grid .info-item .value {
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+        
         .items-table {
-            font-size: 0.75rem;
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            margin-bottom: 16px;
         }
-        .items-table th,
+        
+        .items-table th {
+            text-align: left;
+            padding: 8px 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            background: var(--bg-body);
+            border-bottom: 2px solid var(--border-color);
+        }
+        
         .items-table td {
-            padding: 4px 8px;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
         }
-    }
-</style>
+        
+        .items-table tr:hover td {
+            background: var(--primary-bg);
+        }
+        
+        [data-theme="dark"] .items-table tr:hover td {
+            background: #1E3A5F;
+        }
+        
+        .items-table .stock-ok {
+            color: var(--success);
+            font-weight: 600;
+        }
+        
+        .items-table .stock-error {
+            color: var(--danger);
+            font-weight: 600;
+        }
+        
+        .items-table .text-right {
+            text-align: right;
+        }
+        
+        .total-summary {
+            background: var(--bg-body);
+            border-radius: 10px;
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 10px;
+        }
+        
+        [data-theme="dark"] .total-summary {
+            background: var(--gray-700);
+        }
+        
+        .total-summary .total-label {
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .total-summary .total-amount {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        /* ================================================================
+           PENDING LIST
+           ================================================================ */
+        .pending-list-card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 16px 20px;
+            border: 2px solid var(--border-color);
+            box-shadow: var(--shadow);
+            margin-bottom: 20px;
+        }
+        
+        [data-theme="dark"] .pending-list-card {
+            background: var(--gray-800);
+            border-color: var(--gray-700);
+        }
+        
+        .pending-list-card .list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.2s ease;
+            cursor: pointer;
+            text-decoration: none;
+            color: var(--text-primary);
+        }
+        
+        .pending-list-card .list-item:hover {
+            background: var(--primary-bg);
+            border-radius: 8px;
+        }
+        
+        .pending-list-card .list-item:last-child {
+            border-bottom: none;
+        }
+        
+        .pending-list-card .list-item .item-info .patient-name {
+            font-weight: 500;
+            font-size: 0.85rem;
+        }
+        
+        .pending-list-card .list-item .item-info .sale-number {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-family: monospace;
+        }
+        
+        .pending-list-card .list-item .item-amount {
+            font-weight: 600;
+            color: var(--primary);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .card-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .card-title .title-blue { color: var(--primary); }
+        
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
+        .btn-dispense-large {
+            background: var(--success);
+            color: white;
+            padding: 10px 30px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-dispense-large:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.4);
+        }
+        
+        .btn-dispense-large:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-cancel-large {
+            background: #EF4444;
+            color: white;
+            padding: 10px 30px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        .btn-cancel-large:hover {
+            background: #DC2626;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(220, 38, 38, 0.4);
+        }
+        
+        .btn-outline-large {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+            padding: 8px 24px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-outline-large:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            transform: translateY(-2px);
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 2px solid var(--border-color);
+        }
+        
+        /* ================================================================
+           EMPTY STATE
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            color: var(--border-color);
+            display: block;
+            margin-bottom: 12px;
+        }
+        
+        .empty-state .sub {
+            font-size: 0.8rem;
+            margin-top: 4px;
+        }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: #D97706; }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav .search-wrapper { max-width: 300px; }
+        }
+        
+        @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .prescription-detail-card .detail-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .prescription-detail-card {
+                padding: 16px 18px;
+            }
+            .action-buttons {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .action-buttons .btn-dispense-large,
+            .action-buttons .btn-cancel-large,
+            .action-buttons .btn-outline-large {
+                width: 100%;
+                justify-content: center;
+            }
+            .total-summary {
+                flex-direction: column;
+                text-align: center;
+            }
+            .pending-list-card .list-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 4px;
+            }
+            .main-content { padding: 10px; }
+        }
+        
+        @media (max-width: 480px) {
+            .prescription-detail-card .detail-grid {
+                grid-template-columns: 1fr;
+            }
+            .items-table {
+                font-size: 0.75rem;
+            }
+            .items-table th,
+            .items-table td {
+                padding: 4px 8px;
+            }
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
 
 <!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
@@ -599,21 +1080,24 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-prescription mr-2" style="color: #059669;"></i> Dispensing
-            </h1>
-            <p class="page-subtitle">
-                Process and dispense prescription medicines
+                <i class="fas fa-prescription mr-2"></i> Dispensing
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
                 <?php if ($pending_prescriptions > 0): ?>
-                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                    <span class="branch-tag" style="background:rgba(239,68,68,0.3);color:#FCA5A5;border-color:rgba(239,68,68,0.2);">
                         <i class="fas fa-clock mr-1"></i> <?= $pending_prescriptions ?> pending
                     </span>
                 <?php endif; ?>
+            </h1>
+            <p class="page-subtitle">
+                Process and dispense prescription medicines
+                <span class="text-xs text-white/50 ml-2">
+                    <i class="fas fa-clock"></i> Updated: <?= date('H:i:s') ?>
+                </span>
             </p>
         </div>
         <div>
@@ -635,7 +1119,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- PENDING PRESCRIPTIONS LIST (Sidebar) -->
+    <!-- PENDING PRESCRIPTIONS LIST -->
     <!-- ================================================================ -->
     <?php if (count($pending_list) > 0 && !$prescription): ?>
     <div class="pending-list-card animate-fade-in-up">
@@ -829,11 +1313,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Dispensing
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -845,10 +1331,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- TOAST -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle"></i>
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
-        <p id="toastTitle">Notification</p>
-        <p id="toastMessage"></p>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
@@ -935,6 +1421,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         if (el) {
             el.textContent = dateStr + ' • ' + timeStr;
         }
+        var footer = document.getElementById('footerTimestamp');
+        if (footer) {
+            footer.textContent = 'Last updated: ' + timeStr;
+        }
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -974,11 +1464,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     });
 
     console.log('%c💊 Braick - Dispensing', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Pending Prescriptions: <?= $pending_prescriptions ?>', 'font-size:13px; color:#0B5ED7;');
     <?php if ($prescription): ?>
     console.log('%c📋 Processing: <?= htmlspecialchars($prescription['sale_number']) ?> - <?= htmlspecialchars($prescription['patient_name']) ?>', 'font-size:13px; color:#0D9488;');
     <?php endif; ?>
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -4,28 +4,28 @@
 // PHARMACY - DISPENSED PRESCRIPTIONS (BLUE THEME)
 // Shows all prescriptions that have been dispensed
 // NO AMOUNT CARDS - Only Total Dispensed
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Pharmacy
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
-    $_SESSION['user_id'] = 9;
-    $_SESSION['full_name'] = 'Pharmacy Dodoma';
-    $_SESSION['role'] = 'pharmacy';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'pharm.dodoma';
-    $_SESSION['is_admin'] = false;
+    header('Location: ../login.php');
+    exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 9;
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Dodoma';
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'pharmacy';
 
 // ================================================================
 // PATH SAHIHI
@@ -792,6 +792,37 @@ include_once '../../components/pharmacy_sidebar.php';
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: #D97706; }
+        
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
@@ -1214,6 +1245,8 @@ include_once '../../components/pharmacy_sidebar.php';
     }
 
     console.log('%c🔵 Braick - Dispensed Prescriptions (Blue Theme - No Amount Cards)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Total Dispensed: <?= $total_dispensed ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c❌ Removed: Amount, Discount, Balance cards', 'font-size:13px; color:#DC2626;');
