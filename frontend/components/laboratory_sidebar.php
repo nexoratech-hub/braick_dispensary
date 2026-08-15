@@ -4,11 +4,12 @@
 // LABORATORY - SHARED SIDEBAR (FIXED - WITH REAL DATA FROM BOTH TABLES)
 // FIXED: Counts completed from BOTH lab_tests AND lab_requests
 // FIXED: Counts pending from BOTH lab_tests AND lab_requests
-// FIXED: Counts in_progress from lab_requests (no lab_tests in_progress)
+// FIXED: Counts in_progress from BOTH lab_requests AND lab_tests
 // WITH AUTO-UPDATE EVERY 3 SECONDS (SELF-CONTAINED)
 // WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
 // FULLY RESPONSIVE - ALL DEVICES
 // WITH LOGIN PROTECTION
+// REMOVED: Reports menu item
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -98,14 +99,26 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $pending_count = $pending_tests + $pending_requests;
         
         // ================================================================
-        // 2. IN PROGRESS: FROM lab_requests ONLY (status 'accepted' or 'in_progress')
+        // 2. IN PROGRESS: FROM BOTH lab_requests AND lab_tests - FIXED
         // ================================================================
+        
+        // In Progress from lab_requests (status 'accepted' or 'in_progress')
         $stmt = $db->prepare("
             SELECT COUNT(*) as count FROM lab_requests 
             WHERE branch_id = ? AND status IN ('accepted', 'in_progress')
         ");
         $stmt->execute([$user_branch_id]);
-        $in_progress_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        $in_progress_requests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // In Progress from lab_tests (status 'in_progress')
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_tests 
+            WHERE branch_id = ? AND status = 'in_progress'
+        ");
+        $stmt->execute([$user_branch_id]);
+        $in_progress_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        $in_progress_count = $in_progress_requests + $in_progress_tests;
         
         // ================================================================
         // 3. COMPLETED: FROM BOTH lab_tests AND lab_requests - FIXED
@@ -228,13 +241,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             $response['pending'] = $pending_tests + $pending_requests;
             
-            // 2. In Progress
+            // 2. In Progress - FROM BOTH - FIXED
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count FROM lab_requests 
                 WHERE branch_id = ? AND status IN ('accepted', 'in_progress')
             ");
             $stmt->execute([$branch_id]);
-            $response['in_progress'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            $in_progress_requests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_tests 
+                WHERE branch_id = ? AND status = 'in_progress'
+            ");
+            $stmt->execute([$branch_id]);
+            $in_progress_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $response['in_progress'] = $in_progress_requests + $in_progress_tests;
             
             // 3. Completed - FROM BOTH - FIXED
             $stmt = $db->prepare("
@@ -848,7 +870,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <span class="badge <?= $pending_count > 0 ? 'danger' : '' ?>" id="sidebarPendingBadge"><?= $pending_count ?></span>
         </a>
         
-        <!-- In Progress -->
+        <!-- In Progress (Counts BOTH lab_requests AND lab_tests) - FIXED -->
         <a href="/dispensary_system/frontend/pages/laboratory/in_progress.php" class="sidebar-link <?= isActive('in_progress.php') ?>" id="sidebarInProgressLink">
             <i class="fas fa-spinner"></i> In Progress
             <span class="badge <?= $in_progress_count > 0 ? 'orange' : '' ?>" id="sidebarInProgressBadge"><?= $in_progress_count ?></span>
@@ -869,11 +891,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <a href="/dispensary_system/frontend/pages/laboratory/results_history.php" class="sidebar-link <?= isActive('results_history.php') ?>" id="sidebarResultsLink">
             <i class="fas fa-history"></i> Results History
             <span class="badge <?= $today_tests > 0 ? 'green' : '' ?>" id="sidebarTodayTests"><?= $today_tests ?></span>
-        </a>
-        
-        <!-- Reports -->
-        <a href="/dispensary_system/frontend/pages/laboratory/reports.php" class="sidebar-link <?= isActive('reports.php') ?>">
-            <i class="fas fa-chart-bar"></i> Reports
         </a>
         
         <!-- ============================================================ -->
@@ -1073,7 +1090,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
         
         // ================================================================
-        // 2. Update In Progress Badge
+        // 2. Update In Progress Badge - FIXED
         // ================================================================
         var inProgressBadge = document.getElementById('sidebarInProgressBadge');
         if (inProgressBadge) {
@@ -1245,9 +1262,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     console.log('%c📋 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?> | Today: <?= $today_tests ?>', 'font-size:12px; color:#9EC5FE;');
     console.log('%c✅ FIXED: Completed counts from BOTH lab_tests AND lab_requests', 'font-size:12px; color:#34D399;');
     console.log('%c✅ FIXED: Pending counts from BOTH lab_tests AND lab_requests', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: In Progress counts from BOTH lab_requests AND lab_tests', 'font-size:12px; color:#34D399;');
     console.log('%c🔄 Data updates every 3 seconds WITHOUT page refresh', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Badges update in real-time', 'font-size:12px; color:#059669;');
     console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
     console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:12px; color:#F87171;');
+    console.log('%c❌ Reports menu removed as requested', 'font-size:12px; color:#F87171;');
 </script>

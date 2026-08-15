@@ -2,30 +2,73 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/get_lab_stats.php
 // LABORATORY STATS API - USING lab_requests & lab_request_items
+// WITH FULL LOGIN SESSION PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE LAB.DODOMA (ID: 8) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 8;
-    $_SESSION['full_name'] = 'Lab Technician Dodoma';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.dodoma';
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    // User is not logged in - return error JSON
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Not logged in',
+        'redirect' => '../login.php'
+    ]);
+    exit;
+}
 
 // ================================================================
-// INCLUDE DATABASE
+// CHECK IF USER IS LABORATORY OR ADMIN
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+if ($_SESSION['role'] !== 'laboratory' && $_SESSION['role'] !== 'admin') {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Unauthorized access. Laboratory role required.'
+    ]);
+    exit;
+}
+
+// ================================================================
+// GET USER INFO FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician';
+$user_role = $_SESSION['role'];
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_username = $_SESSION['username'] ?? 'lab.technician';
+
+// ================================================================
+// IF ADMIN VIEWING LAB STATS, USE THEIR BRANCH
+// ================================================================
+if ($_SESSION['role'] === 'admin') {
+    $user_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $user_branch_id;
+}
+
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Database connection error: ' . $e->getMessage()
+    ]);
+    exit;
+}
 
 // ================================================================
 // TODAY'S DATE
@@ -160,6 +203,18 @@ $stmt->execute([$user_branch_id]);
 $most_requested = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
+// GET UNREAD NOTIFICATIONS COUNT (for lab technician)
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
 // CREATE DATA HASH FOR CHANGE DETECTION
 // ================================================================
 $data_array = [
@@ -173,7 +228,8 @@ $data_array = [
     'daily_tests' => $daily_tests,
     'monthly_tests' => $monthly_tests,
     'recent_count' => count($recent_requests),
-    'most_requested_count' => count($most_requested)
+    'most_requested_count' => count($most_requested),
+    'unread_notifications' => $unread_notifications
 ];
 
 $data_hash = md5(json_encode($data_array));
@@ -185,6 +241,14 @@ header('Content-Type: application/json');
 echo json_encode([
     'success' => true,
     'hash' => $data_hash,
+    'user' => [
+        'id' => $user_id,
+        'name' => $user_full_name,
+        'role' => $user_role,
+        'branch_id' => $user_branch_id,
+        'branch_name' => $user_branch_name,
+        'username' => $user_username
+    ],
     'data' => [
         'stats' => [
             'pending_requests' => $pending_requests,
@@ -193,7 +257,8 @@ echo json_encode([
             'today_tests' => $today_tests,
             'total_tests' => $total_tests,
             'total_requests' => $total_requests,
-            'completion_rate' => $completion_rate
+            'completion_rate' => $completion_rate,
+            'unread_notifications' => $unread_notifications
         ],
         'charts' => [
             'daily_labels' => $daily_labels,

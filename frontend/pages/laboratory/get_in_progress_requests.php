@@ -2,24 +2,24 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/get_in_progress_requests.php
 // LABORATORY - GET IN PROGRESS REQUESTS (ALL TESTS)
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// IF NO SESSION, USE LAB.DODOMA (ID: 8) AS DEFAULT
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT LABORATORY
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 8;
-    $_SESSION['full_name'] = 'Lab Technician Dodoma';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.dodoma';
+    header('Location: ../login.php');
+    exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 8;
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================

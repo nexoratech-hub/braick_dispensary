@@ -2,42 +2,38 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/edit_profile.php
 // LABORATORY - EDIT PROFILE (FIXED UPLOAD)
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT LABORATORY
+// ================================================================
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician';
+$user_role = $_SESSION['role'] ?? 'laboratory';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
+$user_username = $_SESSION['username'] ?? 'lab.tech';
+$user_email = $_SESSION['email'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
 // INCLUDE CONFIG
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
-
-// ================================================================
-// SESSION - Default to lab.anna
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 4;
-    $_SESSION['full_name'] = 'Anna Mushi';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.anna';
-    $_SESSION['email'] = 'anna@braick.com';
-    $_SESSION['phone'] = '+255 700 000 003';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['profile_pic'] = '';
-}
-
-$user_id = $_SESSION['user_id'] ?? 4;
-$user_full_name = $_SESSION['full_name'] ?? 'Anna Mushi';
-$user_role = $_SESSION['role'] ?? 'laboratory';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_username = $_SESSION['username'] ?? 'lab.anna';
-$user_email = $_SESSION['email'] ?? 'anna@braick.com';
-$user_phone = $_SESSION['phone'] ?? '+255 700 000 003';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $db = getDB();
 
@@ -928,6 +924,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     });
 
     console.log('%c🧪 Braick - Edit Profile (Fixed Upload)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📁 Upload Dir: <?= $upload_dir ?>', 'font-size:13px; color:#64748B;');
     console.log('%c✅ Upload fixed with proper directory path', 'font-size:13px; color:#34D399;');

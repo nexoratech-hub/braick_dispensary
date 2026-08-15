@@ -5,28 +5,27 @@
 // WITH COMMON RESULTS DROPDOWN + CUSTOM INPUT
 // FIXED: Custom result now works correctly
 // FIXED: Dark mode - patient details visible
+// FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
 session_start();
 
 // ================================================================
-// FORCE SESSION - Lab Technician
+// CHECK SESSION - REDIRECT TO LOGIN IF NOT LABORATORY
 // ================================================================
-if (!isset($_SESSION['user_id'] ) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 8;
-    $_SESSION['full_name'] = 'Lab Technician Dodoma';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.dodoma';
-    $_SESSION['is_admin'] = false;
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
+    header('Location: ../login.php');
+    exit;
 }
 
-$user_id = $_SESSION['user_id'] ?? 8;
-$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
 
 // ================================================================
 // INCLUDE CONFIG
@@ -1868,12 +1867,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <?php endif; ?>
 
     console.log('%c🧪 Add Results with Common Results Dropdown', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Request: <?= htmlspecialchars($request['request_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patient: <?= htmlspecialchars($request['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🧪 Tests: <?= $total_items ?> (<?= $completed_items ?> completed)', 'font-size:13px; color:#059669;');
     console.log('%c📋 Common Results: <?= count($common_results) ?> options available', 'font-size:13px; color:#D97706;');
-    console.log('%c✏️ Select from dropdown OR type custom result', 'font-size:13px; color:#34D399;');
-    console.log('%c🌙 Dark mode - Patient details now visible', 'font-size:13px; color:#6EA8FE;');
 </script>
 
 </body>

@@ -2,50 +2,72 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/in_progress.php
 // LABORATORY - IN PROGRESS REQUESTS (FIXED)
-// Shows both accepted lab_requests and in_progress lab_tests
+// Shows BOTH:
+//   1. lab_requests with status = 'accepted' OR 'in_progress'
+//   2. lab_tests with status = 'in_progress'
+// WITH FULL LOGIN SESSION PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// FORCE SESSION - Lab Technician
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 8;
-    $_SESSION['full_name'] = 'Lab Technician Dodoma';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.dodoma';
-    $_SESSION['is_admin'] = false;
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 8;
-$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS LABORATORY OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'laboratory' && $_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET LAB TECHNICIAN INFO FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician';
+$user_role = $_SESSION['role'];
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE CONFIG
+// INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ================================================================
-// HANDLE POST ACTIONS
+// HANDLE POST ACTIONS - UPDATE STATUS
 // ================================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = $_POST['action'];
     
-    // ================================================================
-    // UPDATE LAB TEST STATUS
-    // ================================================================
     if ($action === 'update_status') {
         $lab_test_id = (int)($_POST['lab_test_id'] ?? 0);
         $status = $_POST['status'] ?? 'completed';
@@ -88,12 +110,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = "✅ Status updated successfully!";
                 $message_type = 'success';
                 
-                echo '<script>
-                    showToast("✅ Success", "Status updated successfully!", "success");
-                    setTimeout(function(){ window.location.href = "in_progress.php?success=1"; }, 1500);
-                </script>';
-                exit;
-                
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
@@ -103,13 +119,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
-// GET IN PROGRESS - FROM lab_requests (accepted) AND lab_tests (in_progress)
+// GET IN PROGRESS DATA - FROM BOTH TABLES
 // ================================================================
-$lab_tests_list = [];
+$lab_items = [];
 $total_in_progress = 0;
 
 try {
-    // First, get all accepted lab requests
+    // ================================================================
+    // 1. GET lab_requests with status = 'accepted' OR 'in_progress'
+    // ================================================================
     $query = "
         SELECT 
             lr.id as request_id,
@@ -124,6 +142,7 @@ try {
             lr.requested_at,
             lr.accepted_at,
             lr.created_at,
+            lr.completed_at,
             lr.branch_id,
             p.full_name as patient_name,
             p.patient_id as patient_code,
@@ -133,38 +152,49 @@ try {
             u.full_name as doctor_name,
             v.visit_number,
             v.visit_type,
-            (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id) as total_tests,
-            (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id AND status = 'completed') as completed_tests,
-            (SELECT GROUP_CONCAT(test_name SEPARATOR ', ') FROM lab_tests WHERE visit_id = lr.visit_id) as test_names,
-            NULL as id,
+            NULL as test_id,
             NULL as test_name,
             NULL as test_price,
             NULL as test_type,
             NULL as sample_type,
-            NULL as test_date,
             NULL as results,
             NULL as reference_range,
-            'in_progress' as test_status,
+            NULL as test_status,
             NULL as bill_created,
             NULL as technician_id,
-            NULL as completed_at,
             NULL as updated_at,
-            NULL as formatted_result,
-            NULL as printed_at,
-            NULL as printed_by
+            (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id) as total_tests,
+            (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lr.visit_id AND status = 'completed') as completed_tests,
+            (SELECT GROUP_CONCAT(test_name SEPARATOR ', ') FROM lab_tests WHERE visit_id = lr.visit_id) as test_names,
+            'request' as source_type
         FROM lab_requests lr
         LEFT JOIN visits v ON lr.visit_id = v.id
         LEFT JOIN patients p ON lr.patient_id = p.id
         LEFT JOIN users u ON lr.doctor_id = u.id
         WHERE lr.branch_id = ? 
-        AND lr.status = 'accepted'
+        AND lr.status IN ('accepted', 'in_progress')
     ";
     $params = [$user_branch_id];
     
-    // Also get in_progress lab tests
+    if (!empty($search)) {
+        $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lr.request_number LIKE ?)";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+        $params[] = "%$search%";
+    }
+    
+    $query .= " ORDER BY lr.accepted_at ASC";
+    
+    $stmt = $db->prepare($query);
+    $stmt->execute($params);
+    $lab_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // ================================================================
+    // 2. GET lab_tests with status = 'in_progress'
+    // ================================================================
     $query2 = "
         SELECT 
-            lt.id,
+            lt.id as test_id,
             lt.visit_id,
             lt.doctor_id,
             lt.lab_technician_id,
@@ -201,7 +231,9 @@ try {
             lr.accepted_at,
             lr.completed_at as request_completed_at,
             (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lt.visit_id) as total_tests,
-            (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lt.visit_id AND status = 'completed') as completed_tests
+            (SELECT COUNT(*) FROM lab_tests WHERE visit_id = lt.visit_id AND status = 'completed') as completed_tests,
+            NULL as test_names,
+            'test' as source_type
         FROM lab_tests lt
         LEFT JOIN visits v ON lt.visit_id = v.id
         LEFT JOIN patients p ON v.patient_id = p.id
@@ -213,37 +245,29 @@ try {
     $params2 = [$user_branch_id];
     
     if (!empty($search)) {
-        $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lr.request_number LIKE ?)";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-        
         $query2 .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR lt.test_name LIKE ?)";
         $params2[] = "%$search%";
         $params2[] = "%$search%";
         $params2[] = "%$search%";
     }
     
-    $query .= " ORDER BY lr.accepted_at ASC";
     $query2 .= " ORDER BY lt.created_at ASC";
-    
-    $stmt = $db->prepare($query);
-    $stmt->execute($params);
-    $lab_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     $stmt = $db->prepare($query2);
     $stmt->execute($params2);
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Merge both results
-    $lab_tests_list = array_merge($lab_requests, $lab_tests);
-    $total_in_progress = count($lab_tests_list);
+    // ================================================================
+    // MERGE BOTH RESULTS
+    // ================================================================
+    $lab_items = array_merge($lab_requests, $lab_tests);
+    $total_in_progress = count($lab_items);
     
 } catch (Exception $e) {
     error_log("In Progress error: " . $e->getMessage());
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
-    $lab_tests_list = [];
+    $lab_items = [];
 }
 
 // ================================================================
@@ -260,15 +284,26 @@ try {
     $pending_count = 0;
 }
 
-// Accepted count
-$accepted_count = 0;
+// In Progress count (lab_requests + lab_tests)
+$in_progress_requests = 0;
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'accepted'");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status IN ('accepted', 'in_progress')");
     $stmt->execute([$user_branch_id]);
-    $accepted_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $in_progress_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } catch (Exception $e) {
-    $accepted_count = 0;
+    $in_progress_requests = 0;
 }
+
+$in_progress_tests = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'in_progress'");
+    $stmt->execute([$user_branch_id]);
+    $in_progress_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $in_progress_tests = 0;
+}
+
+$in_progress_total = $in_progress_requests + $in_progress_tests;
 
 // Completed today
 $completed_today = 0;
@@ -308,10 +343,11 @@ try {
 // ================================================================
 // PROFILE PICTURE
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -326,16 +362,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>In Progress - Laboratory</title>
-    
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           STYLES (same as before - kept short for brevity)
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -393,9 +423,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        /* ================================================================
-           TOP NAV (same as before)
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -411,11 +438,148 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
         }
-        /* ... rest of styles ... */
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
+        }
+        
+        .top-nav .search-wrapper:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
+        
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .top-nav .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .top-nav .search-wrapper .search-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .top-nav .search-wrapper .search-btn:hover {
+            background: var(--primary-dark);
+        }
+        
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .top-nav .avatar:hover {
+            border-color: var(--primary);
+            transform: scale(1.05);
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: var(--primary);
+        }
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .dark-toggle-btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-card);
+        }
+        
+        .dark-toggle-btn i { font-size: 0.9rem; }
+        
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        [data-theme="dark"] .branch-badge-display {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -426,9 +590,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
+        [data-theme="dark"] .main-content {
+            background: var(--gray-900);
+            color: var(--gray-100);
+        }
+        
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
@@ -442,6 +608,18 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
             position: relative;
             overflow: hidden;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .page-header .page-title {
@@ -532,9 +710,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             backdrop-filter: blur(4px);
         }
         
-        /* ================================================================
-           STATS CARDS
-           ================================================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -598,25 +773,45 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             margin-top: 4px;
         }
         
-        .stat-card-custom.orange {
-            background: linear-gradient(135deg, #D97706, #F59E0B);
+        .stat-card-custom.orange { background: linear-gradient(135deg, #D97706, #F59E0B); }
+        .stat-card-custom.blue { background: linear-gradient(135deg, #0B5ED7, #1A73E8); }
+        .stat-card-custom.green { background: linear-gradient(135deg, #059669, #10B981); }
+        .stat-card-custom.purple { background: linear-gradient(135deg, #7C3AED, #8B5CF6); }
+        
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 20px 24px;
+            border: 1px solid var(--border-color);
+            transition: var(--transition);
+            box-shadow: var(--shadow);
         }
         
-        .stat-card-custom.blue {
-            background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+        .card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
         }
         
-        .stat-card-custom.green {
-            background: linear-gradient(135deg, #059669, #10B981);
+        [data-theme="dark"] .card {
+            background: var(--gray-800);
+            border-color: var(--gray-700);
         }
         
-        .stat-card-custom.purple {
-            background: linear-gradient(135deg, #7C3AED, #8B5CF6);
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            gap: 8px;
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
+        .card-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
         .table-container {
             overflow-x: auto;
             border-radius: var(--radius-lg);
@@ -666,9 +861,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           BADGES & STATUS
-           ================================================================ */
         .badge {
             display: inline-block;
             padding: 2px 10px;
@@ -716,9 +908,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border: 1px solid var(--success);
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -734,92 +923,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-family: inherit;
         }
         
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
+        .btn-success { background: var(--success); color: white; }
+        .btn-success:hover { background: #047857; transform: translateY(-1px); }
+        .btn-outline { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
+        .btn-outline:hover { background: var(--gray-50); border-color: var(--primary); color: var(--primary); }
+        .btn-xs { padding: 2px 6px; font-size: 0.6rem; border-radius: 3px; }
         
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-1px);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: #047857;
-            transform: translateY(-1px);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 1px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--gray-50);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-xs {
-            padding: 2px 6px;
-            font-size: 0.6rem;
-            border-radius: 3px;
-        }
-        
-        .btn-sm {
-            padding: 3px 8px;
-            font-size: 0.65rem;
-            border-radius: 4px;
-        }
-        
-        /* ================================================================
-           CARD
-           ================================================================ */
-        .card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            padding: 20px 24px;
-            border: 1px solid var(--border-color);
-            transition: var(--transition);
-            box-shadow: var(--shadow);
-        }
-        
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        [data-theme="dark"] .card {
-            background: var(--gray-800);
-            border-color: var(--gray-700);
-        }
-        
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        .card-title {
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .card-title .title-blue { color: var(--primary); }
-        
-        /* ================================================================
-           PATIENT CELL
-           ================================================================ */
         .patient-cell {
             display: flex;
             align-items: center;
@@ -857,44 +968,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .progress-bar .progress-fill.success { background: var(--success); }
         .progress-bar .progress-fill.warning { background: var(--warning); }
         
-        .text-truncate {
-            max-width: 150px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            display: inline-block;
-        }
-        
         .font-mono { font-family: monospace; }
         .font-semibold { font-weight: 600; }
         .text-success { color: var(--success); }
         .text-warning { color: var(--warning); }
         .text-primary { color: var(--primary); }
         .text-danger { color: var(--danger); }
+        .text-gray-400 { color: var(--text-secondary); }
+        .text-sm { font-size: 0.85rem; }
+        .text-xs { font-size: 0.75rem; }
         
-        /* ================================================================
-           ALERT
-           ================================================================ */
-        .alert {
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 24px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 0.9rem;
-            border: 1px solid transparent;
-            animation: slideDown 0.3s ease;
-        }
-        
-        .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
-        .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
-        .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
-        .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
-        
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 40px 20px;
@@ -914,9 +997,23 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             margin-bottom: 8px;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
+        .alert {
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.9rem;
+            border: 1px solid transparent;
+            animation: slideDown 0.3s ease;
+        }
+        
+        .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
+        .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
+        .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
+        .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
+        
         .toast-custom {
             position: fixed;
             bottom: 30px;
@@ -941,9 +1038,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -958,9 +1052,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-weight: 600;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -984,9 +1075,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
             .stat-card-custom { padding: 10px 14px; }
             .stat-card-custom .stat-number { font-size: 1.2rem; }
-            .stat-card-custom .stat-icon { font-size: 1.2rem; }
-            .table-container tbody td { padding: 4px 6px; font-size: 0.65rem; }
-            .btn { padding: 2px 6px; font-size: 0.55rem; }
         }
     </style>
 </head>
@@ -1001,34 +1089,34 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <i class="fas fa-bars text-lg"></i>
         </button>
         
-        <div class="search-wrapper" style="display:flex;align-items:center;background:var(--bg-body);border-radius:10px;border:2px solid var(--border-color);flex:1;max-width:500px;">
+        <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search in progress..." value="<?= htmlspecialchars($search) ?>" style="border:none;background:transparent;padding:8px 14px;width:100%;font-size:0.85rem;outline:none;color:var(--text-primary);">
-            <button id="searchBtn" class="search-btn" style="background:var(--primary);color:white;border:none;padding:8px 16px;border-radius:0 10px 10px 0;cursor:pointer;font-size:0.85rem;transition:all 0.3s;">
+            <input type="text" id="searchInput" placeholder="Search in progress..." value="<?= htmlspecialchars($search) ?>">
+            <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
         </div>
     </div>
     
     <div class="flex items-center gap-3">
-        <span class="branch-badge-display" style="display:inline-block;font-size:0.6rem;font-weight:600;padding:2px 10px;border-radius:20px;background:var(--success-bg);color:var(--success);">
+        <span class="branch-badge-display">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
-        <span class="datetime" id="currentDateTime" style="font-size:0.78rem;color:var(--text-secondary);font-weight:500;"></span>
+        <span class="datetime" id="currentDateTime"></span>
         
-        <button id="darkModeToggle" class="dark-toggle-btn" style="background:var(--bg-body);border:2px solid var(--border-color);border-radius:10px;padding:6px 12px;cursor:pointer;font-size:0.82rem;color:var(--text-primary);transition:all 0.3s;display:flex;align-items:center;gap:6px;">
+        <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
         
-        <button class="icon-btn" style="width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:all 0.3s;background:transparent;border:none;cursor:pointer;position:relative;">
+        <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>" style="position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;border:2px solid var(--bg-nav);<?= $unread_notifications > 0 ? 'background:var(--danger);' : 'background:var(--gray-400);animation:none;' ?>"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--border-color);cursor:pointer;transition:all 0.3s;"
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
@@ -1045,7 +1133,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-spinner"></i>
                 In Progress
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">LABORATORY</span>
+                <span class="role-badge-display">LABORATORY</span>
                 <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
@@ -1101,7 +1189,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         <div class="stat-card-custom blue">
             <span class="stat-icon">🔄</span>
-            <span class="stat-number" id="statInProgress"><?= $total_in_progress ?></span>
+            <span class="stat-number" id="statInProgress"><?= $in_progress_total ?></span>
             <span class="stat-label">In Progress</span>
             <span class="stat-sub">Currently being processed</span>
         </div>
@@ -1122,91 +1210,95 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TABLE: IN PROGRESS TESTS -->
+    <!-- TABLE: IN PROGRESS ITEMS -->
     <!-- ================================================================ -->
     <div class="card">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i>
-                In Progress Lab Tests
+                <i class="fas fa-list" style="color:var(--primary);margin-right:8px;"></i>
+                In Progress Items
                 <span class="text-sm font-normal text-gray-400">(<?= $total_in_progress ?> items)</span>
             </h3>
             <span class="text-xs text-gray-400" id="lastUpdateTime">⏱ Auto-update</span>
         </div>
         
-        <?php if (count($lab_tests_list) > 0): ?>
+        <?php if (count($lab_items) > 0): ?>
             <div class="table-container">
                 <table>
                     <thead>
                         <tr>
                             <th>#</th>
                             <th>Patient</th>
-                            <th>Test / Request</th>
+                            <th>Item</th>
                             <th>Doctor</th>
                             <th>Visit</th>
-                            <th>Request #</th>
+                            <th>Source</th>
                             <th>Status</th>
                             <th>Progress</th>
                             <th style="text-align:center;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php $i = 1; foreach ($lab_tests_list as $test): 
-                            $total = $test['total_tests'] ?? 1;
-                            $completed = $test['completed_tests'] ?? 0;
+                        <?php $i = 1; foreach ($lab_items as $item): 
+                            $is_request = ($item['source_type'] === 'request');
+                            $total = $item['total_tests'] ?? 1;
+                            $completed = $item['completed_tests'] ?? 0;
                             $percent = $total > 0 ? round(($completed / $total) * 100) : 0;
-                            $color = '#' . substr(md5($test['patient_name'] ?? 'Unknown'), 0, 6);
-                            $is_request = empty($test['id']) && !empty($test['request_id']);
-                            $test_name = $is_request ? ($test['test_names'] ?? 'Multiple Tests') : ($test['test_name'] ?? 'N/A');
+                            $color = '#' . substr(md5($item['patient_name'] ?? 'Unknown'), 0, 6);
+                            
+                            if ($is_request) {
+                                $item_name = $item['test_names'] ?? 'Multiple Tests';
+                                $status = $item['request_status'] ?? 'accepted';
+                                $status_label = ucfirst($status);
+                                $item_id = $item['request_id'];
+                                $view_link = "view_request.php?id=" . $item_id;
+                                $add_link = "add_request_result.php?request_id=" . $item_id;
+                                $source_label = '📋 Request';
+                                $source_color = 'badge-info';
+                            } else {
+                                $item_name = $item['test_name'] ?? 'N/A';
+                                $status = $item['test_status'] ?? 'in_progress';
+                                $status_label = ucfirst($status);
+                                $item_id = $item['test_id'];
+                                $view_link = "view_test.php?id=" . $item_id;
+                                $add_link = "add_result.php?id=" . $item_id;
+                                $source_label = '🔬 Test';
+                                $source_color = 'badge-warning';
+                            }
                         ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td>
                                     <div class="patient-cell">
                                         <div class="patient-avatar-sm" style="background: <?= $color ?>;">
-                                            <?= strtoupper(substr($test['patient_name'] ?? 'U', 0, 1)) ?>
+                                            <?= strtoupper(substr($item['patient_name'] ?? 'U', 0, 1)) ?>
                                         </div>
                                         <div>
-                                            <div class="font-semibold text-sm"><?= htmlspecialchars($test['patient_name'] ?? 'Unknown') ?></div>
-                                            <div class="text-xs text-gray-400"><?= htmlspecialchars($test['patient_code'] ?? 'N/A') ?></div>
+                                            <div class="font-semibold text-sm"><?= htmlspecialchars($item['patient_name'] ?? 'Unknown') ?></div>
+                                            <div class="text-xs text-gray-400"><?= htmlspecialchars($item['patient_code'] ?? 'N/A') ?></div>
                                         </div>
                                     </div>
                                 </td>
                                 <td>
-                                    <div class="font-semibold text-sm">
-                                        <?php if ($is_request): ?>
-                                            <span class="text-primary">📋 Request: <?= htmlspecialchars($test_name) ?></span>
-                                        <?php else: ?>
-                                            <?= htmlspecialchars($test_name) ?>
-                                        <?php endif; ?>
-                                    </div>
-                                    <?php if (!empty($test['test_type'])): ?>
-                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($test['test_type']) ?></div>
-                                    <?php endif; ?>
-                                    <?php if (!empty($test['sample_type'])): ?>
-                                        <div class="text-xs text-gray-400">Sample: <?= htmlspecialchars($test['sample_type']) ?></div>
+                                    <div class="font-semibold text-sm"><?= htmlspecialchars($item_name) ?></div>
+                                    <?php if (!$is_request && !empty($item['test_type'])): ?>
+                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($item['test_type']) ?></div>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="text-sm">Dr. <?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></div>
+                                    <div class="text-sm">Dr. <?= htmlspecialchars($item['doctor_name'] ?? 'N/A') ?></div>
                                 </td>
                                 <td>
-                                    <span class="text-xs font-mono"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></span>
-                                    <div class="text-xs text-gray-400"><?= ucfirst($test['visit_type'] ?? '') ?></div>
+                                    <span class="text-xs font-mono"><?= htmlspecialchars($item['visit_number'] ?? 'N/A') ?></span>
+                                    <div class="text-xs text-gray-400"><?= ucfirst($item['visit_type'] ?? '') ?></div>
                                 </td>
                                 <td>
-                                    <span class="text-xs font-mono"><?= htmlspecialchars($test['request_number'] ?? 'N/A') ?></span>
+                                    <span class="badge <?= $source_color ?>"><?= $source_label ?></span>
                                 </td>
                                 <td>
-                                    <?php if ($is_request): ?>
-                                        <span class="status-badge accepted">
-                                            ✅ Accepted
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="status-badge <?= $test['test_status'] ?? 'pending' ?>">
-                                            <?= ucfirst($test['test_status'] ?? 'Pending') ?>
-                                        </span>
-                                    <?php endif; ?>
+                                    <span class="status-badge <?= $status ?>">
+                                        <?= $status_label ?>
+                                    </span>
                                 </td>
                                 <td>
                                     <div class="flex items-center gap-2">
@@ -1219,32 +1311,21 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                                 </td>
                                 <td>
                                     <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center;">
-                                        <?php if ($is_request): ?>
-                                            <!-- If it's a request, go to view request -->
-                                            <a href="view_request.php?id=<?= $test['request_id'] ?>" class="btn btn-outline btn-xs" title="View Request">
-                                                <i class="fas fa-eye"></i> View
-                                            </a>
-                                            <a href="add_result.php?request_id=<?= $test['request_id'] ?>" class="btn btn-primary btn-xs" title="Add Results">
-                                                <i class="fas fa-edit"></i> Add Results
-                                            </a>
-                                        <?php else: ?>
-                                            <!-- If it's a test, go to view test -->
-                                            <a href="view_test.php?id=<?= $test['id'] ?>" class="btn btn-outline btn-xs" title="View Test">
-                                                <i class="fas fa-eye"></i> View
-                                            </a>
-                                            <a href="add_result.php?id=<?= $test['id'] ?>" class="btn btn-primary btn-xs" title="Add Result">
-                                                <i class="fas fa-edit"></i> Result
-                                            </a>
-                                            <?php if (($test['test_status'] ?? '') !== 'completed'): ?>
-                                                <form method="POST" action="" style="display:inline;">
-                                                    <input type="hidden" name="action" value="update_status">
-                                                    <input type="hidden" name="lab_test_id" value="<?= $test['id'] ?>">
-                                                    <input type="hidden" name="status" value="completed">
-                                                    <button type="submit" class="btn btn-success btn-xs" title="Mark as Completed" onclick="return confirm('Mark this test as completed?')">
-                                                        <i class="fas fa-check"></i>
-                                                    </button>
-                                                </form>
-                                            <?php endif; ?>
+                                        <a href="<?= $view_link ?>" class="btn btn-outline btn-xs" title="View">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                        <a href="<?= $add_link ?>" class="btn btn-primary btn-xs" title="Add Results">
+                                            <i class="fas fa-edit"></i>
+                                        </a>
+                                        <?php if (!$is_request && $status !== 'completed'): ?>
+                                            <form method="POST" action="" style="display:inline;">
+                                                <input type="hidden" name="action" value="update_status">
+                                                <input type="hidden" name="lab_test_id" value="<?= $item_id ?>">
+                                                <input type="hidden" name="status" value="completed">
+                                                <button type="submit" class="btn btn-success btn-xs" title="Mark as Completed" onclick="return confirm('Mark this test as completed?')">
+                                                    <i class="fas fa-check"></i>
+                                                </button>
+                                            </form>
                                         <?php endif; ?>
                                     </div>
                                 </td>
@@ -1279,6 +1360,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             In Progress
+            <span class="text-gray-300 mx-2">|</span>
+            Logged in as: <strong><?= htmlspecialchars($user_full_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1362,14 +1445,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) el.textContent = dateStr + ' • ' + timeStr;
-        var footer = document.getElementById('footerTimestamp');
-        if (footer) footer.textContent = 'Last updated: ' + timeStr;
-        var updateTime = document.getElementById('lastUpdateTime');
-        if (updateTime) updateTime.textContent = '⏱ ' + timeStr;
-        var updateBadge = document.getElementById('updateBadge');
-        if (updateBadge) updateBadge.innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
+        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
+        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        document.getElementById('lastUpdateTime').textContent = '⏱ ' + timeStr;
+        document.getElementById('updateBadge').innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -1382,11 +1461,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     
     function performSearch() {
         var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'in_progress.php?search=' + encodeURIComponent(query);
-        } else {
-            window.location.href = 'in_progress.php';
-        }
+        window.location.href = 'in_progress.php?search=' + encodeURIComponent(query);
     }
     
     searchBtn?.addEventListener('click', performSearch);
@@ -1490,6 +1565,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     });
 
     console.log('%c🧪 Laboratory - In Progress (FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total In Progress: <?= $total_in_progress ?>', 'font-size:13px; color:#64748B;');
     console.log('%c✅ Shows accepted lab_requests AND in_progress lab_tests', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');

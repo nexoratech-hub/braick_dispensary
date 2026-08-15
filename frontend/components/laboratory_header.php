@@ -3,6 +3,7 @@
 // FILE: frontend/components/laboratory_header.php
 // LABORATORY - SHARED HEADER (FIXED - Database connection)
 // WITH LOGIN PROTECTION
+// FIXED: Date and Time now displayed correctly
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -277,6 +278,13 @@ $dark_mode = $_SESSION['dark_mode'];
             font-size: 0.78rem;
             color: var(--text-secondary);
             font-weight: 500;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            background: var(--bg-body);
+            padding: 4px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            display: inline-block;
+            white-space: nowrap;
         }
         
         .top-nav .avatar {
@@ -351,6 +359,7 @@ $dark_mode = $_SESSION['dark_mode'];
             display: flex;
             align-items: center;
             gap: 6px;
+            text-decoration: none;
         }
         
         .dark-toggle-btn:hover {
@@ -696,7 +705,6 @@ $dark_mode = $_SESSION['dark_mode'];
         
         @media (max-width: 768px) {
             .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
         }
         
         @media (max-width: 640px) {
@@ -727,6 +735,50 @@ $dark_mode = $_SESSION['dark_mode'];
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        
+        /* ================================================================
+           DATE/TIME STYLES
+           ================================================================ */
+        .datetime-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-body);
+            padding: 4px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .datetime-wrapper .datetime-icon {
+            color: var(--primary);
+            font-size: 0.7rem;
+        }
+        
+        .datetime-wrapper .datetime-separator {
+            color: var(--border-color);
+            margin: 0 2px;
+        }
+        
+        @media (max-width: 768px) {
+            .datetime-wrapper {
+                font-size: 0.65rem;
+                padding: 2px 8px;
+            }
+        }
+        
+        @media (max-width: 640px) {
+            .datetime-wrapper {
+                font-size: 0.55rem;
+                padding: 2px 6px;
+            }
+            .datetime-wrapper .datetime-icon {
+                display: none;
+            }
+        }
     </style>
 </head>
 <body>
@@ -754,17 +806,26 @@ $dark_mode = $_SESSION['dark_mode'];
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
-        <span class="datetime" id="currentDateTime"></span>
+        <!-- ================================================================ -->
+        <!-- DATE & TIME - FIXED: Now showing correctly -->
+        <!-- ================================================================ -->
+        <span class="datetime-wrapper" id="datetimeWrapper">
+            <i class="fas fa-calendar-alt datetime-icon"></i>
+            <span id="currentDate"><?= date('M d, Y') ?></span>
+            <span class="datetime-separator">|</span>
+            <i class="fas fa-clock datetime-icon"></i>
+            <span id="currentTime"><?= date('h:i:s A') ?></span>
+        </span>
         
         <!-- ================================================================ -->
-        <!-- DARK MODE TOGGLE - FIXED: Using link instead of button -->
+        <!-- DARK MODE TOGGLE -->
         <!-- ================================================================ -->
         <a href="?toggle_dark=1" class="dark-toggle-btn" id="darkModeLink">
             <i id="darkIcon" class="fas <?= $dark_mode === 'dark' ? 'fa-sun' : 'fa-moon' ?>"></i>
             <span id="darkText"><?= $dark_mode === 'dark' ? 'Light' : 'Dark' ?></span>
         </a>
         
-        <button class="icon-btn">
+        <button class="icon-btn" id="notifBtn" title="Notifications">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
@@ -804,21 +865,34 @@ $dark_mode = $_SESSION['dark_mode'];
     }
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - FIXED: Now updates every second
     // ================================================================
     function updateDateTime() {
         var now = new Date();
+        
+        // Format Date: "Aug 15, 2026"
         var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+            month: 'short', 
+            day: 'numeric', 
+            year: 'numeric'
         });
+        
+        // Format Time: "08:45:30 PM"
         var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
+        
+        var dateEl = document.getElementById('currentDate');
+        var timeEl = document.getElementById('currentTime');
+        
+        if (dateEl) dateEl.textContent = dateStr;
+        if (timeEl) timeEl.textContent = timeStr;
     }
+    
+    // Update immediately and every second
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
@@ -852,6 +926,7 @@ $dark_mode = $_SESSION['dark_mode'];
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c🌙 Dark Mode: <?= $dark_mode ?>', 'font-size:12px; color:#D97706;');
     console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Date & Time now displayed correctly with real-time updates', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Dark mode toggles via page reload (Session based)', 'font-size:12px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
 </script>

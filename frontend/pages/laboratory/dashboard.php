@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/dashboard.php
 // LABORATORY DASHBOARD - FULL VERSION WITH AUTO-UPDATE
+// FIXED: Beautiful cards with solid colors and reduced opacity
+// FIXED: Modern gradient themes with hover effects
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -195,18 +197,26 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     /* ================================================================
        LABORATORY DASHBOARD STYLES
        ================================================================ */
+    
+    /* Stats Grid - Responsive with fixed height cards */
     .stats-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 16px;
-        margin-bottom: 24px;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 18px;
+        margin-bottom: 28px;
     }
     
+    /* ================================================================
+       MODERN STAT CARDS - SOLID COLORS WITH OPACITY
+       ================================================================ */
     .stat-card {
         border-radius: 16px;
-        padding: 18px 20px;
+        padding: 20px 22px;
+        min-height: 130px;
+        max-height: 140px;
+        height: 130px;
         border: none;
-        transition: all 0.3s;
+        transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
         color: white;
         cursor: pointer;
         text-decoration: none;
@@ -215,87 +225,181 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         justify-content: space-between;
         position: relative;
         overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08);
     }
     
-    .stat-card::before {
-        content: '';
+    /* Card themes with solid colors and reduced opacity */
+    .stat-card.orange { 
+        background: #D97706;
+        box-shadow: 0 4px 20px rgba(217, 119, 6, 0.3);
+    }
+    .stat-card.orange .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .stat-card.blue { 
+        background: #0B5ED7;
+        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.3);
+    }
+    .stat-card.blue .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .stat-card.green { 
+        background: #059669;
+        box-shadow: 0 4px 20px rgba(5, 150, 105, 0.3);
+    }
+    .stat-card.green .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .stat-card.purple { 
+        background: #7C3AED;
+        box-shadow: 0 4px 20px rgba(124, 58, 237, 0.3);
+    }
+    .stat-card.purple .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .stat-card.teal { 
+        background: #0D9488;
+        box-shadow: 0 4px 20px rgba(13, 148, 136, 0.3);
+    }
+    .stat-card.teal .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .stat-card.indigo { 
+        background: #4F46E5;
+        box-shadow: 0 4px 20px rgba(79, 70, 229, 0.3);
+    }
+    .stat-card.indigo .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .stat-card.pink { 
+        background: #DB2777;
+        box-shadow: 0 4px 20px rgba(219, 39, 119, 0.3);
+    }
+    .stat-card.pink .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .stat-card.rose { 
+        background: #E11D48;
+        box-shadow: 0 4px 20px rgba(225, 29, 72, 0.3);
+    }
+    .stat-card.rose .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    .stat-card.cyan { 
+        background: #0891B2;
+        box-shadow: 0 4px 20px rgba(8, 145, 178, 0.3);
+    }
+    .stat-card.cyan .stat-icon-wrapper {
+        background: rgba(255,255,255,0.15);
+    }
+    
+    /* Card shine effect on hover */
+    .stat-card .shine {
         position: absolute;
-        top: -50%;
-        right: -30%;
-        width: 100px;
-        height: 100px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 50%;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+        transition: all 0.8s ease;
         pointer-events: none;
     }
     
+    .stat-card:hover .shine {
+        left: 100%;
+    }
+    
+    /* Card hover effects */
     .stat-card:hover {
-        transform: translateY(-6px);
-        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+        transform: translateY(-6px) scale(1.01);
+        box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    }
+    
+    .stat-card:hover .stat-icon-wrapper {
+        background: rgba(255,255,255,0.25);
+        transform: scale(1.08) rotate(-4deg);
     }
     
     .stat-card:active {
-        transform: scale(0.98);
+        transform: scale(0.97);
     }
     
-    .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
-    .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-    .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
-    .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-    .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-    .stat-card.red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-    .stat-card.pink { background: linear-gradient(135deg, #DB2777, #BE185D); }
-    .stat-card.indigo { background: linear-gradient(135deg, #4F46E5, #4338CA); }
-    
+    /* Card content */
     .stat-card .stat-left {
         display: flex;
         flex-direction: column;
         gap: 2px;
         z-index: 1;
+        flex: 1;
     }
     
-    .stat-card .stat-icon {
-        width: 42px;
-        height: 42px;
+    .stat-card .stat-icon-wrapper {
+        width: 44px;
+        height: 44px;
         border-radius: 12px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.1rem;
-        background: rgba(255,255,255,0.15);
+        font-size: 1.2rem;
         color: white;
         flex-shrink: 0;
         z-index: 1;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: all 0.3s ease;
     }
     
     .stat-card .stat-number {
-        font-size: 1.8rem;
-        font-weight: 700;
+        font-size: 1.9rem;
+        font-weight: 800;
         color: white;
-        line-height: 1.2;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
     .stat-card .stat-label {
-        font-size: 0.75rem;
-        color: rgba(255,255,255,0.8);
+        font-size: 0.72rem;
+        color: rgba(255,255,255,0.85);
         font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
     
     .stat-card .stat-trend {
-        font-size: 0.65rem;
+        font-size: 0.6rem;
         font-weight: 600;
-        padding: 2px 10px;
+        padding: 2px 12px;
         border-radius: 20px;
-        background: rgba(255,255,255,0.15);
+        background: rgba(255,255,255,0.18);
         color: white;
         display: inline-block;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.08);
+        margin-top: 3px;
+        letter-spacing: 0.02em;
+    }
+    
+    .stat-card .stat-trend i {
+        margin-right: 3px;
+        font-size: 0.55rem;
     }
     
     .stat-card .nav-arrow {
         opacity: 0;
-        transition: all 0.3s ease;
-        font-size: 0.8rem;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        font-size: 0.85rem;
         z-index: 1;
+        transform: translateX(-10px);
+        color: rgba(255,255,255,0.6);
     }
     
     .stat-card:hover .nav-arrow {
@@ -303,19 +407,39 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         transform: translateX(4px);
     }
     
+    /* Small decorative dots */
+    .stat-card .dot-pattern {
+        position: absolute;
+        bottom: 8px;
+        right: 12px;
+        display: flex;
+        gap: 4px;
+        opacity: 0.12;
+        z-index: 0;
+    }
+    
+    .stat-card .dot-pattern span {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: white;
+    }
+    
     /* ================================================================
        UPDATE BADGE
        ================================================================ */
     .update-badge {
-        background: rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.12);
         color: #93C5FD;
-        padding: 4px 14px;
+        padding: 4px 16px;
         border-radius: 20px;
         font-size: 0.7rem;
         font-weight: 500;
         display: inline-flex;
         align-items: center;
         gap: 6px;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.06);
     }
     
     .update-badge .fa-spin {
@@ -325,6 +449,51 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     @keyframes fa-spin {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
+    }
+    
+    /* ================================================================
+       PAGE HEADER
+       ================================================================ */
+    .page-header {
+        margin-bottom: 28px;
+        padding-bottom: 16px;
+        border-bottom: 3px solid var(--primary);
+    }
+    
+    .page-title {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    
+    .page-title i {
+        color: var(--primary);
+    }
+    
+    .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.95rem;
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .branch-tag {
+        background: var(--success);
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
     }
     
     /* ================================================================
@@ -495,65 +664,257 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     [data-theme="dark"] .badge-red { background: #B91C1C; }
     
     /* ================================================================
+       BUTTONS
+       ================================================================ */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 16px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.78rem;
+        transition: all 0.3s;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    
+    .btn-blue {
+        background: var(--primary);
+        color: white;
+    }
+    .btn-blue:hover {
+        background: var(--primary-dark);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+    }
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: var(--primary);
+        color: var(--primary);
+    }
+    
+    .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
+    
+    /* ================================================================
+       CARD
+       ================================================================ */
+    .card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 1px solid var(--border-color);
+        transition: all 0.3s;
+        box-shadow: var(--shadow-sm);
+    }
+    
+    .card:hover {
+        border-color: var(--primary);
+        box-shadow: var(--shadow-md);
+    }
+    
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    
+    .card-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    
+    .card-title .title-blue { color: var(--primary); }
+    .card-title .title-green { color: #059669; }
+    .card-title .title-purple { color: #7C3AED; }
+    
+    /* ================================================================
+       TABLE
+       ================================================================ */
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+    }
+    
+    .data-table thead th {
+        text-align: left;
+        padding: 8px 12px;
+        font-weight: 700;
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-secondary);
+        border-bottom: 2px solid var(--border-color);
+    }
+    
+    .data-table tbody td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+    }
+    
+    /* ================================================================
+       TOAST
+       ================================================================ */
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 360px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+    
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #DC2626; }
+    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.warning { background: #D97706; }
+    
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer {
+        padding: 14px 0;
+        border-top: 1px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    
+    /* ================================================================
        RESPONSIVE
        ================================================================ */
+    @media (max-width: 1200px) {
+        .stats-grid {
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+        }
+        .stat-card {
+            min-height: 120px;
+            max-height: 130px;
+            height: 120px;
+            padding: 16px 18px;
+        }
+        .stat-card .stat-number {
+            font-size: 1.6rem;
+        }
+    }
+    
+    @media (max-width: 992px) {
+        .stats-grid {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 14px;
+        }
+        .stat-card {
+            min-height: 110px;
+            max-height: 120px;
+            height: 110px;
+            padding: 14px 16px;
+        }
+        .stat-card .stat-number {
+            font-size: 1.5rem;
+        }
+        .stat-card .stat-label {
+            font-size: 0.68rem;
+        }
+    }
+    
     @media (max-width: 768px) {
         .stats-grid {
             grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        .stat-card {
+            min-height: 100px;
+            max-height: 110px;
+            height: 100px;
+            padding: 12px 14px;
+        }
+        .stat-card .stat-number {
+            font-size: 1.3rem;
+        }
+        .stat-card .stat-label {
+            font-size: 0.62rem;
+        }
+        .stat-card .stat-icon-wrapper {
+            width: 36px;
+            height: 36px;
+            font-size: 0.9rem;
+        }
+        .stat-card .stat-trend {
+            font-size: 0.5rem;
+            padding: 1px 8px;
+        }
+        .stat-card .nav-arrow {
+            display: none;
         }
         .chart-container {
             height: 150px;
+        }
+        .page-title {
+            font-size: 1.4rem;
         }
     }
     
     @media (max-width: 480px) {
         .stats-grid {
-            grid-template-columns: 1fr;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .stat-card {
+            min-height: 90px;
+            max-height: 100px;
+            height: 90px;
+            padding: 10px 12px;
+            border-radius: 12px;
+        }
+        .stat-card .stat-number {
+            font-size: 1.1rem;
+        }
+        .stat-card .stat-label {
+            font-size: 0.55rem;
+            letter-spacing: 0.02em;
+        }
+        .stat-card .stat-icon-wrapper {
+            width: 30px;
+            height: 30px;
+            font-size: 0.75rem;
+            border-radius: 8px;
+        }
+        .stat-card .stat-trend {
+            font-size: 0.45rem;
+            padding: 1px 6px;
+        }
+        .stat-card .stat-left {
+            gap: 1px;
         }
     }
 </style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search requests, patients...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -563,25 +924,22 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- ================================================================ -->
     <!-- PAGE HEADER -->
     <!-- ================================================================ -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-flask mr-2" style="color: var(--primary);"></i> Laboratory Dashboard
-                <span class="role-badge-display ml-2">LABORATORY</span>
-                <span class="update-badge ml-2" id="updateBadge">
+                <i class="fas fa-flask"></i> Laboratory Dashboard
+                <span class="update-badge" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
             </h1>
             <p class="page-subtitle">
-                Welcome, <strong><?= htmlspecialchars($user_full_name) ?></strong>!
-                <span class="branch-tag ml-2">
+                <i class="fas fa-user-circle"></i>
+                Welcome, <strong><?= htmlspecialchars($user_full_name) ?></strong>
+                <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
-                </span>
-                <span class="ml-2 text-xs text-gray-400">
-                    <i class="fas fa-hand-pointer mr-1"></i> Click cards to navigate
+                <span class="text-xs text-gray-400">
+                    <i class="fas fa-calendar-day"></i> <?= date('l, F d, Y') ?>
                 </span>
             </p>
         </div>
@@ -599,113 +957,145 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - WITH NAVIGATION -->
+    <!-- STATISTICS CARDS - 8 CARDS WITH FIXED HEIGHT -->
     <!-- ================================================================ -->
-    <div class="stats-grid animate-fade-in-up">
+    <div class="stats-grid">
         
         <!-- 1. Pending Requests -->
         <a href="pending_requests.php" class="stat-card orange">
+            <div class="shine"></div>
             <div class="stat-left">
-                <p class="stat-label">Pending Requests</p>
-                <p class="stat-number" id="statPendingCard"><?= $pending ?></p>
+                <span class="stat-label">Pending Requests</span>
+                <span class="stat-number" id="statPendingCard"><?= $pending ?></span>
                 <span class="stat-trend"><i class="fas fa-clock"></i> Awaiting</span>
             </div>
-            <div class="stat-icon">
+            <div class="stat-icon-wrapper">
                 <i class="fas fa-clock"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+            <div class="dot-pattern">
+                <span></span><span></span><span></span>
             </div>
         </a>
         
         <!-- 2. In Progress -->
         <a href="in_progress.php" class="stat-card blue">
+            <div class="shine"></div>
             <div class="stat-left">
-                <p class="stat-label">In Progress</p>
-                <p class="stat-number" id="statInProgressCard"><?= $in_progress ?></p>
+                <span class="stat-label">In Progress</span>
+                <span class="stat-number" id="statInProgressCard"><?= $in_progress ?></span>
                 <span class="stat-trend"><i class="fas fa-spinner"></i> Running</span>
             </div>
-            <div class="stat-icon">
+            <div class="stat-icon-wrapper">
                 <i class="fas fa-spinner"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+            <div class="dot-pattern">
+                <span></span><span></span><span></span>
             </div>
         </a>
         
         <!-- 3. Completed Today -->
         <a href="completed_requests.php" class="stat-card green">
+            <div class="shine"></div>
             <div class="stat-left">
-                <p class="stat-label">Completed Today</p>
-                <p class="stat-number" id="statCompletedTodayCard"><?= $completed_today ?></p>
+                <span class="stat-label">Completed Today</span>
+                <span class="stat-number" id="statCompletedTodayCard"><?= $completed_today ?></span>
                 <span class="stat-trend"><i class="fas fa-check-circle"></i> Done</span>
             </div>
-            <div class="stat-icon">
+            <div class="stat-icon-wrapper">
                 <i class="fas fa-check-circle"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+            <div class="dot-pattern">
+                <span></span><span></span><span></span>
             </div>
         </a>
         
         <!-- 4. Today's Tests -->
         <a href="results_history.php?filter=today" class="stat-card purple">
+            <div class="shine"></div>
             <div class="stat-left">
-                <p class="stat-label">Today's Tests</p>
-                <p class="stat-number" id="statTodayTestsCard"><?= $today_tests ?></p>
+                <span class="stat-label">Today's Tests</span>
+                <span class="stat-number" id="statTodayTestsCard"><?= $today_tests ?></span>
                 <span class="stat-trend"><i class="fas fa-flask"></i> Completed</span>
             </div>
-            <div class="stat-icon">
+            <div class="stat-icon-wrapper">
                 <i class="fas fa-flask"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+            <div class="dot-pattern">
+                <span></span><span></span><span></span>
             </div>
         </a>
         
         <!-- 5. Total Tests -->
         <a href="results_history.php" class="stat-card teal">
+            <div class="shine"></div>
             <div class="stat-left">
-                <p class="stat-label">Total Tests</p>
-                <p class="stat-number" id="statTotalTestsCard"><?= number_format($total_tests) ?></p>
+                <span class="stat-label">Total Tests</span>
+                <span class="stat-number" id="statTotalTestsCard"><?= number_format($total_tests) ?></span>
                 <span class="stat-trend"><i class="fas fa-chart-line"></i> All Time</span>
             </div>
-            <div class="stat-icon">
+            <div class="stat-icon-wrapper">
                 <i class="fas fa-chart-line"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+            <div class="dot-pattern">
+                <span></span><span></span><span></span>
             </div>
         </a>
         
         <!-- 6. Total Requests -->
         <a href="pending_requests.php" class="stat-card indigo">
+            <div class="shine"></div>
             <div class="stat-left">
-                <p class="stat-label">Total Requests</p>
-                <p class="stat-number" id="statTotalRequestsCard"><?= number_format($total_requests) ?></p>
+                <span class="stat-label">Total Requests</span>
+                <span class="stat-number" id="statTotalRequestsCard"><?= number_format($total_requests) ?></span>
                 <span class="stat-trend"><i class="fas fa-list"></i> All Time</span>
             </div>
-            <div class="stat-icon">
+            <div class="stat-icon-wrapper">
                 <i class="fas fa-list"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+            <div class="dot-pattern">
+                <span></span><span></span><span></span>
             </div>
         </a>
         
         <!-- 7. Completion Rate -->
         <a href="completed_requests.php" class="stat-card pink">
+            <div class="shine"></div>
             <div class="stat-left">
-                <p class="stat-label">Completion Rate</p>
-                <p class="stat-number" id="statCompletionRateCard"><?= $completion_rate ?>%</p>
-                <span class="stat-trend"><i class="fas fa-percentage"></i> Success Rate</span>
+                <span class="stat-label">Completion Rate</span>
+                <span class="stat-number" id="statCompletionRateCard"><?= $completion_rate ?>%</span>
+                <span class="stat-trend"><i class="fas fa-percentage"></i> Success</span>
             </div>
-            <div class="stat-icon">
+            <div class="stat-icon-wrapper">
                 <i class="fas fa-percentage"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
             </div>
+            <div class="dot-pattern">
+                <span></span><span></span><span></span>
+            </div>
         </a>
         
-        <!-- 8. Average Tests per Request -->
-        <a href="results_history.php" class="stat-card red">
+        <!-- 8. Avg Tests/Request -->
+        <a href="results_history.php" class="stat-card rose">
+            <div class="shine"></div>
             <div class="stat-left">
-                <p class="stat-label">Avg Tests/Request</p>
-                <p class="stat-number" id="statAvgTestsCard">
+                <span class="stat-label">Avg Tests/Request</span>
+                <span class="stat-number" id="statAvgTestsCard">
                     <?= $total_requests > 0 ? number_format($total_tests / $total_requests, 1) : '0.0' ?>
-                </p>
+                </span>
                 <span class="stat-trend"><i class="fas fa-calculator"></i> Per Request</span>
             </div>
-            <div class="stat-icon">
+            <div class="stat-icon-wrapper">
                 <i class="fas fa-calculator"></i>
                 <i class="fas fa-chevron-right nav-arrow"></i>
+            </div>
+            <div class="dot-pattern">
+                <span></span><span></span><span></span>
             </div>
         </a>
         
@@ -1034,7 +1424,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 datasets: [{
                     label: 'Tests Completed',
                     data: (values && values.length > 0) ? values : defaultValues,
-                    backgroundColor: '#0B5ED7',
+                    backgroundColor: isDark ? '#6EA8FE' : '#0B5ED7',
                     borderRadius: 4
                 }]
             },
@@ -1082,11 +1472,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 datasets: [{
                     label: 'Tests Completed',
                     data: (values && values.length > 0) ? values : defaultValues,
-                    borderColor: '#059669',
-                    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+                    borderColor: isDark ? '#34D399' : '#059669',
+                    backgroundColor: isDark ? 'rgba(52, 211, 153, 0.1)' : 'rgba(5, 150, 105, 0.1)',
                     fill: true,
                     tension: 0.4,
-                    pointBackgroundColor: '#059669',
+                    pointBackgroundColor: isDark ? '#34D399' : '#059669',
                     pointRadius: 4
                 }]
             },
@@ -1146,10 +1536,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         lastHash = data.hash;
                         updateDashboard(data.data);
                         document.getElementById('footerTimestamp').textContent = 'Last updated: ' + data.data.timestamp;
-                        
-                        if (updateCount > 1) {
-                            showToast('🔄 Updated', 'Dashboard auto-updated at ' + data.data.timestamp, 'info');
-                        }
                     }
                     
                     var now = new Date();
@@ -1171,9 +1557,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         var charts = data.charts || {};
         var lists = data.lists || {};
         
-        // ================================================================
-        // UPDATE STATS CARDS
-        // ================================================================
+        // Update stats cards
         document.getElementById('statPending').textContent = stats.pending || 0;
         document.getElementById('statInProgress').textContent = stats.in_progress || 0;
         document.getElementById('statPendingCard').textContent = stats.pending || 0;
@@ -1184,13 +1568,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         document.getElementById('statTotalRequestsCard').textContent = Number(stats.total_requests || 0).toLocaleString();
         document.getElementById('statCompletionRateCard').textContent = (stats.completion_rate || 0) + '%';
         
-        // Average tests per request
         var avg = (stats.total_requests || 0) > 0 ? (stats.total_tests / stats.total_requests) : 0;
         document.getElementById('statAvgTestsCard').textContent = avg.toFixed(1);
         
-        // ================================================================
-        // UPDATE CHARTS
-        // ================================================================
+        // Update charts
         if (charts.daily_labels && charts.daily_tests) {
             renderDailyChart(charts.daily_labels, charts.daily_tests);
         }
@@ -1198,9 +1579,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             renderMonthlyChart(charts.monthly_labels, charts.monthly_tests);
         }
         
-        // ================================================================
-        // UPDATE MOST REQUESTED TESTS
-        // ================================================================
+        // Update most requested
         var mostRequested = document.getElementById('mostRequested');
         if (mostRequested && lists.most_requested) {
             var tests = lists.most_requested || [];
@@ -1216,19 +1595,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     `;
                 });
                 mostRequested.innerHTML = html;
-            } else {
-                mostRequested.innerHTML = `
-                    <div class="empty-state">
-                        <i class="fas fa-flask"></i>
-                        <p>No tests completed yet</p>
-                    </div>
-                `;
             }
         }
         
-        // ================================================================
-        // UPDATE RECENT REQUESTS TABLE
-        // ================================================================
+        // Update recent requests
         var tableBody = document.getElementById('recentTableBody');
         if (tableBody && lists.recent_requests) {
             var requests = lists.recent_requests || [];
@@ -1270,15 +1640,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     `;
                 });
                 tableBody.innerHTML = html;
-            } else {
-                tableBody.innerHTML = `
-                    <tr>
-                        <td colspan="8" class="text-center py-8 text-gray-400">
-                            <i class="fas fa-flask text-3xl block mb-2"></i>
-                            <p>No laboratory requests yet</p>
-                        </td>
-                    </tr>
-                `;
             }
         }
     }
@@ -1319,8 +1680,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             if (btn) {
                 btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
                 btn.disabled = false;
+                showToast('✅ Refreshed', 'Dashboard updated successfully', 'success');
             }
-        }, 1000);
+        }, 1500);
     }
 
     // ================================================================
@@ -1335,9 +1697,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         fetchAndUpdateStats();
     }
 
-    // ================================================================
-    // STOP AUTO-UPDATE
-    // ================================================================
     function stopAutoUpdate() {
         if (updateInterval) {
             clearInterval(updateInterval);
@@ -1400,6 +1759,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     console.log('%c💡 Type LabDashboard.stop() or LabDashboard.start() to control', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💡 Press Alt+R to refresh manually', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
+    console.log('%c🎨 Beautiful cards with solid colors and reduced opacity', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>

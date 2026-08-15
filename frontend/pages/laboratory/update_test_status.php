@@ -2,31 +2,70 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/update_test_status.php
 // LABORATORY - UPDATE TEST STATUS (Complete Version)
+// WITH FULL LOGIN SESSION PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// IF NO SESSION, USE LAB.DODOMA (ID: 8) AS DEFAULT
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 8;
-    $_SESSION['full_name'] = 'Lab Technician Dodoma';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.dodoma';
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 8;
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    // User is not logged in - redirect to login
+    header('Location: ../login.php');
+    exit;
+}
 
 // ================================================================
-// INCLUDE DATABASE
+// CHECK IF USER IS LABORATORY OR ADMIN
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+if ($_SESSION['role'] !== 'laboratory' && $_SESSION['role'] !== 'admin') {
+    // User is not laboratory - redirect to their dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET LAB TECHNICIAN INFO FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician';
+$user_role = $_SESSION['role'];
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_specialty = $_SESSION['specialty'] ?? 'Laboratory';
+$user_username = $_SESSION['username'] ?? 'lab.technician';
+
+// ================================================================
+// IF ADMIN VIEWING LAB PAGE, USE THEIR BRANCH
+// ================================================================
+if ($_SESSION['role'] === 'admin') {
+    $user_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $user_branch_id;
+}
+
+// ================================================================
+// INCLUDE DATABASE - CORRECT PATH
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    // Redirect with error
+    header('Location: pending_requests.php?success=0&message=' . urlencode('Database connection error'));
+    exit;
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -57,7 +96,7 @@ if ($action === 'confirm_test' && $id > 0) {
         $test = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$test) {
-            header('Location: pending_requests.php?success=0&message=Test+not+found');
+            header('Location: pending_requests.php?success=0&message=' . urlencode('Test not found'));
             exit;
         }
         
@@ -72,7 +111,22 @@ if ($action === 'confirm_test' && $id > 0) {
         // Create bill for this test (if price exists)
         createTestBill($db, $id, $user_id, $user_branch_id);
         
-        header('Location: in_progress.php?success=1&message=Test+confirmed+successfully!');
+        // Log activity
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'test_confirmed', ?, NOW())
+            ");
+            $stmt->execute([
+                $user_id,
+                $user_branch_id,
+                "Test confirmed: " . $test['test_name'] . " (ID: " . $id . ")"
+            ]);
+        } catch (Exception $e) {
+            // Silent fail for logging
+        }
+        
+        header('Location: in_progress.php?success=1&message=' . urlencode('Test confirmed successfully!'));
         exit;
         
     } catch (Exception $e) {
@@ -86,6 +140,11 @@ if ($action === 'confirm_test' && $id > 0) {
 // ================================================================
 if ($action === 'cancel_test' && $id > 0) {
     try {
+        // Check if test exists
+        $stmt = $db->prepare("SELECT test_name FROM lab_tests WHERE id = ? AND branch_id = ?");
+        $stmt->execute([$id, $user_branch_id]);
+        $test = $stmt->fetch(PDO::FETCH_ASSOC);
+        
         // Update test status to 'cancelled'
         $stmt = $db->prepare("
             UPDATE lab_tests 
@@ -94,7 +153,22 @@ if ($action === 'cancel_test' && $id > 0) {
         ");
         $stmt->execute([$id, $user_branch_id]);
         
-        header('Location: pending_requests.php?success=1&message=Test+cancelled+successfully!');
+        // Log activity
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'test_cancelled', ?, NOW())
+            ");
+            $stmt->execute([
+                $user_id,
+                $user_branch_id,
+                "Test cancelled: " . ($test['test_name'] ?? 'Unknown') . " (ID: " . $id . ")"
+            ]);
+        } catch (Exception $e) {
+            // Silent fail for logging
+        }
+        
+        header('Location: pending_requests.php?success=1&message=' . urlencode('Test cancelled successfully!'));
         exit;
         
     } catch (Exception $e) {
@@ -114,7 +188,7 @@ if ($action === 'accept' && $id > 0) {
         $request = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if (!$request) {
-            header('Location: pending_requests.php?success=0&message=Request+not+found');
+            header('Location: pending_requests.php?success=0&message=' . urlencode('Request not found'));
             exit;
         }
         
@@ -134,7 +208,22 @@ if ($action === 'accept' && $id > 0) {
         ");
         $stmt->execute([$id]);
         
-        header('Location: in_progress.php?success=1&message=Request+accepted+successfully!');
+        // Log activity
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'request_accepted', ?, NOW())
+            ");
+            $stmt->execute([
+                $user_id,
+                $user_branch_id,
+                "Request accepted: " . $request['request_number'] . " (ID: " . $id . ")"
+            ]);
+        } catch (Exception $e) {
+            // Silent fail for logging
+        }
+        
+        header('Location: in_progress.php?success=1&message=' . urlencode('Request accepted successfully!'));
         exit;
         
     } catch (Exception $e) {
@@ -148,6 +237,11 @@ if ($action === 'accept' && $id > 0) {
 // ================================================================
 if ($action === 'complete' && $id > 0) {
     try {
+        // Get request details
+        $stmt = $db->prepare("SELECT request_number FROM lab_requests WHERE id = ? AND branch_id = ?");
+        $stmt->execute([$id, $user_branch_id]);
+        $request = $stmt->fetch(PDO::FETCH_ASSOC);
+        
         // Update all items to completed
         $stmt = $db->prepare("
             UPDATE lab_request_items 
@@ -164,7 +258,22 @@ if ($action === 'complete' && $id > 0) {
         ");
         $stmt->execute([$id, $user_branch_id]);
         
-        header('Location: completed_requests.php?success=1&message=Request+completed+successfully!');
+        // Log activity
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'request_completed', ?, NOW())
+            ");
+            $stmt->execute([
+                $user_id,
+                $user_branch_id,
+                "Request completed: " . ($request['request_number'] ?? 'Unknown') . " (ID: " . $id . ")"
+            ]);
+        } catch (Exception $e) {
+            // Silent fail for logging
+        }
+        
+        header('Location: completed_requests.php?success=1&message=' . urlencode('Request completed successfully!'));
         exit;
         
     } catch (Exception $e) {
@@ -178,6 +287,11 @@ if ($action === 'complete' && $id > 0) {
 // ================================================================
 if ($action === 'cancel' && $id > 0) {
     try {
+        // Get request details
+        $stmt = $db->prepare("SELECT request_number FROM lab_requests WHERE id = ? AND branch_id = ?");
+        $stmt->execute([$id, $user_branch_id]);
+        $request = $stmt->fetch(PDO::FETCH_ASSOC);
+        
         $stmt = $db->prepare("
             UPDATE lab_requests 
             SET status = 'cancelled', cancelled_at = NOW()
@@ -185,7 +299,22 @@ if ($action === 'cancel' && $id > 0) {
         ");
         $stmt->execute([$id, $user_branch_id]);
         
-        header('Location: pending_requests.php?success=1&message=Request+cancelled!');
+        // Log activity
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'request_cancelled', ?, NOW())
+            ");
+            $stmt->execute([
+                $user_id,
+                $user_branch_id,
+                "Request cancelled: " . ($request['request_number'] ?? 'Unknown') . " (ID: " . $id . ")"
+            ]);
+        } catch (Exception $e) {
+            // Silent fail for logging
+        }
+        
+        header('Location: pending_requests.php?success=1&message=' . urlencode('Request cancelled!'));
         exit;
         
     } catch (Exception $e) {
@@ -200,9 +329,14 @@ if ($action === 'cancel' && $id > 0) {
 if ($action === 'update_test' && $id > 0 && $test_id > 0) {
     try {
         if (empty($status)) {
-            header('Location: view_request.php?id=' . $id . '&success=0&message=Status+is+required');
+            header('Location: view_request.php?id=' . $id . '&success=0&message=' . urlencode('Status is required'));
             exit;
         }
+        
+        // Get test details
+        $stmt = $db->prepare("SELECT test_name FROM lab_request_items WHERE id = ? AND request_id = ?");
+        $stmt->execute([$test_id, $id]);
+        $test_item = $stmt->fetch(PDO::FETCH_ASSOC);
         
         $stmt = $db->prepare("
             UPDATE lab_request_items 
@@ -236,7 +370,22 @@ if ($action === 'update_test' && $id > 0 && $test_id > 0) {
         ");
         $stmt_update->execute([$request_status, $request_status, $id]);
         
-        header('Location: view_request.php?id=' . $id . '&success=1&message=Test+updated+successfully!');
+        // Log activity
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'test_item_updated', ?, NOW())
+            ");
+            $stmt->execute([
+                $user_id,
+                $user_branch_id,
+                "Test item updated: " . ($test_item['test_name'] ?? 'Unknown') . " -> " . $status
+            ]);
+        } catch (Exception $e) {
+            // Silent fail for logging
+        }
+        
+        header('Location: view_request.php?id=' . $id . '&success=1&message=' . urlencode('Test updated successfully!'));
         exit;
         
     } catch (Exception $e) {

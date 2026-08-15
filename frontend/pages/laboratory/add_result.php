@@ -7,30 +7,59 @@
 // WITH SHARED HEADER (DARK MODE & TIME)
 // FLOW: After saving results -> visit status becomes 'lab_test' 
 //       so doctor can continue consultation
+// WITH FULL LOGIN SESSION PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
-
-// ================================================================
-// FORCE SESSION - Lab Technician
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
-    $_SESSION['user_id'] = 8;
-    $_SESSION['full_name'] = 'Lab Technician Dodoma';
-    $_SESSION['role'] = 'laboratory';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'lab.dodoma';
-    $_SESSION['is_admin'] = false;
-    $_SESSION['specialty'] = 'N/A';
+// Start session
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$user_id = $_SESSION['user_id'] ?? 8;
-$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician Dodoma';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    // User is not logged in - redirect to login
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS LABORATORY OR ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'laboratory' && $_SESSION['role'] !== 'admin') {
+    // User is not laboratory - redirect to their dashboard
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET LAB TECHNICIAN INFO FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Lab Technician';
+$user_role = $_SESSION['role'];
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_specialty = $_SESSION['specialty'] ?? 'N/A';
+$user_specialty = $_SESSION['specialty'] ?? 'Laboratory';
+$user_username = $_SESSION['username'] ?? 'lab.technician';
+$user_email = $_SESSION['email'] ?? 'lab@braick.com';
+$user_phone = $_SESSION['phone'] ?? '+255 700 000 000';
+
+// ================================================================
+// IF ADMIN VIEWING LAB PAGE, USE THEIR BRANCH
+// ================================================================
+if ($_SESSION['role'] === 'admin') {
+    $user_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $user_branch_id;
+}
 
 // ================================================================
 // GET PARAMETERS - Supports both id and request_id
@@ -44,12 +73,16 @@ if ($lab_test_id <= 0 && $request_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE CONFIG
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die('Database connection error: ' . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
 $lab_test = null;
@@ -645,13 +678,19 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
+// Logo path
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR - CORRECT PATHS
 // ================================================================
 include_once __DIR__ . '/../../components/laboratory_header.php';
 include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 ?>
 
+<!-- ================================================================ -->
+<!-- HTML STARTS HERE -->
+<!-- ================================================================ -->
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -1657,6 +1696,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             <?= $show_ultrasound ? 'Ultrasound Report' : 'Add Result' ?>
             <span class="text-gray-300 mx-2">|</span>
+            Logged in as: <strong><?= htmlspecialchars($user_full_name) ?></strong>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1897,6 +1938,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
 
     console.log('%c🧪 Add Result - Laboratory (COMPLETE FLOW)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c✅ Supports both lab_test_id AND request_id', 'font-size:13px; color:#059669;');
     console.log('%c✅ After saving -> visit status becomes "lab_test"', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Doctor can continue consultation from lab_test', 'font-size:13px; color:#0B5ED7;');
