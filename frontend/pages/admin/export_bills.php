@@ -4,19 +4,48 @@
 // SUPER ADMIN - EXPORT BILLS (VIEW & EXCEL)
 // PDF: Display in new window first with Braick Logo
 // BRAICK DISPENSARY
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Admin Only
+// SESSION START
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
+
+// ================================================================
+// LOGIN PROTECTION
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../../auth/login.php');
+    exit;
+}
+
+// ================================================================
+// ROLE CHECK - ONLY ADMIN CAN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../../auth/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 // Include database
 require_once '../../../backend/config/database.php';
@@ -937,6 +966,7 @@ if ($format === 'pdf' || $format === 'view') {
             });
             
             console.log('%c📄 Braick Dispensary - Bills Report', 'font-size:18px; font-weight:bold; color:#059669;');
+            console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
             console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
             console.log('%c📊 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
             console.log('%c💰 Total Amount: TSh <?= number_format($total_amount, 0) ?>', 'font-size:13px; color:#7B2FBE;');

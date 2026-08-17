@@ -5,23 +5,80 @@
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// VERIFY USER EXISTS IN DATABASE
+// ================================================================
+$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
+$stmt->execute([$user_id]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$user || $user['status'] !== 'active') {
+    session_destroy();
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -53,6 +110,9 @@ try {
             lt.test_price,
             lt.lab_technician_id,
             lt.formatted_result,
+            lt.visit_id,
+            lt.doctor_id,
+            lt.branch_id as lab_branch_id,
             p.id as patient_id,
             p.full_name as patient_name,
             p.patient_id as patient_code,
@@ -116,6 +176,45 @@ try {
 }
 
 // ================================================================
+// HANDLE DELETE REQUEST
+// ================================================================
+$message = '';
+$message_type = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete') {
+    try {
+        // Check if lab test exists
+        $stmt = $db->prepare("SELECT id, test_name FROM lab_tests WHERE id = ?");
+        $stmt->execute([$lab_test_id]);
+        $test = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($test) {
+            // Delete the lab test
+            $stmt = $db->prepare("DELETE FROM lab_tests WHERE id = ?");
+            $stmt->execute([$lab_test_id]);
+            
+            // Log activity
+            $details = "Deleted lab test: " . htmlspecialchars($test['test_name']) . " (ID: #$lab_test_id)";
+            $stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                VALUES (?, ?, 'lab_test_deleted', ?, NOW())
+            ");
+            $stmt->execute([$user_id, $lab_test['lab_branch_id'] ?? 1, $details]);
+            
+            $_SESSION['toast'] = [
+                'message' => '✅ Lab test deleted successfully!',
+                'type' => 'success'
+            ];
+            header('Location: lab_tests.php?branch=' . urlencode($selected_branch_id));
+            exit;
+        }
+    } catch (Exception $e) {
+        $message = "❌ Error deleting lab test: " . $e->getMessage();
+        $message_type = "danger";
+    }
+}
+
+// ================================================================
 // STATUS BADGE CLASS
 // ================================================================
 function getStatusBadge($status) {
@@ -128,9 +227,23 @@ function getStatusBadge($status) {
     return $classes[$status] ?? 'secondary';
 }
 
+function getStatusIcon($status) {
+    $icons = [
+        'pending' => 'fa-clock',
+        'in_progress' => 'fa-spinner fa-spin',
+        'completed' => 'fa-check-circle',
+        'cancelled' => 'fa-times-circle'
+    ];
+    return $icons[$status] ?? 'fa-circle';
+}
+
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -561,6 +674,122 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           BUTTONS - FULL CSS STYLED
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .btn:active {
+            transform: translateY(0px);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+        
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-gradient-strong);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: linear-gradient(135deg, #047857, #065F46);
+            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #B91C1C, #991B1B);
+            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background: linear-gradient(135deg, #B45309, #92400E);
+            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.35);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-primary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
+        }
+        
+        .btn-sm {
+            padding: 5px 12px;
+            font-size: 0.7rem;
+            border-radius: 6px;
+        }
+        
+        .btn-lg {
+            padding: 14px 32px;
+            font-size: 1rem;
+        }
+        
+        .btn-block {
+            width: 100%;
+            justify-content: center;
+        }
+        
+        .btn i {
+            font-size: 0.9rem;
+        }
+        
+        .btn-sm i {
+            font-size: 0.7rem;
+        }
+        
+        .btn-lg i {
+            font-size: 1.1rem;
+        }
+        
+        /* ================================================================
            INFO BOX
            ================================================================ */
         .info-box {
@@ -569,6 +798,9 @@ include_once '../../components/admin_sidebar.php';
             padding: 16px 20px;
             border-left: 4px solid var(--primary);
             margin-bottom: 20px;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .info-box .info-item {
@@ -609,6 +841,9 @@ include_once '../../components/admin_sidebar.php';
             transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
             margin-bottom: 24px;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .result-card:hover {
@@ -655,67 +890,6 @@ include_once '../../components/admin_sidebar.php';
         .badge-purple { background: #7C3AED; }
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 24px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn:hover {
-            transform: translateY(-2px);
-        }
-        
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
-        }
-        
-        .btn-primary:hover {
-            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
-        }
-        
-        .btn-success:hover {
-            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-actions {
-            display: flex;
-            gap: 12px;
-            padding-top: 20px;
-            margin-top: 20px;
-            border-top: 2px solid var(--border-color);
-            flex-wrap: wrap;
-        }
         
         /* ================================================================
            TOAST
@@ -862,12 +1036,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -891,7 +1065,7 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-vial"></i>
                 <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
                 <span class="header-badge">
-                    <i class="fas fa-<?= isset($lab_test['status']) && $lab_test['status'] === 'completed' ? 'check-circle' : 'clock' ?>"></i>
+                    <i class="fas <?= getStatusIcon($lab_test['status'] ?? 'pending') ?>"></i>
                     <?= ucfirst($lab_test['status'] ?? 'Pending') ?>
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
@@ -901,6 +1075,9 @@ include_once '../../components/admin_sidebar.php';
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
                     <i class="fas fa-money-bill-wave"></i>
                     TSh <?= number_format($lab_test['test_price'] ?? 0, 0) ?>
+                </span>
+                <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                    <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
                 </span>
             </p>
         </div>
@@ -917,7 +1094,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- TEST INFORMATION -->
     <!-- ================================================================ -->
-    <div class="info-box" style="max-width:900px;margin:0 auto 20px;">
+    <div class="info-box animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="info-item">
             <span class="label">Test ID</span>
             <span class="value">#<?= $lab_test_id ?></span>
@@ -973,6 +1150,7 @@ include_once '../../components/admin_sidebar.php';
             <span class="label">Status</span>
             <span class="value">
                 <span class="badge badge-<?= getStatusBadge($lab_test['status'] ?? 'pending') ?>">
+                    <i class="fas <?= getStatusIcon($lab_test['status'] ?? 'pending') ?>"></i>
                     <?= ucfirst($lab_test['status'] ?? 'Pending') ?>
                 </span>
             </span>
@@ -997,7 +1175,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- REFERENCE RANGE -->
     <!-- ================================================================ -->
     <?php if (!empty($lab_test['reference_range'])): ?>
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="result-label"><i class="fas fa-chart-bar"></i> Reference Range</div>
         <div class="result-value"><?= htmlspecialchars($lab_test['reference_range']) ?></div>
     </div>
@@ -1006,7 +1184,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- RESULTS -->
     <!-- ================================================================ -->
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.1s;">
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="result-label"><i class="fas fa-file-medical-alt"></i> Results</div>
         <div class="result-value">
             <?php if (!empty($lab_test['formatted_result'])): ?>
@@ -1023,7 +1201,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- INTERPRETATION -->
     <!-- ================================================================ -->
     <?php if (!empty($lab_test['interpretation'])): ?>
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.15s;border-color:var(--primary);background:var(--primary-bg);">
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.2s;border-color:var(--primary);background:var(--primary-bg);">
         <div class="result-label" style="color:var(--primary);"><i class="fas fa-stethoscope"></i> Interpretation</div>
         <div class="result-value" style="color:var(--primary);"><?= nl2br(htmlspecialchars($lab_test['interpretation'])) ?></div>
     </div>
@@ -1033,7 +1211,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- NOTES -->
     <!-- ================================================================ -->
     <?php if (!empty($lab_test['lab_notes'])): ?>
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.2s;">
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="result-label"><i class="fas fa-sticky-note"></i> Notes</div>
         <div class="result-value" style="font-style:italic;color:var(--text-secondary);"><?= nl2br(htmlspecialchars($lab_test['lab_notes'])) ?></div>
     </div>
@@ -1043,7 +1221,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- CLINICAL INFORMATION -->
     <!-- ================================================================ -->
     <?php if (!empty($lab_test['symptoms']) || !empty($lab_test['complaint']) || !empty($lab_test['diagnosis']) || !empty($lab_test['treatment'])): ?>
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.25s;">
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.3s;">
         <h3 class="text-sm font-bold text-primary mb-4">
             <i class="fas fa-notes-medical"></i> Clinical Information
         </h3>
@@ -1077,20 +1255,40 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ACTION BUTTONS -->
+    <!-- ACTION BUTTONS - VIEW, EDIT, DELETE -->
     <!-- ================================================================ -->
-    <div class="btn-actions" style="max-width:900px;margin:0 auto;">
-        <?php if (isset($lab_test['status']) && $lab_test['status'] !== 'completed' && $lab_test['status'] !== 'cancelled'): ?>
-            <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-success">
-                <i class="fas fa-check-circle"></i> Mark as Completed
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.35s;">
+        <h3 class="text-sm font-bold text-primary mb-4">
+            <i class="fas fa-bolt"></i> Actions
+        </h3>
+        <div class="flex flex-wrap gap-3">
+            <!-- View Button -->
+            <a href="view_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary">
+                <i class="fas fa-eye"></i> View
             </a>
-        <?php endif; ?>
-        <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary">
-            <i class="fas fa-edit"></i> Edit Test
-        </a>
-        <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">
-            <i class="fas fa-arrow-left"></i> Back to List
-        </a>
+            
+            <!-- Edit Button -->
+            <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-warning">
+                <i class="fas fa-edit"></i> Edit
+            </a>
+            
+            <!-- Complete Button (if not completed) -->
+            <?php if (isset($lab_test['status']) && $lab_test['status'] !== 'completed' && $lab_test['status'] !== 'cancelled'): ?>
+            <a href="edit_lab_test.php?action=complete&id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-success">
+                <i class="fas fa-check-circle"></i> Mark Complete
+            </a>
+            <?php endif; ?>
+            
+            <!-- Delete Button -->
+            <button onclick="confirmDelete()" class="btn btn-danger">
+                <i class="fas fa-trash"></i> Delete
+            </button>
+            
+            <!-- Back Button -->
+            <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">
+                <i class="fas fa-arrow-left"></i> Back to List
+            </a>
+        </div>
     </div>
 
     <!-- ================================================================ -->
@@ -1109,6 +1307,38 @@ include_once '../../components/admin_sidebar.php';
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- DELETE CONFIRMATION MODAL -->
+<!-- ================================================================ -->
+<div id="deleteModal" class="modal" style="display:none;">
+    <div class="modal-overlay" onclick="closeDeleteModal()"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-exclamation-triangle text-red-500 mr-2"></i> Confirm Delete</h3>
+            <button onclick="closeDeleteModal()" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Are you sure you want to delete this lab test?</p>
+            <p class="text-sm text-gray-500 mt-2">
+                <i class="fas fa-info-circle"></i> 
+                <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
+            </p>
+            <p class="text-sm text-red-600 mt-2 font-semibold">
+                ⚠️ This action cannot be undone!
+            </p>
+        </div>
+        <div class="modal-footer">
+            <button onclick="closeDeleteModal()" class="btn btn-outline btn-sm">Cancel</button>
+            <form method="POST" style="display:inline;">
+                <input type="hidden" name="action" value="delete">
+                <button type="submit" class="btn btn-danger btn-sm">
+                    <i class="fas fa-trash"></i> Yes, Delete
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- TOAST -->
@@ -1237,11 +1467,41 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
+    // ================================================================
+    // DELETE MODAL
+    // ================================================================
+    function confirmDelete() {
+        document.getElementById('deleteModal').style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeDeleteModal() {
+        document.getElementById('deleteModal').style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    // Close modal on overlay click
+    document.getElementById('deleteModal')?.addEventListener('click', function(e) {
+        if (e.target === this || e.target.classList.contains('modal-overlay')) {
+            closeDeleteModal();
+        }
+    });
+
+    // Close modal on ESC key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeDeleteModal();
+        }
+    });
+
     console.log('%c🧪 Braick Dispensary - View Lab Result', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> (ID: <?= $lab_test_id ?>)', 'font-size:13px; color:#7C3AED;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Status: <?= ucfirst($lab_test['status'] ?? 'Pending') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔵 Blue Theme Applied', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Admin has FULL ACCESS: View, Edit, Delete', 'font-size:13px; color:#34D399;');
+    console.log('%c🔵 Blue Theme Applied with beautiful CSS', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/cancel_bill.php
 // ADMIN - CANCEL BILL
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
 // FEATURES:
@@ -15,29 +16,102 @@
 // 8. Responsive design
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Admin
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 4;
-    $_SESSION['full_name'] = 'System Admin';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'admin';
-    $_SESSION['is_admin'] = true;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// PATH SAHIHI
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ADMIN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    // Redirect based on role
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($user_username) && !empty($user_username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = getDB();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$user_username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['profile_pic'] = $user['profile_pic'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $profile_pic = $user['profile_pic'];
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// PATH SAHIHI - FIXED
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_id = $_SESSION['user_id'];
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
+// ================================================================
+// GET DATABASE CONNECTION - FIXED
+// ================================================================
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
+
+// ================================================================
+// BRANCH FILTER
+// ================================================================
 $selected_branch_id = isset($_GET['branch']) && $_GET['branch'] !== 'all' ? (int)$_GET['branch'] : $user_branch_id;
 $branch_filter = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
@@ -54,8 +128,6 @@ if ($bill_id <= 0) {
 }
 
 try {
-    $db = getDB();
-    
     // ================================================================
     // GET BILL DETAILS
     // ================================================================
@@ -314,10 +386,39 @@ try {
 }
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// PROFILE PICTURE URL
 // ================================================================
-include_once '../../components/admin_header.php';
-include_once '../../components/admin_sidebar.php';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
+// INCLUDE SHARED HEADER & SIDEBAR - FIXED PATHS
+// ================================================================
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
+
+// ================================================================
+// PAGE TITLE
+// ================================================================
+$page_title = 'Cancel Bill';
 ?>
 
 <!DOCTYPE html>
@@ -327,13 +428,14 @@ include_once '../../components/admin_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cancel Bill - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* All CSS styles remain the same as previous... */
         /* ================================================================
            MODERN ROOT VARIABLES
            ================================================================ */
@@ -1238,8 +1340,8 @@ include_once '../../components/admin_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1811,13 +1913,15 @@ include_once '../../components/admin_sidebar.php';
     updateFooterTime();
     setInterval(updateFooterTime, 1000);
 
-    console.log('%c🚫 Braick - Cancel Bill', 'font-size:18px; font-weight:bold; color:#DC2626;');
+    console.log('%c🚫 Braick - Cancel Bill (FIXED)', 'font-size:18px; font-weight:bold; color:#DC2626;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
     console.log('%c📋 Bill #<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total: TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#2563EB;');
     console.log('%c💳 Paid: TSh <?= number_format($total_paid, 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Items: <?= count($bill_items) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c⚠️ Cancellation will reverse all payments and restore stock', 'font-size:13px; color:#D97706;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

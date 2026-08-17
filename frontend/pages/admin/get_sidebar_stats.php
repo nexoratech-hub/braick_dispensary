@@ -3,19 +3,50 @@
 // FILE: frontend/pages/admin/get_sidebar_stats.php
 // AJAX ENDPOINT - GET SIDEBAR STATISTICS
 // BRAICK DISPENSARY
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// SESSION START
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
+
+// ================================================================
+// LOGIN PROTECTION
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Unauthorized',
+        'message' => 'Please login first'
+    ]);
+    exit;
+}
+
+// ================================================================
+// ROLE CHECK - ONLY ADMIN CAN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Access Denied',
+        'message' => 'Only administrators can access this endpoint'
+    ]);
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
 // Include database
 require_once '../../../backend/config/database.php';
@@ -35,7 +66,16 @@ function getCount($db, $table, $branch_id, $extra_conditions = '') {
         $sql = "SELECT COUNT(*) as count FROM $table WHERE 1=1 ";
         $params = [];
         
-        if ($branch_id !== 'all') {
+        // Check if table has branch_id column
+        $has_branch = false;
+        try {
+            $stmt = $db->query("SHOW COLUMNS FROM $table LIKE 'branch_id'");
+            $has_branch = $stmt->rowCount() > 0;
+        } catch (Exception $e) {
+            $has_branch = false;
+        }
+        
+        if ($has_branch && $branch_id !== 'all') {
             $sql .= " AND branch_id = ?";
             $params[] = (int)$branch_id;
         }
@@ -93,13 +133,29 @@ try {
     $total_doctors = 0;
 }
 
+// Online Doctors
+$online_doctors = 0;
+try {
+    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active' AND is_online = 1";
+    $params = [];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $online_doctors = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+} catch (Exception $e) {
+    $online_doctors = 0;
+}
+
 // Module counts
 $pharmacy_count = getCount($db, 'users', $selected_branch_id, "role = 'pharmacy' AND status = 'active'");
 $reception_count = getCount($db, 'users', $selected_branch_id, "role = 'reception' AND status = 'active'");
 $laboratory_count = getCount($db, 'users', $selected_branch_id, "role = 'laboratory' AND status = 'active'");
 $cashier_count = getCount($db, 'users', $selected_branch_id, "role = 'cashier' AND status = 'active'");
 
-// Services
+// Services (bills)
 $total_services = getCount($db, 'bill_items', $selected_branch_id, "status != 'cancelled'");
 $today_services = getCount($db, 'bill_items', $selected_branch_id, "status != 'cancelled' AND DATE(created_at) = CURDATE()");
 
@@ -119,8 +175,7 @@ try {
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM prescriptions p 
-            INNER JOIN patient_bills pb ON p.id = pb.prescription_id 
-            WHERE p.status = 'pending' AND pb.branch_id = ?
+            WHERE p.status = 'pending' AND p.branch_id = ?
         ");
         $stmt->execute([(int)$selected_branch_id]);
     } else {
@@ -134,23 +189,101 @@ try {
 // Pending lab tests
 $pending_lab_tests = getCount($db, 'lab_tests', $selected_branch_id, "status = 'pending'");
 
+// Total visits today
+$today_visits = getCount($db, 'visits', $selected_branch_id, "DATE(created_at) = CURDATE()");
+
+// Total appointments today
+$today_appointments = getCount($db, 'appointments', $selected_branch_id, "DATE(appointment_date) = CURDATE() AND status NOT IN ('cancelled')");
+
+// Pending bills
+$pending_bills = getCount($db, 'patient_bills', $selected_branch_id, "status = 'pending'");
+
+// Total revenue today
+$today_revenue = 0;
+try {
+    if ($selected_branch_id !== 'all') {
+        $stmt = $db->prepare("
+            SELECT SUM(total_amount) as total 
+            FROM patient_bills 
+            WHERE branch_id = ? 
+            AND status = 'paid' 
+            AND DATE(created_at) = CURDATE()
+        ");
+        $stmt->execute([(int)$selected_branch_id]);
+    } else {
+        $stmt = $db->query("
+            SELECT SUM(total_amount) as total 
+            FROM patient_bills 
+            WHERE status = 'paid' 
+            AND DATE(created_at) = CURDATE()
+        ");
+    }
+    $today_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (Exception $e) {
+    $today_revenue = 0;
+}
+
+// Total revenue all time
+$total_revenue = 0;
+try {
+    if ($selected_branch_id !== 'all') {
+        $stmt = $db->prepare("
+            SELECT SUM(total_amount) as total 
+            FROM patient_bills 
+            WHERE branch_id = ? 
+            AND status = 'paid'
+        ");
+        $stmt->execute([(int)$selected_branch_id]);
+    } else {
+        $stmt = $db->query("
+            SELECT SUM(total_amount) as total 
+            FROM patient_bills 
+            WHERE status = 'paid'
+        ");
+    }
+    $total_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (Exception $e) {
+    $total_revenue = 0;
+}
+
 // ================================================================
 // RETURN JSON
 // ================================================================
 header('Content-Type: application/json');
 echo json_encode([
     'success' => true,
+    'branch_id' => $selected_branch_id,
+    'user_name' => $user_full_name,
+    'user_role' => $user_role,
+    
+    // Employee Stats
     'total_employees' => $total_employees,
-    'total_patients' => $total_patients,
-    'today_patients' => $today_patients,
     'total_doctors' => $total_doctors,
+    'online_doctors' => $online_doctors,
     'pharmacy_count' => $pharmacy_count,
     'reception_count' => $reception_count,
     'laboratory_count' => $laboratory_count,
     'cashier_count' => $cashier_count,
+    
+    // Patient Stats
+    'total_patients' => $total_patients,
+    'today_patients' => $today_patients,
+    'today_visits' => $today_visits,
+    
+    // Appointment Stats
+    'today_appointments' => $today_appointments,
+    
+    // Service Stats
     'total_services' => $total_services,
     'today_services' => $today_services,
-    'total_branches' => $total_branches,
+    
+    // Pending Items
     'pending_prescriptions' => $pending_prescriptions,
-    'pending_lab_tests' => $pending_lab_tests
+    'pending_lab_tests' => $pending_lab_tests,
+    'pending_bills' => $pending_bills,
+    
+    // Revenue Stats
+    'today_revenue' => number_format($today_revenue, 0),
+    'total_revenue' => number_format($total_revenue, 0),
+    'total_branches' => $total_branches
 ]);

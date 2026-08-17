@@ -6,30 +6,55 @@
 // INCLUDES: Services, Lab Tests, Tools, Procedures
 // BRANCH SPECIFIC - WITH NULL SUPPORT
 // BLUE THEME WITH BRANCH FILTER
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - ADMIN
+// SESSION START
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
+
+// ================================================================
+// LOGIN PROTECTION
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../../auth/login.php');
+    exit;
+}
+
+// ================================================================
+// ROLE CHECK - ONLY ADMIN CAN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../../auth/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // VERIFY USER EXISTS IN DATABASE - FIX FOR FOREIGN KEY
 // ================================================================
 require_once '../../../backend/config/database.php';
 $db = Database::getInstance()->getConnection();
-
-$user_id = $_SESSION['user_id'] ?? 1;
-$user_full_name = $_SESSION['full_name'] ?? 'Admin John';
-$user_role = $_SESSION['role'] ?? 'admin';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
 // CHECK IF USER EXISTS, IF NOT CREATE DEFAULT
@@ -547,6 +572,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // FETCH DATA WITH BRANCH FILTER
 // ================================================================
 
@@ -755,11 +789,6 @@ function getStatusLabel($status) {
 function getBranchDisplay($branch_name) {
     return $branch_name ?? 'All Branches';
 }
-
-// ================================================================
-// LOGO PATH
-// ================================================================
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -1740,8 +1769,8 @@ include_once '../../components/admin_sidebar.php';
         </a>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -2890,9 +2919,11 @@ include_once '../../components/admin_sidebar.php';
     });
 
     console.log('%c🛠️ Services Management - FIXED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c✅ Price fixed: Commas removed before saving to database', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Delete fixed: Uses delete_id from form', 'font-size:13px; color:#34D399;');
     console.log('%c🏢 Branch: <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($selected_branch_id) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

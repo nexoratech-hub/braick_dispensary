@@ -4,32 +4,53 @@
 // ADMIN / RECEPTION - ASSIGN / CHANGE DOCTOR & LAB REQUESTS
 // ================================================================
 
-session_start();
-
 // ================================================================
-// SESSION - Inaruhusu Admin na Reception
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || ($_SESSION['role'] !== 'reception' && $_SESSION['role'] !== 'admin')) {
-    $_SESSION['user_id'] = 6;
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
 // ================================================================
-// PATH SAHIHI
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
+// ================================================================
+// CHECK IF USER HAS ACCESS (Admin or Reception)
+// ================================================================
+$allowed_roles = ['admin', 'reception'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
 $user_id = $_SESSION['user_id'];
-$user_role = $_SESSION['role'];
+$user_full_name = $_SESSION['full_name'] ?? 'User';
+$user_role = $_SESSION['role'] ?? 'reception';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// SET BRANCH FOR DISPLAY
+// ================================================================
 $selected_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $user_branch_id;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$branch_name = $user_branch_name;
 
 // Admin anaweza kuona branches zote
 if ($user_role === 'admin') {
@@ -38,6 +59,12 @@ if ($user_role === 'admin') {
     $selected_branch_id = $user_branch_id;
     $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 }
+
+// ================================================================
+// PATH SAHIHI
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/config.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 $message = '';
 $message_type = '';
@@ -60,9 +87,19 @@ $latest_vital_signs = null;
 $selected_patient_data = null;
 $change_mode = isset($_GET['change']) && $_GET['change'] == 1;
 $lab_tests_catalog = [];
+$unread_notifications = 0;
 
 try {
     $db = getDB();
+    
+    // ================================================================
+    // GET UNREAD NOTIFICATIONS
+    // ================================================================
+    if (isset($_SESSION['user_id'])) {
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$_SESSION['user_id']]);
+        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    }
     
     // ================================================================
     // GET BRANCH NAME
@@ -86,7 +123,7 @@ try {
     }
     
     // ================================================================
-    // ✅ GET CONSULTATION SERVICES FROM SERVICES TABLE (category_id = 2)
+    // GET CONSULTATION SERVICES FROM SERVICES TABLE (category_id = 2)
     // ================================================================
     $stmt = $db->prepare("
         SELECT id, service_name, description, price, unit, is_active
@@ -388,7 +425,7 @@ try {
             ];
         }
         
-        // ✅ CREATE NEW BILL
+        // CREATE NEW BILL
         $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
         
         $stmt = $db->prepare("
@@ -412,7 +449,7 @@ try {
         ]);
         $bill_id = $db->lastInsertId();
         
-        // ✅ ADD BILL ITEM
+        // ADD BILL ITEM
         $item_name = 'Consultation (' . ucfirst(str_replace('_', ' ', $visit_type)) . ')';
         
         $stmt = $db->prepare("
@@ -424,7 +461,7 @@ try {
         ");
         $stmt->execute([$bill_id, $item_name, $consultation_fee, $consultation_fee]);
         
-        // ✅ NOTIFY CASHIER - Bill created
+        // NOTIFY CASHIER - Bill created
         try {
             $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
             $stmt->execute([$branch_id]);
@@ -455,7 +492,7 @@ try {
     }
     
     // ================================================================
-    // HANDLE FORM SUBMISSION - AJAX ENDPOINTS
+    // HANDLE FORM SUBMISSIONS - AJAX ENDPOINTS
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
@@ -1490,6 +1527,15 @@ try {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // COMMON SYMPTOMS LIST
 // ================================================================
 $common_symptoms = [
@@ -1522,6 +1568,9 @@ if ($user_role === 'admin') {
 }
 ?>
 
+<!-- ================================================================ -->
+<!-- REST OF THE PAGE (HTML CONTENT) - SAME AS BEFORE -->
+<!-- ================================================================ -->
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -1529,15 +1578,15 @@ if ($user_role === 'admin') {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Assign Doctor - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
         /* ================================================================
-           ROOT VARIABLES
+           ROOT VARIABLES - SAME AS ORIGINAL
            ================================================================ */
         :root {
             --primary: #2563EB;
@@ -2660,10 +2709,11 @@ if ($user_role === 'admin') {
     </style>
 </head>
 <body>
+<!-- ================================================================ -->
+<!-- THE REST OF THE HTML CONTENT (SAME AS ORIGINAL) -->
+<!-- ================================================================ -->
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - WITH CLOCK -->
-<!-- ================================================================ -->
+<!-- TOP NAVIGATION -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -2672,7 +2722,6 @@ if ($user_role === 'admin') {
     </div>
     
     <div class="flex items-center gap-3">
-        <!-- BRANCH SELECTOR - Admin anaweza kubadilisha branch -->
         <?php if ($user_role === 'admin'): ?>
             <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
                 <?php foreach ($branches as $b): ?>
@@ -2703,20 +2752,18 @@ if ($user_role === 'admin') {
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
 
 <!-- ================================================================ -->
-<!-- MAIN CONTENT -->
+<!-- MAIN CONTENT - SAME AS ORIGINAL -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
+    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -2775,9 +2822,7 @@ if ($user_role === 'admin') {
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- ASSIGNED PATIENTS LIST WITH BLUE DAYS BADGE -->
-    <!-- ================================================================ -->
+    <!-- Assigned Patients List -->
     <div class="modern-card animate-fade-in-up">
         <div class="card-header">
             <div class="card-title">
@@ -2794,74 +2839,65 @@ if ($user_role === 'admin') {
         </div>
         
         <div id="assignedPatientsList">
-            <?php if (count($assigned_patients) > 0): ?>
-                <div style="overflow-x:auto;">
-                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-                        <thead>
-                            <tr style="border-bottom:2px solid var(--border-color);">
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient / Days</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient ID</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Assigned Doctor</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Action</th>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                    <thead>
+                        <tr style="border-bottom:2px solid var(--border-color);">
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient / Days</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient ID</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Assigned Doctor</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="assignedPatientsTableBody">
+                        <?php foreach ($assigned_patients as $patient): 
+                            $assigned_days = 0;
+                            if (!empty($patient['visit_created_at'])) {
+                                $assigned_days = (int)floor((time() - strtotime($patient['visit_created_at'])) / 86400);
+                            }
+                            $days_text = $assigned_days > 0 ? '<span class="assigned-days-badge-blue">' . $assigned_days . ' days</span>' : '<span class="assigned-days-badge-blue new">Just assigned</span>';
+                        ?>
+                            <tr id="assigned-row-<?= $patient['id'] ?>" style="border-bottom:1px solid var(--border-color);">
+                                <td style="padding:10px 12px;font-weight:500;">
+                                    <?= htmlspecialchars($patient['full_name']) ?>
+                                    <?= $days_text ?>
+                                </td>
+                                <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 12px;">
+                                    <?php if (!empty($patient['assigned_doctor_name'])): ?>
+                                        <span class="assigned-doctor-tag-modern">
+                                            <i class="fas fa-user-md"></i>
+                                            Dr. <?= htmlspecialchars($patient['assigned_doctor_name']) ?>
+                                            <?php if ($patient['assigned_doctor_online'] == 1): ?>
+                                                <span class="text-green-500 text-xs">🟢</span>
+                                            <?php else: ?>
+                                                <span class="text-gray-400 text-xs">⚪</span>
+                                            <?php endif; ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="text-gray-400 text-xs">No doctor</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td style="padding:10px 12px;">
+                                    <span class="status-badge-dropdown assigned">✅ Assigned</span>
+                                </td>
+                                <td style="padding:10px 12px;">
+                                    <button onclick="selectPatientAndChange(<?= $patient['id'] ?>)" class="btn-modern btn-modern-warning btn-modern-sm" style="padding:4px 12px;font-size:0.7rem;">
+                                        <i class="fas fa-sync-alt"></i> Change
+                                    </button>
+                                </td>
                             </tr>
-                        </thead>
-                        <tbody id="assignedPatientsTableBody">
-                            <?php foreach ($assigned_patients as $patient): 
-                                $assigned_days = 0;
-                                if (!empty($patient['visit_created_at'])) {
-                                    $assigned_days = (int)floor((time() - strtotime($patient['visit_created_at'])) / 86400);
-                                }
-                                $days_text = $assigned_days > 0 ? '<span class="assigned-days-badge-blue">' . $assigned_days . ' days</span>' : '<span class="assigned-days-badge-blue new">Just assigned</span>';
-                            ?>
-                                <tr id="assigned-row-<?= $patient['id'] ?>" style="border-bottom:1px solid var(--border-color);">
-                                    <td style="padding:10px 12px;font-weight:500;">
-                                        <?= htmlspecialchars($patient['full_name']) ?>
-                                        <?= $days_text ?>
-                                    </td>
-                                    <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
-                                    <td style="padding:10px 12px;">
-                                        <?php if (!empty($patient['assigned_doctor_name'])): ?>
-                                            <span class="assigned-doctor-tag-modern">
-                                                <i class="fas fa-user-md"></i>
-                                                Dr. <?= htmlspecialchars($patient['assigned_doctor_name']) ?>
-                                                <?php if ($patient['assigned_doctor_online'] == 1): ?>
-                                                    <span class="text-green-500 text-xs">🟢</span>
-                                                <?php else: ?>
-                                                    <span class="text-gray-400 text-xs">⚪</span>
-                                                <?php endif; ?>
-                                            </span>
-                                        <?php else: ?>
-                                            <span class="text-gray-400 text-xs">No doctor</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td style="padding:10px 12px;">
-                                        <span class="status-badge-dropdown assigned">✅ Assigned</span>
-                                    </td>
-                                    <td style="padding:10px 12px;">
-                                        <button onclick="selectPatientAndChange(<?= $patient['id'] ?>)" class="btn-modern btn-modern-warning btn-modern-sm" style="padding:4px 12px;font-size:0.7rem;">
-                                            <i class="fas fa-sync-alt"></i> Change
-                                        </button>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php else: ?>
-                <div class="text-center py-6 text-gray-400" id="noAssignedPatients">
-                    <i class="fas fa-user-check text-2xl block mb-2"></i>
-                    <p>No patients currently assigned</p>
-                </div>
-            <?php endif; ?>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- LAB REQUESTS LIST -->
-    <!-- ================================================================ -->
+    <!-- Lab Requests List -->
     <?php if ($selected_patient_id > 0): ?>
-    <div class="modern-card animate-fade-in-up" style="border-color:var(--purple);border-width:2px;background:var(--purple-bg);" style="animation-delay:0.05s;">
+    <div class="modern-card animate-fade-in-up" style="border-color:var(--purple);border-width:2px;background:var(--purple-bg);">
         <div class="card-header" style="border-color:var(--purple);">
             <div class="card-title">
                 <i class="fas fa-flask" style="color:var(--purple);"></i>
@@ -2929,9 +2965,10 @@ if ($user_role === 'admin') {
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ASSIGN FORM -->
+    <!-- ASSIGN FORM - SAME AS ORIGINAL -->
     <!-- ================================================================ -->
     <div class="form-card-modern animate-fade-in-up <?= $change_mode ? 'change-mode-active-modern' : '' ?>" id="mainFormCard" style="animation-delay:0.1s;">
+        <!-- Form Header -->
         <div class="form-header">
             <div class="form-icon">
                 <i class="fas <?= $change_mode ? 'fa-sync-alt' : 'fa-stethoscope' ?>"></i>
@@ -2961,9 +2998,7 @@ if ($user_role === 'admin') {
         <form method="POST" action="" id="assignForm">
             <input type="hidden" name="action" value="assign_doctor">
             
-            <!-- ============================================================ -->
             <!-- ROW 1: PATIENT & ASSIGNMENT TYPE -->
-            <!-- ============================================================ -->
             <div class="grid-2-modern">
                 <div class="form-row-modern">
                     <label class="form-label">
@@ -3009,11 +3044,9 @@ if ($user_role === 'admin') {
                                     
                                     $selected = ($selected_patient_id == $patient['id']) ? 'selected' : '';
                                     
-                                    // ✅ BLUE DAYS CARD
                                     $days = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
                                     $days_text = $days > 0 ? '<span class="days-badge-blue">📅 ' . $days . ' days</span>' : '<span class="days-badge-blue new">📅 New</span>';
                                     
-                                    // ✅ BLUE ASSIGNED DAYS CARD
                                     $assigned_days_text = '';
                                     if (!empty($patient['visit_id']) && !empty($patient['visit_created_at'])) {
                                         $assigned_days = (int)floor((time() - strtotime($patient['visit_created_at'])) / 86400);
@@ -3023,17 +3056,7 @@ if ($user_role === 'admin') {
                                     $is_new = (strtotime($patient['patient_created_at'] ?? 'now') > strtotime('-7 days'));
                                     $new_badge = $is_new ? ' <span class="new-patient-badge">New</span>' : '';
                                 ?>
-                                    <option value="<?= $patient['id'] ?>" data-status="<?= $status_class ?>" data-doctor="<?= htmlspecialchars($patient['assigned_doctor_name'] ?? '') ?>" <?= $selected ?>>
-                                        <?= $status_icon ?> <?= htmlspecialchars($patient['full_name']) ?> (<?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>)
-                                        <?php if (!empty($patient['phone'])): ?>
-                                            - <?= htmlspecialchars($patient['phone']) ?>
-                                        <?php endif; ?>
-                                        <?= $days_text ?>
-                                        <?= $assigned_days_text ?>
-                                        <?= $new_badge ?>
-                                        <?= $doctor_info ?>
-                                        <span class="status-badge-dropdown <?= $status_class ?>"><?= $status_label ?></span>
-                                    </option>
+                                    <option value="<?= $patient['id'] ?>" data-status="<?= $status_class ?>" data-doctor="<?= htmlspecialchars($patient['assigned_doctor_name'] ?? '') ?>" <?= $selected ?>> <?= $status_icon ?> <?= htmlspecialchars($patient['full_name']) ?> (<?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>) <?php if (!empty($patient['phone'])): ?> - <?= htmlspecialchars($patient['phone']) ?> <?php endif; ?> <?= $days_text ?> <?= $assigned_days_text ?> <?= $new_badge ?> <?= $doctor_info ?> <span class="status-badge-dropdown <?= $status_class ?>"><?= $status_label ?></span> </option>
                                 <?php endforeach; ?>
                             </optgroup>
                         <?php else: ?>
@@ -3101,9 +3124,7 @@ if ($user_role === 'admin') {
                 </div>
             </div>
             
-            <!-- ============================================================ -->
             <!-- ROW 2: DOCTOR & VISIT TYPE -->
-            <!-- ============================================================ -->
             <div class="grid-2-modern" id="doctorSection">
                 <div class="form-row-modern">
                     <label class="form-label">
@@ -3189,9 +3210,7 @@ if ($user_role === 'admin') {
                 </div>
             </div>
             
-            <!-- ============================================================ -->
             <!-- ROW 3: SYMPTOMS -->
-            <!-- ============================================================ -->
             <div class="grid-2-modern" id="doctorSection">
                 <div class="form-row-modern">
                     <label class="form-label">
@@ -3216,9 +3235,7 @@ if ($user_role === 'admin') {
                 </div>
             </div>
             
-            <!-- ============================================================ -->
             <!-- ROW 4: COMPLAINT & NOTES -->
-            <!-- ============================================================ -->
             <div class="grid-2-modern" id="doctorSection">
                 <div class="form-row-modern">
                     <label class="form-label">
@@ -3235,9 +3252,7 @@ if ($user_role === 'admin') {
                 </div>
             </div>
             
-            <!-- ============================================================ -->
             <!-- LAB TEST SECTION -->
-            <!-- ============================================================ -->
             <div id="labSection" style="display:none;">
                 <div class="lab-modal-container-modern">
                     <div class="lab-modal-header-modern">
@@ -3323,9 +3338,7 @@ if ($user_role === 'admin') {
                 </div>
             </div>
             
-            <!-- ================================================================ -->
-            <!-- VITAL SIGNS - 6 SIGNS (3x2 Grid) - NO VALIDATION -->
-            <!-- ================================================================ -->
+            <!-- VITAL SIGNS -->
             <div class="form-row-modern">
                 <label class="form-label">
                     <i class="fas fa-heartbeat label-icon" style="color:#DC2626;"></i> Vital Signs
@@ -3389,9 +3402,7 @@ if ($user_role === 'admin') {
                 </div>
             </div>
             
-            <!-- ============================================================ -->
             <!-- FORM ACTIONS -->
-            <!-- ============================================================ -->
             <div class="form-actions-modern">
                 <button type="submit" class="btn-modern <?= $change_mode ? 'btn-modern-warning' : 'btn-modern-primary' ?>" id="assignBtn">
                     <i class="fas <?= $change_mode ? 'fa-sync-alt' : 'fa-user-md' ?>"></i> 
@@ -3426,9 +3437,7 @@ if ($user_role === 'admin') {
         </form>
     </div>
 
-    <!-- ================================================================ -->
     <!-- QUICK STATS -->
-    <!-- ================================================================ -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5" style="max-width:1100px;margin:24px auto 0;">
         <div class="stat-card-modern" id="pendingStats">
             <div class="stat-icon">🟡</div>
@@ -3450,9 +3459,7 @@ if ($user_role === 'admin') {
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer-modern">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -3479,7 +3486,7 @@ if ($user_role === 'admin') {
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT (SAME AS ORIGINAL) -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -4158,12 +4165,10 @@ if ($user_role === 'admin') {
                             feeHtml = '<span class="text-xs text-purple-500">🧪 Lab Only (No consultation fee)</span>';
                         }
                         
-                        // ✅ BLUE DAYS CARD
                         var patientDays = data.patient_days || 0;
                         var daysText = patientDays > 0 ? patientDays + ' days ago' : 'Just registered';
                         var daysHtml = '<span class="days-badge-blue">📅 ' + daysText + '</span>';
                         
-                        // ✅ BLUE ASSIGNED DAYS CARD
                         var visitDaysHtml = '';
                         if (data.visit_days !== undefined && data.visit_days !== null && data.visit_days > 0) {
                             visitDaysHtml = '<span class="assigned-days-badge-blue">Assigned: ' + data.visit_days + ' days ago</span>';
@@ -4283,6 +4288,8 @@ if ($user_role === 'admin') {
     });
 
     console.log('%c👨‍⚕️ Braick - Assign / Change Doctor', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Role: <?= $user_role === 'admin' ? 'ADMIN' : 'RECEPTION' ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c👥 All Patients: <?= count($all_patients) ?> (Newest First)', 'font-size:13px; color:#64748B;');
@@ -4290,13 +4297,6 @@ if ($user_role === 'admin') {
     console.log('%c✅ Assigned: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline)', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Live updates every 3 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c📋 Visit Type: From services table (category_id=2)', 'font-size:13px; color:#2563EB;');
-    console.log('%c💰 Fees: Bill sent to Cashier', 'font-size:13px; color:#059669;');
-    console.log('%c📅 Days badge: BLUE background with white text', 'font-size:13px; color:#2563EB;');
-    console.log('%c🚫 7 Days Rule: REMOVED', 'font-size:13px; color:#DC2626;');
-    console.log('%c🧪 Lab Request - NO bill', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🔍 Search bar: REMOVED', 'font-size:13px; color:#DC2626;');
-    console.log('%c📋 Each patient has a DAYS CARD in dropdown', 'font-size:13px; color:#2563EB;');
 </script>
 
 </body>

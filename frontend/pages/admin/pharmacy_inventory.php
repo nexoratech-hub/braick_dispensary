@@ -2,22 +2,54 @@
 // ================================================================
 // FILE: frontend/pages/admin/pharmacy_inventory.php
 // SUPER ADMIN - VIEW PHARMACY INVENTORY
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - BLUE THEME - WITH BLUE STAT CARDS (3+3)
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
@@ -34,6 +66,18 @@ $search = $_GET['search'] ?? '';
 if ($pharmacy_id <= 0) {
     header('Location: pharmacies.php?branch=' . $selected_branch_id . '&error=invalid_id');
     exit;
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -112,11 +156,13 @@ $low_stock = 0;
 $expired = 0;
 $expiring_soon = 0;
 $in_stock = 0;
+$total_cost_value = 0;
 
 foreach ($inventory_items as $item) {
     $qty = $item['quantity'] ?? 0;
     $total_quantity += $qty;
     $total_value += ($qty * ($item['selling_price'] ?? 0));
+    $total_cost_value += ($qty * ($item['unit_cost'] ?? 0));
     
     if ($qty <= 0) {
         $out_of_stock++;
@@ -162,8 +208,12 @@ function getStatusBadge($status) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -591,137 +641,264 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS - 6 BLUE THEME CARDS
+           BUTTONS - FULL CSS STYLED
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .btn:active {
+            transform: translateY(0px);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+        
+        /* Primary Button */
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-gradient-hover);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        }
+        
+        /* Success Button */
+        .btn-success {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: linear-gradient(135deg, #047857, #065F46);
+            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
+        }
+        
+        /* Danger Button */
+        .btn-danger {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #B91C1C, #991B1B);
+            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
+        }
+        
+        /* Warning Button */
+        .btn-warning {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background: linear-gradient(135deg, #B45309, #92400E);
+            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.35);
+        }
+        
+        /* Outline Button */
+        .btn-outline {
+            background: transparent;
+            color: var(--text-primary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
+        }
+        
+        /* Outline with primary color */
+        .btn-outline-primary {
+            background: transparent;
+            color: var(--primary);
+            border: 2px solid var(--primary);
+        }
+        
+        .btn-outline-primary:hover {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
+        }
+        
+        /* Outline Light (for header) */
+        .btn-outline-light {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 18px;
+            border-radius: var(--radius);
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+        }
+        
+        .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        /* Button Sizes */
+        .btn-sm {
+            padding: 5px 12px;
+            font-size: 0.7rem;
+            border-radius: 6px;
+        }
+        
+        .btn-lg {
+            padding: 14px 32px;
+            font-size: 1rem;
+        }
+        
+        .btn-block {
+            width: 100%;
+            justify-content: center;
+        }
+        
+        /* Button with icon */
+        .btn i {
+            font-size: 0.9rem;
+        }
+        
+        .btn-sm i {
+            font-size: 0.7rem;
+        }
+        
+        .btn-lg i {
+            font-size: 1.1rem;
+        }
+        
+        /* ================================================================
+           STATS CARDS - BLUE BACKGROUND (3+3 GRID)
            ================================================================ */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
-            gap: 16px;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 18px;
             margin-bottom: 24px;
         }
         
         .stat-card {
-            background: var(--bg-card);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             border-radius: var(--radius);
-            padding: 16px 18px;
-            border: 2px solid var(--border-color);
+            padding: 20px 24px;
+            border: 2px solid rgba(255,255,255,0.1);
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 16px;
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
+            box-shadow: 0 4px 15px rgba(11, 94, 215, 0.2);
             text-decoration: none;
-            color: inherit;
+            color: white;
             position: relative;
             overflow: hidden;
+            min-height: 90px;
         }
         
         .stat-card::before {
             content: '';
             position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--primary-gradient);
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            top: -50%;
+            right: -20%;
+            width: 150px;
+            height: 150px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            bottom: -30%;
+            left: -10%;
+            width: 100px;
+            height: 100px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .stat-card:hover {
-            border-color: var(--primary);
             transform: translateY(-4px);
-            box-shadow: var(--shadow-lg);
+            box-shadow: 0 8px 30px rgba(11, 94, 215, 0.35);
+            border-color: rgba(255,255,255,0.2);
         }
         
-        .stat-card:hover::before {
-            opacity: 1;
-        }
-        
-        .stat-card .stat-content {
-            flex: 1;
-        }
-        
-        .stat-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
+        .stat-card .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            font-size: 1.3rem;
             flex-shrink: 0;
-            transition: all 0.3s ease;
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.1);
+            position: relative;
+            z-index: 1;
         }
         
-        .stat-card:hover .stat-icon {
-            transform: scale(1.05);
-        }
-        
-        .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-icon.green { background: #ECFDF5; color: #059669; }
-        .stat-icon.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
-        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-icon.teal { background: #ECFDF5; color: #0D9488; }
-        .stat-icon.amber { background: #FFFBEB; color: #D97706; }
-        .stat-icon.rose { background: #FFF1F2; color: #E11D48; }
-        .stat-icon.cyan { background: #ECFEFF; color: #0891B2; }
-        
-        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .stat-icon.green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .stat-icon.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-icon.teal { background: #1A3A2A; color: #2DD4BF; }
-        [data-theme="dark"] .stat-icon.amber { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.rose { background: #3A1A1A; color: #FB7185; }
-        [data-theme="dark"] .stat-icon.cyan { background: #0A2A3A; color: #22D3EE; }
-        
-        .stat-label {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
+        .stat-card .stat-label {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.8);
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             margin: 0;
+            position: relative;
+            z-index: 1;
         }
         
-        .stat-value {
-            font-size: 1.2rem;
+        .stat-card .stat-value {
+            font-size: 1.5rem;
             font-weight: 700;
-            color: var(--text-primary);
+            color: white;
             margin: 0;
             line-height: 1.2;
+            position: relative;
+            z-index: 1;
         }
         
-        .stat-value.blue-text { color: var(--primary); }
-        .stat-value.green-text { color: #059669; }
-        .stat-value.orange-text { color: #F59E0B; }
-        .stat-value.red-text { color: #DC2626; }
-        .stat-value.purple-text { color: #7C3AED; }
-        .stat-value.teal-text { color: #0D9488; }
-        .stat-value.amber-text { color: #D97706; }
-        .stat-value.rose-text { color: #E11D48; }
-        .stat-value.cyan-text { color: #0891B2; }
-        
-        .stat-sub {
-            font-size: 0.55rem;
-            color: var(--text-secondary);
-            margin-top: 1px;
-        }
-        
-        .stat-arrow {
-            opacity: 0;
-            transition: all 0.3s ease;
-            color: var(--primary);
-            font-size: 0.7rem;
-            flex-shrink: 0;
-        }
-        
-        .stat-card:hover .stat-arrow {
-            opacity: 1;
-            transform: translateX(4px);
+        .stat-card .stat-sub {
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.6);
+            margin-top: 2px;
+            position: relative;
+            z-index: 1;
         }
         
         /* ================================================================
@@ -785,51 +962,8 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
         }
         
-        .filter-bar .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 18px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-gradient-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-sm {
-            padding: 4px 12px;
-            font-size: 0.7rem;
-            border-radius: 6px;
-        }
-        
         /* ================================================================
-           DATA TABLE
+           DATA TABLE - BEAUTIFUL DESIGN
            ================================================================ */
         .data-table {
             width: 100%;
@@ -842,12 +976,15 @@ include_once '../../components/admin_sidebar.php';
             background: var(--primary-gradient);
             color: white;
             font-weight: 600;
-            padding: 10px 12px;
+            padding: 12px 14px;
             font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             border-bottom: none;
             white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 5;
         }
         
         .data-table thead th:first-child {
@@ -859,11 +996,15 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .data-table td {
-            padding: 10px 12px;
+            padding: 10px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
             transition: background 0.2s ease;
+        }
+        
+        .data-table tbody tr {
+            transition: all 0.2s ease;
         }
         
         .data-table tbody tr:hover td {
@@ -873,6 +1014,20 @@ include_once '../../components/admin_sidebar.php';
         .data-table tbody tr:last-child td {
             border-bottom: none;
         }
+        
+        /* Status indicator dot */
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        
+        .status-dot.green { background: #059669; }
+        .status-dot.amber { background: #D97706; }
+        .status-dot.red { background: #DC2626; }
+        .status-dot.blue { background: #0B5ED7; }
         
         /* ================================================================
            CARD
@@ -921,6 +1076,35 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+        }
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        .toast-custom.success { background: #059669; }
+        .toast-custom.error { background: #DC2626; }
+        .toast-custom.info { background: #0B5ED7; }
+        .toast-custom.warning { background: #D97706; }
+        
+        /* ================================================================
            EMPTY STATE
            ================================================================ */
         .empty-state {
@@ -961,14 +1145,11 @@ include_once '../../components/admin_sidebar.php';
         /* ================================================================
            RESPONSIVE
            ================================================================ */
-        @media (max-width: 1200px) {
-            .stats-grid { grid-template-columns: repeat(3, 1fr); }
-        }
-        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -979,6 +1160,10 @@ include_once '../../components/admin_sidebar.php';
             .stats-grid { grid-template-columns: 1fr 1fr; }
             .filter-bar { flex-direction: column; align-items: stretch; }
             .filter-bar select, .filter-bar input { width: 100%; min-width: unset; }
+            .data-table { font-size: 0.7rem; }
+            .data-table td, .data-table th { padding: 6px 8px; }
+            .btn { padding: 6px 12px; font-size: 0.75rem; }
+            .btn-sm { padding: 3px 8px; font-size: 0.6rem; }
         }
         
         @media (max-width: 480px) {
@@ -998,15 +1183,6 @@ include_once '../../components/admin_sidebar.php';
         .animate-fade-in-up {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-        
-        .stat-card:hover .stat-icon {
-            animation: pulse 0.5s ease;
         }
         
         /* ================================================================
@@ -1032,8 +1208,7 @@ include_once '../../components/admin_sidebar.php';
             .page-title, .page-subtitle, .header-badge, .role-badge-display {
                 color: white !important;
             }
-            .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; }
-            .stat-card::before { display: none !important; }
+            .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; background: #0B5ED7 !important; color: white !important; }
         }
     </style>
 </head>
@@ -1076,12 +1251,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1126,86 +1301,82 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 6 STATISTICS CARDS - BLUE THEME -->
+    <!-- 6 STATISTICS CARDS - 3+3 GRID (BLUE BACKGROUND) -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
+        <!-- Row 1: Cards 1-3 -->
         <!-- Card 1: Total Items -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=all" class="stat-card">
-            <div class="stat-icon blue">
+            <div class="stat-icon">
                 <i class="fas fa-boxes"></i>
             </div>
-            <div class="stat-content">
+            <div>
                 <p class="stat-label">Total Items</p>
-                <p class="stat-value blue-text"><?= number_format($total_items) ?></p>
+                <p class="stat-value"><?= number_format($total_items) ?></p>
                 <p class="stat-sub">Inventory items</p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- Card 2: In Stock -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=instock" class="stat-card">
-            <div class="stat-icon green">
+            <div class="stat-icon">
                 <i class="fas fa-check-circle"></i>
             </div>
-            <div class="stat-content">
+            <div>
                 <p class="stat-label">In Stock</p>
-                <p class="stat-value green-text"><?= number_format($in_stock) ?></p>
+                <p class="stat-value"><?= number_format($in_stock) ?></p>
                 <p class="stat-sub">Available items</p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- Card 3: Low Stock -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=lowstock" class="stat-card">
-            <div class="stat-icon amber">
+            <div class="stat-icon">
                 <i class="fas fa-exclamation-triangle"></i>
             </div>
-            <div class="stat-content">
+            <div>
                 <p class="stat-label">Low Stock</p>
-                <p class="stat-value amber-text"><?= number_format($low_stock) ?></p>
+                <p class="stat-value"><?= number_format($low_stock) ?></p>
                 <p class="stat-sub">Below reorder level</p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
+        <!-- Row 2: Cards 4-6 -->
         <!-- Card 4: Out of Stock -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=outofstock" class="stat-card">
-            <div class="stat-icon red">
+            <div class="stat-icon">
                 <i class="fas fa-times-circle"></i>
             </div>
-            <div class="stat-content">
+            <div>
                 <p class="stat-label">Out of Stock</p>
-                <p class="stat-value red-text"><?= number_format($out_of_stock) ?></p>
+                <p class="stat-value"><?= number_format($out_of_stock) ?></p>
                 <p class="stat-sub">Zero quantity</p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- Card 5: Expired -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expired" class="stat-card">
-            <div class="stat-icon rose">
+            <div class="stat-icon">
                 <i class="fas fa-skull"></i>
             </div>
-            <div class="stat-content">
+            <div>
                 <p class="stat-label">Expired</p>
-                <p class="stat-value rose-text"><?= number_format($expired) ?></p>
+                <p class="stat-value"><?= number_format($expired) ?></p>
                 <p class="stat-sub">Past expiry date</p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- Card 6: Expiring Soon -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expiring" class="stat-card">
-            <div class="stat-icon cyan">
+            <div class="stat-icon">
                 <i class="fas fa-hourglass-half"></i>
             </div>
-            <div class="stat-content">
+            <div>
                 <p class="stat-label">Expiring Soon</p>
-                <p class="stat-value cyan-text"><?= number_format($expiring_soon) ?></p>
+                <p class="stat-value"><?= number_format($expiring_soon) ?></p>
                 <p class="stat-sub">Next 30 days</p>
             </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
     </div>
@@ -1229,11 +1400,11 @@ include_once '../../components/admin_sidebar.php';
             
             <input type="text" name="search" placeholder="Search by name or category..." value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[200px]">
             
-            <button type="submit" class="btn btn-primary">
+            <button type="submit" class="btn btn-primary btn-sm">
                 <i class="fas fa-search"></i> Filter
             </button>
             
-            <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+            <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
                 <i class="fas fa-times"></i> Clear
             </a>
         </form>
@@ -1249,10 +1420,10 @@ include_once '../../components/admin_sidebar.php';
                 Inventory Items (<?= count($inventory_items) ?>)
             </h3>
             <div class="flex gap-2">
-                <a href="add_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-sm btn-primary">
+                <a href="add_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
                     <i class="fas fa-plus"></i> Add Item
                 </a>
-                <a href="export_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=<?= $filter ?>" class="btn btn-sm btn-outline">
+                <a href="export_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=<?= $filter ?>" class="btn btn-outline btn-sm">
                     <i class="fas fa-file-export"></i> Export
                 </a>
             </div>
@@ -1262,14 +1433,14 @@ include_once '../../components/admin_sidebar.php';
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Medicine</th>
-                            <th>Category</th>
-                            <th>Qty</th>
-                            <th>Reorder Level</th>
-                            <th>Selling Price</th>
-                            <th>Expiry Date</th>
-                            <th>Status</th>
-                            <th>Action</th>
+                            <th style="min-width: 120px;">Medicine</th>
+                            <th style="min-width: 100px;">Category</th>
+                            <th style="width: 70px;">Qty</th>
+                            <th style="width: 100px;">Reorder Level</th>
+                            <th style="width: 110px;">Selling Price</th>
+                            <th style="min-width: 110px;">Expiry Date</th>
+                            <th style="width: 130px;">Status</th>
+                            <th style="width: 100px;">Action</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1282,40 +1453,65 @@ include_once '../../components/admin_sidebar.php';
                         ?>
                             <tr>
                                 <td class="font-medium"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
-                                <td class="font-semibold <?= $is_out_of_stock ? 'text-red-600' : ($is_low_stock ? 'text-amber-600' : 'text-green-600') ?>">
-                                    <?= number_format($item['quantity'] ?? 0) ?>
+                                <td>
+                                    <span class="badge badge-info" style="font-size:0.55rem;padding:2px 10px;background:var(--primary-bg);color:var(--primary);">
+                                        <?= htmlspecialchars($item['category'] ?? 'N/A') ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="font-bold <?= $is_out_of_stock ? 'text-red-600' : ($is_low_stock ? 'text-amber-600' : 'text-green-600') ?>">
+                                        <?= number_format($item['quantity'] ?? 0) ?>
+                                    </span>
                                 </td>
                                 <td><?= number_format($item['reorder_level'] ?? 0) ?></td>
-                                <td>TSh <?= number_format($item['selling_price'] ?? 0, 0) ?></td>
+                                <td>
+                                    <span class="font-semibold text-blue-600">TSh <?= number_format($item['selling_price'] ?? 0, 0) ?></span>
+                                </td>
                                 <td class="<?= $is_expired ? 'text-red-600 font-bold' : ($is_expiring_soon ? 'text-amber-600' : 'text-gray-500') ?>">
                                     <?= !empty($item['expiry_date']) ? date('M d, Y', strtotime($item['expiry_date'])) : 'N/A' ?>
                                     <?php if ($is_expired): ?>
-                                        <span class="text-red-600 text-xs block">(Expired)</span>
+                                        <span class="text-red-600 text-[10px] block font-bold">(EXPIRED)</span>
                                     <?php elseif ($is_expiring_soon): ?>
-                                        <span class="text-amber-600 text-xs block">(Soon)</span>
+                                        <span class="text-amber-600 text-[10px] block">(Expiring Soon)</span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
                                     <?php if ($is_out_of_stock): ?>
-                                        <span class="badge badge-danger" style="font-size:0.6rem;padding:2px 10px;">Out of Stock</span>
+                                        <span class="badge badge-danger" style="font-size:0.6rem;padding:2px 10px;">
+                                            <span class="status-dot red"></span> Out of Stock
+                                        </span>
                                     <?php elseif ($is_low_stock): ?>
-                                        <span class="badge badge-warning" style="font-size:0.6rem;padding:2px 10px;">Low Stock</span>
+                                        <span class="badge badge-warning" style="font-size:0.6rem;padding:2px 10px;">
+                                            <span class="status-dot amber"></span> Low Stock
+                                        </span>
                                     <?php elseif ($is_expired): ?>
-                                        <span class="badge badge-danger" style="font-size:0.6rem;padding:2px 10px;">Expired</span>
+                                        <span class="badge badge-danger" style="font-size:0.6rem;padding:2px 10px;">
+                                            <span class="status-dot red"></span> Expired
+                                        </span>
                                     <?php elseif ($is_expiring_soon): ?>
-                                        <span class="badge badge-warning" style="font-size:0.6rem;padding:2px 10px;">Expiring Soon</span>
+                                        <span class="badge badge-warning" style="font-size:0.6rem;padding:2px 10px;">
+                                            <span class="status-dot amber"></span> Expiring Soon
+                                        </span>
                                     <?php elseif ($is_healthy): ?>
-                                        <span class="badge badge-success" style="font-size:0.6rem;padding:2px 10px;">In Stock</span>
+                                        <span class="badge badge-success" style="font-size:0.6rem;padding:2px 10px;">
+                                            <span class="status-dot green"></span> In Stock
+                                        </span>
                                     <?php else: ?>
-                                        <span class="badge badge-secondary" style="font-size:0.6rem;padding:2px 10px;">Unknown</span>
+                                        <span class="badge badge-secondary" style="font-size:0.6rem;padding:2px 10px;">
+                                            Unknown
+                                        </span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="flex gap-1">
-                                        <a href="edit_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="text-blue-600 text-xs hover:underline">Edit</a>
-                                        <span class="text-gray-300">|</span>
-                                        <a href="view_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <div class="flex gap-1 items-center">
+                                        <a href="edit_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" 
+                                           class="btn btn-sm btn-outline-primary" style="padding:3px 8px;font-size:0.6rem;border-width:1.5px;">
+                                            <i class="fas fa-edit"></i>
+                                        </a>
+                                        <a href="view_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" 
+                                           class="btn btn-sm btn-primary" style="padding:3px 8px;font-size:0.6rem;">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
                                     </div>
                                 </td>
                             </tr>
@@ -1330,11 +1526,11 @@ include_once '../../components/admin_sidebar.php';
                         <?= !empty($search) || $filter !== 'all' ? 'No items match your search criteria.' : 'This pharmacy has no inventory items yet.' ?>
                     </p>
                     <?php if (!empty($search) || $filter !== 'all'): ?>
-                        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary mt-4">
+                        <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary">
                             <i class="fas fa-times"></i> Clear Filters
                         </a>
                     <?php else: ?>
-                        <a href="add_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary mt-4">
+                        <a href="add_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary">
                             <i class="fas fa-plus"></i> Add Item
                         </a>
                     <?php endif; ?>
@@ -1359,6 +1555,17 @@ include_once '../../components/admin_sidebar.php';
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <div>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
@@ -1467,12 +1674,38 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c📦 Braick Dispensary - Pharmacy Inventory (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // TOAST
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3500);
+    }
+
+    console.log('%c📦 Braick Dispensary - Pharmacy Inventory (3+3 GRID)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?> (ID: <?= $pharmacy['id'] ?>)', 'font-size:13px; color:#059669;');
     console.log('%c📦 Total Items: <?= number_format($total_items) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c💰 Total Value: TSh <?= number_format($total_value, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ In Stock: <?= $in_stock ?> | ⚠️ Low Stock: <?= $low_stock ?> | ❌ Out of Stock: <?= $out_of_stock ?>', 'font-size:13px; color:#059669;');
-    console.log('%c⏰ Expired: <?= $expired ?> | Expiring Soon: <?= $expiring_soon ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ 3+3 GRID: Cards in 2 rows of 3', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ All 6 stat cards have BLUE BACKGROUND with white text', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 Inventory table with beautiful design', 'font-size:13px; color:#34D399;');
+    console.log('%c🎨 All buttons have beautiful CSS styling', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

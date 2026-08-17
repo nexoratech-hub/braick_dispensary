@@ -3,19 +3,50 @@
 // FILE: frontend/pages/admin/laboratories.php
 // ADMIN - VIEW ALL LABORATORIES
 // BRAICK DISPENSARY - BLUE THEME
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// ADD LABORATORY BUTTON REMOVED
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// SESSION START
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
+
+// ================================================================
+// LOGIN PROTECTION
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../../auth/login.php');
+    exit;
+}
+
+// ================================================================
+// ROLE CHECK - ONLY ADMIN CAN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../../auth/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // Include database
 require_once '../../../backend/config/database.php';
@@ -135,18 +166,18 @@ function getStatusBadge($status) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -1115,8 +1146,8 @@ include_once '../../components/admin_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1127,7 +1158,7 @@ include_once '../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- PAGE HEADER - ADD LABORATORY BUTTON REMOVED -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -1150,11 +1181,7 @@ include_once '../../components/admin_sidebar.php';
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="add_laboratory.php" class="btn-outline-light">
-                <i class="fas fa-plus"></i> Add Laboratory
-            </a>
-        </div>
+        <!-- BUTTON YA ADD LABORATORY IMEONDOLWA -->
     </div>
 
     <!-- ================================================================ -->
@@ -1321,7 +1348,7 @@ include_once '../../components/admin_sidebar.php';
         <div class="empty-state animate-fade-in-up" style="animation-delay:0.1s;">
             <i class="fas fa-flask"></i>
             <h3>No Laboratories Found</h3>
-            <p>Try adjusting your filters or <a href="add_laboratory.php" class="text-blue-600 hover:underline">add a new laboratory</a></p>
+            <p>Try adjusting your filters</p>
         </div>
     <?php endif; ?>
 
@@ -1439,12 +1466,14 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     console.log('%c🧪 Braick Dispensary - Laboratories', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔬 Total Labs: <?= $total_labs ?>', 'font-size:13px; color:#059669;');
     console.log('%c🧪 Total Tests: <?= number_format($total_tests) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c⏳ Pending Tests: <?= number_format($pending_tests) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c✅ Completed Tests: <?= number_format($completed_tests) ?>', 'font-size:13px; color:#34D399;');
     console.log('%c👨‍🔬 Total Technicians: <?= number_format($total_technicians) ?>', 'font-size:13px; color:#0D9488;');
     console.log('%c🔵 Card headers have BLUE BACKGROUND with white text', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c❌ Add Laboratory button REMOVED', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

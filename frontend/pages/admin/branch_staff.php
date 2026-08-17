@@ -1,7 +1,8 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/branches.php
-// SUPER ADMIN - BRANCHES MANAGEMENT
+// FILE: frontend/pages/admin/branch_staff.php
+// SUPER ADMIN - BRANCH STAFF MANAGEMENT
+// VIEW AND MANAGE STAFF FOR A SPECIFIC BRANCH
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -27,29 +28,151 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET BRANCH FILTER
+// GET BRANCH ID
 // ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
-$search_term = $_GET['search'] ?? '';
+$branch_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+
+if ($branch_id <= 0) {
+    header('Location: branches.php');
+    exit();
+}
+
+// ================================================================
+// GET BRANCH INFO
+// ================================================================
+$branch_stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
+$branch_stmt->execute([$branch_id]);
+$branch = $branch_stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$branch) {
+    header('Location: branches.php');
+    exit();
+}
+
+// ================================================================
+// GET STAFF FOR THIS BRANCH
+// ================================================================
+$staff_stmt = $db->prepare("
+    SELECT 
+        u.*,
+        b.name as branch_name
+    FROM users u
+    LEFT JOIN branches b ON u.branch_id = b.id
+    WHERE u.branch_id = ?
+    ORDER BY u.role, u.full_name
+");
+$staff_stmt->execute([$branch_id]);
+$staff_list = $staff_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// GET STAFF COUNTS BY ROLE
+// ================================================================
+$count_stmt = $db->prepare("
+    SELECT role, COUNT(*) as count 
+    FROM users 
+    WHERE branch_id = ? AND status = 'active'
+    GROUP BY role
+");
+$count_stmt->execute([$branch_id]);
+$role_counts = $count_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$role_count_map = [];
+foreach ($role_counts as $rc) {
+    $role_count_map[$rc['role']] = $rc['count'];
+}
+
+$total_staff = count($staff_list);
+$active_staff = 0;
+$inactive_staff = 0;
+
+foreach ($staff_list as $staff) {
+    if ($staff['status'] === 'active') {
+        $active_staff++;
+    } else {
+        $inactive_staff++;
+    }
+}
+
+// ================================================================
+// HANDLE STAFF STATUS TOGGLE
+// ================================================================
 $message = '';
 $message_type = '';
 
-// ================================================================
-// HANDLE FORM SUBMISSIONS
-// ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     if ($action === 'toggle_status') {
-        $id = (int)($_POST['id'] ?? 0);
+        $staff_id = (int)($_POST['staff_id'] ?? 0);
         $status = $_POST['status'] ?? 'active';
         
-        if ($id > 0 && in_array($status, ['active', 'inactive'])) {
+        if ($staff_id > 0 && in_array($status, ['active', 'inactive'])) {
             try {
-                $stmt = $db->prepare("UPDATE branches SET status = ?, updated_at = NOW() WHERE id = ?");
-                $stmt->execute([$status, $id]);
-                $message = "✅ Branch status updated to <strong>" . ucfirst($status) . "</strong>";
+                $stmt = $db->prepare("UPDATE users SET status = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$status, $staff_id]);
+                $message = "✅ Staff status updated to <strong>" . ucfirst($status) . "</strong>";
                 $message_type = 'success';
+                
+                // Refresh staff list
+                $staff_stmt->execute([$branch_id]);
+                $staff_list = $staff_stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Recalculate counts
+                $active_staff = 0;
+                $inactive_staff = 0;
+                foreach ($staff_list as $staff) {
+                    if ($staff['status'] === 'active') {
+                        $active_staff++;
+                    } else {
+                        $inactive_staff++;
+                    }
+                }
+                $total_staff = count($staff_list);
+                
+            } catch (PDOException $e) {
+                $message = "❌ Error: " . $e->getMessage();
+                $message_type = 'error';
+            }
+        }
+    }
+    
+    if ($action === 'delete_staff') {
+        $staff_id = (int)($_POST['staff_id'] ?? 0);
+        
+        if ($staff_id > 0) {
+            try {
+                // Check if staff has any dependencies
+                $check_stmt = $db->prepare("
+                    SELECT COUNT(*) as count FROM visits WHERE doctor_id = ?
+                ");
+                $check_stmt->execute([$staff_id]);
+                $visit_count = $check_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+                
+                if ($visit_count > 0) {
+                    $message = "❌ Cannot delete this staff member. They have $visit_count associated visits.";
+                    $message_type = 'error';
+                } else {
+                    $stmt = $db->prepare("DELETE FROM users WHERE id = ?");
+                    $stmt->execute([$staff_id]);
+                    $message = "✅ Staff member removed successfully.";
+                    $message_type = 'success';
+                    
+                    // Refresh staff list
+                    $staff_stmt->execute([$branch_id]);
+                    $staff_list = $staff_stmt->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    // Recalculate counts
+                    $active_staff = 0;
+                    $inactive_staff = 0;
+                    foreach ($staff_list as $staff) {
+                        if ($staff['status'] === 'active') {
+                            $active_staff++;
+                        } else {
+                            $inactive_staff++;
+                        }
+                    }
+                    $total_staff = count($staff_list);
+                }
             } catch (PDOException $e) {
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
@@ -59,114 +182,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
-// FETCH BRANCHES
-// ================================================================
-$query = "SELECT b.* FROM branches b WHERE 1=1";
-
-if (!empty($search_term)) {
-    $query .= " AND (b.name LIKE :search OR b.location LIKE :search OR b.phone LIKE :search OR b.email LIKE :search)";
-}
-
-$query .= " ORDER BY b.name ASC";
-
-$stmt = $db->prepare($query);
-
-if (!empty($search_term)) {
-    $stmt->bindValue(':search', '%' . $search_term . '%');
-}
-
-$stmt->execute();
-$branches_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// ENRICH BRANCH DATA
-// ================================================================
-$branches = [];
-$total_staff = 0;
-$total_patients = 0;
-$active_branches = 0;
-
-foreach ($branches_raw as $branch) {
-    // Get staff counts
-    $staff_stmt = $db->prepare("
-        SELECT role, COUNT(*) as count 
-        FROM users 
-        WHERE branch_id = ? AND status = 'active'
-        GROUP BY role
-    ");
-    $staff_stmt->execute([$branch['id']]);
-    $staff_counts = $staff_stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    $admin_count = 0;
-    $doctor_count = 0;
-    $reception_count = 0;
-    $pharmacy_count = 0;
-    $cashier_count = 0;
-    $lab_count = 0;
-    
-    foreach ($staff_counts as $sc) {
-        switch ($sc['role']) {
-            case 'admin': $admin_count = $sc['count']; break;
-            case 'doctor': $doctor_count = $sc['count']; break;
-            case 'reception': $reception_count = $sc['count']; break;
-            case 'pharmacy': $pharmacy_count = $sc['count']; break;
-            case 'cashier': $cashier_count = $sc['count']; break;
-            case 'laboratory': $lab_count = $sc['count']; break;
-        }
-    }
-    
-    $total_staff += ($admin_count + $doctor_count + $reception_count + $pharmacy_count + $cashier_count + $lab_count);
-    
-    // Get patient count
-    $patient_stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-    $patient_stmt->execute([$branch['id']]);
-    $patient_count = $patient_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    $total_patients += $patient_count;
-    
-    // Get visits
-    $visits_stmt = $db->prepare("
-        SELECT 
-            COUNT(CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN 1 END) as active_visits,
-            COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_visits
-        FROM visits 
-        WHERE branch_id = ?
-    ");
-    $visits_stmt->execute([$branch['id']]);
-    $visits_data = $visits_stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($branch['status'] === 'active') {
-        $active_branches++;
-    }
-    
-    $branch['admin_count'] = $admin_count;
-    $branch['doctor_count'] = $doctor_count;
-    $branch['reception_count'] = $reception_count;
-    $branch['pharmacy_count'] = $pharmacy_count;
-    $branch['cashier_count'] = $cashier_count;
-    $branch['lab_count'] = $lab_count;
-    $branch['patient_count'] = $patient_count;
-    $branch['active_visits'] = $visits_data['active_visits'] ?? 0;
-    $branch['completed_visits'] = $visits_data['completed_visits'] ?? 0;
-    $branch['total_staff'] = $admin_count + $doctor_count + $reception_count + $pharmacy_count + $cashier_count + $lab_count;
-    
-    $branches[] = $branch;
-}
-
-$total_branches = count($branches);
-
-// ================================================================
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 $user_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
+$selected_branch_id = $branch_id;
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Branches - Braick Dispensary</title>
+    <title>Branch Staff - <?= htmlspecialchars($branch['name']) ?> - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -424,7 +452,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
         }
         
         /* ================================================================
-           PAGE HEADER - BLUE
+           PAGE HEADER
            ================================================================ */
         .page-header {
             background: var(--primary-solid);
@@ -545,11 +573,11 @@ $user_role = $_SESSION['role'] ?? 'admin';
         }
         
         /* ================================================================
-           STATS CARDS - BLUE BACKGROUND
+           STATS CARDS
            ================================================================ */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 16px;
             margin-bottom: 28px;
         }
@@ -557,10 +585,10 @@ $user_role = $_SESSION['role'] ?? 'admin';
         .stat-card {
             background: var(--primary-solid);
             border-radius: var(--radius);
-            padding: 20px 24px;
+            padding: 16px 20px;
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 14px;
             transition: all 0.3s ease;
             box-shadow: 0 4px 16px rgba(26, 86, 219, 0.25);
             border: none;
@@ -573,13 +601,13 @@ $user_role = $_SESSION['role'] ?? 'admin';
         }
         
         .stat-icon {
-            width: 52px;
-            height: 52px;
-            border-radius: 12px;
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.3rem;
+            font-size: 1.1rem;
             flex-shrink: 0;
             background: rgba(255,255,255,0.2);
             color: white;
@@ -587,7 +615,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
         }
         
         .stat-card .stat-label {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: rgba(255,255,255,0.75);
             font-weight: 500;
             text-transform: uppercase;
@@ -596,7 +624,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
         }
         
         .stat-card .stat-value {
-            font-size: 1.5rem;
+            font-size: 1.2rem;
             font-weight: 700;
             color: white;
             margin: 0;
@@ -604,342 +632,214 @@ $user_role = $_SESSION['role'] ?? 'admin';
         }
         
         /* ================================================================
-           BRANCH CARDS
+           STAFF TABLE
            ================================================================ */
-        .branches-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-            gap: 20px;
-        }
-        
-        .branch-card {
+        .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
             border: 1px solid var(--border-color);
             overflow: hidden;
-            transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
         }
         
-        .branch-card:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-lg);
-            border-color: var(--primary);
-        }
-        
-        .branch-card.active {
-            border-left: 4px solid var(--primary-solid);
-        }
-        
-        .branch-card.inactive {
-            border-left: 4px solid var(--danger);
-            opacity: 0.85;
-        }
-        
-        .branch-card.inactive:hover {
-            opacity: 1;
-        }
-        
-        .branch-card-header {
-            padding: 16px 20px;
-            background: var(--primary-solid);
+        .table-container .table-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
             gap: 12px;
-            position: relative;
-            overflow: hidden;
+            background: var(--bg-body);
         }
         
-        .branch-card-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -10%;
-            width: 200px;
-            height: 200px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
+        [data-theme="dark"] .table-container .table-header {
+            background: var(--bg-card);
         }
         
-        .branch-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            min-width: 0;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .branch-icon {
-            width: 42px;
-            height: 42px;
-            border-radius: 10px;
-            background: rgba(255,255,255,0.2);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.1rem;
-            flex-shrink: 0;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.15);
-        }
-        
-        .branch-name {
-            font-size: 0.95rem;
+        .table-container .table-header h3 {
+            font-size: 1rem;
             font-weight: 600;
-            color: white;
+            color: var(--text-primary);
             margin: 0;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
         }
         
-        .branch-code {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.7);
-            display: block;
-            font-family: 'Courier New', monospace;
-        }
-        
-        .branch-status-badge {
+        .table-container .table-header .btn-add {
+            background: var(--primary-solid);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
+            gap: 8px;
+        }
+        
+        .table-container .table-header .btn-add:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(26, 86, 219, 0.3);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        table thead {
+            background: var(--bg-body);
+        }
+        
+        [data-theme="dark"] table thead {
+            background: var(--bg-card);
+        }
+        
+        table thead th {
+            padding: 12px 16px;
+            text-align: left;
+            font-size: 0.7rem;
             font-weight: 600;
-            color: white;
-            background: rgba(255,255,255,0.2);
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.15);
-            position: relative;
-            z-index: 1;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            border-bottom: 2px solid var(--border-color);
         }
         
-        .branch-status-badge.active {
-            background: rgba(52, 211, 153, 0.3);
-            border-color: rgba(52, 211, 153, 0.3);
-            color: #34D399;
-        }
-        
-        .branch-status-badge.inactive {
-            background: rgba(248, 113, 113, 0.3);
-            border-color: rgba(248, 113, 113, 0.3);
-            color: #F87171;
-        }
-        
-        .branch-card-body {
-            padding: 16px 20px;
-        }
-        
-        .branch-details {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px 16px;
-            margin-bottom: 14px;
-        }
-        
-        .detail-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
+        table tbody td {
+            padding: 12px 16px;
             font-size: 0.82rem;
-            color: var(--text-primary);
-            padding: 6px 0;
             border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
         }
         
-        .detail-item:last-child {
+        table tbody tr:hover {
+            background: var(--table-hover);
+        }
+        
+        table tbody tr:last-child td {
             border-bottom: none;
         }
         
-        .detail-item i {
+        .staff-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+        }
+        
+        .staff-avatar-placeholder {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary-bg);
             color: var(--primary-solid);
-            font-size: 0.85rem;
-            width: 18px;
-            text-align: center;
-            flex-shrink: 0;
-        }
-        
-        .detail-item .detail-label {
-            color: var(--text-secondary);
-            font-weight: 500;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-            min-width: 60px;
-        }
-        
-        .detail-item .detail-value {
-            color: var(--text-primary);
-            font-weight: 500;
-            word-break: break-all;
-        }
-        
-        [data-theme="dark"] .detail-item i {
-            color: var(--primary-light);
-        }
-        
-        .branch-stats {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 8px;
-            padding: 10px 0;
-            border-top: 1px solid var(--border-color);
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .stat-item {
-            text-align: center;
-        }
-        
-        .stat-item .stat-number {
-            display: block;
-            font-size: 1.1rem;
             font-weight: 700;
-            color: var(--text-primary);
+            font-size: 0.8rem;
+            border: 2px solid var(--border-color);
         }
         
-        .stat-item .stat-label {
-            font-size: 0.55rem;
-            color: var(--text-secondary);
+        .badge-role {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.03em;
+        }
+        
+        .badge-role.admin { background: #DC2626; color: white; }
+        .badge-role.doctor { background: #1A56DB; color: white; }
+        .badge-role.reception { background: #7C3AED; color: white; }
+        .badge-role.pharmacy { background: #D97706; color: white; }
+        .badge-role.cashier { background: #059669; color: white; }
+        .badge-role.laboratory { background: #0D9488; color: white; }
+        
+        .badge-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.6rem;
             font-weight: 600;
         }
         
-        .branch-card-footer {
-            padding: 12px 20px;
-            background: var(--bg-body);
-            border-top: 1px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
+        .badge-status.active {
+            background: var(--primary-bg);
+            color: var(--primary-solid);
         }
         
-        [data-theme="dark"] .branch-card-footer {
-            background: var(--bg-card);
+        .badge-status.inactive {
+            background: var(--danger-bg);
+            color: var(--danger-dark);
         }
         
-        .staff-breakdown {
-            display: flex;
-            gap: 4px;
-            flex-wrap: wrap;
-        }
-        
-        .staff-tag {
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-            font-size: 0.55rem;
-            font-weight: 500;
-            padding: 2px 8px;
-            border-radius: 10px;
-            background: var(--bg-card);
+        .btn-action {
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.7rem;
+            transition: all 0.2s ease;
+            background: transparent;
             color: var(--text-secondary);
-            border: 1px solid var(--border-color);
-            white-space: nowrap;
         }
         
-        [data-theme="dark"] .staff-tag {
-            background: var(--bg-body);
+        .btn-action:hover {
+            transform: scale(1.1);
         }
         
-        .staff-tag i {
-            font-size: 0.5rem;
-        }
+        .btn-action.edit:hover { color: var(--primary-solid); }
+        .btn-action.activate:hover { color: var(--success); }
+        .btn-action.deactivate:hover { color: var(--danger); }
+        .btn-action.delete:hover { color: var(--danger); }
         
-        .branch-actions {
+        .actions-cell {
             display: flex;
             gap: 4px;
+            align-items: center;
+            flex-wrap: wrap;
         }
         
         /* ================================================================
-           BUTTONS
+           EMPTY STATE
            ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            background: var(--bg-card);
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+        }
+        
+        .empty-state i {
+            font-size: 4rem;
+            color: var(--text-secondary);
+            opacity: 0.3;
+            margin-bottom: 16px;
+            display: block;
+        }
+        
+        .empty-state h3 {
+            font-size: 1.2rem;
             color: var(--text-primary);
-            border: 1.5px solid var(--border-color);
+            margin: 0 0 8px 0;
         }
         
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .btn-sm {
-            padding: 4px 10px;
-            font-size: 0.65rem;
-            border-radius: 6px;
-        }
-        
-        .btn-primary {
-            background: var(--primary-solid);
-            color: white;
-            border-color: var(--primary-solid);
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            border-color: var(--primary-dark);
-            color: white;
-        }
-        
-        .btn-outline-primary {
-            background: transparent;
-            color: var(--primary-solid);
-            border: 1.5px solid var(--primary-solid);
-        }
-        
-        .btn-outline-primary:hover {
-            background: var(--primary-solid);
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(26, 86, 219, 0.3);
-        }
-        
-        .btn-outline-success {
-            color: var(--primary-solid);
-            border-color: var(--primary-solid);
-        }
-        
-        .btn-outline-success:hover {
-            background: var(--primary-solid);
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(26, 86, 219, 0.3);
-        }
-        
-        .btn-outline-danger {
-            color: var(--danger);
-            border-color: var(--danger);
-        }
-        
-        .btn-outline-danger:hover {
-            background: var(--danger);
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        .empty-state p {
+            color: var(--text-secondary);
+            margin: 0 0 20px 0;
+            font-size: 0.9rem;
         }
         
         /* ================================================================
@@ -969,37 +869,6 @@ $user_role = $_SESSION['role'] ?? 'admin';
         .alert-modern i { font-size: 1.1rem; margin-top: 2px; }
         
         /* ================================================================
-           EMPTY STATE
-           ================================================================ */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
-        }
-        
-        .empty-state i {
-            font-size: 4rem;
-            color: var(--text-secondary);
-            opacity: 0.3;
-            margin-bottom: 16px;
-            display: block;
-        }
-        
-        .empty-state h3 {
-            font-size: 1.2rem;
-            color: var(--text-primary);
-            margin: 0 0 8px 0;
-        }
-        
-        .empty-state p {
-            color: var(--text-secondary);
-            margin: 0 0 20px 0;
-            font-size: 0.9rem;
-        }
-        
-        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
@@ -1017,8 +886,72 @@ $user_role = $_SESSION['role'] ?? 'admin';
         }
         
         /* ================================================================
-           SIDEBAR FIX - Add these important styles
+           RESPONSIVE
            ================================================================ */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .stats-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+        }
+        
+        @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
+            
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+            
+            .table-container .table-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            table thead { display: none; }
+            table tbody td {
+                display: block;
+                padding: 8px 12px;
+                border-bottom: none;
+            }
+            table tbody tr {
+                display: block;
+                border-bottom: 2px solid var(--border-color);
+                padding: 8px 0;
+            }
+            table tbody tr:last-child {
+                border-bottom: none;
+            }
+            table tbody td:before {
+                content: attr(data-label);
+                font-weight: 600;
+                display: inline-block;
+                width: 100px;
+                font-size: 0.7rem;
+                text-transform: uppercase;
+                color: var(--text-secondary);
+            }
+            table tbody td:not(:last-child) {
+                border-bottom: 1px solid var(--border-color);
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+            .stats-grid { grid-template-columns: 1fr; }
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        /* SIDEBAR */
         .sidebar {
             position: fixed !important;
             top: 0 !important;
@@ -1035,53 +968,6 @@ $user_role = $_SESSION['role'] ?? 'admin';
             box-shadow: 4px 0 20px rgba(0,0,0,0.15) !important;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .branches-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
-            .sidebar { transform: translateX(-100%) !important; }
-            .sidebar.open { transform: translateX(0) !important; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .branches-grid { grid-template-columns: 1fr; }
-            .branch-details { grid-template-columns: 1fr; }
-            .branch-stats { grid-template-columns: repeat(2, 1fr); }
-            .branch-card-footer { flex-direction: column; align-items: stretch; }
-            .staff-breakdown { justify-content: center; }
-            .branch-actions { justify-content: center; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .stats-grid { grid-template-columns: 1fr; }
-            .branch-card-header { flex-direction: column; align-items: stretch; text-align: center; }
-            .branch-info { flex-direction: column; text-align: center; }
-            .branch-status { text-align: center; }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        /* Sidebar Overlay */
         #sidebarOverlay {
             position: fixed;
             top: 0;
@@ -1095,25 +981,17 @@ $user_role = $_SESSION['role'] ?? 'admin';
             -webkit-backdrop-filter: blur(2px);
         }
         
-        #sidebarOverlay.active {
-            display: block !important;
-        }
-        
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .branch-actions, .page-header .btn-outline-light,
-            .footer, #sidebarToggle { display: none !important; }
-            
-            .main-content { margin: 0; padding: 20px; }
-            .branch-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .branch-card-header { background: #1A56DB !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        @media (max-width: 1024px) {
+            .sidebar { transform: translateX(-100%) !important; }
+            .sidebar.open { transform: translateX(0) !important; }
+            #sidebarOverlay.active { display: block !important; }
         }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR OVERLAY (Mobile) -->
+<!-- SIDEBAR OVERLAY -->
 <!-- ================================================================ -->
 <div id="sidebarOverlay"></div>
 
@@ -1121,11 +999,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
 <!-- SIDEBAR -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
-    
-    <!-- ================================================================ -->
-    <!-- BRAND / HEADER -->
-    <!-- ================================================================ -->
-    <div class="sidebar-brand" style="padding:18px 16px 14px;border-bottom:2px solid #0B3D8A;background:#0B4EA8;position:sticky;top:0;z-index:5;">
+    <div style="padding:18px 16px 14px;border-bottom:2px solid #0B3D8A;background:#0B4EA8;position:sticky;top:0;z-index:5;">
         <div style="display:flex;align-items:center;gap:12px;">
             <img src="<?= $logo_url ?>" alt="Braick Logo" style="width:42px;height:42px;border-radius:10px;object-fit:cover;background:white;padding:4px;border:2px solid rgba(255,255,255,0.1);"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
@@ -1136,34 +1010,22 @@ $user_role = $_SESSION['role'] ?? 'admin';
         </div>
     </div>
     
-    <!-- ================================================================ -->
-    <!-- BRANCH SELECTOR -->
-    <!-- ================================================================ -->
     <div style="padding:10px 14px;border-bottom:2px solid #0B3D8A;background:#0B4EA8;">
         <select id="sidebarBranchSelector" onchange="switchBranch(this.value)" style="width:100%;padding:7px 10px;border-radius:8px;border:none;background:rgba(255,255,255,0.12);color:white;font-size:0.75rem;cursor:pointer;outline:none;transition:all 0.3s ease;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 12 12%22%3E%3Cpath fill=%22white%22 d=%22M6 8L1 3h10z%22/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 10px center;">
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php
             try {
-                if ($db !== null) {
-                    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                        $sel = ($selected_branch_id == $row['id']) ? 'selected' : '';
-                        echo '<option value="' . $row['id'] . '" ' . $sel . ' style="background:#0B4EA8;color:white;padding:8px;">🏥 ' . htmlspecialchars($row['name']) . '</option>';
-                    }
+                $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $sel = ($selected_branch_id == $row['id']) ? 'selected' : '';
+                    echo '<option value="' . $row['id'] . '" ' . $sel . ' style="background:#0B4EA8;color:white;padding:8px;">🏥 ' . htmlspecialchars($row['name']) . '</option>';
                 }
             } catch (Exception $e) {}
             ?>
         </select>
     </div>
     
-    <!-- ================================================================ -->
-    <!-- NAVIGATION -->
-    <!-- ================================================================ -->
     <nav style="padding:10px 8px 20px;">
-        
-        <!-- ============================================================ -->
-        <!-- MAIN MENU -->
-        <!-- ============================================================ -->
         <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Main Menu</div>
         
         <a href="/dispensary_system/frontend/pages/admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
@@ -1174,70 +1036,45 @@ $user_role = $_SESSION['role'] ?? 'admin';
         <a href="/dispensary_system/frontend/pages/admin/employees.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-users"></i> Employees
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeEmployees"><?= $total_staff ?></span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/patients.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-injured"></i> Patients
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgePatients"><?= $total_patients ?></span>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- MODULES -->
-        <!-- ============================================================ -->
         <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Modules</div>
         
         <a href="/dispensary_system/frontend/pages/admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-md"></i> Doctors
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeDoctors">0</span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-prescription"></i> Pharmacy
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgePharmacy">0</span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/view_reception.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-headset"></i> Reception
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeReception">0</span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-flask"></i> Laboratory
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeLaboratory">0</span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/view_cashier.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-cash-register"></i> Cashier
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeCashier">0</span>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- SERVICES -->
-        <!-- ============================================================ -->
-        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Services</div>
-        
-        <a href="/dispensary_system/frontend/pages/admin/services.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-concierge-bell"></i> Services
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeServices">0</span>
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- MANAGEMENT -->
-        <!-- ============================================================ -->
         <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Management</div>
         
         <a href="/dispensary_system/frontend/pages/admin/branches.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;background:#0AA84F;color:white;box-shadow:0 4px 12px rgba(10,168,79,0.35);">
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-store-alt"></i> Branches
-            <span style="margin-left:auto;background:rgba(255,255,255,0.25);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeBranches"><?= $total_branches ?></span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/departments.php?branch=<?= $selected_branch_id ?>" 
@@ -1250,19 +1087,6 @@ $user_role = $_SESSION['role'] ?? 'admin';
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-chart-bar"></i> Reports
         </a>
         
-        <!-- ============================================================ -->
-        <!-- SYSTEM -->
-        <!-- ============================================================ -->
-        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">System</div>
-        
-        <a href="/dispensary_system/frontend/pages/admin/settings.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-cog"></i> Settings
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- ACCOUNT -->
-        <!-- ============================================================ -->
         <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Account</div>
         
         <a href="/dispensary_system/frontend/pages/admin/profile.php" 
@@ -1270,14 +1094,10 @@ $user_role = $_SESSION['role'] ?? 'admin';
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-circle"></i> Profile
         </a>
         
-        <!-- ============================================================ -->
-        <!-- LOGOUT -->
-        <!-- ============================================================ -->
         <a href="/dispensary_system/frontend/pages/logout.php" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;border-top:2px solid rgba(255,255,255,0.08);padding-top:10px;margin-top:6px;color:#FCA5A5;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-sign-out-alt"></i> Logout
         </a>
-        
     </nav>
 </aside>
 
@@ -1290,13 +1110,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
             <i class="fas fa-bars"></i>
         </button>
         
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search branches..." value="<?= htmlspecialchars($search_term) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
+        <div style="flex:1;"></div>
     </div>
     
     <div class="flex items-center gap-3">
@@ -1328,34 +1142,28 @@ $user_role = $_SESSION['role'] ?? 'admin';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-store-alt"></i>
-                Branches Management
+                <i class="fas fa-users-cog"></i>
+                Staff - <?= htmlspecialchars($branch['name']) ?>
                 <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-building"></i>
-                Manage all dispensary branches
+                <i class="fas fa-user-md"></i>
+                Manage staff members for <?= htmlspecialchars($branch['name']) ?> branch
                 <span class="header-badge">
-                    <i class="fas fa-store"></i> <?= $total_branches ?> Total
+                    <i class="fas fa-store"></i> Branch #<?= $branch_id ?>
                 </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-check-circle"></i> <?= $active_branches ?> Active
-                </span>
-                <span class="header-badge" style="background:rgba(248,113,113,0.2);border-color:rgba(248,113,113,0.3);color:#F87171;">
-                    <i class="fas fa-times-circle"></i> <?= $total_branches - $active_branches ?> Inactive
-                </span>
-                <span class="header-badge" style="background:rgba(167,139,250,0.2);border-color:rgba(167,139,250,0.3);color:#A78BFA;">
-                    <i class="fas fa-users"></i> <?= number_format($total_staff) ?> Staff
+                <span class="header-badge">
+                    <i class="fas fa-map-marker-alt"></i> <?= htmlspecialchars($branch['location'] ?? 'N/A') ?>
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="add_branch.php" class="btn-outline-light">
-                <i class="fas fa-plus-circle"></i> Add Branch
+            <a href="branches.php" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back to Branches
             </a>
-            <button onclick="window.location.reload()" class="btn-outline-light">
-                <i class="fas fa-sync-alt"></i> Refresh
-            </button>
+            <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-outline-light">
+                <i class="fas fa-user-plus"></i> Add Staff
+            </a>
         </div>
     </div>
 
@@ -1368,16 +1176,16 @@ $user_role = $_SESSION['role'] ?? 'admin';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - BLUE BACKGROUND -->
+    <!-- STATISTICS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <div class="stat-card">
             <div class="stat-icon">
-                <i class="fas fa-store"></i>
+                <i class="fas fa-users"></i>
             </div>
             <div>
-                <p class="stat-label">Total Branches</p>
-                <p class="stat-value"><?= $total_branches ?></p>
+                <p class="stat-label">Total Staff</p>
+                <p class="stat-value"><?= $total_staff ?></p>
             </div>
         </div>
         <div class="stat-card">
@@ -1385,175 +1193,165 @@ $user_role = $_SESSION['role'] ?? 'admin';
                 <i class="fas fa-check-circle"></i>
             </div>
             <div>
-                <p class="stat-label">Active Branches</p>
-                <p class="stat-value"><?= $active_branches ?></p>
+                <p class="stat-label">Active</p>
+                <p class="stat-value"><?= $active_staff ?></p>
             </div>
         </div>
         <div class="stat-card">
             <div class="stat-icon">
-                <i class="fas fa-users"></i>
+                <i class="fas fa-times-circle"></i>
             </div>
             <div>
-                <p class="stat-label">Total Staff</p>
-                <p class="stat-value"><?= number_format($total_staff) ?></p>
+                <p class="stat-label">Inactive</p>
+                <p class="stat-value"><?= $inactive_staff ?></p>
             </div>
         </div>
         <div class="stat-card">
             <div class="stat-icon">
-                <i class="fas fa-user-injured"></i>
+                <i class="fas fa-user-md"></i>
             </div>
             <div>
-                <p class="stat-label">Total Patients</p>
-                <p class="stat-value"><?= number_format($total_patients) ?></p>
+                <p class="stat-label">Doctors</p>
+                <p class="stat-value"><?= $role_count_map['doctor'] ?? 0 ?></p>
             </div>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- BRANCHES GRID -->
+    <!-- STAFF TABLE -->
     <!-- ================================================================ -->
-    <?php if (count($branches) > 0): ?>
-        <div class="branches-grid animate-fade-in-up" style="animation-delay:0.05s;">
-            <?php foreach ($branches as $branch): 
-                $branch_id = $branch['id'] ?? 0;
-                $branch_name = htmlspecialchars($branch['name'] ?? 'Unknown');
-                $branch_status = $branch['status'] ?? 'active';
-                $branch_location = htmlspecialchars($branch['location'] ?? 'Not set');
-                $branch_phone = htmlspecialchars($branch['phone'] ?? 'Not set');
-                $branch_email = htmlspecialchars($branch['email'] ?? 'Not set');
-                
-                $admin_count = $branch['admin_count'] ?? 0;
-                $doctor_count = $branch['doctor_count'] ?? 0;
-                $reception_count = $branch['reception_count'] ?? 0;
-                $pharmacy_count = $branch['pharmacy_count'] ?? 0;
-                $cashier_count = $branch['cashier_count'] ?? 0;
-                $lab_count = $branch['lab_count'] ?? 0;
-                $total_staff_branch = $admin_count + $doctor_count + $reception_count + $pharmacy_count + $cashier_count + $lab_count;
-                
-                $patient_count = $branch['patient_count'] ?? 0;
-                $active_visits = $branch['active_visits'] ?? 0;
-                $completed_visits = $branch['completed_visits'] ?? 0;
-            ?>
-                <div class="branch-card <?= $branch_status === 'active' ? 'active' : 'inactive' ?>">
-                    <div class="branch-card-header">
-                        <div class="branch-info">
-                            <div class="branch-icon">
-                                <i class="fas fa-hospital"></i>
-                            </div>
-                            <div>
-                                <h3 class="branch-name"><?= $branch_name ?></h3>
-                                <span class="branch-code">ID: <?= $branch_id ?></span>
-                            </div>
-                        </div>
-                        <div class="branch-status">
-                            <span class="branch-status-badge <?= $branch_status === 'active' ? 'active' : 'inactive' ?>">
-                                <i class="fas fa-<?= $branch_status === 'active' ? 'circle' : 'times-circle' ?>"></i>
-                                <?= ucfirst($branch_status) ?>
-                            </span>
-                        </div>
-                    </div>
-                    
-                    <div class="branch-card-body">
-                        <div class="branch-details">
-                            <div class="detail-item">
-                                <i class="fas fa-map-marker-alt"></i>
-                                <span class="detail-label">Location</span>
-                                <span class="detail-value"><?= $branch_location ?></span>
-                            </div>
-                            <div class="detail-item">
-                                <i class="fas fa-phone"></i>
-                                <span class="detail-label">Phone</span>
-                                <span class="detail-value"><?= $branch_phone ?></span>
-                            </div>
-                            <div class="detail-item" style="grid-column: span 2;">
-                                <i class="fas fa-envelope"></i>
-                                <span class="detail-label">Email</span>
-                                <span class="detail-value"><?= $branch_email ?></span>
-                            </div>
-                        </div>
-                        
-                        <div class="branch-stats">
-                            <div class="stat-item">
-                                <span class="stat-number"><?= $total_staff_branch ?></span>
-                                <span class="stat-label">Staff</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-number"><?= $patient_count ?></span>
-                                <span class="stat-label">Patients</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-number"><?= $active_visits ?></span>
-                                <span class="stat-label">Active Visits</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-number"><?= $completed_visits ?></span>
-                                <span class="stat-label">Completed</span>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="branch-card-footer">
-                        <div class="staff-breakdown">
-                            <?php if ($admin_count > 0): ?>
-                                <span class="staff-tag">
-                                    <i class="fas fa-user-tie"></i> <?= $admin_count ?> Admins
-                                </span>
-                            <?php endif; ?>
-                            <?php if ($doctor_count > 0): ?>
-                                <span class="staff-tag">
-                                    <i class="fas fa-user-md"></i> <?= $doctor_count ?> Doctors
-                                </span>
-                            <?php endif; ?>
-                            <?php if ($reception_count > 0): ?>
-                                <span class="staff-tag">
-                                    <i class="fas fa-user-friends"></i> <?= $reception_count ?> Reception
-                                </span>
-                            <?php endif; ?>
-                            <?php if ($pharmacy_count > 0): ?>
-                                <span class="staff-tag">
-                                    <i class="fas fa-prescription-bottle"></i> <?= $pharmacy_count ?> Pharmacy
-                                </span>
-                            <?php endif; ?>
-                            <?php if ($total_staff_branch == 0): ?>
-                                <span class="staff-tag" style="color:var(--text-secondary);">
-                                    <i class="fas fa-user-slash"></i> No staff assigned
-                                </span>
-                            <?php endif; ?>
-                        </div>
-                        <div class="branch-actions">
-                            <a href="view_branch.php?id=<?= $branch_id ?>" class="btn btn-sm btn-outline-primary" title="View Details">
-                                <i class="fas fa-eye"></i>
-                            </a>
-                            <a href="edit_branch.php?id=<?= $branch_id ?>" class="btn btn-sm btn-outline-primary" title="Edit Branch">
-                                <i class="fas fa-edit"></i>
-                            </a>
-                            <a href="branch_staff.php?id=<?= $branch_id ?>" class="btn btn-sm btn-outline-primary" title="Manage Staff">
-                                <i class="fas fa-users-cog"></i>
-                            </a>
-                            <?php if ($branch_status === 'active'): ?>
-                                <button onclick="toggleBranch(<?= $branch_id ?>, 'inactive')" class="btn btn-sm btn-outline-danger" title="Deactivate">
-                                    <i class="fas fa-pause"></i>
-                                </button>
-                            <?php else: ?>
-                                <button onclick="toggleBranch(<?= $branch_id ?>, 'active')" class="btn btn-sm btn-outline-success" title="Activate">
-                                    <i class="fas fa-play"></i>
-                                </button>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
-            <?php endforeach; ?>
-        </div>
-    <?php else: ?>
-        <div class="empty-state animate-fade-in-up">
-            <i class="fas fa-store-alt-slash"></i>
-            <h3>No Branches Found</h3>
-            <p>No branches match your search criteria. Try adjusting your search or add a new branch.</p>
-            <a href="add_branch.php" class="btn btn-primary">
-                <i class="fas fa-plus-circle"></i> Add Branch
+    <div class="table-container animate-fade-in-up" style="animation-delay:0.05s;">
+        <div class="table-header">
+            <h3>
+                <i class="fas fa-users"></i> 
+                Staff Members (<?= $total_staff ?>)
+            </h3>
+            <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-add">
+                <i class="fas fa-user-plus"></i> Add Staff
             </a>
         </div>
-    <?php endif; ?>
+        
+        <?php if (count($staff_list) > 0): ?>
+            <div style="overflow-x:auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width:50px;">#</th>
+                            <th>Staff</th>
+                            <th>Role</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Status</th>
+                            <th style="text-align:center;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php $counter = 1; foreach ($staff_list as $staff): 
+                            $staff_id = $staff['id'] ?? 0;
+                            $staff_name = htmlspecialchars($staff['full_name'] ?? 'Unknown');
+                            $staff_role = $staff['role'] ?? 'unknown';
+                            $staff_email = htmlspecialchars($staff['email'] ?? 'N/A');
+                            $staff_phone = htmlspecialchars($staff['phone'] ?? 'N/A');
+                            $staff_status = $staff['status'] ?? 'inactive';
+                            $profile_pic = $staff['profile_pic'] ?? '';
+                            
+                            $role_badge_class = 'badge-role';
+                            switch ($staff_role) {
+                                case 'admin': $role_badge_class .= ' admin'; break;
+                                case 'doctor': $role_badge_class .= ' doctor'; break;
+                                case 'reception': $role_badge_class .= ' reception'; break;
+                                case 'pharmacy': $role_badge_class .= ' pharmacy'; break;
+                                case 'cashier': $role_badge_class .= ' cashier'; break;
+                                case 'laboratory': $role_badge_class .= ' laboratory'; break;
+                                default: $role_badge_class .= ' admin';
+                            }
+                            
+                            $role_icons = [
+                                'admin' => 'fa-user-tie',
+                                'doctor' => 'fa-user-md',
+                                'reception' => 'fa-headset',
+                                'pharmacy' => 'fa-prescription-bottle',
+                                'cashier' => 'fa-cash-register',
+                                'laboratory' => 'fa-flask'
+                            ];
+                            $role_icon = $role_icons[$staff_role] ?? 'fa-user';
+                        ?>
+                            <tr>
+                                <td data-label="#"><?= $counter++ ?></td>
+                                <td data-label="Staff">
+                                    <div style="display:flex;align-items:center;gap:10px;">
+                                        <?php if (!empty($profile_pic)): ?>
+                                            <img src="/dispensary_system/frontend/assets/uploads/profiles/<?= $profile_pic ?>" 
+                                                 alt="<?= $staff_name ?>" 
+                                                 class="staff-avatar"
+                                                 onerror="this.style.display='none'">
+                                        <?php endif; ?>
+                                        <?php if (empty($profile_pic)): ?>
+                                            <div class="staff-avatar-placeholder"><?= substr($staff_name, 0, 1) ?></div>
+                                        <?php endif; ?>
+                                        <div>
+                                            <div style="font-weight:600;color:var(--text-primary);"><?= $staff_name ?></div>
+                                            <div style="font-size:0.65rem;color:var(--text-secondary);">ID: #<?= $staff_id ?></div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td data-label="Role">
+                                    <span class="<?= $role_badge_class ?>">
+                                        <i class="fas <?= $role_icon ?>"></i>
+                                        <?= ucfirst($staff_role) ?>
+                                    </span>
+                                </td>
+                                <td data-label="Email">
+                                    <a href="mailto:<?= $staff_email ?>" style="color:var(--primary-solid);text-decoration:none;">
+                                        <?= $staff_email ?>
+                                    </a>
+                                </td>
+                                <td data-label="Phone"><?= $staff_phone ?></td>
+                                <td data-label="Status">
+                                    <span class="badge-status <?= $staff_status === 'active' ? 'active' : 'inactive' ?>">
+                                        <i class="fas fa-<?= $staff_status === 'active' ? 'circle' : 'times-circle' ?>"></i>
+                                        <?= ucfirst($staff_status) ?>
+                                    </span>
+                                </td>
+                                <td data-label="Actions">
+                                    <div class="actions-cell" style="justify-content:center;">
+                                        <a href="edit_staff.php?id=<?= $staff_id ?>&branch_id=<?= $branch_id ?>" 
+                                           class="btn-action edit" title="Edit">
+                                            <i class="fas fa-edit"></i>
+                                        </a>
+                                        <?php if ($staff_status === 'active'): ?>
+                                            <button onclick="toggleStaffStatus(<?= $staff_id ?>, 'inactive')" 
+                                                    class="btn-action deactivate" title="Deactivate">
+                                                <i class="fas fa-pause"></i>
+                                            </button>
+                                        <?php else: ?>
+                                            <button onclick="toggleStaffStatus(<?= $staff_id ?>, 'active')" 
+                                                    class="btn-action activate" title="Activate">
+                                                <i class="fas fa-play"></i>
+                                            </button>
+                                        <?php endif; ?>
+                                        <button onclick="deleteStaff(<?= $staff_id ?>, '<?= addslashes($staff_name) ?>')" 
+                                                class="btn-action delete" title="Delete">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-user-slash"></i>
+                <h3>No Staff Found</h3>
+                <p>This branch currently has no staff members assigned.</p>
+                <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-add" style="display:inline-flex;">
+                    <i class="fas fa-user-plus"></i> Add First Staff
+                </a>
+            </div>
+        <?php endif; ?>
+    </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -1562,7 +1360,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Branches Management
+            Staff Management - <?= htmlspecialchars($branch['name']) ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1573,12 +1371,17 @@ $user_role = $_SESSION['role'] ?? 'admin';
 </main>
 
 <!-- ================================================================ -->
-<!-- TOGGLE STATUS FORM -->
+<!-- FORMS FOR ACTIONS -->
 <!-- ================================================================ -->
 <form id="toggleStatusForm" method="POST" action="" style="display:none;">
     <input type="hidden" name="action" value="toggle_status">
-    <input type="hidden" name="id" id="toggleStatusId" value="0">
-    <input type="hidden" name="status" id="toggleStatusValue" value="">
+    <input type="hidden" name="staff_id" id="toggleStaffId" value="0">
+    <input type="hidden" name="status" id="toggleStaffStatus" value="">
+</form>
+
+<form id="deleteStaffForm" method="POST" action="" style="display:none;">
+    <input type="hidden" name="action" value="delete_staff">
+    <input type="hidden" name="staff_id" id="deleteStaffId" value="0">
 </form>
 
 <!-- ================================================================ -->
@@ -1592,7 +1395,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         if (url.searchParams.has('id')) {
-            url.searchParams.delete('id');
+            // Keep the id parameter for branch_staff page
         }
         window.location.href = url.toString();
     }
@@ -1646,7 +1449,6 @@ $user_role = $_SESSION['role'] ?? 'admin';
             }
         });
         
-        // Close sidebar on resize to desktop
         window.addEventListener('resize', function() {
             if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                 sidebar.classList.remove('open');
@@ -1654,11 +1456,6 @@ $user_role = $_SESSION['role'] ?? 'admin';
                 document.body.style.overflow = '';
             }
         });
-        
-        console.log('✅ Sidebar initialized successfully');
-        console.log('📱 Window width:', window.innerWidth);
-        console.log('📱 Is mobile:', window.innerWidth <= 1024);
-        console.log('👤 Admin: <?= htmlspecialchars($user_name) ?>');
     });
 
     // ================================================================
@@ -1694,35 +1491,24 @@ $user_role = $_SESSION['role'] ?? 'admin';
     });
 
     // ================================================================
-    // SEARCH
+    // TOGGLE STAFF STATUS
     // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        var branch = '<?= $selected_branch_id ?>';
-        if (query.length > 0) {
-            window.location.href = 'branches.php?branch=' + branch + '&search=' + encodeURIComponent(query);
-        } else {
-            window.location.href = 'branches.php?branch=' + branch;
+    function toggleStaffStatus(staffId, status) {
+        var action = status === 'active' ? 'activate' : 'deactivate';
+        if (confirm('Are you sure you want to ' + action + ' this staff member?')) {
+            document.getElementById('toggleStaffId').value = staffId;
+            document.getElementById('toggleStaffStatus').value = status;
+            document.getElementById('toggleStatusForm').submit();
         }
     }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
 
     // ================================================================
-    // TOGGLE BRANCH STATUS
+    // DELETE STAFF
     // ================================================================
-    function toggleBranch(id, status) {
-        var action = status === 'active' ? 'activate' : 'deactivate';
-        if (confirm('Are you sure you want to ' + action + ' this branch?')) {
-            document.getElementById('toggleStatusId').value = id;
-            document.getElementById('toggleStatusValue').value = status;
-            document.getElementById('toggleStatusForm').submit();
+    function deleteStaff(staffId, staffName) {
+        if (confirm('Are you sure you want to delete staff member: "' + staffName + '"? This action cannot be undone.')) {
+            document.getElementById('deleteStaffId').value = staffId;
+            document.getElementById('deleteStaffForm').submit();
         }
     }
 
@@ -1746,11 +1532,10 @@ $user_role = $_SESSION['role'] ?? 'admin';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏢 Braick Dispensary - Branches Management', 'font-size:18px; font-weight:bold; color:#1A56DB;');
-    console.log('%c📊 Total Branches: <?= $total_branches ?>', 'font-size:13px; color:#1A56DB;');
-    console.log('%c✅ Active: <?= $active_branches ?>, ❌ Inactive: <?= $total_branches - $active_branches ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c👥 Total Staff: <?= number_format($total_staff) ?>', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c🩺 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c🏥 Braick Dispensary - Branch Staff', 'font-size:18px; font-weight:bold; color:#1A56DB;');
+    console.log('%c📋 Branch: <?= htmlspecialchars($branch['name']) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#1A56DB;');
+    console.log('%c👥 Total Staff: <?= $total_staff ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Active: <?= $active_staff ?>, ❌ Inactive: <?= $inactive_staff ?>', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

@@ -2,33 +2,66 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_cashier.php
 // ADMIN - VIEW CASHIER BRANCH DETAILS WITH REVENUE CARDS
-// BRAICK DISPENSARY - GREEN THEME
+// BRAICK DISPENSARY - GREEN THEME - FIXED
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET BRANCH ID
+// GET BRANCH ID - FIXED: Use default if not provided
 // ================================================================
 $cashier_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
+// If no ID provided, redirect with error
 if ($cashier_id <= 0) {
     header('Location: cashiers.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
     exit;
@@ -67,7 +100,7 @@ try {
 }
 
 // ================================================================
-// REVENUE QUERIES
+// ✅ FIXED: REVENUE QUERIES - WITH PROPER JOINS
 // ================================================================
 
 // 1. TOTAL REVENUE - All payments
@@ -85,7 +118,6 @@ try {
 
 // 2. PHARMACY REVENUE (Prescribe + OTC)
 try {
-    // Prescription Revenue
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(total_amount), 0) as prescribe_revenue
         FROM prescription_sales 
@@ -98,7 +130,6 @@ try {
 }
 
 try {
-    // OTC Revenue
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(net_amount), 0) as otc_revenue
         FROM otc_sales 
@@ -112,25 +143,40 @@ try {
 
 $pharmacy_total = $prescribe_revenue + $otc_revenue;
 
-// 3. LAB REVENUE - All lab tests
+// 3. ✅ LAB REVENUE - FROM BOTH lab_requests AND lab_tests
+$lab_revenue = 0;
 try {
+    // From lab_requests
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(lab_total), 0) as lab_revenue
+        FROM lab_requests 
+        WHERE branch_id = ? AND status = 'completed'
+    ");
+    $stmt->execute([$cashier_id]);
+    $lab_revenue_requests = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
+    
+    // From lab_tests
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(test_price), 0) as lab_revenue
         FROM lab_tests 
         WHERE branch_id = ? AND status = 'completed'
     ");
     $stmt->execute([$cashier_id]);
-    $lab_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
+    $lab_revenue_tests = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
+    
+    // Total lab revenue
+    $lab_revenue = $lab_revenue_requests + $lab_revenue_tests;
 } catch (Exception $e) {
     $lab_revenue = 0;
 }
 
-// 4. PROCEDURES REVENUE
+// 4. ✅ PROCEDURES REVENUE - FROM bill_items with proper join
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_price), 0) as procedures_revenue
-        FROM bill_items 
-        WHERE branch_id = ? AND item_type = 'procedure' AND payment_status = 'paid'
+        SELECT COALESCE(SUM(bi.total_price), 0) as procedures_revenue
+        FROM bill_items bi
+        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
+        WHERE pb.branch_id = ? AND bi.item_type = 'procedure' AND bi.payment_status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
     $procedures_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['procedures_revenue'] ?? 0;
@@ -138,12 +184,13 @@ try {
     $procedures_revenue = 0;
 }
 
-// 5. TOOLS REVENUE
+// 5. ✅ TOOLS REVENUE - FROM bill_items with proper join
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_price), 0) as tools_revenue
-        FROM bill_items 
-        WHERE branch_id = ? AND item_type = 'tool' AND payment_status = 'paid'
+        SELECT COALESCE(SUM(bi.total_price), 0) as tools_revenue
+        FROM bill_items bi
+        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
+        WHERE pb.branch_id = ? AND bi.item_type = 'tool' AND bi.payment_status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
     $tools_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['tools_revenue'] ?? 0;
@@ -154,7 +201,7 @@ try {
 // 6. PROCEDURES + TOOLS TOTAL
 $procedures_tools_total = $procedures_revenue + $tools_revenue;
 
-// 7. OTHER SERVICES (Registration + Consultation fees from visits)
+// 7. ✅ OTHER SERVICES - FROM visits with proper status
 try {
     $stmt = $db->prepare("
         SELECT 
@@ -174,13 +221,34 @@ try {
 
 $other_services_total = $registration_revenue + $consultation_revenue;
 
-// 8. GRAND TOTAL REVENUE (All sources combined)
+// 8. ✅ GRAND TOTAL REVENUE (All sources combined)
 $grand_total_revenue = $pharmacy_total + $lab_revenue + $procedures_tools_total + $other_services_total;
+
+// ================================================================
+// ✅ EXPENSES
+// ================================================================
+$total_expenses = 0;
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(amount), 0) as total_expenses
+        FROM expenses 
+        WHERE branch_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$cashier_id]);
+    $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total_expenses'] ?? 0;
+} catch (Exception $e) {
+    $total_expenses = 0;
+}
+
+// ================================================================
+// ✅ NET PROFIT
+// ================================================================
+$net_profit = $grand_total_revenue - $total_expenses;
 
 // ================================================================
 // GET CASHIERS FOR THIS BRANCH
 // ================================================================
-$cashiers = [];
+$cashiers_list = [];
 try {
     $stmt = $db->prepare("
         SELECT id, full_name, email, phone, status, created_at 
@@ -189,9 +257,9 @@ try {
         ORDER BY full_name
     ");
     $stmt->execute([$cashier_id]);
-    $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $cashiers_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $cashiers = [];
+    $cashiers_list = [];
 }
 
 // ================================================================
@@ -296,19 +364,19 @@ function formatCurrency($amount) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
-include_once '../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!DOCTYPE html>
@@ -316,7 +384,7 @@ include_once '../../components/admin_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Cashier - <?= htmlspecialchars($cashier['name']) ?> - Braick Dispensary</title>
+    <title>View Cashier - <?= htmlspecialchars($cashier['name'] ?? 'Branch') ?> - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -357,6 +425,9 @@ include_once '../../components/admin_sidebar.php';
             
             --orange: #F59E0B;
             --orange-bg: #FFFBEB;
+            
+            --blue: #0B5ED7;
+            --blue-bg: #E8F0FE;
             
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -776,7 +847,7 @@ include_once '../../components/admin_sidebar.php';
             background: var(--primary-gradient-strong);
             border-radius: var(--radius);
             padding: 18px 20px;
-            border: 2px solid var(--border-color);
+            border: 2px solid rgba(255,255,255,0.1);
             transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
             position: relative;
@@ -988,6 +1059,39 @@ include_once '../../components/admin_sidebar.php';
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
         /* ================================================================
+           STAT MINI CARDS
+           ================================================================ */
+        .stat-mini {
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            padding: 14px 18px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            text-decoration: none;
+            color: var(--text-primary);
+            display: block;
+        }
+        
+        .stat-mini:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .stat-mini .stat-label-mini {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-weight: 600;
+        }
+        
+        .stat-mini .stat-number-mini {
+            font-size: 1.5rem;
+            font-weight: 800;
+        }
+        
+        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
@@ -1047,6 +1151,37 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        /* ================================================================
            PRINT STYLES
            ================================================================ */
         @media print {
@@ -1070,7 +1205,7 @@ include_once '../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1110,8 +1245,8 @@ include_once '../../components/admin_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1133,16 +1268,22 @@ include_once '../../components/admin_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-store-alt"></i>
-                <strong><?= htmlspecialchars($cashier['name']) ?></strong>
+                <strong><?= htmlspecialchars($cashier['name'] ?? 'N/A') ?></strong>
                 <span class="header-badge">
-                    <i class="fas fa-<?= $cashier['status'] === 'active' ? 'check-circle' : 'times-circle' ?>"></i>
-                    <?= ucfirst($cashier['status']) ?>
+                    <i class="fas fa-<?= ($cashier['status'] ?? 'active') === 'active' ? 'check-circle' : 'times-circle' ?>"></i>
+                    <?= ucfirst($cashier['status'] ?? 'Active') ?>
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($grand_total_revenue, 0) ?> Revenue
+                    <i class="fas fa-money-bill-wave"></i> <?= formatCurrency($grand_total_revenue) ?> Revenue
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
                     <i class="fas fa-file-invoice"></i> <?= $cashier['total_bills'] ?? 0 ?> Bills
+                </span>
+                <span class="header-badge" style="background:rgba(239,68,68,0.2);border-color:rgba(239,68,68,0.3);color:#F87171;">
+                    <i class="fas fa-arrow-up"></i> Expenses: <?= formatCurrency($total_expenses) ?>
+                </span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-chart-line"></i> Profit: <?= formatCurrency($net_profit) ?>
                 </span>
             </p>
         </div>
@@ -1160,7 +1301,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- CASHIER INFO CARD -->
     <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
                 <p class="detail-label"><i class="fas fa-map-marker-alt mr-1"></i> Location</p>
                 <p class="detail-value"><?= htmlspecialchars($cashier['location'] ?? 'N/A') ?></p>
@@ -1172,14 +1313,6 @@ include_once '../../components/admin_sidebar.php';
             <div>
                 <p class="detail-label"><i class="fas fa-envelope mr-1"></i> Email</p>
                 <p class="detail-value"><?= htmlspecialchars($cashier['email'] ?? 'N/A') ?></p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-calendar-plus mr-1"></i> Created</p>
-                <p class="detail-value"><?= date('M d, Y h:i A', strtotime($cashier['created_at'] ?? 'now')) ?></p>
-            </div>
-            <div>
-                <p class="detail-label"><i class="fas fa-clock mr-1"></i> Last Updated</p>
-                <p class="detail-value"><?= date('M d, Y h:i A', strtotime($cashier['updated_at'] ?? 'now')) ?></p>
             </div>
             <div>
                 <p class="detail-label"><i class="fas fa-user-tie mr-1"></i> Cashiers</p>
@@ -1219,7 +1352,7 @@ include_once '../../components/admin_sidebar.php';
             <div class="card-icon"><i class="fas fa-flask"></i></div>
             <p class="card-amount"><?= formatCurrency($lab_revenue) ?></p>
             <p class="card-label">Lab Revenue</p>
-            <p class="card-sub">All completed lab tests</p>
+            <p class="card-sub">From lab_requests + lab_tests</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1245,7 +1378,7 @@ include_once '../../components/admin_sidebar.php';
         <a href="procedures_tools_revenue.php?branch=<?= $cashier_id ?>" class="revenue-card">
             <div class="card-icon"><i class="fas fa-toolbox"></i></div>
             <p class="card-amount"><?= formatCurrency($procedures_tools_total) ?></p>
-            <p class="card-label">Procedures & Tools Total</p>
+            <p class="card-label">Procedures &amp; Tools</p>
             <p class="card-sub">
                 Procedures: <span class="highlight"><?= formatCurrency($procedures_revenue) ?></span> | 
                 Tools: <span class="highlight"><?= formatCurrency($tools_revenue) ?></span>
@@ -1253,7 +1386,7 @@ include_once '../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 7. OTHER SERVICES (Registration + Consultation) -->
+        <!-- 7. OTHER SERVICES -->
         <a href="other_services_revenue.php?branch=<?= $cashier_id ?>" class="revenue-card">
             <div class="card-icon"><i class="fas fa-file-medical"></i></div>
             <p class="card-amount"><?= formatCurrency($other_services_total) ?></p>
@@ -1265,17 +1398,14 @@ include_once '../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 8. GRAND TOTAL REVENUE (Breakdown) -->
-        <a href="revenue_breakdown.php?branch=<?= $cashier_id ?>" class="revenue-card" style="border-color: rgba(255,255,255,0.2);">
-            <div class="card-icon"><i class="fas fa-chart-pie"></i></div>
-            <p class="card-amount"><?= formatCurrency($grand_total_revenue) ?></p>
-            <p class="card-label">Grand Total Revenue</p>
+        <!-- 8. NET PROFIT -->
+        <a href="profit.php?branch=<?= $cashier_id ?>" class="revenue-card">
+            <div class="card-icon"><i class="fas fa-chart-line"></i></div>
+            <p class="card-amount"><?= formatCurrency($net_profit) ?></p>
+            <p class="card-label">Net Profit</p>
             <p class="card-sub">
-                Pharmacy: <span class="highlight"><?= formatCurrency($pharmacy_total) ?></span> | 
-                Lab: <span class="highlight"><?= formatCurrency($lab_revenue) ?></span>
-                <br>
-                Proc/Tools: <span class="highlight"><?= formatCurrency($procedures_tools_total) ?></span> | 
-                Other: <span class="highlight"><?= formatCurrency($other_services_total) ?></span>
+                Revenue: <span class="highlight"><?= formatCurrency($grand_total_revenue) ?></span> | 
+                Expenses: <span class="highlight"><?= formatCurrency($total_expenses) ?></span>
             </p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
@@ -1285,26 +1415,26 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- BILLS SUMMARY CARDS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6 animate-fade-in-up" style="animation-delay:0.1s;">
-        <a href="bills.php?branch=<?= $cashier_id ?>" class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);transition:all 0.3s ease;text-decoration:none;color:var(--text-primary);">
-            <p class="text-xs text-gray-400">Total Bills</p>
-            <p class="text-2xl font-bold text-green-600"><?= number_format($cashier['total_bills'] ?? 0) ?></p>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6 animate-fade-in-up" style="animation-delay:0.1s;">
+        <a href="bills.php?branch=<?= $cashier_id ?>" class="stat-mini">
+            <p class="stat-label-mini"><i class="fas fa-file-invoice mr-1"></i> Total Bills</p>
+            <p class="stat-number-mini text-green-600"><?= number_format($cashier['total_bills'] ?? 0) ?></p>
         </a>
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=pending" class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);transition:all 0.3s ease;text-decoration:none;color:var(--text-primary);">
-            <p class="text-xs text-gray-400">Pending Bills</p>
-            <p class="text-2xl font-bold text-yellow-600"><?= number_format($cashier['pending_bills'] ?? 0) ?></p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=pending" class="stat-mini">
+            <p class="stat-label-mini"><i class="fas fa-clock mr-1"></i> Pending Bills</p>
+            <p class="stat-number-mini text-yellow-600"><?= number_format($cashier['pending_bills'] ?? 0) ?></p>
         </a>
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=partial" class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);transition:all 0.3s ease;text-decoration:none;color:var(--text-primary);">
-            <p class="text-xs text-gray-400">Partial Bills</p>
-            <p class="text-2xl font-bold text-purple-600"><?= number_format($cashier['partial_bills'] ?? 0) ?></p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=partial" class="stat-mini">
+            <p class="stat-label-mini"><i class="fas fa-hourglass-half mr-1"></i> Partial Bills</p>
+            <p class="stat-number-mini text-purple-600"><?= number_format($cashier['partial_bills'] ?? 0) ?></p>
         </a>
-        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);transition:all 0.3s ease;text-decoration:none;color:var(--text-primary);">
-            <p class="text-xs text-gray-400">Paid Bills</p>
-            <p class="text-2xl font-bold text-green-600"><?= number_format($cashier['paid_bills'] ?? 0) ?></p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="stat-mini">
+            <p class="stat-label-mini"><i class="fas fa-check-circle mr-1"></i> Paid Bills</p>
+            <p class="stat-number-mini text-green-600"><?= number_format($cashier['paid_bills'] ?? 0) ?></p>
         </a>
-        <a href="receipts.php?branch=<?= $cashier_id ?>" class="stat-card" style="background:var(--bg-card);border-radius:var(--radius);padding:14px 18px;border:2px solid var(--border-color);transition:all 0.3s ease;text-decoration:none;color:var(--text-primary);">
-            <p class="text-xs text-gray-400">Receipts</p>
-            <p class="text-2xl font-bold text-teal-600"><?= number_format($cashier['total_payments'] ?? 0) ?></p>
+        <a href="receipts.php?branch=<?= $cashier_id ?>" class="stat-mini">
+            <p class="stat-label-mini"><i class="fas fa-receipt mr-1"></i> Receipts</p>
+            <p class="stat-number-mini text-teal-600"><?= number_format($cashier['total_payments'] ?? 0) ?></p>
         </a>
     </div>
 
@@ -1340,7 +1470,7 @@ include_once '../../components/admin_sidebar.php';
                                 <td class="font-mono text-xs"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($payment['patient_name'] ?? 'N/A') ?></td>
-                                <td class="font-semibold text-green-600">TSh <?= number_format($payment['amount'] ?? 0, 0) ?></td>
+                                <td class="font-semibold text-green-600"><?= formatCurrency($payment['amount'] ?? 0) ?></td>
                                 <td>
                                     <span class="badge badge-info" style="font-size:0.55rem;padding:1px 8px;">
                                         <?= ucfirst($payment['payment_method'] ?? 'N/A') ?>
@@ -1399,13 +1529,13 @@ include_once '../../components/admin_sidebar.php';
                                     <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
                                 </td>
                                 <td><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></td>
-                                <td class="font-semibold">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
-                                <td class="text-green-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                                <td class="font-semibold"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
+                                <td class="text-green-600"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
                                 <td>
                                     <?php if ($balance > 0): ?>
-                                        <span class="text-red-600 font-semibold">TSh <?= number_format($balance, 0) ?></span>
+                                        <span class="text-red-600 font-semibold"><?= formatCurrency($balance) ?></span>
                                     <?php else: ?>
-                                        <span class="text-green-600">TSh 0</span>
+                                        <span class="text-green-600"><?= formatCurrency(0) ?></span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -1437,14 +1567,14 @@ include_once '../../components/admin_sidebar.php';
     <div class="table-container animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-user-tie text-teal-600"></i>
-                Cashiers (<?= count($cashiers) ?>)
+                <i class="fas fa-user-tie"></i>
+                Cashiers (<?= count($cashiers_list) ?>)
             </h3>
             <a href="add_employee.php?branch=<?= $cashier_id ?>&role=cashier" class="card-action">
                 <i class="fas fa-plus"></i> Add Cashier
             </a>
         </div>
-        <?php if (count($cashiers) > 0): ?>
+        <?php if (count($cashiers_list) > 0): ?>
             <div class="overflow-x-auto">
                 <table class="data-table">
                     <thead>
@@ -1457,7 +1587,7 @@ include_once '../../components/admin_sidebar.php';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($cashiers as $cashier_user): ?>
+                        <?php foreach ($cashiers_list as $cashier_user): ?>
                             <tr>
                                 <td class="font-medium"><?= htmlspecialchars($cashier_user['full_name'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($cashier_user['email'] ?? 'N/A') ?></td>
@@ -1491,7 +1621,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Cashier Details - <?= htmlspecialchars($cashier['name']) ?>
+            Cashier Details - <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1500,6 +1630,17 @@ include_once '../../components/admin_sidebar.php';
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <div>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
@@ -1545,9 +1686,6 @@ include_once '../../components/admin_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1560,9 +1698,6 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
@@ -1576,18 +1711,13 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
+        url.searchParams.delete('branch_id');
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1605,14 +1735,54 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c💰 Braick Dispensary - View Cashier (GREEN BACKGROUND CARDS)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name']) ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
+    // ================================================================
+    // TOAST
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3500);
+    }
+
+    // Check for error in URL
+    <?php if (isset($_GET['error']) && $_GET['error'] === 'invalid_id'): ?>
+        showToast('⚠️ Error', 'Invalid cashier ID provided. Please select a valid cashier.', 'error');
+        // Clean URL after 2 seconds
+        setTimeout(function() {
+            var cleanUrl = window.location.href.split('?')[0] + '?branch=<?= $selected_branch_id ?>';
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState({}, document.title, cleanUrl);
+            }
+        }, 2000);
+    <?php endif; ?>
+
+    console.log('%c💰 Braick Dispensary - View Cashier (FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c💵 Total Revenue: <?= formatCurrency($grand_total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💊 Pharmacy Revenue: <?= formatCurrency($pharmacy_total) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🧪 Lab Revenue: <?= formatCurrency($lab_revenue) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🔧 Procedures & Tools: <?= formatCurrency($procedures_tools_total) ?>', 'font-size:13px; color:#EC4899;');
+    console.log('%c📋 Total Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#EF4444;');
+    console.log('%c📈 Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c💊 Pharmacy Revenue: <?= formatCurrency($pharmacy_total) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🧪 Lab Revenue: <?= formatCurrency($lab_revenue) ?> (FROM lab_requests + lab_tests)', 'font-size:13px; color:#0D9488;');
+    console.log('%c🔧 Procedures: <?= formatCurrency($procedures_revenue) ?>', 'font-size:13px; color:#EC4899;');
+    console.log('%c🛠️ Tools: <?= formatCurrency($tools_revenue) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c📋 Other Services: <?= formatCurrency($other_services_total) ?>', 'font-size:13px; color:#4F46E5;');
-    console.log('%c🟢 All Revenue Cards have GREEN BACKGROUND', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: All revenue queries with proper joins', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Lab revenue from both tables', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Error handling for invalid ID', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

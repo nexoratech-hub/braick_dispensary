@@ -2,27 +2,65 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_employee.php
 // SUPER ADMIN - EDIT EMPLOYEE (WITH ROLES & DEPARTMENTS & PASSWORD)
+// WITH GENERATE BUTTON - CLICK TO GENERATE PASSWORD
 // BRAICK DISPENSARY
 // WITH SHARED HEADER & SIDEBAR
+// FIXED: Password update now works properly for login
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Admin Only (NO LOGIN REQUIRED FOR DIRECT ACCESS)
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
+// ================================================================
+// GET EMPLOYEE ID
+// ================================================================
 $employee_id = (int)($_GET['id'] ?? 0);
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
@@ -125,6 +163,59 @@ try {
 }
 
 // ================================================================
+// GENERATE PASSWORD FUNCTION
+// ================================================================
+function generatePassword($full_name, $branch_id, $user_id) {
+    // Get first 4 letters of full name
+    $clean_name = preg_replace('/[^a-zA-Z]/', '', $full_name);
+    $name_part = strtoupper(substr($clean_name, 0, 4));
+    if (strlen($name_part) < 3) {
+        $name_part = 'USER';
+    }
+    
+    // Get branch code (BR + 2-digit branch ID)
+    $branch_code = 'BR' . str_pad($branch_id, 2, '0', STR_PAD_LEFT);
+    
+    // Get user ID part (UID + 4-digit user ID)
+    $user_code = 'UID' . str_pad($user_id, 4, '0', STR_PAD_LEFT);
+    
+    // Combine: NAME + BRANCH + USER_ID
+    $password = $name_part . $branch_code . $user_code;
+    
+    // If password is too short, add random numbers
+    if (strlen($password) < 8) {
+        $password .= rand(100, 999);
+    }
+    
+    return $password;
+}
+
+// ================================================================
+// HANDLE AJAX REQUEST FOR GENERATE PASSWORD
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'generate_password') {
+    header('Content-Type: application/json');
+    
+    $full_name = $_POST['full_name'] ?? '';
+    $branch_id = (int)($_POST['branch_id'] ?? 0);
+    $user_id = (int)($_POST['user_id'] ?? 0);
+    
+    if (empty($full_name) || $branch_id <= 0) {
+        echo json_encode(['success' => false, 'password' => '', 'error' => 'Name and branch required']);
+        exit;
+    }
+    
+    if ($user_id <= 0) {
+        $user_id = (int)$_POST['current_user_id'] ?? 0;
+    }
+    
+    $password = generatePassword($full_name, $branch_id, $user_id);
+    
+    echo json_encode(['success' => true, 'password' => $password, 'user_id' => $user_id]);
+    exit;
+}
+
+// ================================================================
 // HANDLE FORM SUBMISSION
 // ================================================================
 $message = '';
@@ -141,10 +232,12 @@ $form_data = [
     'status' => $employee['status'] ?? 'active',
     'selected_roles' => $employee_roles,
     'selected_departments' => $employee_departments,
-    'password' => ''
+    'password' => '',
+    'password_changed' => false,
+    'generated_password' => ''
 ];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     // Get form data
     $full_name = trim($_POST['full_name'] ?? '');
     $username = trim($_POST['username'] ?? '');
@@ -154,6 +247,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $branch_id = (int)($_POST['branch_id'] ?? 0);
     $password = $_POST['password'] ?? '';
     $confirm_password = $_POST['confirm_password'] ?? '';
+    $generated_password = $_POST['generated_password'] ?? '';
+    $password_changed = false;
     
     // Get selected roles and departments from checkboxes
     $selected_roles = $_POST['roles'] ?? [];
@@ -179,14 +274,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Branch is required';
     }
     
-    // Password validation (only if password is provided)
-    if (!empty($password)) {
+    // ================================================================
+    // PASSWORD HANDLING - Check if password was generated or entered manually
+    // ================================================================
+    if (!empty($generated_password)) {
+        // Password was generated by the generate button
+        $password = $generated_password;
+        $confirm_password = $generated_password;
+        $password_changed = true;
+    } else if (!empty($password)) {
+        // Manual password entry
         if (strlen($password) < 6) {
             $errors[] = 'Password must be at least 6 characters long';
         }
         if ($password !== $confirm_password) {
             $errors[] = 'Passwords do not match';
         }
+        $password_changed = true;
+    } else {
+        // No password change - keep existing
+        $password = null;
+        $password_changed = false;
     }
     
     // Check if username exists (excluding current user)
@@ -209,76 +317,107 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Update employee
     if (empty($errors)) {
-        // Build update query
-        $sql = "UPDATE users SET full_name = ?, username = ?, email = ?, phone = ?, role = ?, branch_id = ?, status = ?";
-        $params = [$full_name, $username, $email, $phone, $primary_role, $branch_id, $status];
-        
-        // Add password if provided
-        if (!empty($password)) {
-            $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-            $sql .= ", password = ?";
-            $params[] = $hashed_password;
-        }
-        
-        $sql .= " WHERE id = ? AND role != 'admin'";
-        $params[] = $employee_id;
-        
-        $stmt = $db->prepare($sql);
-        
-        if ($stmt->execute($params)) {
+        try {
+            $db->beginTransaction();
             
-            // ================================================================
-            // UPDATE ROLES
-            // ================================================================
-            try {
-                // Delete old roles
-                $stmt = $db->prepare("DELETE FROM employee_roles WHERE user_id = ?");
-                $stmt->execute([$employee_id]);
-                
-                // Insert new roles
-                if (!empty($selected_roles)) {
-                    foreach ($selected_roles as $role_id) {
-                        $stmt = $db->prepare("INSERT INTO employee_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)");
-                        $stmt->execute([$employee_id, $role_id, $_SESSION['user_id']]);
-                    }
-                }
-            } catch (Exception $e) {
-                $errors[] = 'Error updating roles: ' . $e->getMessage();
+            // Build update query
+            $sql = "UPDATE users SET full_name = ?, username = ?, email = ?, phone = ?, role = ?, branch_id = ?, status = ?";
+            $params = [$full_name, $username, $email, $phone, $primary_role, $branch_id, $status];
+            
+            // Add password if changed
+            if ($password_changed && $password !== null) {
+                $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+                $sql .= ", password = ?";
+                $params[] = $hashed_password;
             }
             
-            // ================================================================
-            // UPDATE DEPARTMENTS
-            // ================================================================
-            try {
-                // Delete old departments
-                $stmt = $db->prepare("DELETE FROM employee_departments WHERE user_id = ?");
-                $stmt->execute([$employee_id]);
+            $sql .= " WHERE id = ? AND role != 'admin'";
+            $params[] = $employee_id;
+            
+            $stmt = $db->prepare($sql);
+            
+            if ($stmt->execute($params)) {
                 
-                // Insert new departments
-                if (!empty($selected_departments)) {
-                    foreach ($selected_departments as $dept_id) {
-                        $stmt = $db->prepare("INSERT INTO employee_departments (user_id, department_id, assigned_by) VALUES (?, ?, ?)");
-                        $stmt->execute([$employee_id, $dept_id, $_SESSION['user_id']]);
+                // ================================================================
+                // UPDATE ROLES
+                // ================================================================
+                try {
+                    // Delete old roles
+                    $stmt = $db->prepare("DELETE FROM employee_roles WHERE user_id = ?");
+                    $stmt->execute([$employee_id]);
+                    
+                    // Insert new roles
+                    if (!empty($selected_roles)) {
+                        foreach ($selected_roles as $role_id) {
+                            $stmt = $db->prepare("INSERT INTO employee_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)");
+                            $stmt->execute([$employee_id, $role_id, $_SESSION['user_id']]);
+                        }
                     }
+                } catch (Exception $e) {
+                    $errors[] = 'Error updating roles: ' . $e->getMessage();
                 }
-            } catch (Exception $e) {
-                $errors[] = 'Error updating departments: ' . $e->getMessage();
-            }
-            
-            // Log activity
-            try {
-                $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'employee_updated', ?)");
-                $stmt->execute([$_SESSION['user_id'], "Employee $full_name updated with " . count($selected_roles) . " roles and " . count($selected_departments) . " departments"]);
-            } catch (Exception $e) {}
-            
-            if (empty($errors)) {
+                
+                // ================================================================
+                // UPDATE DEPARTMENTS
+                // ================================================================
+                try {
+                    // Delete old departments
+                    $stmt = $db->prepare("DELETE FROM employee_departments WHERE user_id = ?");
+                    $stmt->execute([$employee_id]);
+                    
+                    // Insert new departments
+                    if (!empty($selected_departments)) {
+                        foreach ($selected_departments as $dept_id) {
+                            $stmt = $db->prepare("INSERT INTO employee_departments (user_id, department_id, assigned_by) VALUES (?, ?, ?)");
+                            $stmt->execute([$employee_id, $dept_id, $_SESSION['user_id']]);
+                        }
+                    }
+                } catch (Exception $e) {
+                    $errors[] = 'Error updating departments: ' . $e->getMessage();
+                }
+                
+                // Log activity
+                try {
+                    $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'employee_updated', ?, NOW())");
+                    $details = "Employee {$full_name} updated with " . count($selected_roles) . " roles and " . count($selected_departments) . " departments";
+                    if ($password_changed) {
+                        $details .= " - Password updated";
+                    }
+                    $stmt->execute([$_SESSION['user_id'], $branch_id, $details]);
+                } catch (Exception $e) {}
+                
+                $db->commit();
+                
                 $message = "Employee updated successfully with " . count($selected_roles) . " role(s) and " . count($selected_departments) . " department(s)!";
+                if ($password_changed && $password !== null) {
+                    $message .= "<br>🔑 New Password: <strong>" . htmlspecialchars($password) . "</strong>";
+                    $message .= "<br>📋 Please copy this password and share with the employee.";
+                }
                 $message_type = 'success';
+                
+                // Refresh employee data
+                $stmt = $db->prepare("SELECT * FROM users WHERE id = ? AND role != 'admin'");
+                $stmt->execute([$employee_id]);
+                $employee = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                // Update form data
+                $form_data['full_name'] = $employee['full_name'];
+                $form_data['username'] = $employee['username'];
+                $form_data['email'] = $employee['email'];
+                $form_data['phone'] = $employee['phone'] ?? '';
+                $form_data['branch_id'] = $employee['branch_id'];
+                $form_data['status'] = $employee['status'] ?? 'active';
+                $form_data['password_changed'] = $password_changed;
+                
+                // Redirect after success with flag
                 header('Location: employees.php?branch=' . $branch_id . '&updated=1');
                 exit;
+            } else {
+                $errors[] = 'Failed to update employee. Please try again.';
             }
-        } else {
-            $errors[] = 'Failed to update employee. Please try again.';
+        } catch (Exception $e) {
+            $db->rollBack();
+            $errors[] = 'Error: ' . $e->getMessage();
         }
     }
     
@@ -295,14 +434,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'status' => $status,
             'selected_roles' => $selected_roles,
             'selected_departments' => $selected_departments,
-            'password' => $password
+            'password' => $password ?? '',
+            'password_changed' => $password_changed,
+            'generated_password' => $generated_password
         ];
     }
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -446,6 +591,216 @@ include_once '../../components/admin_sidebar.php';
     .form-row-icon .form-control:focus + .input-icon,
     .form-row-icon .form-control:focus ~ .input-icon {
         color: #0B5ED7;
+    }
+    
+    /* Password Section */
+    .password-section {
+        background: var(--primary-bg);
+        border-radius: var(--radius);
+        padding: 16px 18px;
+        border: 2px solid var(--primary-light);
+        margin-top: 8px;
+    }
+    
+    [data-theme="dark"] .password-section {
+        background: #1E3A5F;
+        border-color: var(--primary);
+    }
+    
+    .password-section .password-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    
+    .password-section .password-header .password-title {
+        font-weight: 600;
+        color: var(--text-primary);
+        font-size: 0.85rem;
+    }
+    
+    .password-section .password-header .password-title i {
+        color: var(--primary);
+        margin-right: 6px;
+    }
+    
+    .password-section .password-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+    }
+    
+    .password-section .password-row .form-group {
+        position: relative;
+    }
+    
+    .password-section .password-row .form-group .password-toggle {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        cursor: pointer;
+        padding: 4px;
+        font-size: 0.9rem;
+        transition: var(--transition);
+    }
+    
+    .password-section .password-row .form-group .password-toggle:hover {
+        color: var(--primary);
+    }
+    
+    /* GENERATE BUTTON */
+    .generate-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 8px 18px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.8rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        background: linear-gradient(135deg, #059669, #047857);
+        color: white;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        min-height: 38px;
+        min-width: 100px;
+    }
+    
+    .generate-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(5, 150, 105, 0.4);
+        background: linear-gradient(135deg, #047857, #065F46);
+    }
+    
+    .generate-btn:active {
+        transform: scale(0.95);
+    }
+    
+    .generate-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+    }
+    
+    .generate-btn .spinner {
+        display: none;
+        animation: spin 1s linear infinite;
+    }
+    
+    .generate-btn.loading .spinner {
+        display: inline-block;
+    }
+    
+    .generate-btn.loading .btn-text {
+        display: none;
+    }
+    
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    
+    .generated-password-box {
+        background: #1E293B;
+        color: #34D399;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        display: none;
+        margin-top: 10px;
+        border: 1px solid #334155;
+        word-break: break-all;
+        position: relative;
+    }
+    
+    [data-theme="dark"] .generated-password-box {
+        background: #0F172A;
+        border-color: #1E293B;
+    }
+    
+    .generated-password-box .copy-btn {
+        background: rgba(255,255,255,0.1);
+        border: none;
+        color: #94A3B8;
+        padding: 3px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.65rem;
+        transition: var(--transition);
+        margin-left: 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .generated-password-box .copy-btn:hover {
+        background: rgba(255,255,255,0.2);
+        color: white;
+    }
+    
+    .generated-password-box .regenerate-hint {
+        font-size: 0.6rem;
+        color: #94A3B8;
+        margin-top: 4px;
+        font-family: 'Inter', sans-serif;
+        font-weight: 400;
+    }
+    
+    .password-info-text {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        margin-top: 8px;
+        padding: 8px 12px;
+        background: var(--bg-body);
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+    }
+    
+    [data-theme="dark"] .password-info-text {
+        background: #0F172A;
+        border-color: #1E293B;
+    }
+    
+    .password-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.65rem;
+        font-weight: 500;
+        padding: 2px 10px;
+        border-radius: 12px;
+        background: #ECFDF5;
+        color: #059669;
+        border: 1px solid #6EE7B7;
+    }
+    
+    [data-theme="dark"] .password-badge {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #065F46;
+    }
+    
+    .password-badge.generated {
+        background: #EFF6FF;
+        color: #0B5ED7;
+        border-color: #93C5FD;
+    }
+    
+    [data-theme="dark"] .password-badge.generated {
+        background: #1E3A5F;
+        color: #6EA8FE;
+        border-color: #1E3A5F;
     }
     
     .checkbox-group {
@@ -610,14 +965,31 @@ include_once '../../components/admin_sidebar.php';
         margin-left: 8px;
     }
     
-    .password-hint {
+    .password-changed-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #D1FAE5;
+        color: #065F46;
+        padding: 4px 12px;
+        border-radius: 20px;
         font-size: 0.7rem;
-        color: #059669;
-        margin-top: 4px;
+        font-weight: 600;
+        border: 1px solid #6EE7B7;
     }
     
-    .password-hint i {
-        margin-right: 4px;
+    [data-theme="dark"] .password-changed-badge {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #065F46;
+    }
+    
+    .password-action-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 4px;
     }
     
     @media (max-width: 640px) {
@@ -648,6 +1020,21 @@ include_once '../../components/admin_sidebar.php';
         }
         .checkbox-group {
             grid-template-columns: 1fr;
+        }
+        .password-section .password-row {
+            grid-template-columns: 1fr;
+        }
+        .password-section .password-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .password-action-row {
+            flex-direction: column;
+            width: 100%;
+        }
+        .password-action-row .generate-btn {
+            width: 100%;
+            justify-content: center;
         }
     }
 </style>
@@ -693,8 +1080,8 @@ include_once '../../components/admin_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -715,6 +1102,11 @@ include_once '../../components/admin_sidebar.php';
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($employee['full_name']) ?>
                 </span>
+                <?php if ($form_data['password_changed'] ?? false): ?>
+                    <span class="ml-2 password-changed-badge">
+                        <i class="fas fa-check-circle"></i> Password Updated
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div>
@@ -767,7 +1159,7 @@ include_once '../../components/admin_sidebar.php';
                         <span class="required">*</span>
                     </label>
                     <div class="form-row-icon">
-                        <input type="text" name="full_name" class="form-control" 
+                        <input type="text" name="full_name" id="fullName" class="form-control" 
                                placeholder="Enter full name" 
                                value="<?= htmlspecialchars($form_data['full_name']) ?>" required>
                         <span class="input-icon"><i class="fas fa-user"></i></span>
@@ -781,7 +1173,7 @@ include_once '../../components/admin_sidebar.php';
                         <span class="required">*</span>
                     </label>
                     <div class="form-row-icon">
-                        <input type="text" name="username" class="form-control" 
+                        <input type="text" name="username" id="username" class="form-control" 
                                placeholder="Enter username" 
                                value="<?= htmlspecialchars($form_data['username']) ?>" required>
                         <span class="input-icon"><i class="fas fa-at"></i></span>
@@ -823,7 +1215,7 @@ include_once '../../components/admin_sidebar.php';
                         <span class="required">*</span>
                     </label>
                     <div class="form-row-icon">
-                        <select name="branch_id" class="form-control" required>
+                        <select name="branch_id" id="branchSelect" class="form-control" required>
                             <?php foreach ($branches_list as $branch): ?>
                                 <option value="<?= $branch['id'] ?>" <?= $branch['id'] == $form_data['branch_id'] ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($branch['name']) ?>
@@ -849,48 +1241,81 @@ include_once '../../components/admin_sidebar.php';
                 </div>
                 
                 <!-- ================================================================ -->
-                <!-- Password Section -->
+                <!-- Password Section - WITH GENERATE BUTTON -->
                 <!-- ================================================================ -->
                 <div class="md:col-span-2 mt-2">
-                    <h3 class="section-title">
-                        <i class="fas fa-key"></i> Password
-                        <span class="badge-count">(Leave blank to keep current password)</span>
-                    </h3>
-                    <hr class="section-divider">
-                    <p class="help-text mb-2">
-                        <i class="fas fa-info-circle text-blue-600"></i> 
-                        Enter a new password only if you want to change it. Minimum 6 characters.
-                    </p>
-                </div>
-                
-                <!-- New Password -->
-                <div>
-                    <label class="form-label">
-                        <i class="fas fa-lock text-blue-600"></i> New Password
-                    </label>
-                    <div class="form-row-icon">
-                        <input type="password" name="password" class="form-control" 
-                               placeholder="Enter new password (optional)" 
-                               id="newPassword">
-                        <span class="input-icon"><i class="fas fa-lock"></i></span>
+                    <div class="password-section">
+                        <div class="password-header">
+                            <div class="password-title">
+                                <i class="fas fa-key"></i> Password Settings
+                                <span class="password-badge" id="passwordStatusBadge">
+                                    <i class="fas fa-check-circle"></i> 
+                                    <?= $employee['password'] ? 'Current password set' : 'No password set' ?>
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="password-row" id="passwordFields">
+                            <div class="form-group">
+                                <label class="form-label">
+                                    <i class="fas fa-lock label-icon"></i> New Password
+                                    <span class="label-badge" id="passwordFieldLabel">Leave empty to keep current</span>
+                                </label>
+                                <input type="password" name="password" id="newPassword" class="form-control" 
+                                       placeholder="Enter new password...">
+                                <button type="button" class="password-toggle" onclick="togglePasswordVisibility('newPassword', this)">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">
+                                    <i class="fas fa-lock label-icon"></i> Confirm Password
+                                </label>
+                                <input type="password" name="confirm_password" id="confirmPassword" class="form-control" 
+                                       placeholder="Confirm new password...">
+                                <button type="button" class="password-toggle" onclick="togglePasswordVisibility('confirmPassword', this)">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Generate Button & Generated Password -->
+                        <div class="password-action-row">
+                            <button type="button" class="generate-btn" id="generateBtn" onclick="generateAndFillPassword()">
+                                <span class="spinner"><i class="fas fa-circle-notch"></i></span>
+                                <span class="btn-text"><i class="fas fa-magic"></i> Generate Password</span>
+                            </button>
+                            
+                            <span class="password-badge generated" id="generatedBadge" style="display:none;">
+                                <i class="fas fa-check"></i> Generated
+                            </span>
+                        </div>
+                        
+                        <!-- Generated Password Display -->
+                        <div class="generated-password-box" id="generatedPasswordBox">
+                            <span id="generatedPasswordDisplay">****************</span>
+                            <button type="button" class="copy-btn" onclick="copyGeneratedPassword()">
+                                <i class="fas fa-copy"></i> Copy
+                            </button>
+                            <div class="regenerate-hint">
+                                <i class="fas fa-sync-alt"></i> Click "Generate Password" again to regenerate
+                            </div>
+                        </div>
+                        
+                        <!-- Password Info -->
+                        <div class="password-info-text">
+                            <i class="fas fa-info-circle text-blue-600 mr-1"></i>
+                            <?php if ($employee['password']): ?>
+                                Current password is set. Leave password fields empty to keep current password.
+                            <?php else: ?>
+                                No password set. Please generate or enter a password for this employee.
+                            <?php endif; ?>
+                            <br>
+                            <i class="fas fa-lightbulb text-yellow-600 mr-1"></i>
+                            <span class="text-xs">Click <strong>"Generate Password"</strong> to auto-generate a secure password. You can also type manually.</span>
+                        </div>
                     </div>
-                    <p class="password-hint">
-                        <i class="fas fa-info-circle"></i> Minimum 6 characters
-                    </p>
-                </div>
-                
-                <!-- Confirm Password -->
-                <div>
-                    <label class="form-label">
-                        <i class="fas fa-check-circle text-green-600"></i> Confirm Password
-                    </label>
-                    <div class="form-row-icon">
-                        <input type="password" name="confirm_password" class="form-control" 
-                               placeholder="Confirm new password" 
-                               id="confirmPassword">
-                        <span class="input-icon"><i class="fas fa-check-circle"></i></span>
-                    </div>
-                    <p class="help-text" id="passwordMatch"></p>
                 </div>
                 
                 <!-- ================================================================ -->
@@ -964,6 +1389,9 @@ include_once '../../components/admin_sidebar.php';
                     <p class="help-text mt-2">Selected: <strong id="selectedDeptCount"><?= count($form_data['selected_departments']) ?></strong> departments</p>
                 </div>
                 
+                <!-- Hidden field for generated password -->
+                <input type="hidden" name="generated_password" id="generatedPasswordHidden" value="">
+                
             </div>
             
             <!-- Form Actions -->
@@ -1031,11 +1459,13 @@ include_once '../../components/admin_sidebar.php';
             darkIcon.className = 'fas fa-moon';
             darkText.textContent = 'Dark';
             localStorage.setItem('darkMode', 'false');
+            document.cookie = "dark_mode=false; path=/";
         } else {
             htmlElement.setAttribute('data-theme', 'dark');
             darkIcon.className = 'fas fa-sun';
             darkText.textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
+            document.cookie = "dark_mode=true; path=/";
         }
     });
 
@@ -1089,28 +1519,6 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // PASSWORD MATCH CHECK
-    // ================================================================
-    document.getElementById('confirmPassword')?.addEventListener('keyup', function() {
-        var password = document.getElementById('newPassword').value;
-        var confirm = this.value;
-        var matchEl = document.getElementById('passwordMatch');
-        
-        if (confirm.length === 0) {
-            matchEl.textContent = '';
-            return;
-        }
-        
-        if (password === confirm) {
-            matchEl.innerHTML = '<i class="fas fa-check-circle text-green-600"></i> Passwords match';
-            matchEl.style.color = '#059669';
-        } else {
-            matchEl.innerHTML = '<i class="fas fa-times-circle text-red-600"></i> Passwords do not match';
-            matchEl.style.color = '#EF4444';
-        }
-    });
-
-    // ================================================================
     // UPDATE CHECKBOX STYLES ON LOAD
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
@@ -1138,13 +1546,19 @@ include_once '../../components/admin_sidebar.php';
             return false;
         }
         
-        // Check password match if password is entered
-        var password = document.getElementById('newPassword').value;
-        var confirm = document.getElementById('confirmPassword').value;
-        if (password.length > 0 && password !== confirm) {
+        // Check if password is required (no current password)
+        var newPassword = document.getElementById('newPassword');
+        var generatedPassword = document.getElementById('generatedPasswordHidden');
+        var hasCurrentPassword = <?= $employee['password'] ? 'true' : 'false' ?>;
+        
+        if (!hasCurrentPassword && newPassword.value.trim() === '' && generatedPassword.value === '') {
             e.preventDefault();
-            alert('⚠️ Passwords do not match. Please check and try again.');
-            document.getElementById('confirmPassword').focus();
+            alert('⚠️ This employee has no password set. Please generate or enter a password.');
+            document.getElementById('newPassword').focus();
+            document.getElementById('newPassword').style.borderColor = '#EF4444';
+            setTimeout(function() {
+                document.getElementById('newPassword').style.borderColor = '';
+            }, 3000);
             return false;
         }
         
@@ -1225,12 +1639,177 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
+    // ================================================================
+    // GENERATE PASSWORD - CLICK BUTTON TO GENERATE
+    // ================================================================
+    function generateAndFillPassword() {
+        var generateBtn = document.getElementById('generateBtn');
+        var fullName = document.getElementById('fullName').value.trim();
+        var branchId = document.getElementById('branchSelect').value;
+        var newPassword = document.getElementById('newPassword');
+        var confirmPassword = document.getElementById('confirmPassword');
+        var passwordBox = document.getElementById('generatedPasswordBox');
+        var passwordDisplay = document.getElementById('generatedPasswordDisplay');
+        var passwordHidden = document.getElementById('generatedPasswordHidden');
+        var generatedBadge = document.getElementById('generatedBadge');
+        var passwordFieldLabel = document.getElementById('passwordFieldLabel');
+        
+        // Validate inputs
+        if (!fullName) {
+            showToast('⚠️ Warning', 'Please enter the full name first', 'warning');
+            document.getElementById('fullName').focus();
+            return;
+        }
+        
+        if (!branchId || branchId === '') {
+            showToast('⚠️ Warning', 'Please select a branch first', 'warning');
+            document.getElementById('branchSelect').focus();
+            return;
+        }
+        
+        // Show loading state
+        generateBtn.classList.add('loading');
+        generateBtn.disabled = true;
+        passwordDisplay.textContent = 'Generating...';
+        passwordBox.style.display = 'block';
+        
+        // AJAX request to generate password
+        var formData = new FormData();
+        formData.append('action', 'generate_password');
+        formData.append('full_name', fullName);
+        formData.append('branch_id', branchId);
+        formData.append('user_id', <?= $employee_id ?>);
+        formData.append('current_user_id', <?= $employee_id ?>);
+        formData.append('username', document.getElementById('username').value.trim());
+        
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(response) {
+            return response.json();
+        })
+        .then(function(data) {
+            // Remove loading state
+            generateBtn.classList.remove('loading');
+            generateBtn.disabled = false;
+            
+            if (data.success) {
+                var password = data.password;
+                passwordDisplay.textContent = password;
+                newPassword.value = password;
+                confirmPassword.value = password;
+                passwordHidden.value = password;
+                generatedBadge.style.display = 'inline-flex';
+                passwordFieldLabel.textContent = 'Generated password';
+                passwordFieldLabel.style.color = '#059669';
+                
+                // Auto copy to clipboard
+                copyToClipboard(password);
+                showToast('🔑 Password Generated', 'Password generated and copied to clipboard!', 'success');
+                
+                // Highlight the password box
+                passwordBox.style.borderColor = '#34D399';
+                setTimeout(function() {
+                    passwordBox.style.borderColor = '#334155';
+                }, 2000);
+            } else {
+                showToast('❌ Error', data.error || 'Failed to generate password', 'error');
+                passwordBox.style.display = 'none';
+                passwordHidden.value = '';
+                generatedBadge.style.display = 'none';
+                passwordFieldLabel.textContent = 'Leave empty to keep current';
+                passwordFieldLabel.style.color = '';
+            }
+        })
+        .catch(function(error) {
+            // Remove loading state
+            generateBtn.classList.remove('loading');
+            generateBtn.disabled = false;
+            
+            showToast('❌ Error', 'Network error: ' + error.message, 'error');
+            passwordBox.style.display = 'none';
+            passwordHidden.value = '';
+            generatedBadge.style.display = 'none';
+            passwordFieldLabel.textContent = 'Leave empty to keep current';
+            passwordFieldLabel.style.color = '';
+        });
+    }
+
+    // ================================================================
+    // COPY TO CLIPBOARD
+    // ================================================================
+    function copyToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).catch(function() {
+                fallbackCopy(text);
+            });
+        } else {
+            fallbackCopy(text);
+        }
+    }
+
+    function fallbackCopy(text) {
+        var textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+        } catch (e) {}
+        document.body.removeChild(textarea);
+    }
+
+    // ================================================================
+    // COPY GENERATED PASSWORD
+    // ================================================================
+    function copyGeneratedPassword() {
+        var passwordDisplay = document.getElementById('generatedPasswordDisplay');
+        var password = passwordDisplay.textContent;
+        if (password && password !== '****************' && password !== 'Generating...') {
+            copyToClipboard(password);
+            showToast('✅ Copied', 'Password copied to clipboard!', 'success');
+        }
+    }
+
+    // ================================================================
+    // TOGGLE PASSWORD VISIBILITY
+    // ================================================================
+    function togglePasswordVisibility(inputId, button) {
+        var input = document.getElementById(inputId);
+        if (input.type === 'password') {
+            input.type = 'text';
+            button.innerHTML = '<i class="fas fa-eye-slash"></i>';
+        } else {
+            input.type = 'password';
+            button.innerHTML = '<i class="fas fa-eye"></i>';
+        }
+    }
+
+    // ================================================================
+    // CLEAR GENERATED PASSWORD WHEN MANUAL TYPING STARTS
+    // ================================================================
+    document.getElementById('newPassword')?.addEventListener('input', function() {
+        if (this.value.trim() !== '') {
+            // User is typing manually, clear generated password
+            document.getElementById('generatedPasswordHidden').value = '';
+            document.getElementById('generatedBadge').style.display = 'none';
+            document.getElementById('passwordFieldLabel').textContent = 'Manual entry';
+            document.getElementById('passwordFieldLabel').style.color = '#0B5ED7';
+        } else {
+            document.getElementById('passwordFieldLabel').textContent = 'Leave empty to keep current';
+            document.getElementById('passwordFieldLabel').style.color = '';
+        }
+    });
+
     console.log('%c👤 Braick - Edit Employee', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Employee: <?= htmlspecialchars($employee['full_name']) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Multiple Roles: <?= count($form_data['selected_roles']) ?> selected', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Multiple Departments: <?= count($form_data['selected_departments']) ?> selected', 'font-size:13px; color:#64748B;');
-    console.log('%c🔑 Password: Optional - Leave blank to keep current', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c🔗 Shared Header & Sidebar: ACTIVE', 'font-size:13px; color:#64748B;');
+    console.log('%c🔑 Click "Generate Password" to generate a secure password', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Password format: NAME + BRCODE + UID + USER_ID', 'font-size:13px; color:#34D399;');
+    console.log('%c🔐 Password is properly hashed using password_hash()', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>

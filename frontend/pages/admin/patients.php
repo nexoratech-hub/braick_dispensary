@@ -3,26 +3,112 @@
 // FILE: frontend/pages/admin/patients.php
 // SUPER ADMIN - MANAGE PATIENTS
 // WITH TIME PERIOD FILTERS
-// BRAICK DISPENSARY - FULL DELETE FUNCTIONALITY
+// BRAICK DISPENSARY - FULL DELETE FUNCTIONALITY - WITH LOGIN SESSION
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Admin Only
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database and helpers
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
-$db = Database::getInstance()->getConnection();
+// ================================================================
+// CHECK IF USER HAS ADMIN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($username) && !empty($username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['profile_pic'] = $user['profile_pic'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $profile_pic = $user['profile_pic'];
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// INCLUDE DATABASE AND HELPERS
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
+
+// ================================================================
+// GET DATABASE CONNECTION
+// ================================================================
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // VARIABLES
@@ -67,7 +153,7 @@ switch ($time_period) {
 }
 
 // ================================================================
-// ✅ DELETE PATIENT - FULL DELETION WITH ALL 25 TABLES
+// ✅ DELETE PATIENT - FULL DELETION WITH ALL 23 TABLES
 // ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $patient_id = (int)$_GET['delete'];
@@ -85,7 +171,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
             $patient_number = $patient['patient_id'];
             
             // ============================================================
-            // DELETE FROM ALL 25 TABLES WITH patient_id
+            // DELETE FROM ALL 23 TABLES WITH patient_id
             // ============================================================
             
             $tables = [
@@ -133,6 +219,21 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
             $stmt = $db->prepare("DELETE FROM patients WHERE id = ?");
             $stmt->execute([$patient_id]);
             
+            // Log activity
+            try {
+                $log_stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'patient_deleted', ?, NOW())
+                ");
+                $log_stmt->execute([
+                    $user_id, 
+                    $user_branch_id,
+                    "Patient deleted: $patient_name (ID: $patient_number) by " . $user_full_name
+                ]);
+            } catch (Exception $e) {
+                // Silent fail
+            }
+            
             $db->commit();
             
             $message = "✅ Patient '$patient_name' (ID: $patient_number) deleted successfully!";
@@ -141,7 +242,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
             
             header("Location: patients.php?page=$page&period=$time_period" . 
                    ($search ? "&search=" . urlencode($search) : "") . 
-                   "&branch=" . $selected_branch_id);
+                   "&branch=" . urlencode($selected_branch_id));
             exit();
             
         } else {
@@ -273,15 +374,19 @@ $period_labels = [
 $period_label = $period_labels[$time_period] ?? 'All Time';
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/admin_header.php';
-include_once '../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <style>
@@ -895,6 +1000,33 @@ include_once '../../components/admin_sidebar.php';
         color: #6EA8FE;
     }
     
+    /* Toast */
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 14px 20px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 400px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    }
+    .toast-custom.show {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #DC2626; }
+    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.warning { background: #D97706; }
+    
     /* Footer */
     .footer {
         margin-top: 30px;
@@ -959,12 +1091,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -994,7 +1126,7 @@ include_once '../../components/admin_sidebar.php';
             <a href="dashboard.php" class="btn btn-outline btn-sm">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
-            <a href="add_patient.php?branch=<?= $selected_branch_id ?>" class="btn btn-blue btn-sm">
+            <a href="add_patient.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-blue btn-sm">
                 <i class="fas fa-plus"></i> Add Patient
             </a>
         </div>
@@ -1159,15 +1291,15 @@ include_once '../../components/admin_sidebar.php';
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="patient_details.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                            <a href="patient_details.php?id=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                                                class="btn-action btn-view" title="View Patient">
                                                 <i class="fas fa-eye"></i> View
                                             </a>
-                                            <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                            <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                                                class="btn-action btn-edit" title="Edit Patient">
                                                 <i class="fas fa-edit"></i> Edit
                                             </a>
-                                            <a href="?delete=<?= $patient['id'] ?>&page=<?= $page ?>&period=<?= $time_period ?>&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
+                                            <a href="?delete=<?= $patient['id'] ?>&page=<?= $page ?>&period=<?= $time_period ?>&branch=<?= urlencode($selected_branch_id) ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
                                                class="btn-action btn-delete" 
                                                onclick="return confirmDelete('<?= htmlspecialchars($patient['full_name']) ?>', '<?= htmlspecialchars($patient['patient_id']) ?>')" 
                                                title="Delete Patient">
@@ -1204,7 +1336,7 @@ include_once '../../components/admin_sidebar.php';
                 
                 <div class="pagination">
                     <?php if ($page > 1): ?>
-                        <a href="?page=<?= $page - 1 ?>&period=<?= $time_period ?>&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" class="page-link">
+                        <a href="?page=<?= $page - 1 ?>&period=<?= $time_period ?>&branch=<?= urlencode($selected_branch_id) ?><?= $search ? '&search='.urlencode($search) : '' ?>" class="page-link">
                             <i class="fas fa-chevron-left"></i>
                         </a>
                     <?php else: ?>
@@ -1214,14 +1346,14 @@ include_once '../../components/admin_sidebar.php';
                     <?php endif; ?>
                     
                     <?php for ($p = 1; $p <= $total_pages; $p++): ?>
-                        <a href="?page=<?= $p ?>&period=<?= $time_period ?>&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
+                        <a href="?page=<?= $p ?>&period=<?= $time_period ?>&branch=<?= urlencode($selected_branch_id) ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
                            class="page-link <?= $p === $page ? 'active' : '' ?>">
                             <?= $p ?>
                         </a>
                     <?php endfor; ?>
                     
                     <?php if ($page < $total_pages): ?>
-                        <a href="?page=<?= $page + 1 ?>&period=<?= $time_period ?>&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" class="page-link">
+                        <a href="?page=<?= $page + 1 ?>&period=<?= $time_period ?>&branch=<?= urlencode($selected_branch_id) ?><?= $search ? '&search='.urlencode($search) : '' ?>" class="page-link">
                             <i class="fas fa-chevron-right"></i>
                         </a>
                     <?php else: ?>
@@ -1461,11 +1593,13 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Patients Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Patients Management (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Total Patients: <?= $total_all ?>', 'font-size:13px; color:#059669;');
     console.log('%c📅 Today\'s Patients: <?= $today_patients ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🗑️ DELETE PATIENT - Full deletion from 23 tables', 'font-size:13px; color:#EF4444;');
     console.log('%c✅ All tables have patient_id column', 'font-size:13px; color:#059669;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

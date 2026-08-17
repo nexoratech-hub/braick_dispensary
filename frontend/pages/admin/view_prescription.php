@@ -5,23 +5,80 @@
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// VERIFY USER EXISTS IN DATABASE
+// ================================================================
+$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
+$stmt->execute([$user_id]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$user || $user['status'] !== 'active') {
+    session_destroy();
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // GET PRESCRIPTION ID
@@ -179,8 +236,12 @@ function getStatusLabel($status) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -217,6 +278,7 @@ include_once '../../components/admin_sidebar.php';
             --primary-light: #3B82F6;
             --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            --primary-gradient-hover: linear-gradient(135deg, #0A4CA8, #083C8A);
             
             --success: #059669;
             --success-dark: #047857;
@@ -605,13 +667,125 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           BUTTONS - FULL CSS STYLED
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .btn:active {
+            transform: translateY(0px);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+        
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-gradient-hover);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: linear-gradient(135deg, #047857, #065F46);
+            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #B91C1C, #991B1B);
+            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background: linear-gradient(135deg, #B45309, #92400E);
+            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.35);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-primary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
+        }
+        
+        .btn-sm {
+            padding: 5px 12px;
+            font-size: 0.7rem;
+            border-radius: 6px;
+        }
+        
+        .btn-lg {
+            padding: 14px 32px;
+            font-size: 1rem;
+        }
+        
+        .btn-block {
+            width: 100%;
+            justify-content: center;
+        }
+        
+        .btn i {
+            font-size: 0.9rem;
+        }
+        
+        .btn-sm i {
+            font-size: 0.7rem;
+        }
+        
+        /* ================================================================
            DETAIL CARD
            ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
             padding: 24px 28px;
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--border-color);
             transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
             margin-bottom: 24px;
@@ -656,6 +830,7 @@ include_once '../../components/admin_sidebar.php';
         .badge-warning { background: #D97706; color: #1E293B; }
         .badge-info { background: #0B5ED7; }
         .badge-secondary { background: #64748B; }
+        .badge-purple { background: #7C3AED; }
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
@@ -711,7 +886,7 @@ include_once '../../components/admin_sidebar.php';
         .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--border-color);
             overflow: hidden;
             transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
@@ -725,7 +900,7 @@ include_once '../../components/admin_sidebar.php';
         .card-header {
             padding: 16px 24px;
             background: var(--bg-body);
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 2px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -751,79 +926,11 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           BUTTONS
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            border: 1.5px solid var(--border-color);
-        }
-        
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .btn-sm {
-            padding: 4px 10px;
-            font-size: 0.65rem;
-            border-radius: 6px;
-        }
-        
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            border-color: var(--primary-dark);
-            color: white;
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 1.5px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-outline-primary {
-            background: transparent;
-            color: var(--primary);
-            border: 1.5px solid var(--primary);
-        }
-        
-        .btn-outline-primary:hover {
-            background: var(--primary);
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
             padding: 14px 0;
-            border-top: 1px solid var(--border-color);
+            border-top: 2px solid var(--border-color);
             margin-top: 24px;
             text-align: center;
             font-size: 0.7rem;
@@ -857,6 +964,8 @@ include_once '../../components/admin_sidebar.php';
             .page-header { flex-direction: column; align-items: flex-start !important; }
             .data-table { font-size: 0.7rem; }
             .data-table td, .data-table th { padding: 6px 8px; }
+            .btn { padding: 6px 12px; font-size: 0.7rem; }
+            .btn-sm { padding: 3px 8px; font-size: 0.6rem; }
         }
         
         /* ================================================================
@@ -938,12 +1047,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -973,6 +1082,9 @@ include_once '../../components/admin_sidebar.php';
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
                     <i class="fas fa-user-md"></i> <?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?>
+                </span>
+                <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                    <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
                 </span>
             </p>
         </div>
@@ -1368,10 +1480,13 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     console.log('%c💊 Braick Dispensary - View Prescription (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c📋 Prescription: <?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($prescription['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📦 Items: <?= count($prescription_items) ?>', 'font-size:13px; color:#F59E0B;');
+    console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c🔑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

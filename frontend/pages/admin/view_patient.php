@@ -1,27 +1,115 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_patient.php
-// ADMIN - VIEW PATIENT DETAILS
+// ADMIN - VIEW PATIENT DETAILS (FULL VERSION)
 // BRAICK DISPENSARY - BLUE THEME
+// WITH LOGIN SESSION (MATCHES patient_details.php)
+// REMOVED: Quick Actions buttons (Add Visit, Schedule Appointment, Add Prescription, Edit Patient)
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
-$db = Database::getInstance()->getConnection();
+// ================================================================
+// CHECK IF USER HAS ADMIN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($username) && !empty($username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['profile_pic'] = $user['profile_pic'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $profile_pic = $user['profile_pic'];
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// INCLUDE DATABASE AND HELPERS
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
+
+// ================================================================
+// GET DATABASE CONNECTION
+// ================================================================
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -52,9 +140,11 @@ try {
             (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id AND status = 'confirmed') as confirmed_appointments,
             (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status = 'completed') as completed_visits,
             (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
-            (SELECT COUNT(*) FROM lab_tests WHERE visit_id IN (SELECT id FROM visits WHERE patient_id = p.id)) as total_lab_tests,
+            (SELECT COUNT(*) FROM lab_tests lt INNER JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests,
             (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status = 'paid') as paid_bills,
-            (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status = 'pending') as pending_bills
+            (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status = 'pending') as pending_bills,
+            (SELECT COUNT(*) FROM payments WHERE patient_id = p.id) as total_payments,
+            (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE patient_id = p.id) as total_payments_amount
         FROM patients p
         LEFT JOIN users u ON p.created_by = u.id
         LEFT JOIN users u2 ON p.assigned_doctor_id = u2.id
@@ -85,6 +175,29 @@ if (!empty($patient['date_of_birth'])) {
 }
 
 // ================================================================
+// GET VITAL SIGNS (Latest)
+// ================================================================
+$vital_signs = [];
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            vs.*,
+            u.full_name as recorded_by_name,
+            v.visit_number
+        FROM vital_signs vs
+        LEFT JOIN users u ON vs.recorded_by = u.id
+        LEFT JOIN visits v ON vs.visit_id = v.id
+        WHERE vs.patient_id = ?
+        ORDER BY vs.recorded_at DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$patient_id]);
+    $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $vital_signs = [];
+}
+
+// ================================================================
 // GET RECENT VISITS
 // ================================================================
 $recent_visits = [];
@@ -99,7 +212,13 @@ try {
             v.created_at,
             v.visit_total,
             v.payment_status,
-            u.full_name as doctor_name
+            u.full_name as doctor_name,
+            CASE 
+                WHEN v.status = 'pending' THEN 'warning'
+                WHEN v.status = 'completed' THEN 'success'
+                WHEN v.status = 'cancelled' THEN 'danger'
+                ELSE 'info'
+            END as status_color
         FROM visits v
         LEFT JOIN users u ON v.doctor_id = u.id
         WHERE v.patient_id = ?
@@ -125,7 +244,14 @@ try {
             a.visit_type,
             a.purpose,
             a.created_at,
-            u.full_name as doctor_name
+            u.full_name as doctor_name,
+            CASE 
+                WHEN a.status = 'scheduled' THEN 'warning'
+                WHEN a.status = 'confirmed' THEN 'info'
+                WHEN a.status = 'completed' THEN 'success'
+                WHEN a.status = 'cancelled' THEN 'danger'
+                ELSE 'secondary'
+            END as status_color
         FROM appointments a
         LEFT JOIN users u ON a.doctor_id = u.id
         WHERE a.patient_id = ?
@@ -176,7 +302,14 @@ try {
             pb.paid_amount,
             pb.balance,
             pb.status,
-            pb.created_at
+            pb.created_at,
+            CASE 
+                WHEN pb.status = 'pending' THEN 'warning'
+                WHEN pb.status = 'paid' THEN 'success'
+                WHEN pb.status = 'partial' THEN 'info'
+                WHEN pb.status = 'cancelled' THEN 'danger'
+                ELSE 'secondary'
+            END as status_color
         FROM patient_bills pb
         WHERE pb.patient_id = ?
         ORDER BY pb.created_at DESC
@@ -186,27 +319,6 @@ try {
     $recent_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $recent_bills = [];
-}
-
-// ================================================================
-// GET VITAL SIGNS (Latest)
-// ================================================================
-$vital_signs = [];
-try {
-    $stmt = $db->prepare("
-        SELECT 
-            vs.*,
-            u.full_name as recorded_by_name
-        FROM vital_signs vs
-        LEFT JOIN users u ON vs.recorded_by = u.id
-        WHERE vs.patient_id = ?
-        ORDER BY vs.recorded_at DESC
-        LIMIT 1
-    ");
-    $stmt->execute([$patient_id]);
-    $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $vital_signs = [];
 }
 
 // ================================================================
@@ -235,42 +347,26 @@ function getStatusBadge($status) {
         'cancelled' => 'danger',
         'paid' => 'success',
         'partial' => 'warning',
-        'dispensed' => 'success'
+        'dispensed' => 'success',
+        'with_doctor' => 'info'
     ];
     return $classes[$status] ?? 'secondary';
 }
 
-function getStatusIcon($status) {
-    $icons = [
-        'active' => 'fa-check-circle',
-        'inactive' => 'fa-times-circle',
-        'pending' => 'fa-clock',
-        'assigned' => 'fa-user-check',
-        'confirmed' => 'fa-check-double',
-        'scheduled' => 'fa-calendar-check',
-        'completed' => 'fa-check-circle',
-        'cancelled' => 'fa-times-circle',
-        'paid' => 'fa-check-circle',
-        'partial' => 'fa-clock',
-        'dispensed' => 'fa-check-circle'
-    ];
-    return $icons[$status] ?? 'fa-circle';
-}
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
-include_once '../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!DOCTYPE html>
@@ -291,7 +387,7 @@ include_once '../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BOLDER BLUE THEME
+           ROOT VARIABLES - BOLDER BLUE THEME (MATCHES patient_details)
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -725,7 +821,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS
+           STATS CARDS (MATCHES patient_details)
            ================================================================ */
         .stats-grid {
             display: grid;
@@ -778,6 +874,7 @@ include_once '../../components/admin_sidebar.php';
         .stat-card .stat-number.purple { color: #7C3AED; }
         .stat-card .stat-number.teal { color: #0D9488; }
         .stat-card .stat-number.red { color: #DC2626; }
+        .stat-card .stat-number.pink { color: #EC4899; }
         
         .stat-card .stat-label {
             font-size: 0.6rem;
@@ -804,6 +901,7 @@ include_once '../../components/admin_sidebar.php';
         .stat-card .stat-icon-small.purple { background: #F5F3FF; color: #7C3AED; }
         .stat-card .stat-icon-small.teal { background: #ECFDF5; color: #0D9488; }
         .stat-card .stat-icon-small.red { background: #FEF2F2; color: #DC2626; }
+        .stat-card .stat-icon-small.pink { background: #FDF2F8; color: #EC4899; }
         
         [data-theme="dark"] .stat-card .stat-icon-small.blue { background: #1E3A5F; color: #3B82F6; }
         [data-theme="dark"] .stat-card .stat-icon-small.green { background: #1A3A2A; color: #34D399; }
@@ -811,6 +909,116 @@ include_once '../../components/admin_sidebar.php';
         [data-theme="dark"] .stat-card .stat-icon-small.purple { background: #2D1B4E; color: #A78BFA; }
         [data-theme="dark"] .stat-card .stat-icon-small.teal { background: #0F3D3D; color: #5EEAD4; }
         [data-theme="dark"] .stat-card .stat-icon-small.red { background: #3A1A1A; color: #F87171; }
+        [data-theme="dark"] .stat-card .stat-icon-small.pink { background: #3A1A2A; color: #F472B6; }
+        
+        /* ================================================================
+           VITAL SIGNS CARDS - 6 CARDS (MODERN DESIGN - MATCHES patient_details)
+           ================================================================ */
+        .vital-card {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 16px 12px;
+            text-align: center;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            min-height: 100px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .vital-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            border-radius: 14px 14px 0 0;
+        }
+        
+        .vital-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.1);
+        }
+        
+        .vital-card .vital-icon {
+            font-size: 1.8rem;
+            margin-bottom: 6px;
+        }
+        
+        .vital-card .vital-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.2;
+        }
+        
+        .vital-card .vital-label {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            margin-top: 2px;
+        }
+        
+        .vital-card .vital-unit {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            font-weight: 400;
+            margin-left: 2px;
+        }
+        
+        /* Card Colors - 6 Colors */
+        .vital-card.blue::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
+        .vital-card.blue .vital-icon { color: #0B5ED7; }
+        .vital-card.blue .vital-value { color: #0B5ED7; }
+        
+        .vital-card.red::before { background: linear-gradient(90deg, #EF4444, #F87171); }
+        .vital-card.red .vital-icon { color: #EF4444; }
+        .vital-card.red .vital-value { color: #EF4444; }
+        
+        .vital-card.pink::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
+        .vital-card.pink .vital-icon { color: #EC4899; }
+        .vital-card.pink .vital-value { color: #EC4899; }
+        
+        .vital-card.purple::before { background: linear-gradient(90deg, #7B2FBE, #9B4DCA); }
+        .vital-card.purple .vital-icon { color: #7B2FBE; }
+        .vital-card.purple .vital-value { color: #7B2FBE; }
+        
+        .vital-card.green::before { background: linear-gradient(90deg, #059669, #0AA84F); }
+        .vital-card.green .vital-icon { color: #059669; }
+        .vital-card.green .vital-value { color: #059669; }
+        
+        .vital-card.indigo::before { background: linear-gradient(90deg, #4F46E5, #818CF8); }
+        .vital-card.indigo .vital-icon { color: #4F46E5; }
+        .vital-card.indigo .vital-value { color: #4F46E5; }
+        
+        /* Dark mode vital cards */
+        [data-theme="dark"] .vital-card {
+            background: #1E293B;
+            border-color: #334155;
+        }
+        
+        [data-theme="dark"] .vital-card:hover {
+            border-color: #0B5ED7;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+        }
+        
+        [data-theme="dark"] .vital-card .vital-value {
+            color: #F1F5F9;
+        }
+        
+        [data-theme="dark"] .vital-card.blue .vital-value { color: #6EA8FE; }
+        [data-theme="dark"] .vital-card.red .vital-value { color: #F87171; }
+        [data-theme="dark"] .vital-card.pink .vital-value { color: #F472B6; }
+        [data-theme="dark"] .vital-card.purple .vital-value { color: #A78BFA; }
+        [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
+        [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
         
         /* ================================================================
            DATA TABLE
@@ -924,60 +1132,6 @@ include_once '../../components/admin_sidebar.php';
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
         /* ================================================================
-           VITAL SIGNS
-           ================================================================ */
-        .vital-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 12px;
-            margin-top: 12px;
-        }
-        
-        .vital-item {
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            padding: 12px 16px;
-            text-align: center;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .vital-item:hover {
-            border-color: var(--primary);
-        }
-        
-        .vital-item .vital-value {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-        
-        .vital-item .vital-label {
-            font-size: 0.55rem;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            font-weight: 600;
-        }
-        
-        .vital-item .vital-unit {
-            font-size: 0.5rem;
-            color: var(--text-secondary);
-        }
-        
-        .vital-item.blue { border-color: var(--primary); background: var(--primary-bg); }
-        .vital-item.green { border-color: var(--success); background: var(--success-bg); }
-        .vital-item.orange { border-color: var(--warning); background: var(--warning-bg); }
-        .vital-item.purple { border-color: var(--purple); background: var(--purple-bg); }
-        .vital-item.teal { border-color: var(--teal); background: var(--teal-bg); }
-        
-        [data-theme="dark"] .vital-item.blue { background: #1E3A5F; }
-        [data-theme="dark"] .vital-item.green { background: #1A3A2A; }
-        [data-theme="dark"] .vital-item.orange { background: #3D2E0A; }
-        [data-theme="dark"] .vital-item.purple { background: #2D1B4E; }
-        [data-theme="dark"] .vital-item.teal { background: #0F3D3D; }
-        
-        /* ================================================================
            EMPTY STATE
            ================================================================ */
         .empty-state {
@@ -1020,6 +1174,35 @@ include_once '../../components/admin_sidebar.php';
         .btn-export:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 20px rgba(5, 150, 105, 0.35);
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+        
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 0.65rem;
         }
         
         /* ================================================================
@@ -1167,12 +1350,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1196,7 +1379,6 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-id-card"></i>
                 <strong><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></strong>
                 
-                <!-- FIXED: times-circle icon with isset check -->
                 <span class="header-badge">
                     <?php if (isset($patient['status']) && $patient['status'] === 'active'): ?>
                         <i class="fas fa-check-circle"></i> Active
@@ -1308,7 +1490,7 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
+    <!-- STATISTICS CARDS (7 cards like patient_details) -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
         <a href="visits.php?patient_id=<?= $patient_id ?>" class="stat-card">
@@ -1365,70 +1547,132 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
         </a>
+        <a href="payments.php?patient_id=<?= $patient_id ?>" class="stat-card">
+            <div class="flex items-center gap-3">
+                <div class="stat-icon-small pink"><i class="fas fa-hand-holding-usd"></i></div>
+                <div>
+                    <p class="stat-label">Payments</p>
+                    <p class="stat-number pink"><?= number_format($patient['total_payments'] ?? 0) ?></p>
+                </div>
+            </div>
+        </a>
     </div>
 
     <!-- ================================================================ -->
-    <!-- VITAL SIGNS -->
+    <!-- LATEST VITAL SIGNS - 6 CARDS (MATCHES patient_details) -->
     <!-- ================================================================ -->
-    <?php if (!empty($vital_signs)): ?>
+    <?php if ($vital_signs): ?>
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="flex justify-between items-center mb-2">
+        <div class="flex justify-between items-center mb-3">
             <h3 class="text-sm font-bold text-primary">
-                <i class="fas fa-heartbeat"></i> Latest Vital Signs
+                <i class="fas fa-heartbeat" style="color: #EC4899;"></i> Latest Vital Signs
             </h3>
             <span class="text-xs text-gray-400">Recorded: <?= date('M d, Y h:i A', strtotime($vital_signs['recorded_at'] ?? 'now')) ?></span>
         </div>
-        <div class="vital-grid">
-            <?php if (!empty($vital_signs['temperature'])): ?>
-            <div class="vital-item blue">
-                <div class="vital-value"><?= $vital_signs['temperature'] ?>°C</div>
+        
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            
+            <!-- 1. Temperature -->
+            <div class="vital-card blue">
+                <div class="vital-icon"><i class="fas fa-thermometer-half"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $temp = $vital_signs['temperature'] ?? null;
+                        echo $temp !== null ? $temp : '-';
+                    ?>
+                    <span class="vital-unit">°C</span>
+                </div>
                 <div class="vital-label">Temperature</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['blood_pressure_systolic']) && !empty($vital_signs['blood_pressure_diastolic'])): ?>
-            <div class="vital-item green">
-                <div class="vital-value"><?= $vital_signs['blood_pressure_systolic'] ?>/<?= $vital_signs['blood_pressure_diastolic'] ?></div>
+            
+            <!-- 2. Blood Pressure - FIXED: Shows only systolic if diastolic is NULL -->
+            <div class="vital-card red">
+                <div class="vital-icon"><i class="fas fa-heart"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $systolic = $vital_signs['blood_pressure_systolic'] ?? null;
+                        $diastolic = $vital_signs['blood_pressure_diastolic'] ?? null;
+                        
+                        if ($systolic !== null && $diastolic !== null) {
+                            echo $systolic . '/' . $diastolic;
+                        } elseif ($systolic !== null) {
+                            echo $systolic;
+                        } else {
+                            echo '-';
+                        }
+                    ?>
+                    <span class="vital-unit">mmHg</span>
+                </div>
                 <div class="vital-label">Blood Pressure</div>
-                <div class="vital-unit">mmHg</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['pulse_rate'])): ?>
-            <div class="vital-item orange">
-                <div class="vital-value"><?= $vital_signs['pulse_rate'] ?></div>
+            
+            <!-- 3. Pulse Rate -->
+            <div class="vital-card pink">
+                <div class="vital-icon"><i class="fas fa-heartbeat"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $pulse = $vital_signs['pulse_rate'] ?? null;
+                        echo $pulse !== null ? $pulse : '-';
+                    ?>
+                    <span class="vital-unit">bpm</span>
+                </div>
                 <div class="vital-label">Pulse Rate</div>
-                <div class="vital-unit">bpm</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['weight'])): ?>
-            <div class="vital-item purple">
-                <div class="vital-value"><?= $vital_signs['weight'] ?> kg</div>
+            
+            <!-- 4. Weight -->
+            <div class="vital-card purple">
+                <div class="vital-icon"><i class="fas fa-weight"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $weight = $vital_signs['weight'] ?? null;
+                        echo $weight !== null ? $weight : '-';
+                    ?>
+                    <span class="vital-unit">kg</span>
+                </div>
                 <div class="vital-label">Weight</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['height'])): ?>
-            <div class="vital-item teal">
-                <div class="vital-value"><?= $vital_signs['height'] ?> cm</div>
+            
+            <!-- 5. Height -->
+            <div class="vital-card green">
+                <div class="vital-icon"><i class="fas fa-ruler-vertical"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $height = $vital_signs['height'] ?? null;
+                        echo $height !== null ? $height : '-';
+                    ?>
+                    <span class="vital-unit">cm</span>
+                </div>
                 <div class="vital-label">Height</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['bmi'])): ?>
-            <div class="vital-item blue">
-                <div class="vital-value"><?= $vital_signs['bmi'] ?></div>
+            
+            <!-- 6. BMI -->
+            <div class="vital-card indigo">
+                <div class="vital-icon"><i class="fas fa-calculator"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $bmi = $vital_signs['bmi'] ?? null;
+                        echo $bmi !== null ? $bmi : '-';
+                    ?>
+                </div>
                 <div class="vital-label">BMI</div>
-                <div class="vital-unit">kg/m²</div>
             </div>
+            
+        </div>
+        
+        <?php if ($vital_signs['notes']): ?>
+        <div class="mt-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+            <p class="text-xs text-gray-500">📝 Notes</p>
+            <p class="text-sm"><?= htmlspecialchars($vital_signs['notes']) ?></p>
+        </div>
+        <?php endif; ?>
+        
+        <p class="text-xs text-gray-400 mt-2">
+            <i class="fas fa-user"></i> Recorded by: <?= htmlspecialchars($vital_signs['recorded_by_name'] ?? 'N/A') ?>
+            <?php if ($vital_signs['visit_number']): ?>
+                <span class="mx-2">|</span>
+                <i class="fas fa-stethoscope"></i> Visit: <?= htmlspecialchars($vital_signs['visit_number']) ?>
             <?php endif; ?>
-        </div>
-        <?php if (!empty($vital_signs['notes'])): ?>
-        <div class="mt-2 text-xs text-gray-500">
-            <i class="fas fa-sticky-note"></i> <?= htmlspecialchars($vital_signs['notes']) ?>
-        </div>
-        <?php endif; ?>
-        <?php if (!empty($vital_signs['recorded_by_name'])): ?>
-        <div class="mt-1 text-xs text-gray-400 text-right">
-            Recorded by: <?= htmlspecialchars($vital_signs['recorded_by_name']) ?>
-        </div>
-        <?php endif; ?>
+        </p>
     </div>
     <?php endif; ?>
 
@@ -1663,32 +1907,6 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- QUICK ACTIONS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 animate-fade-in-up" style="animation-delay:0.35s;">
-        <a href="add_visit.php?patient_id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
-           class="bg-card border-2 border-border rounded-lg p-4 text-center hover:border-primary transition-all hover:shadow-md text-decoration-none">
-            <i class="fas fa-clinic-medical text-2xl text-blue-600 block mb-2"></i>
-            <span class="text-sm font-medium text-text-primary">Add Visit</span>
-        </a>
-        <a href="add_appointment.php?patient_id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
-           class="bg-card border-2 border-border rounded-lg p-4 text-center hover:border-purple-500 transition-all hover:shadow-md text-decoration-none">
-            <i class="fas fa-calendar-plus text-2xl text-purple-600 block mb-2"></i>
-            <span class="text-sm font-medium text-text-primary">Schedule Appointment</span>
-        </a>
-        <a href="add_prescription.php?patient_id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
-           class="bg-card border-2 border-border rounded-lg p-4 text-center hover:border-green-500 transition-all hover:shadow-md text-decoration-none">
-            <i class="fas fa-prescription text-2xl text-green-600 block mb-2"></i>
-            <span class="text-sm font-medium text-text-primary">Add Prescription</span>
-        </a>
-        <a href="edit_patient.php?id=<?= $patient_id ?>&branch=<?= $selected_branch_id ?>" 
-           class="bg-card border-2 border-border rounded-lg p-4 text-center hover:border-orange-500 transition-all hover:shadow-md text-decoration-none">
-            <i class="fas fa-edit text-2xl text-orange-500 block mb-2"></i>
-            <span class="text-sm font-medium text-text-primary">Edit Patient</span>
-        </a>
-    </div>
-
-    <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
     <footer class="footer">
@@ -1895,14 +2113,18 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c👤 Braick Dispensary - View Patient (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?> (ID: <?= $patient_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Braick Dispensary - View Patient (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?> (ID: <?= $patient_id ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Patient ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Age: <?= $age !== null ? $age . ' yrs' : 'N/A' ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c🏥 Branch: <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0D9488;');
     console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($patient['assigned_doctor_name'] ?? 'Not assigned') ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c❤️ Vital Signs: 6 cards (Temp, BP, Pulse, Weight, Height, BMI)', 'font-size:13px; color:#EC4899;');
+    console.log('%c🩸 BP Display: Shows only systolic if diastolic is NULL', 'font-size:13px; color:#EF4444;');
     console.log('%c📄 Export PDF button added', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ times-circle icon fixed with isset check', 'font-size:13px; color:#059669;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#059669;');
+    console.log('%c❌ Quick Actions buttons REMOVED', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>

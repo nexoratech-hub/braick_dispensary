@@ -5,32 +5,74 @@
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// VERIFY USER EXISTS IN DATABASE
+// ================================================================
+$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
+$stmt->execute([$user_id]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$user || $user['status'] !== 'active') {
+    session_destroy();
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
 // GET BRANCH ID
 // ================================================================
 $branch_id = isset($_GET['id']) ? (int)$_GET['id'] : ($_SESSION['branch_id'] ?? 1);
 
-// ================================================================
-// FUNCTION TO CHECK IF BRANCH EXISTS
-// ================================================================
 function branchExists($db, $branch_id) {
     try {
         $stmt = $db->prepare("SELECT id FROM branches WHERE id = ?");
@@ -43,6 +85,18 @@ function branchExists($db, $branch_id) {
 
 if (!branchExists($db, $branch_id)) {
     $branch_id = 1;
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -155,7 +209,7 @@ try {
 }
 
 // ================================================================
-// FETCH ASSIGNED PATIENTS (with doctor)
+// FETCH ASSIGNED PATIENTS
 // ================================================================
 $assigned_patients = [];
 try {
@@ -186,7 +240,7 @@ try {
 }
 
 // ================================================================
-// FETCH UNASSIGNED PATIENTS (no doctor)
+// FETCH UNASSIGNED PATIENTS
 // ================================================================
 $unassigned_patients = [];
 try {
@@ -290,7 +344,6 @@ try {
 // ================================================================
 function getStatusBadge($status) {
     $status = $status ?? 'unknown';
-    
     $classes = [
         'active' => 'success',
         'inactive' => 'danger',
@@ -316,7 +369,6 @@ function getStatusBadge($status) {
 
 function getStatusIcon($status) {
     $status = $status ?? 'unknown';
-    
     $icons = [
         'active' => 'fa-check-circle',
         'inactive' => 'fa-times-circle',
@@ -341,8 +393,12 @@ function getStatusIcon($status) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -729,115 +785,93 @@ include_once '../../components/admin_sidebar.php';
             transform: translateY(-1px);
         }
         
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
         /* ================================================================
-           STATS CARDS - BLUE THEME
+           STATS CARDS - BLUE BACKGROUND (3+3 GRID)
            ================================================================ */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
+            grid-template-columns: repeat(3, 1fr);
             gap: 16px;
             margin-bottom: 24px;
         }
         
         .stat-card {
-            background: var(--bg-card);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             border-radius: var(--radius);
-            padding: 16px 18px;
-            border: 2px solid var(--border-color);
+            padding: 20px 24px;
+            border: none;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 16px;
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
+            box-shadow: 0 4px 15px rgba(11, 94, 215, 0.25);
             text-decoration: none;
-            color: inherit;
+            color: white;
             position: relative;
             overflow: hidden;
+            min-height: 90px;
         }
         
         .stat-card::before {
             content: '';
             position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--primary-gradient);
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            top: -50%;
+            right: -20%;
+            width: 150px;
+            height: 150px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            bottom: -30%;
+            left: -10%;
+            width: 100px;
+            height: 100px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .stat-card:hover::before {
-            opacity: 1;
+            transform: translateY(-6px);
+            box-shadow: 0 8px 30px rgba(11, 94, 215, 0.4);
         }
         
         .stat-card .stat-content {
             flex: 1;
+            position: relative;
+            z-index: 1;
         }
         
         .stat-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            font-size: 1.3rem;
             flex-shrink: 0;
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.1);
+            position: relative;
+            z-index: 1;
             transition: all 0.3s ease;
         }
         
         .stat-card:hover .stat-icon {
             transform: scale(1.05);
+            background: rgba(255,255,255,0.25);
         }
         
-        .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-icon.green { background: #ECFDF5; color: #059669; }
-        .stat-icon.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
-        .stat-icon.teal { background: #ECFDF5; color: #0D9488; }
-        
-        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .stat-icon.green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .stat-icon.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .stat-icon.teal { background: #1A3A2A; color: #2DD4BF; }
-        
         .stat-label {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.8);
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
@@ -845,32 +879,27 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .stat-value {
-            font-size: 1.2rem;
+            font-size: 1.6rem;
             font-weight: 700;
-            color: var(--text-primary);
+            color: white;
             margin: 0;
             line-height: 1.2;
         }
         
-        .stat-value.blue-text { color: var(--primary); }
-        .stat-value.green-text { color: #059669; }
-        .stat-value.orange-text { color: #F59E0B; }
-        .stat-value.purple-text { color: #7C3AED; }
-        .stat-value.red-text { color: #DC2626; }
-        .stat-value.teal-text { color: #0D9488; }
-        
         .stat-sub {
             font-size: 0.55rem;
-            color: var(--text-secondary);
-            margin-top: 1px;
+            color: rgba(255,255,255,0.6);
+            margin-top: 2px;
         }
         
         .stat-arrow {
             opacity: 0;
             transition: all 0.3s ease;
-            color: var(--primary);
-            font-size: 0.7rem;
+            color: rgba(255,255,255,0.6);
+            font-size: 0.8rem;
             flex-shrink: 0;
+            position: relative;
+            z-index: 1;
         }
         
         .stat-card:hover .stat-arrow {
@@ -903,7 +932,130 @@ include_once '../../components/admin_sidebar.php';
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
         /* ================================================================
-           DOCTOR STATUS CARD - BLUE THEME
+           BUTTONS - FULL CSS STYLED
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 22px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .btn:active {
+            transform: translateY(0px);
+        }
+        
+        /* Primary Button */
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-gradient-hover);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        }
+        
+        /* Success Button */
+        .btn-success {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: linear-gradient(135deg, #047857, #065F46);
+            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
+        }
+        
+        /* Danger Button */
+        .btn-danger {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #B91C1C, #991B1B);
+            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
+        }
+        
+        /* Warning Button */
+        .btn-warning {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background: linear-gradient(135deg, #B45309, #92400E);
+            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.35);
+        }
+        
+        /* Outline Button */
+        .btn-outline {
+            background: transparent;
+            color: var(--text-primary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
+        }
+        
+        /* Button Sizes */
+        .btn-sm {
+            padding: 5px 12px;
+            font-size: 0.7rem;
+            border-radius: 6px;
+        }
+        
+        .btn-lg {
+            padding: 14px 32px;
+            font-size: 1rem;
+        }
+        
+        .btn-block {
+            width: 100%;
+            justify-content: center;
+        }
+        
+        /* Button with icon */
+        .btn i {
+            font-size: 0.9rem;
+        }
+        
+        .btn-sm i {
+            font-size: 0.7rem;
+        }
+        
+        .btn-lg i {
+            font-size: 1.1rem;
+        }
+        
+        /* Disabled button */
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        /* ================================================================
+           DOCTOR STATUS CARD
            ================================================================ */
         .doctor-grid {
             display: grid;
@@ -997,7 +1149,6 @@ include_once '../../components/admin_sidebar.php';
             border-radius: 50%;
             flex-shrink: 0;
             transition: all 0.3s ease;
-            animation: none;
         }
         
         .doctor-card .status-dot.online {
@@ -1026,7 +1177,6 @@ include_once '../../components/admin_sidebar.php';
         .doctor-card .status-label.online { color: #059669; }
         .doctor-card .status-label.offline { color: #DC2626; }
         
-        /* Status update flash animation */
         .doctor-card.status-updated {
             animation: flash-update 0.6s ease;
         }
@@ -1159,63 +1309,6 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           BUTTONS
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-gradient-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-sm {
-            padding: 4px 10px;
-            font-size: 0.65rem;
-            border-radius: 6px;
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-success {
-            background: #059669;
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: #047857;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        /* ================================================================
            TOAST NOTIFICATION
            ================================================================ */
         .status-toast {
@@ -1293,15 +1386,12 @@ include_once '../../components/admin_sidebar.php';
         /* ================================================================
            RESPONSIVE
            ================================================================ */
-        @media (max-width: 1200px) {
-            .stats-grid { grid-template-columns: repeat(3, 1fr); }
-        }
-        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
             .doctor-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -1317,6 +1407,9 @@ include_once '../../components/admin_sidebar.php';
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .stat-card { padding: 14px 16px; min-height: 70px; }
+            .stat-value { font-size: 1.2rem; }
+            .stat-icon { width: 40px; height: 40px; font-size: 1rem; }
         }
         
         /* ================================================================
@@ -1372,12 +1465,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1387,7 +1480,7 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- Page Header (Buttons Removed) -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1405,84 +1498,81 @@ include_once '../../components/admin_sidebar.php';
                     <i class="fas fa-circle" style="color:#34D399;"></i>
                     <span id="onlineCount"><?= count(array_filter($online_doctors, function($d) { return ($d['is_online'] ?? 0) == 1; })) ?></span> Online
                 </span>
+                <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                    <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
+                </span>
             </p>
-        </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="register_patient.php?branch_id=<?= $branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-user-plus"></i> Register Patient
-            </a>
-            <a href="create_appointment.php?branch_id=<?= $branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-calendar-plus"></i> New Appointment
-            </a>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - BLUE THEME -->
+    <!-- STATISTICS CARDS - 3 JUNA 3 CHINI (BLUE BACKGROUND) -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
+        <!-- ROW 1: Cards 1-3 -->
         <div class="stat-card">
-            <div class="stat-icon blue">
+            <div class="stat-icon">
                 <i class="fas fa-users"></i>
             </div>
             <div class="stat-content">
                 <p class="stat-label">Total Patients</p>
-                <p class="stat-value blue-text"><?= number_format($total_patients) ?></p>
+                <p class="stat-value"><?= number_format($total_patients) ?></p>
             </div>
             <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon green">
+            <div class="stat-icon">
                 <i class="fas fa-user-plus"></i>
             </div>
             <div class="stat-content">
                 <p class="stat-label">Today's Patients</p>
-                <p class="stat-value green-text"><?= number_format($today_patients) ?></p>
+                <p class="stat-value"><?= number_format($today_patients) ?></p>
             </div>
             <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon purple">
+            <div class="stat-icon">
                 <i class="fas fa-hospital-user"></i>
             </div>
             <div class="stat-content">
                 <p class="stat-label">Today's Visits</p>
-                <p class="stat-value purple-text"><?= number_format($today_visits) ?></p>
+                <p class="stat-value"><?= number_format($today_visits) ?></p>
             </div>
             <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
         
+        <!-- ROW 2: Cards 4-6 -->
         <div class="stat-card">
-            <div class="stat-icon orange">
+            <div class="stat-icon">
                 <i class="fas fa-calendar-check"></i>
             </div>
             <div class="stat-content">
                 <p class="stat-label">Today's Appointments</p>
-                <p class="stat-value orange-text"><?= number_format($today_appointments) ?></p>
+                <p class="stat-value"><?= number_format($today_appointments) ?></p>
             </div>
             <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon red">
+            <div class="stat-icon">
                 <i class="fas fa-clock"></i>
             </div>
             <div class="stat-content">
                 <p class="stat-label">Pending Appointments</p>
-                <p class="stat-value red-text"><?= number_format($pending_appointments) ?></p>
+                <p class="stat-value"><?= number_format($pending_appointments) ?></p>
             </div>
             <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
         
         <div class="stat-card">
-            <div class="stat-icon teal">
+            <div class="stat-icon">
                 <i class="fas fa-money-bill-wave"></i>
             </div>
             <div class="stat-content">
                 <p class="stat-label">Today's Revenue</p>
-                <p class="stat-value teal-text">TSh <?= number_format($today_revenue, 0) ?></p>
+                <p class="stat-value">TSh <?= number_format($today_revenue, 0) ?></p>
             </div>
             <i class="fas fa-chevron-right stat-arrow"></i>
         </div>
@@ -1503,9 +1593,9 @@ include_once '../../components/admin_sidebar.php';
             <div class="flex items-center gap-3">
                 <span class="text-xs text-gray-400" id="lastUpdateTime">Last update: just now</span>
                 <button onclick="fetchDoctorStatus()" class="btn btn-sm btn-primary" title="Refresh doctor status">
-                    <i class="fas fa-sync-alt" id="refreshIcon"></i>
+                    <i class="fas fa-sync-alt" id="refreshIcon"></i> Refresh
                 </button>
-                <a href="doctors.php?branch_id=<?= $branch_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+                <a href="doctors.php?branch_id=<?= $branch_id ?>" class="btn btn-sm btn-outline">View All</a>
             </div>
         </div>
         <div class="p-4">
@@ -1549,7 +1639,7 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-calendar-day text-purple-600"></i>
                 Today's Appointments
             </h3>
-            <a href="appointments.php?branch_id=<?= $branch_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="appointments.php?branch_id=<?= $branch_id ?>" class="btn btn-sm btn-outline">View All</a>
         </div>
         <div class="overflow-x-auto">
             <?php if (count($todays_appointments_list) > 0): ?>
@@ -1584,7 +1674,7 @@ include_once '../../components/admin_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="view_appointment.php?id=<?= $appointment['id'] ?>&branch_id=<?= $branch_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_appointment.php?id=<?= $appointment['id'] ?>&branch_id=<?= $branch_id ?>" class="btn btn-sm btn-primary">View</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1611,7 +1701,7 @@ include_once '../../components/admin_sidebar.php';
                 <span class="text-xs text-gray-500 ml-2">(<?= count($all_patients) ?> patients)</span>
             </h3>
             <div class="flex gap-2">
-                <a href="patients.php?branch_id=<?= $branch_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+                <a href="patients.php?branch_id=<?= $branch_id ?>" class="btn btn-sm btn-outline">View All</a>
             </div>
         </div>
         <div class="table-container">
@@ -1654,10 +1744,9 @@ include_once '../../components/admin_sidebar.php';
                                 <td><?= number_format($patient['total_visits'] ?? 0) ?></td>
                                 <td><?= number_format($patient['total_appointments'] ?? 0) ?></td>
                                 <td>
-                                    <a href="view_patient.php?id=<?= $patient['id'] ?>&branch_id=<?= $branch_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_patient.php?id=<?= $patient['id'] ?>&branch_id=<?= $branch_id ?>" class="btn btn-sm btn-primary">View</a>
                                     <?php if (empty($patient['assigned_doctor_id'])): ?>
-                                        <span class="text-gray-300 mx-1">|</span>
-                                        <a href="assign_doctor.php?patient_id=<?= $patient['id'] ?>&branch_id=<?= $branch_id ?>" class="text-green-600 text-xs hover:underline">Assign</a>
+                                        <a href="assign_doctor.php?patient_id=<?= $patient['id'] ?>&branch_id=<?= $branch_id ?>" class="btn btn-sm btn-success">Assign</a>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -1685,7 +1774,7 @@ include_once '../../components/admin_sidebar.php';
                 <span class="text-xs text-gray-500 ml-2">(<?= count($assigned_patients) ?> assigned)</span>
             </h3>
             <div class="flex gap-2">
-                <a href="assigned_patients.php?branch_id=<?= $branch_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+                <a href="assigned_patients.php?branch_id=<?= $branch_id ?>" class="btn btn-sm btn-outline">View All</a>
             </div>
         </div>
         <div class="table-container">
@@ -1722,9 +1811,8 @@ include_once '../../components/admin_sidebar.php';
                                 <td><?= htmlspecialchars($patient['doctor_specialty'] ?? 'General') ?></td>
                                 <td><?= number_format($patient['total_visits'] ?? 0) ?></td>
                                 <td>
-                                    <a href="view_patient.php?id=<?= $patient['id'] ?>&branch_id=<?= $branch_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
-                                    <span class="text-gray-300 mx-1">|</span>
-                                    <a href="reassign_doctor.php?patient_id=<?= $patient['id'] ?>&branch_id=<?= $branch_id ?>" class="text-orange-600 text-xs hover:underline">Reassign</a>
+                                    <a href="view_patient.php?id=<?= $patient['id'] ?>&branch_id=<?= $branch_id ?>" class="btn btn-sm btn-primary">View</a>
+                                    <a href="reassign_doctor.php?patient_id=<?= $patient['id'] ?>&branch_id=<?= $branch_id ?>" class="btn btn-sm btn-warning">Reassign</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1735,9 +1823,6 @@ include_once '../../components/admin_sidebar.php';
                     <i class="fas fa-user-check"></i>
                     <h4>No Assigned Patients</h4>
                     <p>No patients have been assigned to doctors in this branch yet.</p>
-                    <a href="assign_doctor.php?branch_id=<?= $branch_id ?>" class="btn btn-sm btn-primary mt-3">
-                        <i class="fas fa-user-plus"></i> Assign Patients
-                    </a>
                 </div>
             <?php endif; ?>
         </div>
@@ -1752,7 +1837,7 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-clock text-gray-500"></i>
                 Recent Activities
             </h3>
-            <a href="activity_logs.php?branch_id=<?= $branch_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="activity_logs.php?branch_id=<?= $branch_id ?>" class="btn btn-sm btn-outline">View All</a>
         </div>
         <div class="max-h-60 overflow-y-auto">
             <?php if (count($recent_activities) > 0): ?>
@@ -1791,7 +1876,7 @@ include_once '../../components/admin_sidebar.php';
             <div class="toast-title" id="toastTitle">Doctor Status Changed</div>
             <div class="toast-message" id="toastMessage">Dr. John Mushi is now online</div>
         </div>
-        <button onclick="hideToast()" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.2rem;">
+        <button onclick="hideToast()" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.2rem;padding:4px 8px;border-radius:6px;transition:all 0.3s;">
             <i class="fas fa-times"></i>
         </button>
     </div>
@@ -1950,13 +2035,12 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // AJAX - FETCH DOCTOR STATUS WITHOUT REFRESH
+    // AJAX - FETCH DOCTOR STATUS
     // ================================================================
     var autoUpdateInterval = null;
     var isUpdating = false;
     var previousDoctorStatus = {};
 
-    // Store initial status
     document.querySelectorAll('.doctor-card').forEach(function(card) {
         var id = card.getAttribute('data-doctor-id');
         var dot = card.querySelector('.status-dot');
@@ -2041,7 +2125,6 @@ include_once '../../components/admin_sidebar.php';
             }
         });
         
-        // Update online counts
         var onlineCountBadge = document.getElementById('onlineCount');
         if (onlineCountBadge) {
             onlineCountBadge.textContent = onlineCount;
@@ -2081,9 +2164,6 @@ include_once '../../components/admin_sidebar.php';
         autoUpdateInterval = setInterval(fetchDoctorStatus, 5000);
     }
 
-    // ================================================================
-    // STOP AUTO UPDATE (when page is hidden)
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             if (autoUpdateInterval) {
@@ -2100,7 +2180,8 @@ include_once '../../components/admin_sidebar.php';
     // ================================================================
     startAutoUpdate();
 
-    console.log('%c🏥 Braick Dispensary - Reception Dashboard (BLUE THEME + PATIENTS TABLES)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Reception Dashboard (3+3 Cards)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Assigned Patients: <?= count($assigned_patients) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Today\'s Appointments: <?= number_format($today_appointments) ?>', 'font-size:13px; color:#F59E0B;');

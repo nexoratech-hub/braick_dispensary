@@ -2,26 +2,100 @@
 // ================================================================
 // FILE: frontend/pages/admin/patient_details.php
 // PATIENT DETAILS - VIEW ALL PATIENT INFORMATION
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - WITH LOGIN SESSION
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION - Admin Only
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database and helpers
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
-$db = Database::getInstance()->getConnection();
+// ================================================================
+// CHECK IF USER HAS ADMIN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($username) && !empty($username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['profile_pic'] = $user['profile_pic'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $profile_pic = $user['profile_pic'];
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// INCLUDE DATABASE AND HELPERS
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
+
+// ================================================================
+// GET DATABASE CONNECTION
+// ================================================================
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // VARIABLES
@@ -30,8 +104,20 @@ $patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
 if ($patient_id <= 0) {
-    header('Location: patients.php?branch=' . $selected_branch_id);
+    header('Location: patients.php?branch=' . urlencode($selected_branch_id));
     exit;
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -48,7 +134,7 @@ $stmt->execute([$patient_id]);
 $patient = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$patient) {
-    header('Location: patients.php?branch=' . $selected_branch_id);
+    header('Location: patients.php?branch=' . urlencode($selected_branch_id));
     exit;
 }
 
@@ -225,15 +311,19 @@ $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER 
 $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/admin_header.php';
-include_once '../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <style>
@@ -661,6 +751,33 @@ include_once '../../components/admin_sidebar.php';
     [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
     [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
     
+    /* Toast */
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 14px 20px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 400px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: white;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    }
+    .toast-custom.show {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #DC2626; }
+    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.warning { background: #D97706; }
+    
     /* Responsive */
     @media (max-width: 640px) {
         .profile-header {
@@ -748,12 +865,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -791,10 +908,10 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
             <div class="flex gap-2 flex-wrap">
-                <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
+                <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary btn-sm" style="background:rgba(255,255,255,0.2);color:white;border:1px solid rgba(255,255,255,0.2);">
                     <i class="fas fa-edit"></i> Edit
                 </a>
-                <a href="patients.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);">
+                <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);">
                     <i class="fas fa-arrow-left"></i> Back
                 </a>
             </div>
@@ -1066,7 +1183,7 @@ include_once '../../components/admin_sidebar.php';
                             <td class="text-xs"><?= date('M d, Y h:i A', strtotime($vs['recorded_at'])) ?></td>
                             <td>
                                 <?php if ($vs['visit_number']): ?>
-                                    <a href="visit_details.php?id=<?= $vs['visit_id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                    <a href="visit_details.php?id=<?= $vs['visit_id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                                        class="text-blue-600 hover:underline text-xs font-mono">
                                         <?= htmlspecialchars($vs['visit_number']) ?>
                                     </a>
@@ -1116,7 +1233,7 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-notes-medical title-blue mr-2"></i> Recent Visits
                 <span class="badge-count">(<?= $total_visits ?> total)</span>
             </h3>
-            <a href="visits.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="visits.php?patient=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1146,7 +1263,7 @@ include_once '../../components/admin_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="visit_details.php?id=<?= $visit['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
+                                    <a href="visit_details.php?id=<?= $visit['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary btn-sm">
                                         <i class="fas fa-eye"></i>
                                     </a>
                                 </td>
@@ -1169,7 +1286,7 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-file-invoice title-blue mr-2"></i> Recent Bills
                 <span class="badge-count">(<?= $total_bills ?> total)</span>
             </h3>
-            <a href="bills.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="bills.php?patient=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1201,7 +1318,7 @@ include_once '../../components/admin_sidebar.php';
                                 </td>
                                 <td class="text-xs"><?= date('M d, Y', strtotime($bill['created_at'])) ?></td>
                                 <td>
-                                    <a href="bill_details.php?id=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
+                                    <a href="bill_details.php?id=<?= $bill['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary btn-sm">
                                         <i class="fas fa-eye"></i>
                                     </a>
                                 </td>
@@ -1224,7 +1341,7 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-prescription title-blue mr-2"></i> Recent Prescriptions
                 <span class="badge-count">(<?= $total_prescriptions ?> total)</span>
             </h3>
-            <a href="prescriptions.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="prescriptions.php?patient=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1252,7 +1369,7 @@ include_once '../../components/admin_sidebar.php';
                                 </td>
                                 <td class="text-xs"><?= date('M d, Y', strtotime($prescription['created_at'])) ?></td>
                                 <td>
-                                    <a href="prescription_details.php?id=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
+                                    <a href="prescription_details.php?id=<?= $prescription['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary btn-sm">
                                         <i class="fas fa-eye"></i>
                                     </a>
                                 </td>
@@ -1275,7 +1392,7 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-flask title-blue mr-2"></i> Recent Lab Tests
                 <span class="badge-count">(<?= $total_lab_tests ?> total)</span>
             </h3>
-            <a href="lab_tests.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="lab_tests.php?patient=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1303,7 +1420,7 @@ include_once '../../components/admin_sidebar.php';
                                 </td>
                                 <td class="text-xs"><?= date('M d, Y', strtotime($test['created_at'])) ?></td>
                                 <td>
-                                    <a href="lab_test_details.php?id=<?= $test['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
+                                    <a href="lab_test_details.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary btn-sm">
                                         <i class="fas fa-eye"></i>
                                     </a>
                                 </td>
@@ -1326,7 +1443,7 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-calendar-check title-blue mr-2"></i> Recent Appointments
                 <span class="badge-count">(<?= $total_appointments ?> total)</span>
             </h3>
-            <a href="appointments.php?patient=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
+            <a href="appointments.php?patient=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline btn-sm">
                 View All <i class="fas fa-arrow-right"></i>
             </a>
         </div>
@@ -1354,7 +1471,7 @@ include_once '../../components/admin_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="appointment_details.php?id=<?= $appointment['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
+                                    <a href="appointment_details.php?id=<?= $appointment['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary btn-sm">
                                         <i class="fas fa-eye"></i>
                                     </a>
                                 </td>
@@ -1500,14 +1617,14 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Patient Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Patient Details (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c❤️ Vital Signs Records: <?= $total_vital_signs ?>', 'font-size:13px; color:#EC4899;');
     console.log('%c📊 6 Vital Signs: Temp, BP, Pulse, Weight, Height, BMI', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🩸 BP Display: Shows only systolic if diastolic is NULL', 'font-size:13px; color:#EF4444;');
-    console.log('%c📊 Visits: <?= $total_visits ?> | Bills: <?= $total_bills ?> | Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔬 Lab Tests: <?= $total_lab_tests ?> (via visits table)', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

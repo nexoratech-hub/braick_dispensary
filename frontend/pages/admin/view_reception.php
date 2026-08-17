@@ -5,23 +5,80 @@
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// VERIFY USER EXISTS IN DATABASE
+// ================================================================
+$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
+$stmt->execute([$user_id]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$user || $user['status'] !== 'active') {
+    session_destroy();
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // GET BRANCH ID
@@ -225,8 +282,12 @@ function getStatusIcon($status) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -263,6 +324,7 @@ include_once '../../components/admin_sidebar.php';
             --primary-light: #3B82F6;
             --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            --primary-gradient-hover: linear-gradient(135deg, #0A4CA8, #083C8A);
             
             --success: #059669;
             --success-dark: #047857;
@@ -688,98 +750,137 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS
+           STATS CARDS - BLUE BACKGROUND (3+3 GRID)
            ================================================================ */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 18px;
             margin-bottom: 24px;
         }
         
         .stat-card {
-            background: var(--bg-card);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             border-radius: var(--radius);
-            padding: 16px 20px;
-            border: 1px solid var(--border-color);
+            padding: 20px 24px;
+            border: 2px solid rgba(255,255,255,0.1);
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 16px;
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
+            box-shadow: 0 4px 15px rgba(11, 94, 215, 0.2);
             text-decoration: none;
-            color: var(--text-primary);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            min-height: 90px;
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 150px;
+            height: 150px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            bottom: -30%;
+            left: -10%;
+            width: 100px;
+            height: 100px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
+            transform: translateY(-4px);
+            box-shadow: 0 8px 30px rgba(11, 94, 215, 0.35);
+            border-color: rgba(255,255,255,0.2);
         }
         
-        .stat-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
+        .stat-card .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.1rem;
+            font-size: 1.3rem;
             flex-shrink: 0;
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.1);
+            position: relative;
+            z-index: 1;
         }
         
-        .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-icon.green { background: #ECFDF5; color: #059669; }
-        .stat-icon.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-icon.indigo { background: #EEF2FF; color: #4F46E5; }
-        .stat-icon.teal { background: #ECFDF5; color: #0D9488; }
-        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
+        .stat-card .stat-icon i {
+            color: white;
+        }
         
-        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .stat-icon.green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .stat-icon.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-icon.indigo { background: #1E1B4B; color: #818CF8; }
-        [data-theme="dark"] .stat-icon.teal { background: #0F3D3D; color: #5EEAD4; }
-        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
+        .stat-card:hover .stat-icon {
+            transform: scale(1.05);
+            background: rgba(255,255,255,0.25);
+        }
         
         .stat-label {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            font-weight: 500;
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.8);
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.03em;
+            letter-spacing: 0.05em;
             margin: 0;
+            position: relative;
+            z-index: 1;
         }
         
         .stat-value {
-            font-size: 1.1rem;
+            font-size: 1.5rem;
             font-weight: 700;
-            color: var(--text-primary);
+            color: white;
             margin: 0;
+            line-height: 1.2;
+            position: relative;
+            z-index: 1;
         }
         
-        .stat-value.blue-text { color: var(--primary); }
-        .stat-value.green-text { color: #059669; }
-        .stat-value.orange-text { color: #F59E0B; }
-        .stat-value.purple-text { color: #7C3AED; }
-        .stat-value.indigo-text { color: #4F46E5; }
-        .stat-value.teal-text { color: #0D9488; }
-        .stat-value.red-text { color: #DC2626; }
-        
         .stat-sub {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            margin: 0;
-            opacity: 0.8;
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.6);
+            margin-top: 2px;
+            position: relative;
+            z-index: 1;
         }
         
         .stat-link-hint {
             font-size: 0.6rem;
-            color: var(--primary);
-            opacity: 0.7;
-            margin-top: 2px;
+            color: rgba(255,255,255,0.5);
+            margin-top: 4px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .stat-arrow {
+            opacity: 0;
+            transition: all 0.3s ease;
+            color: rgba(255,255,255,0.6);
+            font-size: 0.8rem;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .stat-card:hover .stat-arrow {
+            opacity: 1;
+            transform: translateX(4px);
         }
         
         /* ================================================================
@@ -978,6 +1079,7 @@ include_once '../../components/admin_sidebar.php';
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -996,6 +1098,9 @@ include_once '../../components/admin_sidebar.php';
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .stat-card { padding: 14px 16px; min-height: 70px; }
+            .stat-value { font-size: 1.2rem; }
+            .stat-icon { width: 40px; height: 40px; font-size: 1rem; }
         }
         
         /* ================================================================
@@ -1034,6 +1139,12 @@ include_once '../../components/admin_sidebar.php';
             }
             .page-title, .page-subtitle, .header-badge, .role-badge-display {
                 color: white !important;
+            }
+            .stat-card {
+                background: #0B5ED7 !important;
+                color: white !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
             }
         }
     </style>
@@ -1077,12 +1188,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1112,6 +1223,9 @@ include_once '../../components/admin_sidebar.php';
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
                     <i class="fas fa-calendar-check"></i> <?= $reception['today_appointments'] ?? 0 ?> Today
+                </span>
+                <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                    <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
                 </span>
             </p>
         </div>
@@ -1158,111 +1272,116 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
+    <!-- STATISTICS CARDS - BLUE BACKGROUND (3+3 GRID) -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
         <!-- 1. Total Patients -->
         <a href="patients.php?branch=<?= $reception_id ?>" class="stat-card">
-            <div class="stat-icon blue">
+            <div class="stat-icon">
                 <i class="fas fa-users"></i>
             </div>
             <div>
                 <p class="stat-label">Total Patients</p>
-                <p class="stat-value blue-text"><?= number_format($reception['total_patients'] ?? 0) ?></p>
+                <p class="stat-value"><?= number_format($reception['total_patients'] ?? 0) ?></p>
                 <p class="stat-sub">+<?= number_format($reception['today_patients'] ?? 0) ?> today</p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Patients</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- 2. Today's Visits -->
         <a href="visits.php?branch=<?= $reception_id ?>&date=today" class="stat-card">
-            <div class="stat-icon green">
+            <div class="stat-icon">
                 <i class="fas fa-clinic-medical"></i>
             </div>
             <div>
                 <p class="stat-label">Today's Visits</p>
-                <p class="stat-value green-text"><?= number_format($reception['today_visits'] ?? 0) ?></p>
+                <p class="stat-value"><?= number_format($reception['today_visits'] ?? 0) ?></p>
                 <p class="stat-sub">Pending: <?= $reception['pending_visits'] ?? 0 ?></p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Visits</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- 3. Appointments -->
         <a href="appointments.php?branch=<?= $reception_id ?>" class="stat-card">
-            <div class="stat-icon purple">
+            <div class="stat-icon">
                 <i class="fas fa-calendar-check"></i>
             </div>
             <div>
                 <p class="stat-label">Appointments</p>
-                <p class="stat-value purple-text"><?= number_format(($reception['scheduled_appointments'] ?? 0) + ($reception['confirmed_appointments'] ?? 0)) ?></p>
+                <p class="stat-value"><?= number_format(($reception['scheduled_appointments'] ?? 0) + ($reception['confirmed_appointments'] ?? 0)) ?></p>
                 <p class="stat-sub">Scheduled: <?= $reception['scheduled_appointments'] ?? 0 ?> | Confirmed: <?= $reception['confirmed_appointments'] ?? 0 ?></p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Appointments</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- 4. Today's Appointments -->
         <a href="appointments.php?branch=<?= $reception_id ?>&date=today" class="stat-card">
-            <div class="stat-icon orange">
+            <div class="stat-icon">
                 <i class="fas fa-calendar-day"></i>
             </div>
             <div>
                 <p class="stat-label">Today's Appointments</p>
-                <p class="stat-value orange-text"><?= number_format($reception['today_appointments'] ?? 0) ?></p>
+                <p class="stat-value"><?= number_format($reception['today_appointments'] ?? 0) ?></p>
                 <p class="stat-sub">Need attention</p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Today</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- 5. Pending Visits -->
         <a href="visits.php?branch=<?= $reception_id ?>&status=pending" class="stat-card">
-            <div class="stat-icon red">
+            <div class="stat-icon">
                 <i class="fas fa-clock"></i>
             </div>
             <div>
                 <p class="stat-label">Pending Visits</p>
-                <p class="stat-value <?= ($reception['pending_visits'] ?? 0) > 0 ? 'red-text' : 'green-text' ?>">
-                    <?= number_format($reception['pending_visits'] ?? 0) ?>
-                </p>
+                <p class="stat-value"><?= number_format($reception['pending_visits'] ?? 0) ?></p>
                 <p class="stat-sub">Need doctor assignment</p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Pending</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- 6. Assigned Visits -->
         <a href="visits.php?branch=<?= $reception_id ?>&status=assigned" class="stat-card">
-            <div class="stat-icon indigo">
+            <div class="stat-icon">
                 <i class="fas fa-user-check"></i>
             </div>
             <div>
                 <p class="stat-label">Assigned Visits</p>
-                <p class="stat-value indigo-text"><?= number_format($reception['assigned_visits'] ?? 0) ?></p>
+                <p class="stat-value"><?= number_format($reception['assigned_visits'] ?? 0) ?></p>
                 <p class="stat-sub">With doctors</p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Assigned</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- 7. Total Receptionists -->
         <a href="employees.php?branch=<?= $reception_id ?>&role=reception" class="stat-card">
-            <div class="stat-icon teal">
+            <div class="stat-icon">
                 <i class="fas fa-user-tie"></i>
             </div>
             <div>
                 <p class="stat-label">Receptionists</p>
-                <p class="stat-value teal-text"><?= number_format($reception['total_receptionists'] ?? 0) ?></p>
+                <p class="stat-value"><?= number_format($reception['total_receptionists'] ?? 0) ?></p>
                 <p class="stat-sub"><?= $reception['active_receptionists'] ?? 0 ?> active</p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Staff</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
         <!-- 8. Registration Rate -->
         <a href="patients.php?branch=<?= $reception_id ?>" class="stat-card">
-            <div class="stat-icon blue">
+            <div class="stat-icon">
                 <i class="fas fa-chart-line"></i>
             </div>
             <div>
                 <p class="stat-label">Registration Rate</p>
-                <p class="stat-value blue-text">
+                <p class="stat-value">
                     <?php 
                         $total = $reception['total_patients'] ?? 0;
                         $today = $reception['today_patients'] ?? 0;
@@ -1273,6 +1392,7 @@ include_once '../../components/admin_sidebar.php';
                 <p class="stat-sub">Today's registrations</p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Reports</p>
             </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
     </div>
@@ -1688,11 +1808,15 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c📋 Braick Dispensary - View Reception (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Braick Dispensary - View Reception (BLUE THEME + LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($reception['name']) ?> (ID: <?= $reception_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c👥 Total Patients: <?= number_format($reception['total_patients'] ?? 0) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Today\'s Appointments: <?= number_format($reception['today_appointments'] ?? 0) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c🔄 Pending Visits: <?= number_format($reception['pending_visits'] ?? 0) ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c🔑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ All 8 stat cards have BLUE BACKGROUND with white text', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

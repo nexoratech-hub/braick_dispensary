@@ -1,27 +1,107 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_visit.php
-// ADMIN - VIEW VISIT DETAILS WITH VITAL SIGNS
-// BRAICK DISPENSARY - BLUE THEME
+// ADMIN - VIEW VISIT DETAILS WITH VITAL SIGNS CARDS
+// BRAICK DISPENSARY - BLUE THEME - MATCHES view_patient.php
+// WITH LOGIN SESSION
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ADMIN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($username) && !empty($username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['profile_pic'] = $user['profile_pic'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $profile_pic = $user['profile_pic'];
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -77,6 +157,16 @@ try {
     error_log("Error fetching visit: " . $e->getMessage());
     header('Location: visits.php?branch=' . urlencode($selected_branch_id) . '&error=database_error');
     exit;
+}
+
+// ================================================================
+// CALCULATE AGE
+// ================================================================
+$age = null;
+if (!empty($visit['date_of_birth'])) {
+    $birthDate = new DateTime($visit['date_of_birth']);
+    $today = new DateTime('today');
+    $age = $birthDate->diff($today)->y;
 }
 
 // ================================================================
@@ -163,16 +253,6 @@ try {
 }
 
 // ================================================================
-// CALCULATE AGE
-// ================================================================
-$age = null;
-if (!empty($visit['date_of_birth'])) {
-    $birthDate = new DateTime($visit['date_of_birth']);
-    $today = new DateTime('today');
-    $age = $birthDate->diff($today)->y;
-}
-
-// ================================================================
 // GET BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
@@ -223,18 +303,18 @@ function getStatusIcon($status) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -253,7 +333,7 @@ include_once '../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BOLDER BLUE THEME
+           ROOT VARIABLES - BOLDER BLUE THEME (MATCHES view_patient)
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -687,65 +767,116 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           VITAL SIGNS
+           VITAL SIGNS CARDS - 6 CARDS (MATCHES view_patient)
            ================================================================ */
-        .vital-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 12px;
-            margin-top: 12px;
-        }
-        
-        .vital-item {
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            padding: 12px 16px;
+        .vital-card {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 20px 16px;
             text-align: center;
             border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            min-height: 120px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
         }
         
-        .vital-item:hover {
-            border-color: var(--primary);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
+        .vital-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            border-radius: 14px 14px 0 0;
         }
         
-        .vital-item .vital-value {
-            font-size: 1.2rem;
+        .vital-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.1);
+        }
+        
+        .vital-card .vital-icon {
+            font-size: 2rem;
+            margin-bottom: 8px;
+        }
+        
+        .vital-card .vital-value {
+            font-size: 1.6rem;
             font-weight: 700;
             color: var(--text-primary);
+            line-height: 1.2;
         }
         
-        .vital-item .vital-label {
-            font-size: 0.55rem;
+        .vital-card .vital-label {
+            font-size: 0.7rem;
             color: var(--text-secondary);
             text-transform: uppercase;
-            letter-spacing: 0.04em;
             font-weight: 600;
+            letter-spacing: 0.04em;
+            margin-top: 4px;
         }
         
-        .vital-item .vital-unit {
-            font-size: 0.5rem;
+        .vital-card .vital-unit {
+            font-size: 0.65rem;
             color: var(--text-secondary);
+            font-weight: 400;
+            margin-left: 2px;
         }
         
-        .vital-item.blue { border-color: var(--primary); background: var(--primary-bg); }
-        .vital-item.green { border-color: var(--success); background: var(--success-bg); }
-        .vital-item.orange { border-color: var(--warning); background: var(--warning-bg); }
-        .vital-item.purple { border-color: var(--purple); background: var(--purple-bg); }
-        .vital-item.teal { border-color: var(--teal); background: var(--teal-bg); }
-        .vital-item.red { border-color: var(--danger); background: var(--danger-bg); }
+        /* Card Colors - 6 Colors */
+        .vital-card.blue::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
+        .vital-card.blue .vital-icon { color: #0B5ED7; }
+        .vital-card.blue .vital-value { color: #0B5ED7; }
         
-        [data-theme="dark"] .vital-item.blue { background: #1E3A5F; }
-        [data-theme="dark"] .vital-item.green { background: #1A3A2A; }
-        [data-theme="dark"] .vital-item.orange { background: #3D2E0A; }
-        [data-theme="dark"] .vital-item.purple { background: #2D1B4E; }
-        [data-theme="dark"] .vital-item.teal { background: #0F3D3D; }
-        [data-theme="dark"] .vital-item.red { background: #3A1A1A; }
+        .vital-card.red::before { background: linear-gradient(90deg, #EF4444, #F87171); }
+        .vital-card.red .vital-icon { color: #EF4444; }
+        .vital-card.red .vital-value { color: #EF4444; }
+        
+        .vital-card.pink::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
+        .vital-card.pink .vital-icon { color: #EC4899; }
+        .vital-card.pink .vital-value { color: #EC4899; }
+        
+        .vital-card.purple::before { background: linear-gradient(90deg, #7B2FBE, #9B4DCA); }
+        .vital-card.purple .vital-icon { color: #7B2FBE; }
+        .vital-card.purple .vital-value { color: #7B2FBE; }
+        
+        .vital-card.green::before { background: linear-gradient(90deg, #059669, #0AA84F); }
+        .vital-card.green .vital-icon { color: #059669; }
+        .vital-card.green .vital-value { color: #059669; }
+        
+        .vital-card.indigo::before { background: linear-gradient(90deg, #4F46E5, #818CF8); }
+        .vital-card.indigo .vital-icon { color: #4F46E5; }
+        .vital-card.indigo .vital-value { color: #4F46E5; }
+        
+        /* Dark mode vital cards */
+        [data-theme="dark"] .vital-card {
+            background: #1E293B;
+            border-color: #334155;
+        }
+        
+        [data-theme="dark"] .vital-card:hover {
+            border-color: #0B5ED7;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+        }
+        
+        [data-theme="dark"] .vital-card .vital-value {
+            color: #F1F5F9;
+        }
+        
+        [data-theme="dark"] .vital-card.blue .vital-value { color: #6EA8FE; }
+        [data-theme="dark"] .vital-card.red .vital-value { color: #F87171; }
+        [data-theme="dark"] .vital-card.pink .vital-value { color: #F472B6; }
+        [data-theme="dark"] .vital-card.purple .vital-value { color: #A78BFA; }
+        [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
+        [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
         
         /* ================================================================
-           DATA TABLE
+           TABLE CONTAINER
            ================================================================ */
         .table-container {
             background: var(--bg-card);
@@ -796,15 +927,15 @@ include_once '../../components/admin_sidebar.php';
             width: 100%;
             border-collapse: separate;
             border-spacing: 0;
-            font-size: 0.78rem;
+            font-size: 0.82rem;
         }
         
         .data-table thead th {
             background: var(--bg-body);
             color: var(--text-secondary);
             font-weight: 700;
-            padding: 8px 12px;
-            font-size: 0.6rem;
+            padding: 12px 14px;
+            font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             border-bottom: 2px solid var(--border-color);
@@ -816,7 +947,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .data-table td {
-            padding: 8px 12px;
+            padding: 12px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
@@ -837,9 +968,9 @@ include_once '../../components/admin_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 2px 10px;
+            padding: 4px 12px;
             border-radius: 20px;
-            font-size: 0.6rem;
+            font-size: 0.65rem;
             font-weight: 600;
             color: white;
             letter-spacing: 0.02em;
@@ -861,18 +992,18 @@ include_once '../../components/admin_sidebar.php';
            ================================================================ */
         .empty-state {
             text-align: center;
-            padding: 30px 20px;
+            padding: 40px 20px;
             color: var(--text-secondary);
         }
         
         .empty-state i {
-            font-size: 2rem;
+            font-size: 2.5rem;
             color: var(--border-color);
-            margin-bottom: 8px;
+            margin-bottom: 10px;
         }
         
         .empty-state p {
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             margin: 0;
         }
         
@@ -909,16 +1040,13 @@ include_once '../../components/admin_sidebar.php';
             .page-header .page-title { font-size: 1.3rem; }
             .detail-card { padding: 16px; }
             .vital-grid { grid-template-columns: repeat(3, 1fr); }
-            .data-table { font-size: 0.65rem; }
-            .data-table thead th, .data-table td { padding: 6px 8px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .detail-card { padding: 12px 14px; }
             .vital-grid { grid-template-columns: repeat(2, 1fr); }
-            .data-table { font-size: 0.55rem; }
-            .data-table thead th, .data-table td { padding: 4px 6px; }
         }
         
         /* ================================================================
@@ -994,12 +1122,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1125,112 +1253,128 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- VITAL SIGNS - LATEST -->
+    <!-- VITAL SIGNS - 6 CARDS (MATCHES view_patient) -->
     <!-- ================================================================ -->
     <?php if (!empty($vital_signs)): ?>
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.05s;">
-        <div class="flex justify-between items-center mb-2">
+        <div class="flex justify-between items-center mb-3">
             <h3 class="text-sm font-bold text-primary">
-                <i class="fas fa-heartbeat"></i> Latest Vital Signs
+                <i class="fas fa-heartbeat" style="color: #EC4899;"></i> Latest Vital Signs
             </h3>
-            <span class="text-xs text-gray-400">
-                Recorded: <?= date('M d, Y h:i A', strtotime($vital_signs['recorded_at'] ?? 'now')) ?>
-                <?php if (!empty($vital_signs['recorded_by_name'])): ?>
-                    by <?= htmlspecialchars($vital_signs['recorded_by_name']) ?>
-                <?php endif; ?>
-            </span>
+            <span class="text-xs text-gray-400">Recorded: <?= date('M d, Y h:i A', strtotime($vital_signs['recorded_at'] ?? 'now')) ?></span>
         </div>
-        <div class="vital-grid">
-            <?php if (!empty($vital_signs['temperature'])): ?>
-            <div class="vital-item blue">
-                <div class="vital-value"><?= $vital_signs['temperature'] ?>°C</div>
+        
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            
+            <!-- 1. Temperature -->
+            <div class="vital-card blue">
+                <div class="vital-icon"><i class="fas fa-thermometer-half"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $temp = $vital_signs['temperature'] ?? null;
+                        echo $temp !== null ? $temp : '-';
+                    ?>
+                    <span class="vital-unit">°C</span>
+                </div>
                 <div class="vital-label">Temperature</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['blood_pressure_systolic']) && !empty($vital_signs['blood_pressure_diastolic'])): ?>
-            <div class="vital-item green">
-                <div class="vital-value"><?= $vital_signs['blood_pressure_systolic'] ?>/<?= $vital_signs['blood_pressure_diastolic'] ?></div>
+            
+            <!-- 2. Blood Pressure - FIXED: Shows only systolic if diastolic is NULL -->
+            <div class="vital-card red">
+                <div class="vital-icon"><i class="fas fa-heart"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $systolic = $vital_signs['blood_pressure_systolic'] ?? null;
+                        $diastolic = $vital_signs['blood_pressure_diastolic'] ?? null;
+                        
+                        if ($systolic !== null && $diastolic !== null) {
+                            echo $systolic . '/' . $diastolic;
+                        } elseif ($systolic !== null) {
+                            echo $systolic;
+                        } else {
+                            echo '-';
+                        }
+                    ?>
+                    <span class="vital-unit">mmHg</span>
+                </div>
                 <div class="vital-label">Blood Pressure</div>
-                <div class="vital-unit">mmHg</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['pulse_rate'])): ?>
-            <div class="vital-item orange">
-                <div class="vital-value"><?= $vital_signs['pulse_rate'] ?></div>
+            
+            <!-- 3. Pulse Rate -->
+            <div class="vital-card pink">
+                <div class="vital-icon"><i class="fas fa-heartbeat"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $pulse = $vital_signs['pulse_rate'] ?? null;
+                        echo $pulse !== null ? $pulse : '-';
+                    ?>
+                    <span class="vital-unit">bpm</span>
+                </div>
                 <div class="vital-label">Pulse Rate</div>
-                <div class="vital-unit">bpm</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['respiratory_rate'])): ?>
-            <div class="vital-item teal">
-                <div class="vital-value"><?= $vital_signs['respiratory_rate'] ?></div>
-                <div class="vital-label">Respiratory Rate</div>
-                <div class="vital-unit">breaths/min</div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['oxygen_saturation'])): ?>
-            <div class="vital-item purple">
-                <div class="vital-value"><?= $vital_signs['oxygen_saturation'] ?>%</div>
-                <div class="vital-label">Oxygen Saturation</div>
-                <div class="vital-unit">SpO₂</div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['blood_glucose'])): ?>
-            <div class="vital-item red">
-                <div class="vital-value"><?= $vital_signs['blood_glucose'] ?></div>
-                <div class="vital-label">Blood Glucose</div>
-                <div class="vital-unit">mg/dL</div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['weight'])): ?>
-            <div class="vital-item purple">
-                <div class="vital-value"><?= $vital_signs['weight'] ?> kg</div>
+            
+            <!-- 4. Weight -->
+            <div class="vital-card purple">
+                <div class="vital-icon"><i class="fas fa-weight"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $weight = $vital_signs['weight'] ?? null;
+                        echo $weight !== null ? $weight : '-';
+                    ?>
+                    <span class="vital-unit">kg</span>
+                </div>
                 <div class="vital-label">Weight</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['height'])): ?>
-            <div class="vital-item teal">
-                <div class="vital-value"><?= $vital_signs['height'] ?> cm</div>
+            
+            <!-- 5. Height -->
+            <div class="vital-card green">
+                <div class="vital-icon"><i class="fas fa-ruler-vertical"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $height = $vital_signs['height'] ?? null;
+                        echo $height !== null ? $height : '-';
+                    ?>
+                    <span class="vital-unit">cm</span>
+                </div>
                 <div class="vital-label">Height</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['bmi'])): ?>
-            <div class="vital-item blue">
-                <div class="vital-value"><?= $vital_signs['bmi'] ?></div>
+            
+            <!-- 6. BMI -->
+            <div class="vital-card indigo">
+                <div class="vital-icon"><i class="fas fa-calculator"></i></div>
+                <div class="vital-value">
+                    <?php 
+                        $bmi = $vital_signs['bmi'] ?? null;
+                        echo $bmi !== null ? $bmi : '-';
+                    ?>
+                </div>
                 <div class="vital-label">BMI</div>
-                <div class="vital-unit">kg/m²</div>
             </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['muac'])): ?>
-            <div class="vital-item orange">
-                <div class="vital-value"><?= $vital_signs['muac'] ?> cm</div>
-                <div class="vital-label">MUAC</div>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($vital_signs['pain_score']) && $vital_signs['pain_score'] >= 0): ?>
-            <div class="vital-item red">
-                <div class="vital-value"><?= $vital_signs['pain_score'] ?>/10</div>
-                <div class="vital-label">Pain Score</div>
-            </div>
-            <?php endif; ?>
+            
         </div>
+        
         <?php if (!empty($vital_signs['notes'])): ?>
-        <div class="mt-2 text-xs text-gray-500">
-            <i class="fas fa-sticky-note"></i> <?= htmlspecialchars($vital_signs['notes']) ?>
+        <div class="mt-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+            <p class="text-xs text-gray-500">📝 Notes</p>
+            <p class="text-sm"><?= htmlspecialchars($vital_signs['notes']) ?></p>
         </div>
         <?php endif; ?>
+        
+        <p class="text-xs text-gray-400 mt-2">
+            <i class="fas fa-user"></i> Recorded by: <?= htmlspecialchars($vital_signs['recorded_by_name'] ?? 'N/A') ?>
+        </p>
     </div>
     <?php else: ?>
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="flex justify-between items-center">
             <h3 class="text-sm font-bold text-primary">
-                <i class="fas fa-heartbeat"></i> Vital Signs
+                <i class="fas fa-heartbeat" style="color: #EC4899;"></i> Vital Signs
             </h3>
-            <span class="text-xs text-gray-400">No vital signs recorded for this visit</span>
+            <span class="text-xs text-gray-400">No vital signs recorded</span>
         </div>
-        <div class="text-center py-4 text-gray-400">
-            <i class="fas fa-heartbeat text-2xl block mb-2"></i>
-            <p>No vital signs recorded</p>
+        <div class="empty-state">
+            <i class="fas fa-heartbeat" style="color: #EC4899;"></i>
+            <p>No vital signs recorded for this visit</p>
             <a href="add_vital_signs.php?visit_id=<?= $visit_id ?>&branch=<?= $selected_branch_id ?>" class="text-blue-600 text-sm hover:underline">Add Vital Signs</a>
         </div>
     </div>
@@ -1255,10 +1399,8 @@ include_once '../../components/admin_sidebar.php';
                         <th>Temperature</th>
                         <th>BP</th>
                         <th>Pulse</th>
-                        <th>RR</th>
-                        <th>SpO₂</th>
-                        <th>Glucose</th>
                         <th>Weight</th>
+                        <th>Height</th>
                         <th>BMI</th>
                         <th>Recorded By</th>
                     </tr>
@@ -1268,12 +1410,22 @@ include_once '../../components/admin_sidebar.php';
                     <tr>
                         <td class="text-xs"><?= date('M d, Y h:i A', strtotime($vs['recorded_at'] ?? 'now')) ?></td>
                         <td><?= !empty($vs['temperature']) ? $vs['temperature'] . '°C' : '-' ?></td>
-                        <td><?= (!empty($vs['blood_pressure_systolic']) && !empty($vs['blood_pressure_diastolic'])) ? $vs['blood_pressure_systolic'] . '/' . $vs['blood_pressure_diastolic'] : '-' ?></td>
+                        <td>
+                            <?php 
+                                $systolic = $vs['blood_pressure_systolic'] ?? null;
+                                $diastolic = $vs['blood_pressure_diastolic'] ?? null;
+                                if ($systolic !== null && $diastolic !== null) {
+                                    echo $systolic . '/' . $diastolic;
+                                } elseif ($systolic !== null) {
+                                    echo $systolic;
+                                } else {
+                                    echo '-';
+                                }
+                            ?>
+                        </td>
                         <td><?= !empty($vs['pulse_rate']) ? $vs['pulse_rate'] . ' bpm' : '-' ?></td>
-                        <td><?= !empty($vs['respiratory_rate']) ? $vs['respiratory_rate'] . ' /min' : '-' ?></td>
-                        <td><?= !empty($vs['oxygen_saturation']) ? $vs['oxygen_saturation'] . '%' : '-' ?></td>
-                        <td><?= !empty($vs['blood_glucose']) ? $vs['blood_glucose'] . ' mg/dL' : '-' ?></td>
                         <td><?= !empty($vs['weight']) ? $vs['weight'] . ' kg' : '-' ?></td>
+                        <td><?= !empty($vs['height']) ? $vs['height'] . ' cm' : '-' ?></td>
                         <td><?= !empty($vs['bmi']) ? $vs['bmi'] : '-' ?></td>
                         <td><?= htmlspecialchars($vs['recorded_by_name'] ?? 'N/A') ?></td>
                     </tr>
@@ -1508,6 +1660,9 @@ include_once '../../components/admin_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1520,6 +1675,9 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SEARCH
+    // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
@@ -1533,12 +1691,18 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
+    // ================================================================
+    // BRANCH SWITCHER
+    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1556,15 +1720,14 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - View Visit', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($visit['doctor_name'] ?? 'Not assigned') ?>', 'font-size:13px; color:#F59E0B;');
-    <?php if (!empty($vital_signs)): ?>
-        console.log('%c❤️ Vital Signs: Temperature <?= $vital_signs['temperature'] ?? 'N/A' ?>°C, BP <?= ($vital_signs['blood_pressure_systolic'] ?? 'N/A') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? 'N/A') ?>', 'font-size:13px; color:#DC2626;');
-    <?php else: ?>
-        console.log('%c❤️ Vital Signs: Not recorded', 'font-size:13px; color:#64748B;');
-    <?php endif; ?>
+    console.log('%c🏥 Braick Dispensary - View Visit (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c❤️ Vital Signs: 6 cards (Temp, BP, Pulse, Weight, Height, BMI)', 'font-size:13px; color:#EC4899;');
+    console.log('%c🔬 Lab Tests: <?= count($lab_tests) ?>', 'font-size:13px; color:#F59E0B;');
+    console.log('%c💊 Prescriptions: <?= count($prescriptions) ?>', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

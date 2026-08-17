@@ -5,22 +5,50 @@
 // VIEW AND EDIT ADMIN PROFILE
 // WITH PROFILE PICTURE UPLOAD & USERNAME CHANGE
 // BRAICK DISPENSARY
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// SESSION START
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['username'] = 'admin';
-    $_SESSION['email'] = 'admin@braick.com';
-    $_SESSION['phone'] = '+255 700 000 000';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
+
+// ================================================================
+// LOGIN PROTECTION
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../../auth/login.php');
+    exit;
+}
+
+// ================================================================
+// ROLE CHECK - ONLY ADMIN CAN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../../auth/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // Include database
 require_once '../../../backend/config/database.php';
@@ -309,8 +337,12 @@ if (!empty($profile_pic)) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL FOR AVATAR
 // ================================================================
+$profile_pic_avatar = !empty($profile_pic_url) 
+    ? $profile_pic_url 
+    : 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" rx="50%" fill="#0B5ED7"/><text x="20" y="26" text-anchor="middle" fill="white" font-size="18" font-weight="bold" font-family="Arial">' . $initial . '</text></svg>');
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -363,8 +395,8 @@ include_once '../../components/admin_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_avatar ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= $initial ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1366,12 +1398,13 @@ include_once '../../components/admin_sidebar.php';
         return true;
     });
 
-    console.log('%c👤 Braick Dispensary - Profile Page (With Picture Upload)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user['full_name'] ?? 'Admin') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Braick Dispensary - Profile Page', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user['full_name'] ?? 'Admin') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📧 Email: <?= htmlspecialchars($user['email'] ?? '') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📸 Profile Pic: <?= !empty($profile_pic) ? '✅ Uploaded' : '❌ Not set' ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Username can be changed', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

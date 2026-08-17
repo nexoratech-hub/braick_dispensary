@@ -5,56 +5,68 @@
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
-session_start();
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
-// Include database
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// VERIFY AND FIX SESSION - USE VALID USER ID FROM DATABASE
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-// Check if user exists in database, if not use admin (id=4)
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    // Check if admin user exists
-    $stmt = $db->prepare("SELECT id FROM users WHERE role = 'admin' AND status = 'active' LIMIT 1");
-    $stmt->execute();
-    $admin = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($admin) {
-        $_SESSION['user_id'] = $admin['id'];
-        $_SESSION['full_name'] = 'System Admin';
-        $_SESSION['role'] = 'admin';
-        $_SESSION['branch_id'] = 1;
-    } else {
-        // If no admin found, use user with id=4 (from your data)
-        $_SESSION['user_id'] = 4;
-        $_SESSION['full_name'] = 'Admin John';
-        $_SESSION['role'] = 'admin';
-        $_SESSION['branch_id'] = 1;
-    }
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
 }
 
-// Ensure user_id is set and valid
-$user_id = $_SESSION['user_id'];
+// ================================================================
+// CHECK IF USER IS ADMIN
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
 
-// Verify user exists in database
-$stmt = $db->prepare("SELECT id, full_name, role FROM users WHERE id = ?");
+// ================================================================
+// GET ADMIN DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// VERIFY USER EXISTS IN DATABASE
+// ================================================================
+$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
 $stmt->execute([$user_id]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if (!$user) {
-    // If user doesn't exist, use admin user (id=4 from your data)
-    $user_id = 4;
-    $_SESSION['user_id'] = 4;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-} else {
-    // Update session with correct user data
-    $_SESSION['full_name'] = $user['full_name'];
-    $_SESSION['role'] = $user['role'];
+if (!$user || $user['status'] !== 'active') {
+    // If user not found or inactive, redirect to login
+    session_destroy();
+    header('Location: ../login.php');
+    exit;
 }
 
 // ================================================================
@@ -62,7 +74,6 @@ if (!$user) {
 // ================================================================
 $patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 $branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : 0;
-$visit_id = isset($_GET['visit_id']) ? (int)$_GET['visit_id'] : 0;
 
 if ($patient_id <= 0) {
     header('Location: patients.php?branch=' . $branch_id . '&error=invalid_patient');
@@ -108,8 +119,18 @@ if ($branch_id > 0) {
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-// If branch not found, use branch_id=1 (Dodoma)
-if (!$branch && $branch_id > 0) {
+// If branch not found, try to get from patient
+if (!$branch && $patient['branch_id'] > 0) {
+    $stmt = $db->prepare("SELECT id, name FROM branches WHERE id = ?");
+    $stmt->execute([$patient['branch_id']]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $branch_id = $branch['id'];
+    }
+}
+
+// If still not found, use branch_id=1 (Dodoma)
+if (!$branch) {
     $stmt = $db->prepare("SELECT id, name FROM branches WHERE id = 1");
     $stmt->execute();
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -120,6 +141,18 @@ if (!$branch && $branch_id > 0) {
 // CHECK IF PATIENT HAS A DOCTOR ASSIGNED
 // ================================================================
 $has_doctor = !empty($patient['current_doctor_id']);
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // HANDLE REMOVE DOCTOR
@@ -162,13 +195,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$patient['current_visit_id']]);
             }
             
-            // 3. Log activity - Use valid user_id and branch_id
+            // 3. Log activity
             $details = "Doctor REMOVED from patient: " . htmlspecialchars($patient['full_name']) . 
                        " (ID: " . htmlspecialchars($patient['patient_id']) . ")" .
                        " - Removed doctor: " . htmlspecialchars($removed_doctor_name) .
                        " | Patient now has NO assigned doctor";
             
-            // Use branch_id=1 if not set
             $log_branch_id = !empty($branch_id) ? $branch_id : 1;
             
             $stmt = $db->prepare("
@@ -212,8 +244,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -998,12 +1034,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1032,6 +1068,9 @@ include_once '../../components/admin_sidebar.php';
                         <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch['name']) ?>
                     </span>
                 <?php endif; ?>
+                <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                    <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
+                </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
@@ -1068,6 +1107,10 @@ include_once '../../components/admin_sidebar.php';
                 <div class="info-item">
                     <div class="info-label">Phone</div>
                     <div class="info-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Branch</div>
+                    <div class="info-value"><?= htmlspecialchars($branch['name'] ?? 'N/A') ?></div>
                 </div>
                 <?php if (!empty($patient['current_visit_id'])): ?>
                     <div class="info-item">
@@ -1111,6 +1154,11 @@ include_once '../../components/admin_sidebar.php';
                             <?php else: ?>
                                 <span class="badge badge-secondary" style="font-size:0.55rem;padding:2px 8px;">
                                     <i class="fas fa-circle"></i> Offline
+                                </span>
+                            <?php endif; ?>
+                            <?php if (!empty($patient['current_doctor_id'])): ?>
+                                <span class="badge badge-info" style="font-size:0.55rem;padding:2px 8px;">
+                                    ID: <?= $patient['current_doctor_id'] ?>
                                 </span>
                             <?php endif; ?>
                         </div>
@@ -1330,10 +1378,12 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     console.log('%c👨‍⚕️ Remove Doctor from Patient - Braick Dispensary', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?> (ID: <?= $patient_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🩺 Current Doctor: <?= $has_doctor ? htmlspecialchars($patient['current_doctor_name']) : 'None' ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c⚠️ Action: Remove doctor - patient will be unassigned', 'font-size:13px; color:#DC2626;');
-    console.log('%c👤 User ID: <?= $user_id ?> - <?= htmlspecialchars($_SESSION['full_name']) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Login session: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

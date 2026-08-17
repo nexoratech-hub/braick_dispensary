@@ -2,26 +2,101 @@
 // ================================================================
 // FILE: frontend/pages/admin/cashiers.php
 // SUPER ADMIN - VIEW ALL CASHIERS
-// BRAICK DISPENSARY - 8 CARDS DASHBOARD - FIXED
+// WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// BRAICK DISPENSARY - BEAUTIFUL CARDS DESIGN
 // ================================================================
 
-session_start();
-
 // ================================================================
-// FORCE SESSION
+// START SESSION
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    $_SESSION['user_id'] = 1;
-    $_SESSION['full_name'] = 'Admin John';
-    $_SESSION['role'] = 'admin';
-    $_SESSION['branch_id'] = 1;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    header('Location: ../login.php');
+    exit;
+}
 
-$db = Database::getInstance()->getConnection();
+// ================================================================
+// CHECK IF USER HAS ADMIN ACCESS
+// ================================================================
+if ($_SESSION['role'] !== 'admin') {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($username) && !empty($username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['profile_pic'] = $user['profile_pic'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $profile_pic = $user['profile_pic'];
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
+
+// ================================================================
+// GET DATABASE CONNECTION
+// ================================================================
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET FILTER PARAMETERS
@@ -31,14 +106,22 @@ $search = $_GET['search'] ?? '';
 $status_filter = $_GET['status'] ?? 'all';
 
 // ================================================================
+// GET BRANCHES FOR FILTER
+// ================================================================
+$branches = [];
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
+}
+
+// ================================================================
 // ✅ FIXED: GET FINANCIAL SUMMARY - WITH REAL EXPENSES
 // ================================================================
 function getFinancialSummary($db, $branch_id = 'all') {
     $results = [];
     
-    // ============================================================
-    // Build branch condition based on filter
-    // ============================================================
     $branch_condition = "";
     $params = [];
     
@@ -47,11 +130,9 @@ function getFinancialSummary($db, $branch_id = 'all') {
         $params[] = (int)$branch_id;
     }
     
-    // Params for OTC
     $params_otc = $params;
     $branch_condition_otc = str_replace('pb.branch_id', 'os.branch_id', $branch_condition);
     
-    // Params for Expenses
     $params_expenses = [];
     $branch_condition_expenses = "";
     if ($branch_id !== 'all' && is_numeric($branch_id)) {
@@ -59,9 +140,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
         $params_expenses[] = (int)$branch_id;
     }
     
-    // ============================================================
     // 1. PATIENT BILLS REVENUE
-    // ============================================================
     $sql_patient = "
         SELECT COALESCE(SUM(pb.total_amount), 0) as patient_revenue
         FROM patient_bills pb
@@ -73,9 +152,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $patient_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['patient_revenue'] ?? 0;
     $results['patient_revenue'] = $patient_revenue;
     
-    // ============================================================
     // 2. OTC REVENUE
-    // ============================================================
     $sql_otc = "
         SELECT COALESCE(SUM(os.net_amount), 0) as otc_revenue
         FROM otc_sales os
@@ -86,14 +163,10 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
     $results['otc_revenue'] = $otc_revenue;
     
-    // ============================================================
     // 3. TOTAL REVENUE
-    // ============================================================
     $results['total_revenue'] = $patient_revenue + $otc_revenue;
     
-    // ============================================================
-    // 4. ✅ REAL EXPENSES FROM DATABASE
-    // ============================================================
+    // 4. REAL EXPENSES FROM DATABASE
     $sql_expenses = "
         SELECT COALESCE(SUM(amount), 0) as total_expenses
         FROM expenses
@@ -103,14 +176,10 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params_expenses);
     $results['total_expenses'] = $stmt->fetch(PDO::FETCH_ASSOC)['total_expenses'] ?? 0;
     
-    // ============================================================
     // 5. NET PROFIT
-    // ============================================================
     $results['net_profit'] = $results['total_revenue'] - $results['total_expenses'];
     
-    // ============================================================
     // 6. PRESCRIPTION REVENUE
-    // ============================================================
     $sql_prescription = "
         SELECT COALESCE(SUM(bi.total_price), 0) as prescription_revenue
         FROM bill_items bi
@@ -124,9 +193,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params);
     $results['prescription_revenue'] = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
     
-    // ============================================================
     // 7. PAID BILLS
-    // ============================================================
     $sql_paid = "
         SELECT COUNT(*) as paid_bills
         FROM patient_bills pb
@@ -137,9 +204,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params);
     $results['paid_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['paid_bills'] ?? 0;
     
-    // ============================================================
     // 8. PENDING BILLS
-    // ============================================================
     $sql_pending = "
         SELECT COUNT(*) as pending_bills
         FROM patient_bills pb
@@ -150,9 +215,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params);
     $results['pending_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['pending_bills'] ?? 0;
     
-    // ============================================================
     // 9. CANCELLED BILLS
-    // ============================================================
     $sql_cancelled = "
         SELECT COUNT(*) as cancelled_bills
         FROM patient_bills pb
@@ -163,9 +226,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params);
     $results['cancelled_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['cancelled_bills'] ?? 0;
     
-    // ============================================================
     // 10. TOTAL BILLS
-    // ============================================================
     $sql_total = "
         SELECT COUNT(*) as total_bills
         FROM patient_bills pb
@@ -190,7 +251,6 @@ $query = "
         b.*,
         (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active') as active_cashiers,
         (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier') as total_cashiers,
-        -- Bills
         (SELECT COUNT(*) 
          FROM patient_bills pb
          INNER JOIN patients p ON pb.patient_id = p.id
@@ -211,7 +271,6 @@ $query = "
          FROM patient_bills pb
          INNER JOIN patients p ON pb.patient_id = p.id
          WHERE pb.branch_id = b.id AND pb.status = 'cancelled') as cancelled_bills,
-        -- Revenue
         (SELECT COALESCE(SUM(pb.total_amount), 0) 
          FROM patient_bills pb
          INNER JOIN patients p ON pb.patient_id = p.id
@@ -219,7 +278,6 @@ $query = "
         (SELECT COALESCE(SUM(os.net_amount), 0) 
          FROM otc_sales os
          WHERE os.branch_id = b.id AND os.payment_status = 'paid') as otc_revenue,
-        -- Prescription revenue per branch
         (SELECT COALESCE(SUM(bi.total_price), 0) 
          FROM bill_items bi
          INNER JOIN patient_bills pb ON bi.bill_id = pb.id
@@ -227,11 +285,9 @@ $query = "
          WHERE bi.item_type = 'medication' 
          AND pb.status = 'paid' 
          AND pb.branch_id = b.id) as prescription_revenue,
-        -- ✅ Expenses per branch
         (SELECT COALESCE(SUM(amount), 0) 
          FROM expenses 
          WHERE branch_id = b.id AND status = 'paid') as branch_expenses,
-        -- Total revenue
         (
             (SELECT COALESCE(SUM(pb.total_amount), 0) 
              FROM patient_bills pb
@@ -313,30 +369,34 @@ foreach ($cashiers as $c) {
     $total_revenue += ($c['total_revenue'] ?? 0);
 }
 
-// Net Profit
 $net_profit = $total_revenue - $total_expenses;
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// GET UNREAD NOTIFICATIONS
 // ================================================================
-$branches = [];
+$unread_notifications = 0;
 try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
-    $branches = [];
+    $unread_notifications = 0;
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/admin_header.php';
-include_once '../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!DOCTYPE html>
@@ -405,6 +465,7 @@ include_once '../../components/admin_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+            --shadow-xl: 0 15px 40px rgba(0,0,0,0.12);
             
             --bg-body: #F0FDF4;
             --bg-card: #FFFFFF;
@@ -433,6 +494,7 @@ include_once '../../components/admin_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+            --shadow-xl: 0 15px 40px rgba(0,0,0,0.4);
             --table-hover: #1A3A2A;
         }
         
@@ -762,24 +824,25 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           ✅ 8 CARDS
+           ✅ 8 CARDS - BEAUTIFUL DESIGN
            ================================================================ */
         .cards-8-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 16px;
-            margin-bottom: 24px;
+            gap: 18px;
+            margin-bottom: 28px;
         }
         
         .stat-card-8 {
             background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 18px 20px;
+            border-radius: var(--radius-lg);
+            padding: 20px 24px;
             border: 2px solid var(--border-color);
             box-shadow: var(--shadow-sm);
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
+            cursor: default;
         }
         
         .stat-card-8::before {
@@ -787,60 +850,41 @@ include_once '../../components/admin_sidebar.php';
             position: absolute;
             top: 0;
             left: 0;
-            width: 5px;
-            height: 100%;
-            border-radius: 0 3px 3px 0;
-            opacity: 0.8;
+            right: 0;
+            height: 5px;
+            border-radius: 0 0 3px 3px;
+            opacity: 0.9;
         }
         
-        .stat-card-8.green::before { background: linear-gradient(180deg, #059669, #047857); }
-        .stat-card-8.blue::before { background: linear-gradient(180deg, #0B5ED7, #0A4CA8); }
-        .stat-card-8.purple::before { background: linear-gradient(180deg, #7C3AED, #6D28D9); }
-        .stat-card-8.orange::before { background: linear-gradient(180deg, #F59E0B, #D97706); }
-        .stat-card-8.teal::before { background: linear-gradient(180deg, #0D9488, #0F766E); }
-        .stat-card-8.pink::before { background: linear-gradient(180deg, #EC4899, #DB2777); }
-        .stat-card-8.red::before { background: linear-gradient(180deg, #EF4444, #DC2626); }
-        .stat-card-8.indigo::before { background: linear-gradient(180deg, #4F46E5, #4338CA); }
+        .stat-card-8.green::before { background: linear-gradient(90deg, #059669, #34D399); }
+        .stat-card-8.blue::before { background: linear-gradient(90deg, #0B5ED7, #6EA8FE); }
+        .stat-card-8.purple::before { background: linear-gradient(90deg, #7C3AED, #A78BFA); }
+        .stat-card-8.orange::before { background: linear-gradient(90deg, #F59E0B, #FBBF24); }
+        .stat-card-8.teal::before { background: linear-gradient(90deg, #0D9488, #5EEAD4); }
+        .stat-card-8.pink::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
+        .stat-card-8.red::before { background: linear-gradient(90deg, #EF4444, #F87171); }
+        .stat-card-8.indigo::before { background: linear-gradient(90deg, #4F46E5, #818CF8); }
         
         .stat-card-8:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 30px rgba(0,0,0,0.1);
-        }
-        
-        .stat-card-8 .stat-number {
-            font-size: 1.8rem;
-            font-weight: 800;
-            color: var(--text-primary);
-            line-height: 1.1;
-        }
-        
-        .stat-card-8 .stat-number.green { color: #059669; }
-        .stat-card-8 .stat-number.blue { color: #0B5ED7; }
-        .stat-card-8 .stat-number.purple { color: #7C3AED; }
-        .stat-card-8 .stat-number.orange { color: #F59E0B; }
-        .stat-card-8 .stat-number.teal { color: #0D9488; }
-        .stat-card-8 .stat-number.pink { color: #EC4899; }
-        .stat-card-8 .stat-number.red { color: #EF4444; }
-        .stat-card-8 .stat-number.indigo { color: #4F46E5; }
-        
-        .stat-card-8 .stat-label {
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 0;
+            transform: translateY(-6px);
+            box-shadow: var(--shadow-xl);
+            border-color: var(--primary);
         }
         
         .stat-card-8 .stat-icon-large {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.2rem;
+            font-size: 1.3rem;
             flex-shrink: 0;
+            transition: all 0.3s ease;
+        }
+        
+        .stat-card-8:hover .stat-icon-large {
+            transform: scale(1.05) rotate(-5deg);
         }
         
         .stat-card-8 .stat-icon-large.green { background: var(--primary-bg); color: #059669; }
@@ -860,6 +904,32 @@ include_once '../../components/admin_sidebar.php';
         [data-theme="dark"] .stat-card-8 .stat-icon-large.pink { background: #3A1A2A; color: #F472B6; }
         [data-theme="dark"] .stat-card-8 .stat-icon-large.red { background: #3A1A1A; color: #F87171; }
         [data-theme="dark"] .stat-card-8 .stat-icon-large.indigo { background: #1E1B4B; color: #818CF8; }
+        
+        .stat-card-8 .stat-number {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1.1;
+            font-family: 'Inter', monospace;
+        }
+        
+        .stat-card-8 .stat-number.green { color: #059669; }
+        .stat-card-8 .stat-number.blue { color: #0B5ED7; }
+        .stat-card-8 .stat-number.purple { color: #7C3AED; }
+        .stat-card-8 .stat-number.orange { color: #F59E0B; }
+        .stat-card-8 .stat-number.teal { color: #0D9488; }
+        .stat-card-8 .stat-number.pink { color: #EC4899; }
+        .stat-card-8 .stat-number.red { color: #EF4444; }
+        .stat-card-8 .stat-number.indigo { color: #4F46E5; }
+        
+        .stat-card-8 .stat-label {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin: 0;
+        }
         
         /* ================================================================
            FILTER BAR
@@ -886,6 +956,7 @@ include_once '../../components/admin_sidebar.php';
             right: 0;
             height: 3px;
             background: var(--primary-gradient);
+            border-radius: 3px 3px 0 0;
         }
         
         .filter-bar .filter-label {
@@ -950,12 +1021,12 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           CASHIER CARDS
+           CASHIER CARDS - BEAUTIFUL DESIGN WITH GREEN HEADER
            ================================================================ */
         .cashier-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-            gap: 20px;
+            gap: 24px;
         }
         
         .cashier-card {
@@ -963,7 +1034,7 @@ include_once '../../components/admin_sidebar.php';
             border-radius: var(--radius-lg);
             border: 2px solid var(--border-color);
             overflow: hidden;
-            transition: all 0.3s ease;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             box-shadow: var(--shadow-sm);
             position: relative;
         }
@@ -974,24 +1045,27 @@ include_once '../../components/admin_sidebar.php';
             top: 0;
             left: 0;
             right: 0;
-            height: 5px;
+            height: 6px;
             background: var(--primary-gradient-strong);
-            opacity: 0.7;
-            transition: opacity 0.3s ease;
+            opacity: 0.8;
+            transition: all 0.3s ease;
+            z-index: 2;
         }
         
         .cashier-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 12px 35px rgba(5, 150, 105, 0.15);
+            transform: translateY(-8px);
+            box-shadow: var(--shadow-xl);
             border-color: var(--primary);
         }
         
         .cashier-card:hover::before {
             opacity: 1;
+            height: 8px;
         }
         
+        /* ✅ GREEN HEADER BACKGROUND */
         .cashier-card .card-top {
-            padding: 16px 20px 12px 20px;
+            padding: 18px 22px 14px;
             border-bottom: 2px solid var(--border-color);
             display: flex;
             justify-content: space-between;
@@ -999,6 +1073,7 @@ include_once '../../components/admin_sidebar.php';
             background: var(--primary-gradient-strong);
             position: relative;
             overflow: hidden;
+            min-height: 80px;
         }
         
         .cashier-card .card-top::after {
@@ -1014,23 +1089,23 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .cashier-card .card-top .name {
-            font-size: 1.05rem;
+            font-size: 1.1rem;
             font-weight: 700;
             color: white;
             position: relative;
             z-index: 1;
-            text-shadow: 0 1px 3px rgba(0,0,0,0.15);
+            text-shadow: 0 2px 4px rgba(0,0,0,0.15);
         }
         
         .cashier-card .card-top .name i {
-            color: rgba(255,255,255,0.85);
+            color: rgba(255,255,255,0.8);
             margin-right: 8px;
         }
         
         .cashier-card .card-top .location-text {
             font-size: 0.7rem;
-            color: rgba(255,255,255,0.75);
-            margin-top: 2px;
+            color: rgba(255,255,255,0.85);
+            margin-top: 4px;
             display: flex;
             align-items: center;
             gap: 4px;
@@ -1044,7 +1119,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .cashier-card .card-top .status-badge {
-            padding: 4px 14px;
+            padding: 4px 16px;
             border-radius: 20px;
             font-size: 0.6rem;
             font-weight: 700;
@@ -1053,22 +1128,21 @@ include_once '../../components/admin_sidebar.php';
             position: relative;
             z-index: 1;
             backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.2);
         }
         
         .cashier-card .card-top .status-badge.active {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.3);
+            background: rgba(52, 211, 153, 0.25);
+            color: #34D399;
         }
         
         .cashier-card .card-top .status-badge.inactive {
-            background: rgba(220, 38, 38, 0.3);
-            color: #FCA5A5;
-            border: 1px solid rgba(220, 38, 38, 0.3);
+            background: rgba(248, 113, 113, 0.25);
+            color: #F87171;
         }
         
         .cashier-card .card-body {
-            padding: 14px 20px 16px 20px;
+            padding: 16px 22px 18px;
         }
         
         .cashier-card .card-body .info-row {
@@ -1137,14 +1211,15 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .cashier-card .card-actions {
-            padding: 10px 18px;
+            padding: 12px 18px;
             display: flex;
             gap: 8px;
             justify-content: flex-end;
+            flex-wrap: wrap;
         }
         
         .cashier-card .card-actions .btn-action {
-            padding: 5px 14px;
+            padding: 5px 16px;
             border-radius: 8px;
             font-size: 0.65rem;
             font-weight: 700;
@@ -1154,6 +1229,9 @@ include_once '../../components/admin_sidebar.php';
             color: var(--text-secondary);
             background: transparent;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
         
         .cashier-card .card-actions .btn-action:hover {
@@ -1178,13 +1256,14 @@ include_once '../../components/admin_sidebar.php';
         /* Revenue breakdown */
         .revenue-breakdown {
             display: flex;
-            gap: 10px;
+            gap: 12px;
             justify-content: center;
-            padding: 6px 0;
+            padding: 8px 0 2px;
             border-top: 1px solid var(--border-color);
-            margin-top: 6px;
+            margin-top: 8px;
             font-size: 0.6rem;
             color: var(--text-secondary);
+            flex-wrap: wrap;
         }
         
         .revenue-breakdown .item {
@@ -1197,6 +1276,8 @@ include_once '../../components/admin_sidebar.php';
         .revenue-breakdown .item .amount { font-weight: 700; }
         .revenue-breakdown .item .amount.blue { color: #0B5ED7; }
         .revenue-breakdown .item .amount.green { color: var(--primary); }
+        .revenue-breakdown .item .amount.red { color: #EF4444; }
+        .revenue-breakdown .item .amount.teal { color: #0D9488; }
         
         /* ================================================================
            EMPTY STATE
@@ -1257,10 +1338,12 @@ include_once '../../components/admin_sidebar.php';
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .cashier-grid { grid-template-columns: 1fr; }
-            .cards-8-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .cards-8-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
             .filter-bar { flex-direction: column; align-items: stretch; }
             .cashier-card .card-stats { grid-template-columns: repeat(4, 1fr); }
             .stat-card-8 .stat-number { font-size: 1.3rem; }
+            .stat-card-8 { padding: 14px 16px; }
+            .stat-card-8 .stat-icon-large { width: 38px; height: 38px; font-size: 1rem; }
         }
         
         @media (max-width: 480px) {
@@ -1282,6 +1365,37 @@ include_once '../../components/admin_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
         
         /* ================================================================
            PRINT STYLES
@@ -1344,12 +1458,12 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1520,6 +1634,7 @@ include_once '../../components/admin_sidebar.php';
         <div class="cashier-grid animate-fade-in-up" style="animation-delay:0.1s;">
             <?php foreach ($cashiers as $cashier): ?>
                 <div class="cashier-card">
+                    <!-- ✅ GREEN HEADER BACKGROUND -->
                     <div class="card-top">
                         <div>
                             <div class="name">
@@ -1566,11 +1681,11 @@ include_once '../../components/admin_sidebar.php';
                             </span>
                             <span class="item">
                                 <span class="label">Exp:</span>
-                                <span class="amount" style="color:#EF4444;">TSh <?= number_format($cashier['branch_expenses'] ?? 0, 0) ?></span>
+                                <span class="amount red">TSh <?= number_format($cashier['branch_expenses'] ?? 0, 0) ?></span>
                             </span>
                             <span class="item" style="font-weight:700;color:var(--primary);">
                                 <span class="label">Net:</span>
-                                <span style="color:#0D9488;">TSh <?= number_format(($cashier['total_revenue'] ?? 0) - ($cashier['branch_expenses'] ?? 0), 0) ?></span>
+                                <span class="amount teal">TSh <?= number_format(($cashier['total_revenue'] ?? 0) - ($cashier['branch_expenses'] ?? 0), 0) ?></span>
                             </span>
                         </div>
                     </div>
@@ -1641,6 +1756,17 @@ include_once '../../components/admin_sidebar.php';
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <div>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
@@ -1738,18 +1864,54 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c💰 Braick Dispensary - Cashiers (8 CARDS)', 'font-size:18px; font-weight:bold; color:#059669;');
+    // ================================================================
+    // TOAST
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3500);
+    }
+
+    // Check if there was an error in URL
+    <?php if (isset($_GET['error']) && $_GET['error'] === 'invalid_id'): ?>
+        showToast('⚠️ Error', 'Invalid cashier ID provided', 'error');
+        // Clean URL
+        var cleanUrl = window.location.href.split('?')[0];
+        if (window.history && window.history.replaceState) {
+            window.history.replaceState({}, document.title, cleanUrl);
+        }
+    <?php endif; ?>
+
+    console.log('%c💰 Braick Dispensary - Cashiers (GREEN HEADER)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Total Cashiers: <?= $total_cashiers ?>', 'font-size:13px; color:#059669;');
     console.log('%c✅ 8 CARDS:', 'font-size:13px; font-weight:bold; color:#0B5ED7;');
     console.log('  1. Total Revenue: TSh <?= number_format($financial['total_revenue'], 0) ?>', 'font-size:12px; color:#059669;');
-    console.log('  2. ✅ Total Expenses: TSh <?= number_format($financial['total_expenses'], 0) ?> (FROM expenses TABLE)', 'font-size:12px; color:#EF4444;');
+    console.log('  2. Total Expenses: TSh <?= number_format($financial['total_expenses'], 0) ?> (FROM expenses TABLE)', 'font-size:12px; color:#EF4444;');
     console.log('  3. Net Profit: TSh <?= number_format($financial['net_profit'], 0) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('  4. Prescription Revenue: TSh <?= number_format($financial['prescription_revenue'], 0) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('  5. OTC Revenue: TSh <?= number_format($financial['otc_revenue'], 0) ?>', 'font-size:12px; color:#F59E0B;');
     console.log('  6. Paid Bills: <?= number_format($financial['paid_bills']) ?>', 'font-size:12px; color:#0D9488;');
     console.log('  7. Pending Bills: <?= number_format($financial['pending_bills']) ?>', 'font-size:12px; color:#F59E0B;');
     console.log('  8. Cancelled Bills: <?= number_format($financial['cancelled_bills']) ?>', 'font-size:12px; color:#EF4444;');
-    console.log('%c✅ FIXED: Expenses now from expenses table (Total: TSh <?= number_format($financial['total_expenses'], 0) ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ GREEN HEADER BACKGROUND on cashier cards', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: error=invalid_id handled with toast', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
