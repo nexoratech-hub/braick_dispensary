@@ -1,8 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_branch.php
-// ADMIN - VIEW BRANCH DETAILS
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// VIEW BRANCH DETAILS - WITH SHARED SIDEBAR
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -14,49 +13,43 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER HAS ADMIN ACCESS
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
-    // Redirect based on role
-    $role = $_SESSION['role'];
-    switch ($role) {
-        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
-        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
-        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
-        default: header('Location: ../login.php'); break;
-    }
+    header('Location: ../login.php');
     exit;
 }
 
 // ================================================================
-// GET USER DATA FROM SESSION
+// CLEAR ANY SESSION BRANCH DATA TO AVOID OVERRIDE
+// ================================================================
+unset($_SESSION['branch_id']);
+unset($_SESSION['branch_name']);
+unset($_SESSION['branch_location']);
+unset($_SESSION['branch_phone']);
+unset($_SESSION['branch_email']);
+unset($_SESSION['branch_status']);
+unset($_SESSION['viewing_branch_id']);
+unset($_SESSION['current_branch']);
+unset($_SESSION['selected_branch']);
+
+// ================================================================
+// GET USER DATA
 // ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? '';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -64,105 +57,130 @@ try {
 }
 
 // ================================================================
-// GET BRANCH ID
+// GET BRANCH ID - ONLY FROM URL
 // ================================================================
 $branch_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
+// ================================================================
+// IF NO ID, REDIRECT
+// ================================================================
 if ($branch_id <= 0) {
     header('Location: branches.php?branch=all');
     exit;
 }
 
 // ================================================================
-// GET BRANCH DETAILS
+// GET BRANCH DATA
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        b.*,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND status = 'active') as total_employees,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'doctor' AND status = 'active') as total_doctors,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'pharmacy' AND status = 'active') as total_pharmacy,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception' AND status = 'active') as total_reception,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'laboratory' AND status = 'active') as total_laboratory,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active') as total_cashiers,
-        (SELECT COUNT(*) FROM patients WHERE branch_id = b.id) as total_patients,
-        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id) as total_visits,
-        (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
-        (SELECT COUNT(*) FROM otc_sales WHERE branch_id = b.id) as total_otc,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as total_revenue,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = b.id AND status = 'pending') as pending_revenue,
-        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
-        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
-        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'cancelled') as cancelled_bills,
-        (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE branch_id = b.id AND status = 'paid') as total_expenses,
-        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'scheduled') as scheduled_appointments,
-        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'confirmed') as confirmed_appointments,
-        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'completed') as completed_appointments
-    FROM branches b
-    WHERE b.id = ?
-");
+$query = "SELECT * FROM branches WHERE id = ?";
+$stmt = $db->prepare($query);
 $stmt->execute([$branch_id]);
 $branch = $stmt->fetch(PDO::FETCH_ASSOC);
 
+// ================================================================
+// IF BRANCH NOT FOUND, REDIRECT
+// ================================================================
 if (!$branch) {
     header('Location: branches.php?branch=all');
     exit;
 }
 
 // ================================================================
-// GET RECENT PATIENTS
+// EXTRACT BRANCH DATA
 // ================================================================
-$stmt = $db->prepare("
-    SELECT id, full_name, patient_id, phone, created_at 
-    FROM patients 
-    WHERE branch_id = ? 
-    ORDER BY created_at DESC 
-    LIMIT 10
-");
+$branch_name = $branch['name'];
+$branch_status = $branch['status'] ?? 'inactive';
+$branch_location = $branch['location'] ?? 'N/A';
+$branch_phone = $branch['phone'] ?? 'N/A';
+$branch_email = $branch['email'] ?? 'N/A';
+$branch_created = $branch['created_at'] ?? date('Y-m-d H:i:s');
+$branch_updated = $branch['updated_at'] ?? date('Y-m-d H:i:s');
+
+// ================================================================
+// GET SELECTED BRANCH FOR SIDEBAR
+// ================================================================
+$selected_branch_id = $branch_id;
+
+// ================================================================
+// GET ALL STATS WITH SUBQUERIES
+// ================================================================
+$stats_query = "
+    SELECT 
+        (SELECT COUNT(*) FROM users WHERE branch_id = ? AND status = 'active') as total_employees,
+        (SELECT COUNT(*) FROM users WHERE branch_id = ? AND role = 'doctor' AND status = 'active') as total_doctors,
+        (SELECT COUNT(*) FROM users WHERE branch_id = ? AND role = 'pharmacy' AND status = 'active') as total_pharmacy,
+        (SELECT COUNT(*) FROM users WHERE branch_id = ? AND role = 'reception' AND status = 'active') as total_reception,
+        (SELECT COUNT(*) FROM users WHERE branch_id = ? AND role = 'laboratory' AND status = 'active') as total_laboratory,
+        (SELECT COUNT(*) FROM users WHERE branch_id = ? AND role = 'cashier' AND status = 'active') as total_cashiers,
+        (SELECT COUNT(*) FROM patients WHERE branch_id = ?) as total_patients,
+        (SELECT COUNT(*) FROM visits WHERE branch_id = ?) as total_visits,
+        (SELECT COUNT(*) FROM prescriptions WHERE branch_id = ?) as total_prescriptions,
+        (SELECT COUNT(*) FROM otc_sales WHERE branch_id = ?) as total_otc,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = ? AND status = 'paid') as total_revenue,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE branch_id = ? AND status = 'pending') as pending_revenue,
+        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = ? AND status = 'pending') as pending_bills,
+        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = ? AND status = 'paid') as paid_bills,
+        (SELECT COUNT(*) FROM patient_bills WHERE branch_id = ? AND status = 'cancelled') as cancelled_bills,
+        (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE branch_id = ? AND status = 'paid') as total_expenses,
+        (SELECT COUNT(*) FROM appointments WHERE branch_id = ? AND status = 'scheduled') as scheduled_appointments,
+        (SELECT COUNT(*) FROM appointments WHERE branch_id = ? AND status = 'confirmed') as confirmed_appointments,
+        (SELECT COUNT(*) FROM appointments WHERE branch_id = ? AND status = 'completed') as completed_appointments
+";
+
+$stmt = $db->prepare($stats_query);
+$params = array_fill(0, 19, $branch_id);
+$stmt->execute($params);
+$stats = $stmt->fetch(PDO::FETCH_ASSOC);
+
+// ================================================================
+// EXTRACT STATS
+// ================================================================
+$total_employees = (int)($stats['total_employees'] ?? 0);
+$total_doctors = (int)($stats['total_doctors'] ?? 0);
+$total_pharmacy = (int)($stats['total_pharmacy'] ?? 0);
+$total_reception = (int)($stats['total_reception'] ?? 0);
+$total_laboratory = (int)($stats['total_laboratory'] ?? 0);
+$total_cashiers = (int)($stats['total_cashiers'] ?? 0);
+$total_patients = (int)($stats['total_patients'] ?? 0);
+$total_visits = (int)($stats['total_visits'] ?? 0);
+$total_prescriptions = (int)($stats['total_prescriptions'] ?? 0);
+$total_otc = (int)($stats['total_otc'] ?? 0);
+$total_revenue = (float)($stats['total_revenue'] ?? 0);
+$pending_revenue = (float)($stats['pending_revenue'] ?? 0);
+$pending_bills = (int)($stats['pending_bills'] ?? 0);
+$paid_bills = (int)($stats['paid_bills'] ?? 0);
+$cancelled_bills = (int)($stats['cancelled_bills'] ?? 0);
+$total_expenses = (float)($stats['total_expenses'] ?? 0);
+$scheduled_appointments = (int)($stats['scheduled_appointments'] ?? 0);
+$confirmed_appointments = (int)($stats['confirmed_appointments'] ?? 0);
+$completed_appointments = (int)($stats['completed_appointments'] ?? 0);
+$net_profit = $total_revenue - $total_expenses;
+
+// ================================================================
+// GET RECENT DATA
+// ================================================================
+// Recent Patients
+$stmt = $db->prepare("SELECT id, full_name, patient_id, phone, created_at FROM patients WHERE branch_id = ? ORDER BY created_at DESC LIMIT 10");
 $stmt->execute([$branch_id]);
 $recent_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// ================================================================
-// GET RECENT EMPLOYEES
-// ================================================================
-$stmt = $db->prepare("
-    SELECT id, full_name, username, role, status, created_at 
-    FROM users 
-    WHERE branch_id = ? AND role != 'admin'
-    ORDER BY created_at DESC 
-    LIMIT 10
-");
+// Recent Employees
+$stmt = $db->prepare("SELECT id, full_name, username, role, status, created_at FROM users WHERE branch_id = ? AND role != 'admin' ORDER BY created_at DESC LIMIT 10");
 $stmt->execute([$branch_id]);
 $recent_employees = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// ================================================================
-// GET RECENT PRESCRIPTIONS
-// ================================================================
-$stmt = $db->prepare("
-    SELECT p.*, pat.full_name as patient_name 
-    FROM prescriptions p
-    JOIN patients pat ON p.patient_id = pat.id
-    WHERE p.branch_id = ? 
-    ORDER BY p.created_at DESC 
-    LIMIT 10
-");
+// Recent Prescriptions
+$stmt = $db->prepare("SELECT p.*, pat.full_name as patient_name FROM prescriptions p JOIN patients pat ON p.patient_id = pat.id WHERE p.branch_id = ? ORDER BY p.created_at DESC LIMIT 10");
 $stmt->execute([$branch_id]);
 $recent_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// ================================================================
-// GET RECENT OTC SALES
-// ================================================================
-$stmt = $db->prepare("
-    SELECT * FROM otc_sales 
-    WHERE branch_id = ? 
-    ORDER BY created_at DESC 
-    LIMIT 10
-");
+// Recent OTC Sales
+$stmt = $db->prepare("SELECT * FROM otc_sales WHERE branch_id = ? ORDER BY created_at DESC LIMIT 10");
 $stmt->execute([$branch_id]);
 $recent_otc = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS
+// UNREAD NOTIFICATIONS (for sidebar)
 // ================================================================
 $unread_notifications = 0;
 try {
@@ -174,27 +192,22 @@ try {
 }
 
 // ================================================================
-// PROFILE PICTURE URL
+// INCLUDE THE SHARED SIDEBAR
 // ================================================================
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+// These variables are used by the sidebar
+$selected_branch_id = $branch_id;
+$total_employees = $total_employees;
+$total_doctors = $total_doctors;
+$total_branches = 0;
+$pending_lab_tests = 0;
+$pending_prescriptions = 0;
 
-// ================================================================
-// LOGO PATH
-// ================================================================
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+// Get total branches for sidebar
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
-include_once __DIR__ . '/../../components/admin_header.php';
+// Include sidebar
 include_once __DIR__ . '/../../components/admin_sidebar.php';
-
-// ================================================================
-// PAGE TITLE
-// ================================================================
-$page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
 ?>
 
 <!DOCTYPE html>
@@ -202,35 +215,37 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= htmlspecialchars($branch['name']) ?> - Branch Details</title>
+    <title><?= htmlspecialchars($branch_name) ?> - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
+    <link rel="icon" href="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" type="image/png">
+    <link rel="shortcut icon" href="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            --primary: #1A56DB;
+            --primary-dark: #1A3E8C;
+            --primary-light: #3B82F6;
+            --primary-bg: #E8EFF9;
+            --primary-solid: #1A56DB;
             
-            --success: #059669;
-            --success-bg: #D1FAE5;
+            --success: #1A56DB;
+            --success-dark: #1A3E8C;
+            --success-light: #3B82F6;
+            --success-bg: #E8EFF9;
+            
             --danger: #DC2626;
+            --danger-dark: #B91C1C;
+            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
+            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
             
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -248,6 +263,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+            --shadow-xl: 0 20px 30px rgba(0,0,0,0.12);
             
             --bg-body: #F0F4F8;
             --bg-card: #FFFFFF;
@@ -257,6 +273,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             --border-color: #E2E8F0;
             --radius: 12px;
             --radius-lg: 18px;
+            --table-hover: #F8FAFC;
         }
         
         [data-theme="dark"] {
@@ -270,9 +287,12 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             --primary-dark: #2563EB;
             --primary-light: #60A5FA;
             --primary-bg: #1E3A5F;
+            --primary-solid: #2563EB;
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+            --purple-bg: #2D1B5F;
+            --table-hover: #1E293B;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -322,7 +342,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         
         .top-nav .search-wrapper:focus-within {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+            box-shadow: 0 0 0 4px rgba(26, 86, 219, 0.12);
         }
         
         .top-nav .search-wrapper input {
@@ -340,7 +360,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         }
         
         .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
+            background: var(--primary-solid);
             color: white;
             border: none;
             padding: 8px 16px;
@@ -352,6 +372,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         }
         
         .top-nav .search-wrapper .search-btn:hover {
+            background: var(--primary-dark);
             transform: scale(1.02);
         }
         
@@ -364,9 +385,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             gap: 6px;
         }
         
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
+        .top-nav .datetime i { color: var(--primary-light); }
         
         .top-nav .avatar {
             width: 40px;
@@ -443,21 +462,6 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         
         .dark-toggle-btn i { font-size: 0.9rem; }
         
-        .branch-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
         /* ================================================================
            MAIN CONTENT
            ================================================================ */
@@ -469,10 +473,10 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         }
         
         /* ================================================================
-           PAGE HEADER
+           PAGE HEADER - BLUE
            ================================================================ */
         .page-header {
-            background: var(--primary-gradient);
+            background: var(--primary-solid);
             border-radius: var(--radius-lg);
             padding: 28px 36px;
             margin-bottom: 28px;
@@ -481,7 +485,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 8px 32px rgba(10, 76, 168, 0.35);
+            box-shadow: 0 8px 32px rgba(26, 86, 219, 0.3);
             position: relative;
             overflow: hidden;
         }
@@ -494,6 +498,18 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             width: 400px;
             height: 400px;
             background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .page-header::after {
+            content: '';
+            position: absolute;
+            bottom: -40%;
+            left: -5%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.03);
             border-radius: 50%;
             pointer-events: none;
         }
@@ -526,22 +542,6 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             z-index: 1;
         }
         
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .branch-tag {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
         .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
@@ -552,6 +552,20 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             text-transform: uppercase;
             letter-spacing: 0.05em;
             backdrop-filter: blur(4px);
+        }
+        
+        .page-header .header-badge {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid rgba(255,255,255,0.1);
         }
         
         .page-header .btn-outline-light {
@@ -570,6 +584,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             backdrop-filter: blur(4px);
             position: relative;
             z-index: 1;
+            cursor: pointer;
         }
         
         .page-header .btn-outline-light:hover {
@@ -579,74 +594,74 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         }
         
         /* ================================================================
-           STATS CARDS
+           STATS CARDS - BLUE BACKGROUND
            ================================================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 16px;
-            margin-bottom: 24px;
+            margin-bottom: 28px;
         }
         
         .stat-card {
+            background: var(--primary-solid);
             border-radius: var(--radius);
-            padding: 18px 20px;
-            border: 2px solid var(--border-color);
-            background: var(--bg-card);
+            padding: 20px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
+            box-shadow: 0 4px 16px rgba(26, 86, 219, 0.25);
+            border: none;
+            cursor: default;
         }
         
         .stat-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-            transform: translateY(-2px);
+            transform: translateY(-4px);
+            box-shadow: 0 8px 32px rgba(26, 86, 219, 0.35);
         }
         
-        .stat-card .stat-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
+        .stat-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.2rem;
+            font-size: 1.3rem;
             flex-shrink: 0;
-        }
-        
-        .stat-card .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-card .stat-icon.green { background: var(--success-bg); color: var(--success); }
-        .stat-card .stat-icon.purple { background: var(--purple-bg); color: var(--purple); }
-        .stat-card .stat-icon.orange { background: var(--warning-bg); color: var(--warning); }
-        .stat-card .stat-icon.red { background: var(--danger-bg); color: var(--danger); }
-        .stat-card .stat-icon.teal { background: var(--teal-bg); color: var(--teal); }
-        
-        .stat-card .stat-number {
-            font-size: 1.6rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            line-height: 1.2;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            backdrop-filter: blur(4px);
         }
         
         .stat-card .stat-label {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            font-weight: 600;
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.75);
+            font-weight: 500;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.05em;
+            margin: 0;
+        }
+        
+        .stat-card .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: white;
+            margin: 0;
+            line-height: 1.2;
         }
         
         /* ================================================================
-           DETAIL CARD
+           DETAIL CARDS
            ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            padding: 24px 28px;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border-color);
+            padding: 20px 24px;
             transition: all 0.3s ease;
-            margin-bottom: 20px;
+            box-shadow: var(--shadow-sm);
         }
         
         .detail-card:hover {
@@ -655,28 +670,29 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         }
         
         .detail-card .card-title {
-            font-size: 1rem;
+            font-size: 0.95rem;
             font-weight: 600;
             color: var(--text-primary);
             border-bottom: 2px solid var(--border-color);
             padding-bottom: 12px;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
             display: flex;
             align-items: center;
             gap: 10px;
         }
         
         .detail-card .card-title i {
-            color: var(--primary);
+            color: var(--primary-solid);
         }
         
         .detail-card .card-title .badge-count {
-            background: var(--primary);
+            background: var(--primary-solid);
             color: white;
-            padding: 2px 12px;
+            padding: 1px 10px;
             border-radius: 20px;
             font-size: 0.6rem;
             font-weight: 600;
+            margin-left: auto;
         }
         
         .detail-row {
@@ -701,7 +717,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             color: var(--text-primary);
         }
         
-        .detail-value .status-badge {
+        .status-badge {
             display: inline-block;
             padding: 2px 10px;
             border-radius: 12px;
@@ -709,14 +725,19 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             font-weight: 600;
         }
         
-        .detail-value .status-badge.active {
+        .status-badge.active {
             background: var(--success-bg);
             color: var(--success);
         }
         
-        .detail-value .status-badge.inactive {
+        .status-badge.inactive {
             background: var(--danger-bg);
             color: var(--danger);
+        }
+        
+        .status-badge.pending {
+            background: var(--warning-bg);
+            color: var(--warning);
         }
         
         /* ================================================================
@@ -726,14 +747,14 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 8px 12px;
+            padding: 8px 10px;
             border-bottom: 1px solid var(--border-color);
             transition: all 0.2s ease;
             border-radius: 6px;
         }
         
         .list-item:hover {
-            background: var(--primary-bg);
+            background: var(--table-hover);
         }
         
         .list-item:last-child {
@@ -760,20 +781,21 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             font-size: 0.6rem;
             border-radius: 6px;
             text-decoration: none;
-            background: var(--primary);
+            background: var(--primary-solid);
             color: white;
             transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
         
         .list-item .item-actions .btn-sm:hover {
             background: var(--primary-dark);
+            transform: scale(1.05);
         }
         
-        /* ================================================================
-           SCROLL CONTAINER
-           ================================================================ */
         .scroll-container {
-            max-height: 280px;
+            max-height: 260px;
             overflow-y: auto;
         }
         
@@ -792,6 +814,39 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         }
         
         /* ================================================================
+           QUICK ACTIONS
+           ================================================================ */
+        .quick-action {
+            padding: 16px;
+            border-radius: var(--radius);
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            text-decoration: none;
+            display: block;
+            border: 2px solid var(--border-color);
+            background: var(--bg-card);
+        }
+        
+        .quick-action:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .quick-action .icon {
+            font-size: 1.6rem;
+            display: block;
+            margin-bottom: 4px;
+        }
+        
+        .quick-action .label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        /* ================================================================
            EMPTY STATE
            ================================================================ */
         .empty-state {
@@ -801,10 +856,15 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         }
         
         .empty-state i {
-            font-size: 2rem;
+            font-size: 2.5rem;
             color: var(--border-color);
             display: block;
             margin-bottom: 8px;
+        }
+        
+        .empty-state p {
+            font-size: 0.85rem;
+            margin: 0;
         }
         
         /* ================================================================
@@ -812,7 +872,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
            ================================================================ */
         .footer {
             padding: 14px 0;
-            border-top: 2px solid var(--border-color);
+            border-top: 1px solid var(--border-color);
             margin-top: 24px;
             text-align: center;
             font-size: 0.7rem;
@@ -820,8 +880,8 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         }
         
         .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 700;
+            color: var(--primary-solid);
+            font-weight: 500;
         }
         
         /* ================================================================
@@ -839,23 +899,23 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-            .stat-card .stat-number { font-size: 1.2rem; }
-            .detail-card { padding: 16px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .stat-card { padding: 14px 16px; }
+            .stat-card .stat-value { font-size: 1.2rem; }
+            .stat-icon { width: 40px; height: 40px; font-size: 1rem; }
+            .detail-card { padding: 14px 16px; }
             .detail-row { flex-direction: column; gap: 2px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
-            .stat-card { padding: 12px 14px; }
-            .stat-card .stat-number { font-size: 1rem; }
-            .stat-card .stat-icon { width: 32px; height: 32px; font-size: 0.9rem; }
+            .stat-card { padding: 10px 12px; }
+            .stat-card .stat-value { font-size: 1rem; }
+            .stat-icon { width: 32px; height: 32px; font-size: 0.85rem; }
+            .page-header .page-title { font-size: 1.1rem; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -865,18 +925,6 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -886,8 +934,8 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
+        <button id="sidebarToggle" class="lg:hidden icon-btn" style="background:transparent;border:none;cursor:pointer;color:var(--text-secondary);font-size:1.2rem;padding:8px;">
+            <i class="fas fa-bars"></i>
         </button>
         
         <div class="search-wrapper">
@@ -900,10 +948,6 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
     </div>
     
     <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch['name']) ?>
-        </span>
-        
         <span class="datetime" id="currentDateTime"></span>
         
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
@@ -917,7 +961,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         </button>
         
         <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+            <img src="/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
@@ -928,33 +972,34 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
+    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-store-alt"></i>
-                <?= htmlspecialchars($branch['name']) ?>
+                <?= htmlspecialchars($branch_name) ?>
                 <span class="role-badge-display">BRANCH</span>
-                <?php if ($branch['status'] === 'active'): ?>
-                    <span class="branch-tag" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                        <i class="fas fa-circle text-[6px]"></i> Active
+                <?php if ($branch_status === 'active'): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                        <i class="fas fa-circle" style="font-size:6px;"></i> Active
                     </span>
                 <?php else: ?>
-                    <span class="branch-tag" style="background:rgba(248,113,113,0.2);border-color:rgba(248,113,113,0.3);color:#F87171;">
-                        <i class="fas fa-circle text-[6px]"></i> Inactive
+                    <span class="header-badge" style="background:rgba(248,113,113,0.2);border-color:rgba(248,113,113,0.3);color:#F87171;">
+                        <i class="fas fa-circle" style="font-size:6px;"></i> Inactive
                     </span>
                 <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-map-marker-alt"></i>
-                <strong><?= htmlspecialchars($branch['location'] ?? 'N/A') ?></strong>
-                <span class="branch-tag" style="background:rgba(255,255,255,0.1);">
-                    <i class="fas fa-phone"></i> <?= htmlspecialchars($branch['phone'] ?? 'N/A') ?>
+                <?= htmlspecialchars($branch_location) ?>
+                <span class="header-badge">
+                    <i class="fas fa-phone"></i> <?= htmlspecialchars($branch_phone) ?>
                 </span>
-                <span class="branch-tag" style="background:rgba(255,255,255,0.1);">
-                    <i class="fas fa-envelope"></i> <?= htmlspecialchars($branch['email'] ?? 'N/A') ?>
+                <span class="header-badge">
+                    <i class="fas fa-envelope"></i> <?= htmlspecialchars($branch_email) ?>
+                </span>
+                <span class="header-badge">
+                    <i class="fas fa-id-card"></i> ID: #<?= $branch_id ?>
                 </span>
             </p>
         </div>
@@ -968,104 +1013,67 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- STATS CARDS -->
-    <!-- ================================================================ -->
+    <!-- Stats Cards -->
     <div class="stats-grid animate-fade-in-up">
-        
-        <!-- Total Employees -->
         <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon blue"><i class="fas fa-users"></i></div>
-                <div>
-                    <p class="stat-number"><?= number_format($branch['total_employees'] ?? 0) ?></p>
-                    <p class="stat-label">Total Employees</p>
-                </div>
+            <div class="stat-icon"><i class="fas fa-users"></i></div>
+            <div>
+                <p class="stat-label">Total Employees</p>
+                <p class="stat-value"><?= number_format($total_employees) ?></p>
             </div>
         </div>
-        
-        <!-- Total Patients -->
         <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon green"><i class="fas fa-user-injured"></i></div>
-                <div>
-                    <p class="stat-number"><?= number_format($branch['total_patients'] ?? 0) ?></p>
-                    <p class="stat-label">Total Patients</p>
-                </div>
+            <div class="stat-icon"><i class="fas fa-user-injured"></i></div>
+            <div>
+                <p class="stat-label">Total Patients</p>
+                <p class="stat-value"><?= number_format($total_patients) ?></p>
             </div>
         </div>
-        
-        <!-- Total Visits -->
         <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon purple"><i class="fas fa-clinic-medical"></i></div>
-                <div>
-                    <p class="stat-number"><?= number_format($branch['total_visits'] ?? 0) ?></p>
-                    <p class="stat-label">Total Visits</p>
-                </div>
+            <div class="stat-icon"><i class="fas fa-clinic-medical"></i></div>
+            <div>
+                <p class="stat-label">Total Visits</p>
+                <p class="stat-value"><?= number_format($total_visits) ?></p>
             </div>
         </div>
-        
-        <!-- Total Revenue -->
         <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon green"><i class="fas fa-money-bill-wave"></i></div>
-                <div>
-                    <p class="stat-number">TSh <?= number_format($branch['total_revenue'] ?? 0, 0) ?></p>
-                    <p class="stat-label">Total Revenue</p>
-                </div>
+            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <div>
+                <p class="stat-label">Total Revenue</p>
+                <p class="stat-value">TSh <?= number_format($total_revenue, 0) ?></p>
             </div>
         </div>
-        
-        <!-- Total Prescriptions -->
         <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon teal"><i class="fas fa-prescription"></i></div>
-                <div>
-                    <p class="stat-number"><?= number_format($branch['total_prescriptions'] ?? 0) ?></p>
-                    <p class="stat-label">Prescriptions</p>
-                </div>
+            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+            <div>
+                <p class="stat-label">Prescriptions</p>
+                <p class="stat-value"><?= number_format($total_prescriptions) ?></p>
             </div>
         </div>
-        
-        <!-- Total OTC -->
         <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon orange"><i class="fas fa-shopping-cart"></i></div>
-                <div>
-                    <p class="stat-number"><?= number_format($branch['total_otc'] ?? 0) ?></p>
-                    <p class="stat-label">OTC Sales</p>
-                </div>
+            <div class="stat-icon"><i class="fas fa-shopping-cart"></i></div>
+            <div>
+                <p class="stat-label">OTC Sales</p>
+                <p class="stat-value"><?= number_format($total_otc) ?></p>
             </div>
         </div>
-        
-        <!-- Total Expenses -->
         <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon red"><i class="fas fa-arrow-up"></i></div>
-                <div>
-                    <p class="stat-number">TSh <?= number_format($branch['total_expenses'] ?? 0, 0) ?></p>
-                    <p class="stat-label">Total Expenses</p>
-                </div>
+            <div class="stat-icon"><i class="fas fa-arrow-up"></i></div>
+            <div>
+                <p class="stat-label">Total Expenses</p>
+                <p class="stat-value">TSh <?= number_format($total_expenses, 0) ?></p>
             </div>
         </div>
-        
-        <!-- Net Profit -->
         <div class="stat-card">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon blue"><i class="fas fa-chart-line"></i></div>
-                <div>
-                    <p class="stat-number">TSh <?= number_format(($branch['total_revenue'] ?? 0) - ($branch['total_expenses'] ?? 0), 0) ?></p>
-                    <p class="stat-label">Net Profit</p>
-                </div>
+            <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
+            <div>
+                <p class="stat-label">Net Profit</p>
+                <p class="stat-value">TSh <?= number_format($net_profit, 0) ?></p>
             </div>
         </div>
-        
     </div>
 
-    <!-- ================================================================ -->
-    <!-- DETAILS & LISTS -->
-    <!-- ================================================================ -->
+    <!-- Details & Lists -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
         
         <!-- Branch Information -->
@@ -1077,35 +1085,35 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             
             <div class="detail-row">
                 <span class="detail-label">Branch Name</span>
-                <span class="detail-value"><strong><?= htmlspecialchars($branch['name']) ?></strong></span>
+                <span class="detail-value"><strong><?= htmlspecialchars($branch_name) ?></strong></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Location</span>
-                <span class="detail-value"><?= htmlspecialchars($branch['location'] ?? 'N/A') ?></span>
+                <span class="detail-value"><?= htmlspecialchars($branch_location) ?></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Phone</span>
-                <span class="detail-value"><?= htmlspecialchars($branch['phone'] ?? 'N/A') ?></span>
+                <span class="detail-value"><?= htmlspecialchars($branch_phone) ?></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Email</span>
-                <span class="detail-value"><?= htmlspecialchars($branch['email'] ?? 'N/A') ?></span>
+                <span class="detail-value"><?= htmlspecialchars($branch_email) ?></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Status</span>
                 <span class="detail-value">
-                    <span class="status-badge <?= $branch['status'] === 'active' ? 'active' : 'inactive' ?>">
-                        <?= ucfirst($branch['status'] ?? 'Active') ?>
+                    <span class="status-badge <?= $branch_status === 'active' ? 'active' : 'inactive' ?>">
+                        <?= ucfirst($branch_status) ?>
                     </span>
                 </span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Created</span>
-                <span class="detail-value"><?= date('F d, Y', strtotime($branch['created_at'] ?? 'now')) ?></span>
+                <span class="detail-value"><?= date('F d, Y', strtotime($branch_created)) ?></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Last Updated</span>
-                <span class="detail-value"><?= date('F d, Y', strtotime($branch['updated_at'] ?? 'now')) ?></span>
+                <span class="detail-value"><?= date('F d, Y', strtotime($branch_updated)) ?></span>
             </div>
         </div>
         
@@ -1114,59 +1122,57 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             <div class="card-title">
                 <i class="fas fa-user-tie"></i>
                 Staff Breakdown
-                <span class="badge-count"><?= $branch['total_employees'] ?? 0 ?> total</span>
+                <span class="badge-count"><?= $total_employees ?> total</span>
             </div>
             
             <div class="detail-row">
                 <span class="detail-label">👨‍⚕️ Doctors</span>
-                <span class="detail-value"><strong><?= number_format($branch['total_doctors'] ?? 0) ?></strong></span>
+                <span class="detail-value"><strong><?= number_format($total_doctors) ?></strong></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">💊 Pharmacy</span>
-                <span class="detail-value"><strong><?= number_format($branch['total_pharmacy'] ?? 0) ?></strong></span>
+                <span class="detail-value"><strong><?= number_format($total_pharmacy) ?></strong></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">💉 Laboratory</span>
-                <span class="detail-value"><strong><?= number_format($branch['total_laboratory'] ?? 0) ?></strong></span>
+                <span class="detail-value"><strong><?= number_format($total_laboratory) ?></strong></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">📋 Reception</span>
-                <span class="detail-value"><strong><?= number_format($branch['total_reception'] ?? 0) ?></strong></span>
+                <span class="detail-value"><strong><?= number_format($total_reception) ?></strong></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">💰 Cashiers</span>
-                <span class="detail-value"><strong><?= number_format($branch['total_cashiers'] ?? 0) ?></strong></span>
+                <span class="detail-value"><strong><?= number_format($total_cashiers) ?></strong></span>
             </div>
             
-            <!-- Bill Summary -->
             <div style="margin-top:12px;padding-top:12px;border-top:2px solid var(--border-color);">
                 <div class="detail-row">
                     <span class="detail-label">Paid Bills</span>
-                    <span class="detail-value" style="color:var(--success);"><?= number_format($branch['paid_bills'] ?? 0) ?></span>
+                    <span class="detail-value" style="color:var(--success);"><?= number_format($paid_bills) ?></span>
                 </div>
                 <div class="detail-row">
                     <span class="detail-label">Pending Bills</span>
-                    <span class="detail-value" style="color:var(--warning);"><?= number_format($branch['pending_bills'] ?? 0) ?></span>
+                    <span class="detail-value" style="color:var(--warning);"><?= number_format($pending_bills) ?></span>
                 </div>
                 <div class="detail-row">
                     <span class="detail-label">Cancelled Bills</span>
-                    <span class="detail-value" style="color:var(--danger);"><?= number_format($branch['cancelled_bills'] ?? 0) ?></span>
+                    <span class="detail-value" style="color:var(--danger);"><?= number_format($cancelled_bills) ?></span>
                 </div>
             </div>
             
-            <!-- Appointments Summary -->
             <div style="margin-top:12px;padding-top:12px;border-top:2px solid var(--border-color);">
                 <div class="detail-row">
                     <span class="detail-label">📅 Scheduled</span>
-                    <span class="detail-value"><?= number_format($branch['scheduled_appointments'] ?? 0) ?></span>
+                    <span class="detail-value"><?= number_format($scheduled_appointments) ?></span>
                 </div>
                 <div class="detail-row">
                     <span class="detail-label">✅ Confirmed</span>
-                    <span class="detail-value" style="color:var(--success);"><?= number_format($branch['confirmed_appointments'] ?? 0) ?></span>
+                    <span class="detail-value" style="color:var(--success);"><?= number_format($confirmed_appointments) ?></span>
                 </div>
                 <div class="detail-row">
                     <span class="detail-label">✔️ Completed</span>
-                    <span class="detail-value" style="color:var(--primary);"><?= number_format($branch['completed_appointments'] ?? 0) ?></span>
+                    <span class="detail-value" style="color:var(--primary);"><?= number_format($completed_appointments) ?></span>
                 </div>
             </div>
         </div>
@@ -1179,39 +1185,37 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             </div>
             
             <div style="margin-bottom:12px;padding:12px;background:var(--primary-bg);border-radius:var(--radius);">
-                <p class="detail-label">Total Revenue</p>
-                <p class="detail-value" style="font-size:1.4rem;color:var(--primary);">
-                    TSh <?= number_format($branch['total_revenue'] ?? 0, 0) ?>
+                <p class="detail-label" style="font-size:0.75rem;">Total Revenue</p>
+                <p class="detail-value" style="font-size:1.4rem;color:var(--primary-solid);">
+                    TSh <?= number_format($total_revenue, 0) ?>
                 </p>
             </div>
             
             <div style="margin-bottom:12px;padding:12px;background:var(--danger-bg);border-radius:var(--radius);">
-                <p class="detail-label">Total Expenses</p>
+                <p class="detail-label" style="font-size:0.75rem;">Total Expenses</p>
                 <p class="detail-value" style="font-size:1.4rem;color:var(--danger);">
-                    TSh <?= number_format($branch['total_expenses'] ?? 0, 0) ?>
+                    TSh <?= number_format($total_expenses, 0) ?>
                 </p>
             </div>
             
             <div style="padding:12px;background:var(--success-bg);border-radius:var(--radius);">
-                <p class="detail-label">Net Profit</p>
+                <p class="detail-label" style="font-size:0.75rem;">Net Profit</p>
                 <p class="detail-value" style="font-size:1.4rem;color:var(--success);">
-                    TSh <?= number_format(($branch['total_revenue'] ?? 0) - ($branch['total_expenses'] ?? 0), 0) ?>
+                    TSh <?= number_format($net_profit, 0) ?>
                 </p>
             </div>
             
             <div style="margin-top:12px;padding:12px;background:var(--warning-bg);border-radius:var(--radius);">
-                <p class="detail-label">Pending Revenue</p>
+                <p class="detail-label" style="font-size:0.75rem;">Pending Revenue</p>
                 <p class="detail-value" style="font-size:1.2rem;color:var(--warning);">
-                    TSh <?= number_format($branch['pending_revenue'] ?? 0, 0) ?>
+                    TSh <?= number_format($pending_revenue, 0) ?>
                 </p>
             </div>
         </div>
         
     </div>
 
-    <!-- ================================================================ -->
-    <!-- LISTS -->
-    <!-- ================================================================ -->
+    <!-- Lists -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5">
         
         <!-- Recent Patients -->
@@ -1302,7 +1306,7 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
                                 <div class="name"><?= htmlspecialchars($pres['patient_name']) ?></div>
                                 <div class="sub">
                                     <i class="fas fa-pills"></i> <?= htmlspecialchars($pres['medication'] ?? 'N/A') ?>
-                                    <span class="status-badge <?= $pres['status'] === 'dispensed' ? 'active' : ($pres['status'] === 'pending' ? 'active' : 'inactive') ?>" style="font-size:0.5rem;padding:1px 8px;margin-left:4px;">
+                                    <span class="status-badge <?= $pres['status'] === 'dispensed' ? 'active' : 'pending' ?>" style="font-size:0.5rem;padding:1px 8px;margin-left:4px;">
                                         <?= ucfirst($pres['status']) ?>
                                     </span>
                                 </div>
@@ -1360,52 +1364,66 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
         
     </div>
 
-    <!-- ================================================================ -->
-    <!-- QUICK ACTIONS -->
-    <!-- ================================================================ -->
+    <!-- Quick Actions -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
-        <a href="add_employee.php?branch=<?= $branch_id ?>" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#0B5ED7;">👤</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Add Employee</span>
+        <a href="add_employee.php?branch=<?= $branch_id ?>" class="quick-action">
+            <span class="icon">👤</span>
+            <span class="label">Add Employee</span>
         </a>
-        
-        <a href="edit_branch.php?id=<?= $branch_id ?>" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#059669;">✏️</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Edit Branch</span>
+        <a href="edit_branch.php?id=<?= $branch_id ?>" class="quick-action">
+            <span class="icon">✏️</span>
+            <span class="label">Edit Branch</span>
         </a>
-        
-        <a href="branch_reports.php?id=<?= $branch_id ?>" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#7C3AED;">📊</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Reports</span>
+        <a href="branch_reports.php?id=<?= $branch_id ?>" class="quick-action">
+            <span class="icon">📊</span>
+            <span class="label">Reports</span>
         </a>
-        
-        <a href="branches.php?branch=all" class="quick-action" style="padding:16px;border-radius:12px;text-align:center;transition:all 0.3s ease;cursor:pointer;text-decoration:none;display:block;border:1px solid var(--border-color);background:var(--bg-card);">
-            <span class="icon" style="font-size:1.6rem;display:block;margin-bottom:6px;color:#D97706;">🏢</span>
-            <span class="label" style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">All Branches</span>
+        <a href="branches.php?branch=all" class="quick-action">
+            <span class="icon">🏢</span>
+            <span class="label">All Branches</span>
         </a>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
-            <?= htmlspecialchars($branch['name']) ?> - Details
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
+            <span class="text-gray-300 mx-2">|</span>
+            <?= htmlspecialchars($branch_name) ?> - Details
+            <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
-            <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
+    // ================================================================
+    // SIDEBAR TOGGLE - Works with shared sidebar
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        var sidebar = document.getElementById('sidebar');
+        var sidebarToggle = document.getElementById('sidebarToggle');
+        
+        // The sidebar toggle is handled by the shared sidebar script
+        // But we need to make sure the button works
+        if (sidebarToggle && sidebar) {
+            // Remove any existing click listeners and add our own
+            sidebarToggle.removeEventListener('click', function() {});
+            sidebarToggle.addEventListener('click', function(e) {
+                e.stopPropagation();
+                sidebar.classList.toggle('open');
+                var overlay = document.getElementById('sidebarOverlay');
+                if (overlay) {
+                    overlay.style.display = sidebar.classList.contains('open') ? 'block' : 'none';
+                }
+                document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
+            });
+        }
+    });
+
     // ================================================================
     // DARK MODE
     // ================================================================
@@ -1435,24 +1453,6 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
             darkText.textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
             document.cookie = "dark_mode=true; path=/";
-        }
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
         }
     });
 
@@ -1494,16 +1494,15 @@ $page_title = 'View Branch - ' . htmlspecialchars($branch['name']);
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏢 Braick Dispensary - View Branch', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch['name']) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📍 Location: <?= htmlspecialchars($branch['location'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c👥 Employees: <?= number_format($branch['total_employees'] ?? 0) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c👤 Patients: <?= number_format($branch['total_patients'] ?? 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Revenue: TSh <?= number_format($branch['total_revenue'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Expenses: TSh <?= number_format($branch['total_expenses'] ?? 0, 0) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c📈 Profit: TSh <?= number_format(($branch['total_revenue'] ?? 0) - ($branch['total_expenses'] ?? 0), 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
+    console.log('%c🏢 Braick Dispensary - View Branch', 'font-size:18px; font-weight:bold; color:#1A56DB;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#1A56DB;');
+    console.log('%c📍 Location: <?= htmlspecialchars($branch_location) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📞 Phone: <?= htmlspecialchars($branch_phone) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✉️ Email: <?= htmlspecialchars($branch_email) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c👥 Employees: <?= $total_employees ?>, Patients: <?= $total_patients ?>', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c💰 Revenue: TSh <?= number_format($total_revenue, 0) ?>, Expenses: TSh <?= number_format($total_expenses, 0) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Using SHARED SIDEBAR - admin_sidebar.php', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ DATA FROM DATABASE - NO SESSION OVERRIDE!', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

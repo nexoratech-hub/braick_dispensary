@@ -2,7 +2,6 @@
 // ================================================================
 // FILE: frontend/pages/admin/branch_staff.php
 // SUPER ADMIN - BRANCH STAFF MANAGEMENT
-// VIEW AND MANAGE STAFF FOR A SPECIFIC BRANCH
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -50,18 +49,37 @@ if (!$branch) {
 }
 
 // ================================================================
+// SEARCH FUNCTIONALITY
+// ================================================================
+$search_term = $_GET['search'] ?? '';
+
+// ================================================================
 // GET STAFF FOR THIS BRANCH
 // ================================================================
-$staff_stmt = $db->prepare("
+$staff_query = "
     SELECT 
         u.*,
         b.name as branch_name
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.id
     WHERE u.branch_id = ?
-    ORDER BY u.role, u.full_name
-");
-$staff_stmt->execute([$branch_id]);
+";
+
+if (!empty($search_term)) {
+    $staff_query .= " AND (u.full_name LIKE ? OR u.email LIKE ? OR u.phone LIKE ? OR u.username LIKE ? OR u.role LIKE ?)";
+}
+
+$staff_query .= " ORDER BY u.role, u.full_name";
+
+$staff_stmt = $db->prepare($staff_query);
+
+if (!empty($search_term)) {
+    $search_pattern = '%' . $search_term . '%';
+    $staff_stmt->execute([$branch_id, $search_pattern, $search_pattern, $search_pattern, $search_pattern, $search_pattern]);
+} else {
+    $staff_stmt->execute([$branch_id]);
+}
+
 $staff_list = $staff_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
@@ -114,7 +132,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message_type = 'success';
                 
                 // Refresh staff list
-                $staff_stmt->execute([$branch_id]);
+                if (!empty($search_term)) {
+                    $staff_stmt->execute([$branch_id, $search_pattern, $search_pattern, $search_pattern, $search_pattern, $search_pattern]);
+                } else {
+                    $staff_stmt->execute([$branch_id]);
+                }
                 $staff_list = $staff_stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 // Recalculate counts
@@ -158,7 +180,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $message_type = 'success';
                     
                     // Refresh staff list
-                    $staff_stmt->execute([$branch_id]);
+                    if (!empty($search_term)) {
+                        $staff_stmt->execute([$branch_id, $search_pattern, $search_pattern, $search_pattern, $search_pattern, $search_pattern]);
+                    } else {
+                        $staff_stmt->execute([$branch_id]);
+                    }
                     $staff_list = $staff_stmt->fetchAll(PDO::FETCH_ASSOC);
                     
                     // Recalculate counts
@@ -194,7 +220,7 @@ $selected_branch_id = $branch_id;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Branch Staff - <?= htmlspecialchars($branch['name']) ?> - Braick Dispensary</title>
+    <title>Staff - <?= htmlspecialchars($branch['name']) ?> - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -573,7 +599,7 @@ $selected_branch_id = $branch_id;
         }
         
         /* ================================================================
-           STATS CARDS
+           STATS CARDS - BLUE BACKGROUND
            ================================================================ */
         .stats-grid {
             display: grid;
@@ -632,7 +658,7 @@ $selected_branch_id = $branch_id;
         }
         
         /* ================================================================
-           STAFF TABLE
+           STAFF TABLE - BLUE HEADER
            ================================================================ */
         .table-container {
             background: var(--bg-card);
@@ -664,50 +690,32 @@ $selected_branch_id = $branch_id;
             margin: 0;
         }
         
-        .table-container .table-header .btn-add {
-            background: var(--primary-solid);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 0.8rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .table-container .table-header .btn-add:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(26, 86, 219, 0.3);
-        }
-        
+        /* ================================================================
+           TABLE WITH BLUE HEADER
+           ================================================================ */
         table {
             width: 100%;
             border-collapse: collapse;
         }
         
         table thead {
-            background: var(--bg-body);
-        }
-        
-        [data-theme="dark"] table thead {
-            background: var(--bg-card);
+            background: var(--primary-solid);
         }
         
         table thead th {
-            padding: 12px 16px;
+            padding: 14px 16px;
             text-align: left;
             font-size: 0.7rem;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            color: var(--text-secondary);
-            border-bottom: 2px solid var(--border-color);
+            color: white;
+            border-bottom: none;
+        }
+        
+        table thead th i {
+            margin-right: 6px;
+            opacity: 0.8;
         }
         
         table tbody td {
@@ -726,6 +734,7 @@ $selected_branch_id = $branch_id;
             border-bottom: none;
         }
         
+        /* Staff Avatar */
         .staff-avatar {
             width: 36px;
             height: 36px;
@@ -748,11 +757,12 @@ $selected_branch_id = $branch_id;
             border: 2px solid var(--border-color);
         }
         
+        /* Role Badges */
         .badge-role {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 2px 10px;
+            padding: 3px 12px;
             border-radius: 20px;
             font-size: 0.6rem;
             font-weight: 600;
@@ -767,51 +777,147 @@ $selected_branch_id = $branch_id;
         .badge-role.cashier { background: #059669; color: white; }
         .badge-role.laboratory { background: #0D9488; color: white; }
         
+        /* Status Badges */
         .badge-status {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 2px 10px;
+            padding: 3px 12px;
             border-radius: 20px;
             font-size: 0.6rem;
             font-weight: 600;
         }
         
         .badge-status.active {
-            background: var(--primary-bg);
-            color: var(--primary-solid);
+            background: #D1FAE5;
+            color: #065F46;
         }
         
         .badge-status.inactive {
-            background: var(--danger-bg);
-            color: var(--danger-dark);
+            background: #FEE2E2;
+            color: #991B1B;
+        }
+        
+        [data-theme="dark"] .badge-status.active {
+            background: #064E3B;
+            color: #34D399;
+        }
+        
+        [data-theme="dark"] .badge-status.inactive {
+            background: #7F1D1D;
+            color: #FCA5A5;
+        }
+        
+        /* ================================================================
+           ACTION BUTTONS - ENHANCED
+           ================================================================ */
+        .actions-cell {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            flex-wrap: wrap;
         }
         
         .btn-action {
-            padding: 4px 8px;
-            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 6px 12px;
+            border-radius: 8px;
             border: none;
             cursor: pointer;
             font-size: 0.7rem;
-            transition: all 0.2s ease;
-            background: transparent;
-            color: var(--text-secondary);
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            min-width: 32px;
+            min-height: 32px;
         }
         
-        .btn-action:hover {
-            transform: scale(1.1);
+        .btn-action i {
+            font-size: 0.8rem;
         }
         
-        .btn-action.edit:hover { color: var(--primary-solid); }
-        .btn-action.activate:hover { color: var(--success); }
-        .btn-action.deactivate:hover { color: var(--danger); }
-        .btn-action.delete:hover { color: var(--danger); }
+        /* Edit Button */
+        .btn-action.edit {
+            background: var(--primary-bg);
+            color: var(--primary-solid);
+            border: 1.5px solid var(--primary-solid);
+        }
         
-        .actions-cell {
-            display: flex;
-            gap: 4px;
+        .btn-action.edit:hover {
+            background: var(--primary-solid);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(26, 86, 219, 0.3);
+        }
+        
+        /* Activate Button */
+        .btn-action.activate {
+            background: #D1FAE5;
+            color: #065F46;
+            border: 1.5px solid #065F46;
+        }
+        
+        .btn-action.activate:hover {
+            background: #065F46;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        /* Deactivate Button */
+        .btn-action.deactivate {
+            background: #FEF3C7;
+            color: #92400E;
+            border: 1.5px solid #92400E;
+        }
+        
+        .btn-action.deactivate:hover {
+            background: #92400E;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
+        }
+        
+        /* Delete Button */
+        .btn-action.delete {
+            background: #FEE2E2;
+            color: #991B1B;
+            border: 1.5px solid #991B1B;
+        }
+        
+        .btn-action.delete:hover {
+            background: #991B1B;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        /* ================================================================
+           ADD STAFF BUTTON
+           ================================================================ */
+        .btn-add {
+            display: inline-flex;
             align-items: center;
-            flex-wrap: wrap;
+            gap: 8px;
+            background: var(--primary-solid);
+            color: white;
+            border: none;
+            padding: 8px 18px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+        
+        .btn-add:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(26, 86, 219, 0.3);
         }
         
         /* ================================================================
@@ -908,6 +1014,7 @@ $selected_branch_id = $branch_id;
                 align-items: stretch;
             }
             
+            /* Mobile table */
             table thead { display: none; }
             table tbody td {
                 display: block;
@@ -934,6 +1041,9 @@ $selected_branch_id = $branch_id;
             table tbody td:not(:last-child) {
                 border-bottom: 1px solid var(--border-color);
             }
+            .actions-cell {
+                justify-content: flex-start;
+            }
         }
         
         @media (max-width: 480px) {
@@ -951,7 +1061,9 @@ $selected_branch_id = $branch_id;
             opacity: 0;
         }
         
-        /* SIDEBAR */
+        /* ================================================================
+           SIDEBAR STYLES
+           ================================================================ */
         .sidebar {
             position: fixed !important;
             top: 0 !important;
@@ -981,10 +1093,13 @@ $selected_branch_id = $branch_id;
             -webkit-backdrop-filter: blur(2px);
         }
         
+        #sidebarOverlay.active {
+            display: block !important;
+        }
+        
         @media (max-width: 1024px) {
             .sidebar { transform: translateX(-100%) !important; }
             .sidebar.open { transform: translateX(0) !important; }
-            #sidebarOverlay.active { display: block !important; }
         }
     </style>
 </head>
@@ -1102,7 +1217,7 @@ $selected_branch_id = $branch_id;
 </aside>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION WITH SEARCH -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1110,7 +1225,22 @@ $selected_branch_id = $branch_id;
             <i class="fas fa-bars"></i>
         </button>
         
-        <div style="flex:1;"></div>
+        <!-- ================================================================
+             SEARCH BAR IN HEADER
+             ================================================================ -->
+        <form method="GET" action="" style="flex:1;max-width:500px;display:flex;align-items:center;">
+            <input type="hidden" name="id" value="<?= $branch_id ?>">
+            <div class="search-wrapper" style="flex:1;">
+                <i class="fas fa-search text-gray-400 ml-3"></i>
+                <input type="text" name="search" id="searchInput" 
+                       placeholder="Search staff by name, email, role..." 
+                       value="<?= htmlspecialchars($search_term) ?>"
+                       style="border:none;background:transparent;padding:8px 14px;width:100%;font-size:0.85rem;outline:none;color:var(--text-primary);">
+                <button type="submit" class="search-btn">
+                    <i class="fas fa-search mr-1"></i> Search
+                </button>
+            </div>
+        </form>
     </div>
     
     <div class="flex items-center gap-3">
@@ -1155,6 +1285,11 @@ $selected_branch_id = $branch_id;
                 <span class="header-badge">
                     <i class="fas fa-map-marker-alt"></i> <?= htmlspecialchars($branch['location'] ?? 'N/A') ?>
                 </span>
+                <?php if (!empty($search_term)): ?>
+                    <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                        <i class="fas fa-search"></i> Results for "<?= htmlspecialchars($search_term) ?>"
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
@@ -1176,7 +1311,7 @@ $selected_branch_id = $branch_id;
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS -->
+    <!-- STATISTICS CARDS - BLUE BACKGROUND -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <div class="stat-card">
@@ -1218,13 +1353,21 @@ $selected_branch_id = $branch_id;
     </div>
 
     <!-- ================================================================ -->
-    <!-- STAFF TABLE -->
+    <!-- STAFF TABLE WITH BLUE HEADER -->
     <!-- ================================================================ -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="table-header">
             <h3>
                 <i class="fas fa-users"></i> 
                 Staff Members (<?= $total_staff ?>)
+                <?php if (!empty($search_term)): ?>
+                    <span style="font-weight:400;font-size:0.8rem;color:var(--text-secondary);">
+                        - filtered by "<?= htmlspecialchars($search_term) ?>"
+                        <a href="?id=<?= $branch_id ?>" style="color:var(--primary-solid);text-decoration:none;margin-left:8px;">
+                            <i class="fas fa-times"></i> Clear
+                        </a>
+                    </span>
+                <?php endif; ?>
             </h3>
             <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-add">
                 <i class="fas fa-user-plus"></i> Add Staff
@@ -1236,13 +1379,13 @@ $selected_branch_id = $branch_id;
                 <table>
                     <thead>
                         <tr>
-                            <th style="width:50px;">#</th>
-                            <th>Staff</th>
-                            <th>Role</th>
-                            <th>Email</th>
-                            <th>Phone</th>
-                            <th>Status</th>
-                            <th style="text-align:center;">Actions</th>
+                            <th style="width:50px;"><i class="fas fa-hashtag"></i> #</th>
+                            <th><i class="fas fa-user"></i> Staff</th>
+                            <th><i class="fas fa-briefcase"></i> Role</th>
+                            <th><i class="fas fa-envelope"></i> Email</th>
+                            <th><i class="fas fa-phone"></i> Phone</th>
+                            <th><i class="fas fa-circle"></i> Status</th>
+                            <th style="text-align:center;"><i class="fas fa-cog"></i> Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1302,7 +1445,7 @@ $selected_branch_id = $branch_id;
                                     </span>
                                 </td>
                                 <td data-label="Email">
-                                    <a href="mailto:<?= $staff_email ?>" style="color:var(--primary-solid);text-decoration:none;">
+                                    <a href="mailto:<?= $staff_email ?>" style="color:var(--primary-solid);text-decoration:none;font-weight:500;">
                                         <?= $staff_email ?>
                                     </a>
                                 </td>
@@ -1316,23 +1459,23 @@ $selected_branch_id = $branch_id;
                                 <td data-label="Actions">
                                     <div class="actions-cell" style="justify-content:center;">
                                         <a href="edit_staff.php?id=<?= $staff_id ?>&branch_id=<?= $branch_id ?>" 
-                                           class="btn-action edit" title="Edit">
-                                            <i class="fas fa-edit"></i>
+                                           class="btn-action edit" title="Edit Staff">
+                                            <i class="fas fa-edit"></i> Edit
                                         </a>
                                         <?php if ($staff_status === 'active'): ?>
                                             <button onclick="toggleStaffStatus(<?= $staff_id ?>, 'inactive')" 
-                                                    class="btn-action deactivate" title="Deactivate">
-                                                <i class="fas fa-pause"></i>
+                                                    class="btn-action deactivate" title="Deactivate Staff">
+                                                <i class="fas fa-pause"></i> Deactivate
                                             </button>
                                         <?php else: ?>
                                             <button onclick="toggleStaffStatus(<?= $staff_id ?>, 'active')" 
-                                                    class="btn-action activate" title="Activate">
-                                                <i class="fas fa-play"></i>
+                                                    class="btn-action activate" title="Activate Staff">
+                                                <i class="fas fa-play"></i> Activate
                                             </button>
                                         <?php endif; ?>
                                         <button onclick="deleteStaff(<?= $staff_id ?>, '<?= addslashes($staff_name) ?>')" 
-                                                class="btn-action delete" title="Delete">
-                                            <i class="fas fa-trash"></i>
+                                                class="btn-action delete" title="Delete Staff">
+                                            <i class="fas fa-trash"></i> Delete
                                         </button>
                                     </div>
                                 </td>
@@ -1345,10 +1488,16 @@ $selected_branch_id = $branch_id;
             <div class="empty-state">
                 <i class="fas fa-user-slash"></i>
                 <h3>No Staff Found</h3>
-                <p>This branch currently has no staff members assigned.</p>
-                <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-add" style="display:inline-flex;">
-                    <i class="fas fa-user-plus"></i> Add First Staff
-                </a>
+                <p><?= !empty($search_term) ? 'No staff members match your search criteria.' : 'This branch currently has no staff members assigned.' ?></p>
+                <?php if (!empty($search_term)): ?>
+                    <a href="?id=<?= $branch_id ?>" class="btn-add" style="display:inline-flex;">
+                        <i class="fas fa-times"></i> Clear Search
+                    </a>
+                <?php else: ?>
+                    <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-add" style="display:inline-flex;">
+                        <i class="fas fa-user-plus"></i> Add First Staff
+                    </a>
+                <?php endif; ?>
             </div>
         <?php endif; ?>
     </div>
@@ -1394,9 +1543,6 @@ $selected_branch_id = $branch_id;
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
-        if (url.searchParams.has('id')) {
-            // Keep the id parameter for branch_staff page
-        }
         window.location.href = url.toString();
     }
 
@@ -1531,11 +1677,6 @@ $selected_branch_id = $branch_id;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
-
-    console.log('%c🏥 Braick Dispensary - Branch Staff', 'font-size:18px; font-weight:bold; color:#1A56DB;');
-    console.log('%c📋 Branch: <?= htmlspecialchars($branch['name']) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#1A56DB;');
-    console.log('%c👥 Total Staff: <?= $total_staff ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Active: <?= $active_staff ?>, ❌ Inactive: <?= $inactive_staff ?>', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>
