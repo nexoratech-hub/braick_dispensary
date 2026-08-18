@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/pharmacies.php
-// SUPER ADMIN - VIEW ALL PHARMACIES
+// SUPER ADMIN - VIEW ALL PHARMACIES WITH BRANCH FILTERING
 // 8 CARDS WITH CUSTOM COLORS: BLUE, GREEN, ORANGE, RED
-// REDUCED HEIGHT
+// DATA FILTERED BY SELECTED BRANCH
 // ================================================================
 
 // ================================================================
@@ -113,14 +113,25 @@ try {
 }
 
 // ================================================================
-// GET PRESCRIPTION SALES DATA
+// BUILD BRANCH FILTER CONDITION
+// ================================================================
+$branch_condition = "";
+$branch_params = [];
+
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $branch_condition = " AND branch_id = ?";
+    $branch_params[] = (int)$selected_branch_id;
+}
+
+// ================================================================
+// GET PRESCRIPTION SALES DATA (FILTERED BY BRANCH)
 // ================================================================
 $prescription_sales_data = [];
 $total_prescription_sales_db = 0;
 $total_prescription_revenue_db = 0;
 
 try {
-    $stmt = $db->query("
+    $sql = "
         SELECT 
             ps.*,
             b.name as branch_name,
@@ -130,18 +141,31 @@ try {
         LEFT JOIN branches b ON ps.branch_id = b.id
         LEFT JOIN patients pat ON ps.patient_id = pat.id
         LEFT JOIN users u ON ps.dispensed_by = u.id
-        ORDER BY ps.id DESC 
-        LIMIT 20
-    ");
+        WHERE 1=1
+    ";
+    
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $sql .= " AND ps.branch_id = " . (int)$selected_branch_id;
+    }
+    
+    $sql .= " ORDER BY ps.id DESC LIMIT 20";
+    
+    $stmt = $db->query($sql);
     $prescription_sales_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    $stmt = $db->query("
+    // Get totals with branch filter
+    $sql_totals = "
         SELECT 
             COUNT(*) as total_sales,
             COALESCE(SUM(total_amount), 0) as total_revenue
         FROM prescription_sales 
         WHERE status = 'dispensed'
-    ");
+    ";
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $sql_totals .= " AND branch_id = " . (int)$selected_branch_id;
+    }
+    
+    $stmt = $db->query($sql_totals);
     $totals = $stmt->fetch(PDO::FETCH_ASSOC);
     $total_prescription_sales_db = $totals['total_sales'] ?? 0;
     $total_prescription_revenue_db = $totals['total_revenue'] ?? 0;
@@ -152,19 +176,24 @@ try {
 }
 
 // ================================================================
-// GET OTC SALES DATA
+// GET OTC SALES DATA (FILTERED BY BRANCH)
 // ================================================================
 $total_otc_sales_db = 0;
 $total_otc_revenue_db = 0;
 
 try {
-    $stmt = $db->query("
+    $sql_otc = "
         SELECT 
             COUNT(*) as total_sales,
             COALESCE(SUM(net_amount), 0) as total_revenue
         FROM otc_sales 
         WHERE payment_status = 'paid'
-    ");
+    ";
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $sql_otc .= " AND branch_id = " . (int)$selected_branch_id;
+    }
+    
+    $stmt = $db->query($sql_otc);
     $otc_totals = $stmt->fetch(PDO::FETCH_ASSOC);
     $total_otc_sales_db = $otc_totals['total_sales'] ?? 0;
     $total_otc_revenue_db = $otc_totals['total_revenue'] ?? 0;
@@ -174,19 +203,32 @@ try {
 }
 
 // ================================================================
-// GET TOTAL PRESCRIPTIONS COUNT
+// GET TOTAL PRESCRIPTIONS COUNT (FILTERED BY BRANCH)
 // ================================================================
 $total_prescriptions_count = 0;
 $total_dispensed_count = 0;
 $total_pending_count = 0;
+
 try {
-    $stmt = $db->query("SELECT COUNT(*) as total FROM prescriptions");
+    $sql = "SELECT COUNT(*) as total FROM prescriptions WHERE 1=1";
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $sql .= " AND branch_id = " . (int)$selected_branch_id;
+    }
+    $stmt = $db->query($sql);
     $total_prescriptions_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    $stmt = $db->query("SELECT COUNT(*) as total FROM prescriptions WHERE status = 'dispensed'");
+    $sql = "SELECT COUNT(*) as total FROM prescriptions WHERE status = 'dispensed'";
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $sql .= " AND branch_id = " . (int)$selected_branch_id;
+    }
+    $stmt = $db->query($sql);
     $total_dispensed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    $stmt = $db->query("SELECT COUNT(*) as total FROM prescriptions WHERE status = 'pending'");
+    $sql = "SELECT COUNT(*) as total FROM prescriptions WHERE status = 'pending'";
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $sql .= " AND branch_id = " . (int)$selected_branch_id;
+    }
+    $stmt = $db->query($sql);
     $total_pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
     $total_prescriptions_count = 0;
@@ -243,7 +285,7 @@ try {
 }
 
 // ================================================================
-// CALCULATE TOTALS FOR 8 CARDS
+// CALCULATE TOTALS FOR 8 CARDS (FILTERED BY BRANCH)
 // ================================================================
 $total_pharmacies = count($pharmacies);
 $total_medicines = 0;
@@ -299,6 +341,19 @@ function format_currency($amount) {
 }
 
 // ================================================================
+// GET BRANCH NAME FOR DISPLAY
+// ================================================================
+$display_branch_name = 'All Branches';
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch_id) {
+            $display_branch_name = $b['name'];
+            break;
+        }
+    }
+}
+
+// ================================================================
 // SASA NDIO HEADER INAINGIZWA
 // ================================================================
 ?>
@@ -333,7 +388,6 @@ function format_currency($amount) {
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
             
-            /* 4 Card Colors */
             --card-blue: #0B5ED7;
             --card-blue-dark: #0A4CA8;
             --card-red: #DC2626;
@@ -354,14 +408,6 @@ function format_currency($amount) {
             --primary-dark: #2563EB;
             --primary-light: #60A5FA;
             --primary-bg: #1E3A5F;
-            --card-blue: #2563EB;
-            --card-blue-dark: #1D4ED8;
-            --card-red: #DC2626;
-            --card-red-dark: #B91C1C;
-            --card-green: #059669;
-            --card-green-dark: #047857;
-            --card-orange: #D97706;
-            --card-orange-dark: #B45309;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -371,7 +417,6 @@ function format_currency($amount) {
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        /* TOP NAV */
         .top-nav {
             position: fixed;
             top: 0;
@@ -521,7 +566,6 @@ function format_currency($amount) {
             transition: background 0.3s ease;
         }
         
-        /* SIDEBAR */
         .sidebar {
             position: fixed;
             top: 0;
@@ -656,7 +700,6 @@ function format_currency($amount) {
             pointer-events: none;
             transition: all 0.5s ease;
         }
-        
         .stat-card-8::after {
             content: '';
             position: absolute;
@@ -669,21 +712,12 @@ function format_currency($amount) {
             pointer-events: none;
             transition: all 0.5s ease;
         }
-        
         .stat-card-8:hover {
             transform: translateY(-4px) scale(1.01);
             box-shadow: 0 10px 32px rgba(0,0,0,0.2);
         }
-        
-        .stat-card-8:hover::before {
-            transform: scale(1.3);
-            right: -10%;
-        }
-        
-        .stat-card-8:hover::after {
-            transform: scale(1.4);
-            bottom: -30%;
-        }
+        .stat-card-8:hover::before { transform: scale(1.3); right: -10%; }
+        .stat-card-8:hover::after { transform: scale(1.4); bottom: -30%; }
         
         .stat-card-8 .stat-icon {
             width: 44px;
@@ -703,12 +737,10 @@ function format_currency($amount) {
             z-index: 1;
             margin-bottom: 4px;
         }
-        
         .stat-card-8:hover .stat-icon {
             transform: scale(1.05) rotate(-2deg);
             background: rgba(255,255,255,0.3);
         }
-        
         .stat-card-8 .stat-content {
             position: relative;
             z-index: 1;
@@ -716,7 +748,6 @@ function format_currency($amount) {
             display: flex;
             flex-direction: column;
         }
-        
         .stat-card-8 .stat-label {
             font-size: 0.6rem;
             color: rgba(255,255,255,0.85);
@@ -725,7 +756,6 @@ function format_currency($amount) {
             letter-spacing: 0.06em;
             margin: 0 0 1px 0;
         }
-        
         .stat-card-8 .stat-number-small {
             font-size: 2.2rem;
             font-weight: 800;
@@ -734,7 +764,6 @@ function format_currency($amount) {
             line-height: 1.1;
             letter-spacing: -0.02em;
         }
-        
         .stat-card-8 .stat-amount-large {
             font-size: 1.6rem;
             font-weight: 800;
@@ -743,14 +772,12 @@ function format_currency($amount) {
             line-height: 1.2;
             letter-spacing: -0.02em;
         }
-        
         .stat-card-8 .stat-currency {
             font-size: 0.8rem;
             font-weight: 600;
             color: rgba(255,255,255,0.9);
             margin-right: 3px;
         }
-        
         .stat-card-8 .stat-sub {
             font-size: 0.6rem;
             color: rgba(255,255,255,0.9);
@@ -760,12 +787,10 @@ function format_currency($amount) {
             gap: 6px;
             flex-wrap: wrap;
         }
-        
         .stat-card-8 .stat-sub .highlight {
             color: rgba(255,255,255,0.95);
             font-weight: 600;
         }
-        
         .stat-card-8 .stat-sub .badge-mini {
             font-size: 0.5rem;
             font-weight: 600;
@@ -778,22 +803,18 @@ function format_currency($amount) {
             gap: 3px;
             backdrop-filter: blur(4px);
         }
-        
         .stat-card-8 .stat-sub .badge-mini.danger {
             background: rgba(239, 68, 68, 0.4);
             color: #FCA5A5;
         }
-        
         .stat-card-8 .stat-sub .badge-mini.warning {
             background: rgba(245, 158, 11, 0.4);
             color: #FCD34D;
         }
-        
         .stat-card-8 .stat-sub .badge-mini.success {
             background: rgba(52, 211, 153, 0.4);
             color: #6EE7B7;
         }
-        
         .stat-card-8 .stat-arrow {
             position: absolute;
             right: 12px;
@@ -803,12 +824,10 @@ function format_currency($amount) {
             transition: all 0.3s ease;
             z-index: 1;
         }
-        
         .stat-card-8:hover .stat-arrow {
             transform: translateX(6px);
             color: rgba(255,255,255,0.4);
         }
-        
         .stat-card-8 .flex-row {
             display: flex;
             align-items: baseline;
@@ -816,29 +835,15 @@ function format_currency($amount) {
             flex-wrap: wrap;
         }
         
-        /* ================================================================
-           CARD COLOR CLASSES
-           ================================================================ */
         .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         .card-blue:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
-        
         .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         .card-red:hover { box-shadow: 0 10px 32px rgba(220, 38, 38, 0.4); }
-        
         .card-green { background: linear-gradient(135deg, #059669, #047857); }
         .card-green:hover { box-shadow: 0 10px 32px rgba(5, 150, 105, 0.4); }
-        
         .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
         .card-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
         
-        [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
-        [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        
-        /* ================================================================
-           FILTER BAR
-           ================================================================ */
         .filter-bar {
             display: flex;
             flex-wrap: wrap;
@@ -906,9 +911,6 @@ function format_currency($amount) {
             color: var(--primary);
         }
         
-        /* ================================================================
-           PHARMACY GRID
-           ================================================================ */
         .pharmacy-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
@@ -1215,9 +1217,6 @@ function format_currency($amount) {
             margin-bottom: 8px;
         }
         
-        /* ================================================================
-           PAGE HEADER - BLUE BOX
-           ================================================================ */
         .page-header-box {
             background: var(--primary-gradient);
             border-radius: 16px;
@@ -1227,7 +1226,6 @@ function format_currency($amount) {
             position: relative;
             overflow: hidden;
         }
-        
         .page-header-box::before {
             content: '';
             position: absolute;
@@ -1239,7 +1237,6 @@ function format_currency($amount) {
             border-radius: 50%;
             pointer-events: none;
         }
-        
         .page-header-box .page-title {
             color: white;
             font-size: 1.6rem;
@@ -1251,7 +1248,6 @@ function format_currency($amount) {
             position: relative;
             z-index: 1;
         }
-        
         .page-header-box .page-title .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
@@ -1263,7 +1259,6 @@ function format_currency($amount) {
             letter-spacing: 0.05em;
             backdrop-filter: blur(4px);
         }
-        
         .page-header-box .page-subtitle {
             color: rgba(255,255,255,0.85);
             font-size: 0.85rem;
@@ -1275,12 +1270,18 @@ function format_currency($amount) {
             z-index: 1;
             margin-top: 4px;
         }
-        
         .page-header-box .page-subtitle strong {
             color: white;
             font-weight: 600;
         }
-        
+        .page-header-box .page-subtitle .branch-name-display {
+            background: rgba(255,255,255,0.15);
+            padding: 2px 14px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: white;
+        }
         .page-header-box .header-badge {
             background: rgba(255,255,255,0.12);
             color: white;
@@ -1294,29 +1295,22 @@ function format_currency($amount) {
             gap: 5px;
             border: 1px solid rgba(255,255,255,0.1);
         }
-        
-        .page-header-box .header-badge i {
-            opacity: 0.8;
-        }
-        
+        .page-header-box .header-badge i { opacity: 0.8; }
         .page-header-box .header-badge.medicines {
             background: rgba(52, 211, 153, 0.2);
             border-color: rgba(52, 211, 153, 0.3);
             color: #6EE7B7;
         }
-        
         .page-header-box .header-badge.revenue {
             background: rgba(251, 191, 36, 0.2);
             border-color: rgba(251, 191, 36, 0.3);
             color: #FBBF24;
         }
-        
         .page-header-box .header-badge.rx {
             background: rgba(124, 58, 237, 0.2);
             border-color: rgba(124, 58, 237, 0.3);
             color: #A78BFA;
         }
-        
         .page-header-box .header-badge.otc {
             background: rgba(251, 146, 60, 0.2);
             border-color: rgba(251, 146, 60, 0.3);
@@ -1412,7 +1406,7 @@ function format_currency($amount) {
         <a href="/dispensary_system/frontend/pages/admin/view_cashier.php" class="sidebar-link"><i class="fas fa-cash-register"></i> Cashier</a>
         
         <div class="nav-label">Management</div>
-        <a href="/dispensary_system/frontend/pages/admin/branches.php" class="sidebar-link active"><i class="fas fa-store-alt"></i> Branches</a>
+        <a href="/dispensary_system/frontend/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
         <a href="/dispensary_system/frontend/pages/admin/departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
         <a href="/dispensary_system/frontend/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
         
@@ -1482,6 +1476,9 @@ function format_currency($amount) {
                 <i class="fas fa-prescription-bottle"></i>
                 Pharmacies
                 <span class="role-badge-display">ADMIN</span>
+                <span class="branch-name-display">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
+                </span>
             </h1>
             <p class="page-subtitle">
                 <strong><?= $total_pharmacies ?></strong> pharmacy branches
@@ -1502,7 +1499,7 @@ function format_currency($amount) {
     </div>
 
     <!-- ================================================================ -->
-    <!-- 8 CARDS WITH CUSTOM COLORS - REDUCED HEIGHT -->
+    <!-- 8 CARDS WITH CUSTOM COLORS - DATA FILTERED BY BRANCH -->
     <!-- Pattern: BLUE, BLUE, GREEN, GREEN, BLUE, ORANGE, RED, ORANGE -->
     <!-- ================================================================ -->
     <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.05s;">
@@ -1620,10 +1617,10 @@ function format_currency($amount) {
         <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
         <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
             <select name="branch" onchange="this.form.submit()" class="flex-1 min-w-[150px]">
-                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>All Branches</option>
+                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
                 <?php foreach ($branches as $b): ?>
                     <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($b['name']) ?>
+                        🏥 <?= htmlspecialchars($b['name']) ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -1963,16 +1960,18 @@ function format_currency($amount) {
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Pharmacies', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Pharmacies (FILTERED BY BRANCH)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏪 Branch: <?= htmlspecialchars($display_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Total Pharmacies: <?= $total_pharmacies ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💊 Total Medicines: <?= number_format($total_medicines) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Prescriptions: <?= number_format($total_prescriptions_count) ?> (TSh <?= number_format($total_prescription_revenue_db, 0) ?>)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🛒 OTC Sales: <?= number_format($total_otc_sales_db) ?> (TSh <?= number_format($total_otc_revenue_db, 0) ?>)', 'font-size:13px; color:#D97706;');
     console.log('%c🔵🔵🟢🟢🔵🟠🔴🟠 CUSTOM COLORS', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Data FILTERED by selected branch', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ "All Branches" shows all data', 'font-size:13px; color:#34D399;');
     console.log('%c📉 REDUCED HEIGHT: min-height 100px', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Page Header: BLUE BOX with all stats', 'font-size:13px; color:#34D399;');
     console.log('%c❌ Add Pharmacy Button: REMOVED', 'font-size:13px; color:#DC2626;');
 </script>
 

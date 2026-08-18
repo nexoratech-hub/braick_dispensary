@@ -2,9 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/cashiers.php
 // SUPER ADMIN - VIEW ALL CASHIERS
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// BRAICK DISPENSARY - BEAUTIFUL CARDS DESIGN
-// FIXED: Green background cards like view_cashier
+// FIXED: No invalid ID error, Custom card colors
 // ================================================================
 
 // ================================================================
@@ -50,14 +48,21 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
+
+// ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -65,11 +70,11 @@ try {
 }
 
 // ================================================================
-// GET FILTER PARAMETERS
+// GET FILTER PARAMETERS - FIXED: Remove error from URL
 // ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
-$search = $_GET['search'] ?? '';
-$status_filter = $_GET['status'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$status_filter = isset($_GET['status']) ? trim($_GET['status']) : 'all';
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -83,7 +88,7 @@ try {
 }
 
 // ================================================================
-// ✅ FIXED: GET FINANCIAL SUMMARY - WITH REAL EXPENSES
+// GET FINANCIAL SUMMARY
 // ================================================================
 function getFinancialSummary($db, $branch_id = 'all') {
     $results = [];
@@ -350,13 +355,14 @@ try {
 }
 
 // ================================================================
-// PROFILE PICTURE URL
+// FUNCTION FORMAT CURRENCY
 // ================================================================
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+function format_currency($amount) {
+    if ($amount == 0) {
+        return 'TSh 0';
+    }
+    return 'TSh ' . number_format($amount, 0);
+}
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -379,71 +385,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - GREEN THEME
-           ================================================================ */
         :root {
-            --primary: #059669;
-            --primary-dark: #047857;
-            --primary-light: #34D399;
-            --primary-bg: #D1FAE5;
-            --primary-gradient: linear-gradient(135deg, #059669, #047857);
-            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --blue: #0B5ED7;
-            --blue-bg: #E8F0FE;
-            
-            --pink: #EC4899;
-            --pink-bg: #FCE7F3;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 15px 40px rgba(0,0,0,0.12);
-            
-            --bg-body: #F0FDF4;
+            --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
-            --border-color: #D1FAE5;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --table-hover: #ECFDF5;
+            --border-color: #E2E8F0;
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #3B82F6;
+            --primary-bg: #EFF6FF;
+            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
+            
+            --card-blue: #0B5ED7;
+            --card-red: #DC2626;
+            --card-green: #059669;
+            --card-orange: #D97706;
         }
-        
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -451,35 +411,23 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
-            --primary: #34D399;
-            --primary-dark: #059669;
-            --primary-light: #6EE7B7;
-            --primary-bg: #1A3A2A;
-            --primary-gradient: linear-gradient(135deg, #059669, #047857);
-            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --shadow-xl: 0 15px 40px rgba(0,0,0,0.4);
-            --table-hover: #1A3A2A;
+            --primary: #3B82F6;
+            --primary-dark: #2563EB;
+            --primary-light: #60A5FA;
+            --primary-bg: #1E3A5F;
+            --card-blue: #2563EB;
+            --card-red: #DC2626;
+            --card-green: #059669;
+            --card-orange: #D97706;
         }
-        
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
         body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
             background: var(--bg-body);
             color: var(--text-primary);
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -493,27 +441,22 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             justify-content: space-between;
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
+            transition: background 0.3s ease, border-color 0.3s ease;
         }
-        
         .top-nav .search-wrapper {
             display: flex;
             align-items: center;
             background: var(--bg-body);
-            border-radius: var(--radius);
+            border-radius: 10px;
             border: 2px solid var(--border-color);
             transition: all 0.3s;
             flex: 1;
             max-width: 500px;
         }
-        
         .top-nav .search-wrapper:focus-within {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
         }
-        
         .top-nav .search-wrapper input {
             border: none;
             background: transparent;
@@ -523,40 +466,45 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             outline: none;
             color: var(--text-primary);
         }
-        
         .top-nav .search-wrapper input::placeholder {
             color: var(--text-secondary);
         }
-        
         .top-nav .search-wrapper .search-btn {
             background: var(--primary-gradient);
             color: white;
             border: none;
             padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
+            border-radius: 0 10px 10px 0;
             cursor: pointer;
             font-size: 0.85rem;
             transition: all 0.3s;
             white-space: nowrap;
         }
-        
         .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
+            background: var(--primary-dark);
         }
-        
+        .top-nav .branch-selector {
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            background: var(--bg-card);
+            font-size: 0.82rem;
+            font-weight: 500;
+            cursor: pointer;
+            outline: none;
+            min-width: 160px;
+            color: var(--text-primary);
+            transition: all 0.3s;
+        }
+        .top-nav .branch-selector:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
         .top-nav .datetime {
             font-size: 0.78rem;
             color: var(--text-secondary);
             font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
         }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
         .top-nav .avatar {
             width: 40px;
             height: 40px;
@@ -566,12 +514,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             cursor: pointer;
             transition: all 0.3s;
         }
-        
         .top-nav .avatar:hover {
             border-color: var(--primary);
             transform: scale(1.05);
         }
-        
         .top-nav .icon-btn {
             width: 38px;
             height: 38px;
@@ -586,35 +532,28 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             cursor: pointer;
             position: relative;
         }
-        
         .top-nav .icon-btn:hover {
             background: var(--bg-body);
             color: var(--primary);
         }
-        
         .notif-dot {
             position: absolute;
             top: 6px;
             right: 6px;
             width: 8px;
             height: 8px;
+            background: #059669;
             border-radius: 50%;
             border: 2px solid var(--bg-nav);
             animation: pulse-dot 2s infinite;
         }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
+        .notif-dot.has-notif { background: #EF4444; }
+        .notif-dot.no-notif { background: #94A3B8; animation: none; }
+        @keyframes pulse-dot { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
         .dark-toggle-btn {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
-            border-radius: var(--radius);
+            border-radius: 10px;
             padding: 6px 12px;
             cursor: pointer;
             font-size: 0.82rem;
@@ -624,192 +563,140 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             align-items: center;
             gap: 6px;
         }
-        
         .dark-toggle-btn:hover {
             border-color: var(--primary);
             background: var(--bg-card);
         }
-        
         .dark-toggle-btn i { font-size: 0.9rem; }
         
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
-            padding: 28px 32px;
+            padding: 24px 28px;
             min-height: calc(100vh - 68px);
+            transition: background 0.3s ease;
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
-        .page-header {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 28px 36px;
-            margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(4, 120, 87, 0.35);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header .page-title {
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 270px;
+            background: #0B4EA8;
             color: white;
-            font-size: 1.8rem;
+            z-index: 50;
+            overflow-y: auto;
+            overflow-x: hidden;
+            transition: transform 0.3s ease-in-out;
+            transform: translateX(0);
+            box-shadow: 4px 0 20px rgba(0,0,0,0.15);
+        }
+        .sidebar-brand {
+            padding: 18px 16px 14px;
+            border-bottom: 2px solid #0B3D8A;
+            background: #0B4EA8;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+        .sidebar-brand .logo {
+            width: 42px;
+            height: 42px;
+            border-radius: 10px;
+            object-fit: cover;
+            background: white;
+            padding: 4px;
+            border: 2px solid rgba(255,255,255,0.1);
+        }
+        .sidebar-brand .brand-text { color: white; font-weight: 700; font-size: 0.95rem; line-height: 1.2; }
+        .sidebar-brand .brand-sub { color: #9EC5FE; font-size: 0.65rem; font-weight: 500; }
+        .sidebar-nav { padding: 10px 8px 20px; }
+        .sidebar-nav .nav-label {
+            font-size: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #6EA8FE;
+            padding: 0 10px;
+            margin: 12px 0 4px;
             font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
         }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.95rem;
+        .sidebar-link {
             display: flex;
             align-items: center;
             gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
-        }
-        
-        .page-header .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
+            padding: 8px 12px;
+            border-radius: 8px;
+            color: #D2E3FC;
             text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
+            transition: all 0.25s ease;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin: 1px 0;
+            background: transparent;
+            cursor: pointer;
+            border: none;
+            width: 100%;
+            text-align: left;
             position: relative;
-            z-index: 1;
+        }
+        .sidebar-link:hover {
+            background: #0AA84F;
+            color: white;
+            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
+            transform: translateX(4px);
+        }
+        .sidebar-link.active {
+            background: #0AA84F;
+            color: white;
+            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
+        }
+        .sidebar-link.logout-link {
+            border-top: 2px solid rgba(255,255,255,0.08);
+            padding-top: 10px;
+            margin-top: 6px;
+            color: #FCA5A5;
+        }
+        .sidebar-link.logout-link:hover {
+            background: #DC2626;
+            color: white;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
         }
         
-        .page-header .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            transition: border-color 0.3s ease, color 0.3s ease;
         }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         /* ================================================================
-           ✅ 8 CARDS - GREEN BACKGROUND LIKE VIEW_CASHIER
+           8 CARDS - CUSTOM COLORS
            ================================================================ */
-        .cards-8-grid {
+        .stats-grid-8 {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 18px;
-            margin-bottom: 28px;
+            gap: 14px;
+            margin-bottom: 24px;
         }
         
         .stat-card-8 {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 20px 24px;
-            border: 2px solid rgba(255,255,255,0.1);
-            box-shadow: var(--shadow-sm);
+            border-radius: 14px;
+            padding: 16px 18px;
+            border: none;
+            display: flex;
+            flex-direction: column;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+            color: white;
             position: relative;
             overflow: hidden;
+            min-height: 100px;
             cursor: default;
-            color: white;
         }
         
         .stat-card-8::before {
@@ -817,112 +704,139 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             position: absolute;
             top: -50%;
             right: -20%;
-            width: 200px;
-            height: 200px;
-            background: rgba(255,255,255,0.05);
+            width: 160px;
+            height: 160px;
+            background: rgba(255,255,255,0.06);
             border-radius: 50%;
             pointer-events: none;
+            transition: all 0.5s ease;
         }
-        
         .stat-card-8::after {
             content: '';
             position: absolute;
             bottom: -40%;
             left: -10%;
-            width: 150px;
-            height: 150px;
-            background: rgba(255,255,255,0.03);
+            width: 120px;
+            height: 120px;
+            background: rgba(255,255,255,0.04);
             border-radius: 50%;
             pointer-events: none;
+            transition: all 0.5s ease;
         }
-        
         .stat-card-8:hover {
-            transform: translateY(-6px);
-            box-shadow: 0 8px 32px rgba(4, 120, 87, 0.35);
-            border-color: rgba(255,255,255,0.3);
+            transform: translateY(-4px) scale(1.01);
+            box-shadow: 0 10px 32px rgba(0,0,0,0.2);
         }
+        .stat-card-8:hover::before { transform: scale(1.3); right: -10%; }
+        .stat-card-8:hover::after { transform: scale(1.4); bottom: -30%; }
         
-        .stat-card-8 .stat-icon-large {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
+        .stat-card-8 .stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.3rem;
+            font-size: 1.1rem;
             flex-shrink: 0;
-            background: rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.18);
             color: white;
-            border: 1px solid rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.12);
+            backdrop-filter: blur(8px);
             transition: all 0.3s ease;
+            position: relative;
+            z-index: 1;
+            margin-bottom: 4px;
         }
-        
-        .stat-card-8:hover .stat-icon-large {
-            transform: scale(1.05) rotate(-5deg);
-            background: rgba(255,255,255,0.25);
+        .stat-card-8:hover .stat-icon {
+            transform: scale(1.05) rotate(-2deg);
+            background: rgba(255,255,255,0.3);
         }
-        
+        .stat-card-8 .stat-content {
+            position: relative;
+            z-index: 1;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .stat-card-8 .stat-label {
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.85);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 0 0 1px 0;
+        }
         .stat-card-8 .stat-number {
             font-size: 1.8rem;
             font-weight: 800;
             color: white;
-            line-height: 1.1;
-            font-family: 'Inter', monospace;
-        }
-        
-        .stat-card-8 .stat-label {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.7);
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
             margin: 0;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
         }
-        
         .stat-card-8 .stat-sub {
             font-size: 0.6rem;
-            color: rgba(255,255,255,0.5);
-            margin: 0;
+            color: rgba(255,255,255,0.9);
+            margin-top: 3px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .stat-card-8 .stat-sub .highlight {
+            color: rgba(255,255,255,0.95);
+            font-weight: 600;
+        }
+        .stat-card-8 .stat-arrow {
+            position: absolute;
+            right: 12px;
+            bottom: 12px;
+            color: rgba(255,255,255,0.12);
+            font-size: 0.7rem;
+            transition: all 0.3s ease;
+            z-index: 1;
+        }
+        .stat-card-8:hover .stat-arrow {
+            transform: translateX(6px);
+            color: rgba(255,255,255,0.4);
         }
         
-        /* Different accent colors for each card - small border indicator */
-        .stat-card-8.green-accent { border-left: 4px solid #34D399; }
-        .stat-card-8.blue-accent { border-left: 4px solid #60A5FA; }
-        .stat-card-8.purple-accent { border-left: 4px solid #A78BFA; }
-        .stat-card-8.orange-accent { border-left: 4px solid #FBBF24; }
-        .stat-card-8.teal-accent { border-left: 4px solid #5EEAD4; }
-        .stat-card-8.pink-accent { border-left: 4px solid #F472B6; }
-        .stat-card-8.red-accent { border-left: 4px solid #F87171; }
-        .stat-card-8.indigo-accent { border-left: 4px solid #818CF8; }
+        /* ================================================================
+           CARD COLOR CLASSES
+           ================================================================ */
+        .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+        .card-blue:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
+        
+        .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+        .card-red:hover { box-shadow: 0 10px 32px rgba(220, 38, 38, 0.4); }
+        
+        .card-green { background: linear-gradient(135deg, #059669, #047857); }
+        .card-green:hover { box-shadow: 0 10px 32px rgba(5, 150, 105, 0.4); }
+        
+        .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
+        .card-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
+        
+        [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
+        [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+        [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
+        [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
         
         /* ================================================================
            FILTER BAR
            ================================================================ */
         .filter-bar {
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            padding: 14px 18px;
-            border: 2px solid var(--border-color);
             display: flex;
             flex-wrap: wrap;
-            gap: 10px;
+            gap: 12px;
+            margin-bottom: 20px;
             align-items: center;
-            margin-bottom: 24px;
-            box-shadow: var(--shadow-sm);
-            position: relative;
+            background: var(--bg-card);
+            padding: 14px 18px;
+            border-radius: 12px;
+            border: 2px solid var(--border-color);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
-        
-        .filter-bar::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--primary-gradient);
-            border-radius: 3px 3px 0 0;
-        }
-        
         .filter-bar .filter-label {
             font-size: 0.7rem;
             font-weight: 600;
@@ -930,249 +844,185 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             text-transform: uppercase;
             letter-spacing: 0.04em;
         }
-        
-        .filter-bar select,
-        .filter-bar input {
+        .filter-bar select, .filter-bar input {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
-            border-radius: 8px;
-            padding: 5px 10px;
-            font-size: 0.75rem;
+            border-radius: 12px;
+            padding: 8px 14px;
+            font-size: 0.8rem;
             color: var(--text-primary);
             outline: none;
             transition: all 0.3s;
+            min-width: 150px;
         }
-        
-        .filter-bar select:focus,
-        .filter-bar input:focus {
+        .filter-bar select:focus, .filter-bar input:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.12);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
         }
-        
-        .filter-bar .btn-filter {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 5px 14px;
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 18px;
             border-radius: 8px;
             font-weight: 600;
-            font-size: 0.7rem;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
             cursor: pointer;
-            transition: all 0.3s;
+            border: none;
+            text-decoration: none;
         }
-        
-        .filter-bar .btn-filter:hover {
-            transform: scale(1.02);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
         }
-        
-        .filter-bar .btn-reset {
+        .btn-primary:hover {
+            background: var(--primary-gradient-strong);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        .btn-outline {
             background: transparent;
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
-            padding: 5px 14px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.7rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
         }
-        
-        .filter-bar .btn-reset:hover {
+        .btn-outline:hover {
+            background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
         }
         
         /* ================================================================
-           CASHIER CARDS - BEAUTIFUL DESIGN
+           CASHIER CARDS
            ================================================================ */
         .cashier-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-            gap: 24px;
+            gap: 20px;
+            margin-bottom: 24px;
         }
-        
         .cashier-card {
             background: var(--bg-card);
-            border-radius: var(--radius-lg);
+            border-radius: 18px;
             border: 2px solid var(--border-color);
             overflow: hidden;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: var(--shadow-sm);
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
             position: relative;
         }
-        
         .cashier-card::before {
             content: '';
             position: absolute;
             top: 0;
             left: 0;
             right: 0;
-            height: 6px;
-            background: var(--primary-gradient-strong);
-            opacity: 0.8;
-            transition: all 0.3s ease;
-            z-index: 2;
+            height: 4px;
+            background: var(--primary-gradient);
+            opacity: 0;
+            transition: opacity 0.3s ease;
         }
-        
         .cashier-card:hover {
-            transform: translateY(-8px);
-            box-shadow: var(--shadow-xl);
+            transform: translateY(-6px);
             border-color: var(--primary);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.12);
         }
+        .cashier-card:hover::before { opacity: 1; }
         
-        .cashier-card:hover::before {
-            opacity: 1;
-            height: 8px;
-        }
-        
-        /* ✅ GREEN HEADER BACKGROUND */
         .cashier-card .card-top {
-            padding: 18px 22px 14px;
-            border-bottom: 2px solid var(--border-color);
+            padding: 16px 20px;
+            background: var(--primary-gradient-strong);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
             display: flex;
             justify-content: space-between;
-            align-items: start;
-            background: var(--primary-gradient-strong);
-            position: relative;
-            overflow: hidden;
-            min-height: 80px;
+            align-items: center;
         }
-        
-        .cashier-card .card-top::after {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 200px;
-            height: 200px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .cashier-card .card-top .name {
-            font-size: 1.1rem;
-            font-weight: 700;
+            font-size: 1rem;
+            font-weight: 600;
             color: white;
-            position: relative;
-            z-index: 1;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.15);
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
-        
         .cashier-card .card-top .name i {
             color: rgba(255,255,255,0.8);
-            margin-right: 8px;
         }
-        
         .cashier-card .card-top .location-text {
             font-size: 0.7rem;
             color: rgba(255,255,255,0.85);
-            margin-top: 4px;
             display: flex;
             align-items: center;
             gap: 4px;
-            position: relative;
-            z-index: 1;
+            margin-top: 2px;
         }
-        
-        .cashier-card .card-top .location-text i {
-            color: rgba(255,255,255,0.6);
-            font-size: 0.65rem;
-        }
-        
-        .cashier-card .card-top .status-badge {
-            padding: 4px 16px;
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 14px;
             border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            position: relative;
-            z-index: 1;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.2);
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: white;
+            letter-spacing: 0.02em;
         }
+        .badge-success { background: #059669; }
+        .badge-danger { background: #DC2626; }
+        .badge-warning { background: #D97706; color: #1E293B; }
+        .badge-info { background: #0B5ED7; }
         
-        .cashier-card .card-top .status-badge.active {
-            background: rgba(52, 211, 153, 0.25);
-            color: #34D399;
-        }
-        
-        .cashier-card .card-top .status-badge.inactive {
-            background: rgba(248, 113, 113, 0.25);
-            color: #F87171;
-        }
-        
-        .cashier-card .card-body {
-            padding: 16px 22px 18px;
-        }
-        
+        .cashier-card .card-body { padding: 16px 20px; }
         .cashier-card .card-body .info-row {
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
             padding: 4px 0;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
         }
-        
         .cashier-card .card-body .info-row i {
             width: 18px;
             color: var(--primary);
             font-size: 0.75rem;
         }
         
+        .revenue-breakdown {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            padding: 8px 0 2px;
+            border-top: 1px solid var(--border-color);
+            margin-top: 8px;
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            flex-wrap: wrap;
+        }
+        .revenue-breakdown .item { display: flex; align-items: center; gap: 4px; }
+        .revenue-breakdown .item .label { font-weight: 500; }
+        .revenue-breakdown .item .amount { font-weight: 700; }
+        .revenue-breakdown .item .amount.blue { color: #0B5ED7; }
+        .revenue-breakdown .item .amount.green { color: #059669; }
+        .revenue-breakdown .item .amount.red { color: #DC2626; }
+        .revenue-breakdown .item .amount.teal { color: #0D9488; }
+        
         .cashier-card .card-stats {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 4px;
-            padding: 10px 18px;
+            padding: 10px 14px;
             background: var(--bg-body);
             border-top: 2px solid var(--border-color);
             border-bottom: 2px solid var(--border-color);
         }
-        
-        [data-theme="dark"] .cashier-card .card-stats {
-            background: #0F172A;
-        }
-        
-        .cashier-card .card-stats .stat-item {
-            text-align: center;
-            padding: 4px 0;
-            border-radius: 6px;
-            transition: all 0.3s ease;
-        }
-        
-        .cashier-card .card-stats .stat-item:hover {
-            background: var(--primary-bg);
-        }
-        
-        [data-theme="dark"] .cashier-card .card-stats .stat-item:hover {
-            background: #1A3A2A;
-        }
-        
-        .cashier-card .card-stats .stat-item .num {
-            font-size: 0.9rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-        
-        .cashier-card .card-stats .stat-item .num.green { color: var(--primary); }
-        .cashier-card .card-stats .stat-item .num.orange { color: #F59E0B; }
+        [data-theme="dark"] .cashier-card .card-stats { background: #0F172A; }
+        .cashier-card .card-stats .stat-item { text-align: center; padding: 4px 0; border-radius: 6px; }
+        .cashier-card .card-stats .stat-item .num { font-size: 0.9rem; font-weight: 700; color: var(--text-primary); }
+        .cashier-card .card-stats .stat-item .num.green { color: #059669; }
+        .cashier-card .card-stats .stat-item .num.orange { color: #D97706; }
         .cashier-card .card-stats .stat-item .num.purple { color: #7C3AED; }
         .cashier-card .card-stats .stat-item .num.teal { color: #0D9488; }
         .cashier-card .card-stats .stat-item .num.red { color: #DC2626; }
-        .cashier-card .card-stats .stat-item .num.blue { color: #0B5ED7; }
-        
-        .cashier-card .card-stats .stat-item .label {
-            font-size: 0.5rem;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            font-weight: 700;
-        }
+        .cashier-card .card-stats .stat-item .label { font-size: 0.5rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; }
         
         .cashier-card .card-actions {
             padding: 12px 18px;
@@ -1181,7 +1031,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             justify-content: flex-end;
             flex-wrap: wrap;
         }
-        
         .cashier-card .card-actions .btn-action {
             padding: 5px 16px;
             border-radius: 8px;
@@ -1197,203 +1046,244 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             align-items: center;
             gap: 4px;
         }
-        
         .cashier-card .card-actions .btn-action:hover {
             border-color: var(--primary);
             color: var(--primary);
             transform: translateY(-2px);
         }
-        
         .cashier-card .card-actions .btn-action.primary {
             background: var(--primary-gradient-strong);
             color: white;
             border-color: var(--primary);
         }
-        
         .cashier-card .card-actions .btn-action.primary:hover {
             background: var(--primary-dark);
             border-color: var(--primary-dark);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(4, 120, 87, 0.35);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
         }
         
-        /* Revenue breakdown */
-        .revenue-breakdown {
-            display: flex;
-            gap: 12px;
-            justify-content: center;
-            padding: 8px 0 2px;
-            border-top: 1px solid var(--border-color);
-            margin-top: 8px;
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-            flex-wrap: wrap;
-        }
-        
-        .revenue-breakdown .item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .revenue-breakdown .item .label { font-weight: 500; }
-        .revenue-breakdown .item .amount { font-weight: 700; }
-        .revenue-breakdown .item .amount.blue { color: #0B5ED7; }
-        .revenue-breakdown .item .amount.green { color: var(--primary); }
-        .revenue-breakdown .item .amount.red { color: #EF4444; }
-        .revenue-breakdown .item .amount.teal { color: #0D9488; }
-        
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 60px 20px;
             color: var(--text-secondary);
+            background: var(--bg-card);
+            border-radius: 18px;
+            border: 2px dashed var(--border-color);
         }
+        .empty-state i { font-size: 3.5rem; color: var(--border-color); margin-bottom: 16px; }
+        .empty-state h3 { font-size: 1.2rem; color: var(--text-primary); margin-bottom: 8px; }
         
-        .empty-state i {
-            font-size: 4rem;
-            color: var(--border-color);
-            margin-bottom: 16px;
+        .page-header-box {
+            background: var(--primary-gradient);
+            border-radius: 16px;
+            padding: 20px 28px;
+            margin-bottom: 24px;
+            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.2);
+            position: relative;
+            overflow: hidden;
         }
-        
-        .empty-state h3 {
-            font-size: 1.3rem;
-            color: var(--text-primary);
-            margin-bottom: 8px;
+        .page-header-box::before {
+            content: '';
+            position: absolute;
+            top: -60%;
+            right: -10%;
+            width: 350px;
+            height: 350px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
         }
-        
-        .empty-state p {
-            font-size: 0.9rem;
-        }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
+        .page-header-box .page-title {
+            color: white;
+            font-size: 1.6rem;
             font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        .page-header-box .page-title .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            backdrop-filter: blur(4px);
+        }
+        .page-header-box .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+            margin-top: 4px;
+        }
+        .page-header-box .page-subtitle strong { color: white; font-weight: 600; }
+        .page-header-box .header-badge {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .page-header-box .header-badge i { opacity: 0.8; }
+        .page-header-box .header-badge.revenue {
+            background: rgba(251, 191, 36, 0.2);
+            border-color: rgba(251, 191, 36, 0.3);
+            color: #FBBF24;
+        }
+        .page-header-box .header-badge.bills {
+            background: rgba(52, 211, 153, 0.2);
+            border-color: rgba(52, 211, 153, 0.3);
+            color: #6EE7B7;
+        }
+        .page-header-box .header-badge.expenses {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: #F87171;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        .btn-outline-light {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 18px;
+            border-radius: 12px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
+        }
+        .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .cashier-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
-            .cards-8-grid { grid-template-columns: repeat(2, 1fr); }
+            .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
+            .sidebar { transform: translateX(-100%); }
+            .sidebar.open { transform: translateX(0); }
         }
-        
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
+            .stats-grid-8 { grid-template-columns: 1fr 1fr; }
             .cashier-grid { grid-template-columns: 1fr; }
-            .cards-8-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
+            .page-header-box .page-title { font-size: 1.3rem; }
+            .page-header-box { padding: 16px 18px; }
+            .stat-card-8 { padding: 14px 16px; min-height: 90px; }
+            .stat-card-8 .stat-number { font-size: 1.4rem; }
+            .stat-card-8 .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
             .filter-bar { flex-direction: column; align-items: stretch; }
-            .cashier-card .card-stats { grid-template-columns: repeat(4, 1fr); }
-            .stat-card-8 .stat-number { font-size: 1.3rem; }
-            .stat-card-8 { padding: 14px 16px; }
-            .stat-card-8 .stat-icon-large { width: 38px; height: 38px; font-size: 1rem; }
+            .filter-bar select, .filter-bar input { width: 100%; min-width: unset; }
         }
-        
         @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .cards-8-grid { grid-template-columns: 1fr; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
+            .stats-grid-8 { grid-template-columns: 1fr; }
+            .stat-card-8 { padding: 12px 14px; min-height: 80px; }
+            .stat-card-8 .stat-number { font-size: 1.2rem; }
+            .stat-card-8 .stat-icon { width: 34px; height: 34px; font-size: 0.85rem; }
+            .page-header-box .page-title { font-size: 1rem; flex-direction: column; align-items: flex-start; }
+            .page-header-box .page-subtitle { font-size: 0.75rem; flex-direction: column; align-items: flex-start; gap: 4px; }
             .cashier-card .card-stats { grid-template-columns: repeat(2, 1fr); }
         }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        
         .animate-fade-in-up {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
-        .toast-custom {
+        #sidebarOverlay {
             position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: white;
-            box-shadow: var(--shadow-lg);
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 45;
+            display: none;
+            backdrop-filter: blur(2px);
         }
-        
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .page-header .btn-outline-light,
-            .filter-bar, .footer, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .cashier-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .page-header {
-                background: #059669 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-title, .page-subtitle, .header-badge, .role-badge-display {
-                color: white !important;
-            }
-            .stat-card-8 { break-inside: avoid; }
-            .cards-8-grid { grid-template-columns: repeat(4, 1fr); }
+        @media (max-width: 1024px) {
+            #sidebarOverlay.show { display: block; }
         }
     </style>
 </head>
 <body>
+
+<div id="sidebarOverlay"></div>
+
+<!-- ================================================================ -->
+<!-- SIDEBAR -->
+<!-- ================================================================ -->
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo" 
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+            <div>
+                <p class="brand-text">Braick Dispensary</p>
+                <p class="brand-sub">Super Admin</p>
+            </div>
+        </div>
+    </div>
+    
+    <nav class="sidebar-nav">
+        <div class="nav-label">Main Menu</div>
+        <a href="/dispensary_system/frontend/pages/admin/dashboard.php" class="sidebar-link"><i class="fas fa-home"></i> Dashboard</a>
+        <a href="/dispensary_system/frontend/pages/admin/employees.php" class="sidebar-link"><i class="fas fa-users"></i> Employees</a>
+        <a href="/dispensary_system/frontend/pages/admin/patients.php" class="sidebar-link"><i class="fas fa-user-injured"></i> Patients</a>
+        
+        <div class="nav-label">Modules</div>
+        <a href="/dispensary_system/frontend/pages/admin/doctors_list.php" class="sidebar-link"><i class="fas fa-user-md"></i> Doctors</a>
+        <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php" class="sidebar-link"><i class="fas fa-prescription"></i> Pharmacy</a>
+        <a href="/dispensary_system/frontend/pages/admin/view_reception.php" class="sidebar-link"><i class="fas fa-headset"></i> Reception</a>
+        <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php" class="sidebar-link"><i class="fas fa-flask"></i> Laboratory</a>
+        <a href="/dispensary_system/frontend/pages/admin/view_cashier.php" class="sidebar-link active"><i class="fas fa-cash-register"></i> Cashier</a>
+        
+        <div class="nav-label">Management</div>
+        <a href="/dispensary_system/frontend/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
+        <a href="/dispensary_system/frontend/pages/admin/departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
+        <a href="/dispensary_system/frontend/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
+        
+        <div class="nav-label">Account</div>
+        <a href="/dispensary_system/frontend/pages/admin/profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> Profile</a>
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+    </nav>
+</aside>
 
 <!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
+        <button id="sidebarToggle" class="icon-btn lg:hidden">
             <i class="fas fa-bars text-lg"></i>
         </button>
-        
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
             <input type="text" id="searchInput" placeholder="Search cashiers..." value="<?= htmlspecialchars($search) ?>">
@@ -1438,9 +1328,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- PAGE HEADER - BLUE BOX -->
     <!-- ================================================================ -->
-    <div class="page-header">
+    <div class="page-header-box animate-fade-in-up">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-cash-register"></i>
@@ -1448,20 +1338,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                <i class="fas fa-store-alt"></i>
                 <strong><?= $total_cashiers ?></strong> cashier branches found
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                <span class="header-badge revenue">
                     <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($financial['total_revenue'], 0) ?> Revenue
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                <span class="header-badge bills">
                     <i class="fas fa-file-invoice"></i> <?= number_format($financial['total_bills']) ?> Bills
                 </span>
-                <span class="header-badge" style="background:rgba(239,68,68,0.2);border-color:rgba(239,68,68,0.3);color:#F87171;">
+                <span class="header-badge expenses">
                     <i class="fas fa-arrow-up"></i> Expenses: TSh <?= number_format($financial['total_expenses'], 0) ?>
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
+        <div style="position:relative;z-index:1;">
             <a href="add_cashier.php" class="btn-outline-light">
                 <i class="fas fa-plus"></i> Add Cashier
             </a>
@@ -1469,104 +1358,97 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- ✅ 8 CARDS - GREEN BACKGROUND LIKE VIEW_CASHIER -->
+    <!-- 8 CARDS - CUSTOM COLORS -->
+    <!-- BLUE, RED, GREEN, BLUE, BLUE, GREEN, ORANGE, RED -->
     <!-- ================================================================ -->
-    <div class="cards-8-grid animate-fade-in-up">
+    <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.05s;">
         
-        <!-- 1. TOTAL REVENUE -->
-        <div class="stat-card-8 green-accent">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-large"><i class="fas fa-money-bill-wave"></i></div>
-                <div>
-                    <p class="stat-label">Total Revenue</p>
-                    <p class="stat-number">TSh <?= number_format($financial['total_revenue'], 0) ?></p>
-                    <p class="stat-sub">From bills + OTC</p>
-                </div>
+        <!-- 1. Total Revenue - BLUE -->
+        <div class="stat-card-8 card-blue">
+            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Total Revenue</p>
+                <p class="stat-number">TSh <?= number_format($financial['total_revenue'], 0) ?></p>
+                <p class="stat-sub">From bills + OTC</p>
             </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 2. TOTAL EXPENSES -->
-        <div class="stat-card-8 red-accent">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-large"><i class="fas fa-arrow-up"></i></div>
-                <div>
-                    <p class="stat-label">Total Expenses</p>
-                    <p class="stat-number">TSh <?= number_format($financial['total_expenses'], 0) ?></p>
-                    <p class="stat-sub">From expenses table</p>
-                </div>
+        <!-- 2. Total Expenses - RED -->
+        <div class="stat-card-8 card-red">
+            <div class="stat-icon"><i class="fas fa-arrow-up"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Total Expenses</p>
+                <p class="stat-number">TSh <?= number_format($financial['total_expenses'], 0) ?></p>
+                <p class="stat-sub">From expenses table</p>
             </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 3. NET PROFIT -->
-        <div class="stat-card-8 blue-accent">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-large"><i class="fas fa-chart-line"></i></div>
-                <div>
-                    <p class="stat-label">Net Profit</p>
-                    <p class="stat-number">TSh <?= number_format($financial['net_profit'], 0) ?></p>
-                    <p class="stat-sub">Revenue - Expenses</p>
-                </div>
+        <!-- 3. Net Profit - GREEN -->
+        <div class="stat-card-8 card-green">
+            <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Net Profit</p>
+                <p class="stat-number">TSh <?= number_format($financial['net_profit'], 0) ?></p>
+                <p class="stat-sub">Revenue - Expenses</p>
             </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 4. PRESCRIPTION REVENUE -->
-        <div class="stat-card-8 purple-accent">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-large"><i class="fas fa-prescription"></i></div>
-                <div>
-                    <p class="stat-label">Prescription Revenue</p>
-                    <p class="stat-number">TSh <?= number_format($financial['prescription_revenue'], 0) ?></p>
-                    <p class="stat-sub">From medication items</p>
-                </div>
+        <!-- 4. Prescription Revenue - BLUE -->
+        <div class="stat-card-8 card-blue">
+            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Prescription Revenue</p>
+                <p class="stat-number">TSh <?= number_format($financial['prescription_revenue'], 0) ?></p>
+                <p class="stat-sub">From medication items</p>
             </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 5. OTC REVENUE -->
-        <div class="stat-card-8 orange-accent">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-large"><i class="fas fa-cash-register"></i></div>
-                <div>
-                    <p class="stat-label">OTC Revenue</p>
-                    <p class="stat-number">TSh <?= number_format($financial['otc_revenue'], 0) ?></p>
-                    <p class="stat-sub">Over-the-counter sales</p>
-                </div>
+        <!-- 5. OTC Revenue - BLUE -->
+        <div class="stat-card-8 card-blue">
+            <div class="stat-icon"><i class="fas fa-cash-register"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">OTC Revenue</p>
+                <p class="stat-number">TSh <?= number_format($financial['otc_revenue'], 0) ?></p>
+                <p class="stat-sub">Over-the-counter sales</p>
             </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 6. PAID BILLS -->
-        <div class="stat-card-8 teal-accent">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-large"><i class="fas fa-check-circle"></i></div>
-                <div>
-                    <p class="stat-label">Paid Bills</p>
-                    <p class="stat-number"><?= number_format($financial['paid_bills']) ?></p>
-                    <p class="stat-sub">Completed payments</p>
-                </div>
+        <!-- 6. Paid Bills - GREEN -->
+        <div class="stat-card-8 card-green">
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Paid Bills</p>
+                <p class="stat-number"><?= number_format($financial['paid_bills']) ?></p>
+                <p class="stat-sub">✅ Completed payments</p>
             </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 7. PENDING BILLS -->
-        <div class="stat-card-8 orange-accent">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-large"><i class="fas fa-clock"></i></div>
-                <div>
-                    <p class="stat-label">Pending Bills</p>
-                    <p class="stat-number"><?= number_format($financial['pending_bills']) ?></p>
-                    <p class="stat-sub">Awaiting payment</p>
-                </div>
+        <!-- 7. Pending Bills - ORANGE -->
+        <div class="stat-card-8 card-orange">
+            <div class="stat-icon"><i class="fas fa-clock"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Pending Bills</p>
+                <p class="stat-number"><?= number_format($financial['pending_bills']) ?></p>
+                <p class="stat-sub">⏳ Awaiting payment</p>
             </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 8. CANCELLED BILLS -->
-        <div class="stat-card-8 red-accent">
-            <div class="flex items-center gap-3">
-                <div class="stat-icon-large"><i class="fas fa-times-circle"></i></div>
-                <div>
-                    <p class="stat-label">Cancelled Bills</p>
-                    <p class="stat-number"><?= number_format($financial['cancelled_bills']) ?></p>
-                    <p class="stat-sub">Voided transactions</p>
-                </div>
+        <!-- 8. Cancelled Bills - RED -->
+        <div class="stat-card-8 card-red">
+            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Cancelled Bills</p>
+                <p class="stat-number"><?= number_format($financial['cancelled_bills']) ?></p>
+                <p class="stat-sub">❌ Voided transactions</p>
             </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
     </div>
@@ -1574,28 +1456,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- FILTER BAR -->
     <!-- ================================================================ -->
-    <div class="filter-bar animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="filter-bar animate-fade-in-up" style="animation-delay:0.1s;">
         <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
-        
-        <form method="GET" action="" class="flex flex-wrap gap-2 items-center w-full">
+        <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
             <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
             
-            <select name="status" class="flex-1 min-w-[120px]">
+            <select name="status" class="flex-1 min-w-[150px]">
                 <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Status</option>
                 <option value="active" <?= $status_filter === 'active' ? 'selected' : '' ?>>Active</option>
                 <option value="inactive" <?= $status_filter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
             </select>
             
-            <input type="text" name="search" placeholder="Search by name, location..." 
-                   value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[180px]">
+            <input type="text" name="search" placeholder="Search by name, location..." value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[200px]">
             
-            <button type="submit" class="btn-filter">
-                <i class="fas fa-search"></i> Apply
-            </button>
-            
-            <a href="cashiers.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-reset">
-                <i class="fas fa-times"></i> Reset
-            </a>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-search"></i> Apply</button>
+            <a href="cashiers.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline"><i class="fas fa-times"></i> Reset</a>
         </form>
     </div>
 
@@ -1603,10 +1478,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- CASHIER GRID -->
     <!-- ================================================================ -->
     <?php if (count($cashiers) > 0): ?>
-        <div class="cashier-grid animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="cashier-grid animate-fade-in-up" style="animation-delay:0.15s;">
             <?php foreach ($cashiers as $cashier): ?>
                 <div class="cashier-card">
-                    <!-- ✅ GREEN HEADER BACKGROUND -->
                     <div class="card-top">
                         <div>
                             <div class="name">
@@ -1618,8 +1492,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <?= htmlspecialchars($cashier['location'] ?? 'N/A') ?>
                             </div>
                         </div>
-                        <span class="status-badge <?= $cashier['status'] === 'active' ? 'active' : 'inactive' ?>">
-                            <?= $cashier['status'] === 'active' ? 'Active' : 'Inactive' ?>
+                        <span class="badge badge-<?= ($cashier['status'] ?? 'active') === 'active' ? 'success' : 'danger' ?>" style="font-size:0.6rem;padding:2px 12px;">
+                            <?= ucfirst($cashier['status'] ?? 'Active') ?>
                         </span>
                     </div>
                     
@@ -1637,11 +1511,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <?= ($cashier['active_cashiers'] ?? 0) ?> Active / <?= ($cashier['total_cashiers'] ?? 0) ?> Cashiers
                         </div>
                         <div class="info-row">
-                            <i class="fas fa-arrow-up" style="color:#EF4444;"></i>
+                            <i class="fas fa-arrow-up" style="color:#DC2626;"></i>
                             Expenses: TSh <?= number_format($cashier['branch_expenses'] ?? 0, 0) ?>
                         </div>
                         
-                        <!-- Revenue Breakdown -->
                         <div class="revenue-breakdown">
                             <span class="item">
                                 <span class="label">Bills:</span>
@@ -1684,16 +1557,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                     
                     <div class="card-actions">
-                        <a href="view_cashier.php?id=<?= $cashier['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                           class="btn-action primary">
+                        <a href="view_cashier.php?id=<?= $cashier['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action primary">
                             <i class="fas fa-eye"></i> View
                         </a>
-                        <a href="edit_cashier.php?id=<?= $cashier['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                           class="btn-action">
+                        <a href="edit_cashier.php?id=<?= $cashier['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action">
                             <i class="fas fa-edit"></i> Edit
                         </a>
-                        <a href="cashier_dashboard.php?id=<?= $cashier['id'] ?>" 
-                           class="btn-action">
+                        <a href="cashier_dashboard.php?id=<?= $cashier['id'] ?>" class="btn-action">
                             <i class="fas fa-chart-bar"></i> Dashboard
                         </a>
                     </div>
@@ -1701,20 +1571,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <?php endforeach; ?>
         </div>
         
-        <div class="text-center text-sm text-gray-500 dark:text-gray-400 py-3">
+        <div class="text-center text-sm text-gray-500 dark:text-gray-400 py-2">
             Showing <strong><?= count($cashiers) ?></strong> cashier branch<?= count($cashiers) > 1 ? 'es' : '' ?>
         </div>
     <?php else: ?>
-        <div class="empty-state animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="empty-state animate-fade-in-up">
             <i class="fas fa-cash-register"></i>
             <h3>No Cashiers Found</h3>
-            <p>Try adjusting your filters or <a href="add_cashier.php" class="text-green-600 hover:underline">add a new cashier</a></p>
+            <p>Try adjusting your filters or <a href="add_cashier.php" class="text-primary hover:underline">add a new cashier</a></p>
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1730,23 +1598,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1776,48 +1630,66 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
-    sidebarToggle?.addEventListener('click', function() {
+    var overlay = document.getElementById('sidebarOverlay');
+    
+    function toggleSidebar() {
         sidebar.classList.toggle('open');
+        overlay.classList.toggle('show');
+        document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
+    }
+    
+    sidebarToggle?.addEventListener('click', function(e) {
+        e.stopPropagation();
+        toggleSidebar();
     });
     
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
+    overlay?.addEventListener('click', function() {
+        sidebar.classList.remove('open');
+        overlay.classList.remove('show');
+        document.body.style.overflow = '';
+    });
+    
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+    });
+    
+    window.addEventListener('resize', function() {
+        if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('show');
+            document.body.style.overflow = '';
         }
     });
 
+    function switchBranch(branchId) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('branch', branchId);
+        url.searchParams.delete('error');
+        window.location.href = url.toString();
+    }
+
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
     function performSearch() {
         var query = searchInput.value.trim();
-        var branch = '<?= $selected_branch_id ?>';
-        var status = '<?= $status_filter ?>';
-        var url = 'cashiers.php?branch=' + encodeURIComponent(branch) + '&status=' + encodeURIComponent(status);
         if (query.length > 0) {
-            url += '&search=' + encodeURIComponent(query);
+            var url = new URL(window.location.href);
+            url.searchParams.set('search', query);
+            window.location.href = url.toString();
         }
-        window.location.href = url;
     }
     
     searchBtn?.addEventListener('click', performSearch);
     searchInput?.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') performSearch();
     });
-
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('branch_id');
-        window.location.href = url.toString();
-    }
 
     function updateDateTime() {
         var now = new Date();
@@ -1829,61 +1701,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         });
         var dtEl = document.getElementById('currentDateTime');
         if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-
-    // Check if there was an error in URL
-    <?php if (isset($_GET['error']) && $_GET['error'] === 'invalid_id'): ?>
-        showToast('⚠️ Error', 'Invalid cashier ID provided', 'error');
-        // Clean URL
-        var cleanUrl = window.location.href.split('?')[0];
-        if (window.history && window.history.replaceState) {
-            window.history.replaceState({}, document.title, cleanUrl);
-        }
-    <?php endif; ?>
-
-    console.log('%c💰 Braick Dispensary - Cashiers (GREEN BACKGROUND CARDS)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Total Cashiers: <?= $total_cashiers ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ 8 CARDS WITH GREEN BACKGROUND:', 'font-size:13px; font-weight:bold; color:#0B5ED7;');
-    console.log('  1. Total Revenue: TSh <?= number_format($financial['total_revenue'], 0) ?>', 'font-size:12px; color:#34D399;');
-    console.log('  2. Total Expenses: TSh <?= number_format($financial['total_expenses'], 0) ?> (FROM expenses TABLE)', 'font-size:12px; color:#F87171;');
-    console.log('  3. Net Profit: TSh <?= number_format($financial['net_profit'], 0) ?>', 'font-size:12px; color:#60A5FA;');
-    console.log('  4. Prescription Revenue: TSh <?= number_format($financial['prescription_revenue'], 0) ?>', 'font-size:12px; color:#A78BFA;');
-    console.log('  5. OTC Revenue: TSh <?= number_format($financial['otc_revenue'], 0) ?>', 'font-size:12px; color:#FBBF24;');
-    console.log('  6. Paid Bills: <?= number_format($financial['paid_bills']) ?>', 'font-size:12px; color:#5EEAD4;');
-    console.log('  7. Pending Bills: <?= number_format($financial['pending_bills']) ?>', 'font-size:12px; color:#FBBF24;');
-    console.log('  8. Cancelled Bills: <?= number_format($financial['cancelled_bills']) ?>', 'font-size:12px; color:#F87171;');
-    console.log('%c✅ GREEN HEADER BACKGROUND on cashier cards', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ All branches shown when "All Branches" selected', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
+    console.log('%c💰 Braick Dispensary - Cashiers', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Total Cashiers: <?= $total_cashiers ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ 8 CARDS COLORS:', 'font-size:13px; font-weight:bold; color:#34D399;');
+    console.log('  1. Total Revenue: 🔵 BLUE', 'font-size:12px; color:#60A5FA;');
+    console.log('  2. Total Expenses: 🔴 RED', 'font-size:12px; color:#F87171;');
+    console.log('  3. Net Profit: 🟢 GREEN', 'font-size:12px; color:#34D399;');
+    console.log('  4. Prescription Revenue: 🔵 BLUE', 'font-size:12px; color:#60A5FA;');
+    console.log('  5. OTC Revenue: 🔵 BLUE', 'font-size:12px; color:#60A5FA;');
+    console.log('  6. Paid Bills: 🟢 GREEN', 'font-size:12px; color:#34D399;');
+    console.log('  7. Pending Bills: 🟠 ORANGE', 'font-size:12px; color:#FBBF24;');
+    console.log('  8. Cancelled Bills: 🔴 RED', 'font-size:12px; color:#F87171;');
+    console.log('%c✅ ERROR "invalid cashier ID" - FIXED', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

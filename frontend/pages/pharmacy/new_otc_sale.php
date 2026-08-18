@@ -1,8 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
-// PHARMACY - NEW OTC SALE (WITH DISCOUNT - AMOUNT INPUT)
-// FIXED: Login session - no default user bypass
+// PHARMACY - NEW OTC SALE (WITH 2 OPTIONS: PAY NOW OR SEND TO CASHIER)
+// FIXED: Inserts items into otc_sale_items
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -47,7 +47,7 @@ $stmt->execute([$user_branch_id]);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
-// PROCESS OTC SALE - SENDS BILL TO CASHIER
+// PROCESS OTC SALE - WITH 2 OPTIONS
 // ================================================================
 $message = '';
 $message_type = '';
@@ -58,6 +58,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $payment_method = $_POST['payment_method'] ?? 'cash';
     $discount_amount = (float)($_POST['discount_amount'] ?? 0);
+    $payment_option = $_POST['payment_option'] ?? 'cashier'; // 'cashier' or 'self'
     $items = json_decode($_POST['items_json'] ?? '[]', true);
     
     // Calculate totals
@@ -102,9 +103,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $bill_number = 'BILL-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
             // ================================================================
-            // 1. CREATE PATIENT BILL (for Cashier)
+            // 1. CREATE PATIENT BILL
             // ================================================================
-            // Check if patient exists with this phone
             $patient_id = null;
             if (!empty($customer_phone)) {
                 $stmt_check = $db->prepare("SELECT id FROM patients WHERE phone = ? AND branch_id = ? LIMIT 1");
@@ -115,7 +115,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
             
-            // If no patient found, create one
             if (!$patient_id) {
                 $patient_code = 'PAT-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                 $stmt = $db->prepare("
@@ -126,6 +125,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $patient_id = $db->lastInsertId();
             }
             
+            // Determine payment status
+            $payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
+            $bill_status = ($payment_option === 'self') ? 'paid' : 'pending';
+            $balance = ($payment_option === 'self') ? 0 : $grand_total;
+            
             // Insert bill
             $stmt = $db->prepare("
                 INSERT INTO patient_bills (
@@ -133,7 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     subtotal, total_amount, discount_amount, balance, 
                     status, created_by, branch_id,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW(), NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             ");
             $stmt->execute([
                 $bill_number,
@@ -141,7 +145,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $subtotal,
                 $grand_total,
                 $discount_amount,
-                $grand_total,
+                $balance,
+                $bill_status,
                 $user_id,
                 $user_branch_id
             ]);
@@ -156,44 +161,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         bill_id, item_type, item_name, 
                         quantity, unit_price, total_price,
                         payment_status, is_paid, status, created_at
-                    ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW())
+                    ) VALUES (?, 'medication', ?, ?, ?, ?, ?, ?, 'pending', NOW())
                 ");
+                $is_paid = ($payment_option === 'self') ? 1 : 0;
+                $item_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
                 $stmt->execute([
                     $bill_id,
                     $item['name'],
                     $item['quantity'],
                     $item['price'],
-                    $item['total']
+                    $item['total'],
+                    $item_payment_status,
+                    $is_paid
                 ]);
             }
             
             // ================================================================
             // 3. CREATE OTC SALE RECORD
             // ================================================================
+            $otc_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
+            $payment_notes = ($payment_option === 'self') ? 'Paid by Pharmacy (Self)' : 'OTC Sale - Bill sent to Cashier';
+            
             $stmt = $db->prepare("
                 INSERT INTO otc_sales (
                     sale_number, customer_name, customer_phone, 
-                    total_amount, discount_amount, net_amount, bill_id,
+                    patient_id, total_amount, discount_amount, net_amount, bill_id,
                     payment_method, payment_status, sold_by, branch_id, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt->execute([
                 $sale_number,
                 $customer_name,
                 $customer_phone,
+                $patient_id,
                 $subtotal,
                 $discount_amount,
                 $grand_total,
                 $bill_id,
                 $payment_method,
+                $otc_payment_status,
                 $user_id,
                 $user_branch_id,
-                'OTC Sale - Bill sent to Cashier'
+                $payment_notes
             ]);
             $sale_id = $db->lastInsertId();
             
             // ================================================================
-            // ✅ 4. INSERT OTC SALE ITEMS (FIXED - WAS MISSING)
+            // ✅ 4. INSERT OTC SALE ITEMS (FIXED - CRITICAL)
             // ================================================================
             foreach ($items as $item) {
                 // Get inventory_id for the medicine
@@ -206,6 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $inv = $stmt->fetch(PDO::FETCH_ASSOC);
                 $inventory_id = $inv['id'] ?? null;
                 
+                // ✅ INSERT INTO otc_sale_items
                 $stmt = $db->prepare("
                     INSERT INTO otc_sale_items (
                         sale_id, inventory_id, medicine_name, 
@@ -233,7 +248,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ");
                 $stmt->execute([$item['quantity'], $item['name'], $user_branch_id]);
                 
-                // Get inventory_id for stock movement
                 $stmt = $db->prepare("
                     SELECT id FROM medications_inventory 
                     WHERE medication_name = ? AND branch_id = ? AND status = 'active'
@@ -247,14 +261,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $stmt = $db->prepare("
                         INSERT INTO stock_movements 
                         (inventory_id, sale_type, sale_id, quantity, movement_type, performed_by, notes)
-                        VALUES (?, 'otc', ?, ?, 'out', ?, 'OTC Sale - Bill sent to Cashier')
+                        VALUES (?, 'otc', ?, ?, 'out', ?, ?)
                     ");
-                    $stmt->execute([$inventory_id, $sale_id, $item['quantity'], $user_id]);
+                    $stmt->execute([
+                        $inventory_id, 
+                        $sale_id, 
+                        $item['quantity'], 
+                        $user_id,
+                        $payment_notes
+                    ]);
                 }
             }
             
             // ================================================================
-            // 6. UPDATE OTC SALE WITH BILL ID
+            // 6. IF PAYMENT OPTION IS 'self', CREATE PAYMENT RECORD
+            // ================================================================
+            if ($payment_option === 'self' && $grand_total > 0) {
+                $receipt_number = 'RCP-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
+                
+                $stmt = $db->prepare("
+                    INSERT INTO payments (
+                        receipt_number, bill_id, patient_id, amount, 
+                        payment_method, received_by, branch_id, received_at, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+                ");
+                $stmt->execute([
+                    $receipt_number,
+                    $bill_id,
+                    $patient_id,
+                    $grand_total,
+                    $payment_method,
+                    $user_id,
+                    $user_branch_id,
+                    'OTC Sale - Paid by Pharmacy (Self)'
+                ]);
+                
+                // Update bill items to paid
+                $stmt = $db->prepare("
+                    UPDATE bill_items 
+                    SET payment_status = 'paid', is_paid = 1, paid_at = NOW()
+                    WHERE bill_id = ?
+                ");
+                $stmt->execute([$bill_id]);
+            }
+            
+            // ================================================================
+            // 7. UPDATE OTC SALE WITH BILL ID
             // ================================================================
             $stmt = $db->prepare("
                 UPDATE otc_sales 
@@ -265,10 +317,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             $db->commit();
             
-            $message = "✅ OTC Sale completed! Bill sent to Cashier.";
-            $message_type = 'success';
+            if ($payment_option === 'self') {
+                $message = "✅ OTC Sale completed and PAID! Receipt #" . ($receipt_number ?? 'N/A');
+                $message_type = 'success';
+            } else {
+                $message = "✅ OTC Sale completed! Bill sent to Cashier.";
+                $message_type = 'success';
+            }
             
-            // Redirect to pending prescriptions or show success
+            // Redirect after 2 seconds
             echo '<script>
                 setTimeout(function() {
                     window.location.href = "otc_history.php?success=1";
@@ -785,44 +842,106 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         font-weight: 800;
     }
     
-    .cart-summary {
-        background: var(--bg-body);
-        border-radius: 12px;
-        padding: 16px 20px;
-        margin-top: 16px;
-        border: 2px solid var(--border-color);
-    }
-    
-    .cart-summary .summary-row {
+    .payment-options {
         display: flex;
-        justify-content: space-between;
-        padding: 4px 0;
-        font-size: 0.9rem;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-top: 8px;
     }
     
-    .cart-summary .summary-row .label {
-        color: var(--text-secondary);
+    .payment-option-card {
+        flex: 1;
+        min-width: 200px;
+        padding: 16px 20px;
+        border: 2px solid var(--border-color);
+        border-radius: 12px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        background: var(--bg-card);
+        display: flex;
+        align-items: center;
+        gap: 14px;
     }
     
-    .cart-summary .summary-row .value {
-        font-weight: 600;
-        color: var(--text-primary);
+    .payment-option-card:hover {
+        border-color: var(--primary);
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-md);
     }
     
-    .cart-summary .summary-row.total-row {
-        border-top: 2px solid var(--border-color);
-        padding-top: 8px;
-        margin-top: 4px;
-        font-size: 1.05rem;
+    .payment-option-card.active {
+        border-color: var(--primary);
+        background: var(--primary-bg);
+        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
     }
     
-    .cart-summary .summary-row.total-row .value {
+    .payment-option-card .option-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        flex-shrink: 0;
+    }
+    
+    .payment-option-card .option-icon.cashier {
+        background: var(--purple-light);
+        color: var(--purple);
+    }
+    
+    .payment-option-card .option-icon.self {
+        background: var(--success-light);
         color: var(--success);
-        font-weight: 700;
     }
     
-    .cart-summary .summary-row.discount-row .value {
-        color: var(--gold);
+    [data-theme="dark"] .payment-option-card .option-icon.cashier {
+        background: #2D1B5F;
+        color: #A78BFA;
+    }
+    
+    [data-theme="dark"] .payment-option-card .option-icon.self {
+        background: #1A3A2A;
+        color: #34D399;
+    }
+    
+    .payment-option-card .option-content h4 {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin: 0;
+    }
+    
+    .payment-option-card .option-content p {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        margin: 2px 0 0 0;
+    }
+    
+    .payment-option-card .option-radio {
+        margin-left: auto;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 2px solid var(--border-color);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.3s ease;
+        flex-shrink: 0;
+    }
+    
+    .payment-option-card.active .option-radio {
+        border-color: var(--primary);
+        background: var(--primary);
+    }
+    
+    .payment-option-card.active .option-radio::after {
+        content: '✓';
+        color: white;
+        font-size: 12px;
+        font-weight: 700;
     }
     
     .payment-methods {
@@ -1076,6 +1195,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .discount-display .info-item {
             justify-content: space-between;
         }
+        .payment-options {
+            flex-direction: column;
+        }
+        .payment-option-card {
+            min-width: unset;
+        }
         .payment-methods {
             justify-content: center;
         }
@@ -1122,8 +1247,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-pills mr-1"></i> <?= count($medicines) ?> medicines in stock
                 </span>
-                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200">
-                    <i class="fas fa-receipt mr-1"></i> Bill sent to Cashier
+                <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
+                    <i class="fas fa-cash-register mr-1"></i> 2 Payment Options
                 </span>
             </p>
         </div>
@@ -1151,8 +1276,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <div class="bill-info-box">
         <i class="fas fa-info-circle"></i>
         <span>
-            <strong>💳 Bill Flow:</strong> 
-            Complete sale → Bill sent to <strong>Cashier</strong> → Customer pays at Cashier → Stock updates automatically
+            <strong>💳 Choose Payment Option:</strong> 
+            <strong style="color:var(--purple);">1. Send to Cashier</strong> — Bill goes to Cashier for payment | 
+            <strong style="color:var(--success);">2. Pay Now (Self)</strong> — Pharmacy collects payment immediately
         </span>
     </div>
 
@@ -1164,6 +1290,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <input type="hidden" name="action" value="complete_sale">
             <input type="hidden" name="items_json" id="itemsJson" value="[]">
             <input type="hidden" name="discount_amount" id="discountAmountHidden" value="0">
+            <input type="hidden" name="payment_option" id="paymentOptionHidden" value="cashier">
             
             <!-- Customer Information -->
             <div class="section-title">
@@ -1279,11 +1406,49 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
             </div>
             
-            <!-- Payment Method -->
+            <!-- ================================================================ -->
+            <!-- PAYMENT OPTIONS - 2 OPTIONS -->
+            <!-- ================================================================ -->
             <div class="mt-4 pt-4 border-t border-gray-200">
                 <div class="section-title">
                     <i class="fas fa-credit-card"></i>
+                    Payment Option
+                    <span class="badge-count">Choose</span>
+                </div>
+                
+                <div class="payment-options">
+                    <!-- Option 1: Send to Cashier -->
+                    <div class="payment-option-card active" data-option="cashier" onclick="selectPaymentOption('cashier')">
+                        <div class="option-icon cashier">
+                            <i class="fas fa-cash-register"></i>
+                        </div>
+                        <div class="option-content">
+                            <h4>Send to Cashier</h4>
+                            <p>Bill sent to Cashier for payment</p>
+                        </div>
+                        <div class="option-radio"></div>
+                    </div>
+                    
+                    <!-- Option 2: Pay Now (Self) -->
+                    <div class="payment-option-card" data-option="self" onclick="selectPaymentOption('self')">
+                        <div class="option-icon self">
+                            <i class="fas fa-hand-holding-usd"></i>
+                        </div>
+                        <div class="option-content">
+                            <h4>Pay Now (Self)</h4>
+                            <p>Pharmacy collects payment immediately</p>
+                        </div>
+                        <div class="option-radio"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Payment Method (for self payment) -->
+            <div class="mt-3" id="paymentMethodSection">
+                <div class="section-title" style="border-bottom: none; padding-bottom: 4px; margin-bottom: 8px;">
+                    <i class="fas fa-money-bill-wave"></i>
                     Payment Method
+                    <span class="badge-count" style="background:var(--success);">Optional</span>
                 </div>
                 
                 <div class="payment-methods">
@@ -1310,12 +1475,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     </button>
                 </div>
                 <input type="hidden" name="payment_method" id="selectedPaymentMethod" value="cash">
+                <p class="text-xs text-gray-400 mt-2">
+                    <i class="fas fa-info-circle"></i> Payment method is used when "Pay Now (Self)" is selected
+                </p>
             </div>
             
             <!-- Action Buttons -->
             <div class="action-buttons">
                 <button type="submit" class="btn-complete-sale" id="completeSaleBtn" disabled>
-                    <i class="fas fa-receipt"></i> Complete Sale & Send to Cashier
+                    <i class="fas fa-receipt"></i> Complete Sale
                 </button>
                 <button type="button" class="btn-clear-cart" onclick="clearCart()">
                     <i class="fas fa-trash"></i> Clear Cart
@@ -1364,6 +1532,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     var currentDiscountAmount = 0;
     var subtotal = 0;
     var grandTotal = 0;
+    var selectedPaymentOption = 'cashier';
 
     // ================================================================
     // MEDICINE SELECT - UPDATE PRICE
@@ -1375,6 +1544,41 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             document.getElementById('medicinePrice').value = price;
         }
     });
+
+    // ================================================================
+    // SELECT PAYMENT OPTION
+    // ================================================================
+    function selectPaymentOption(option) {
+        selectedPaymentOption = option;
+        document.getElementById('paymentOptionHidden').value = option;
+        
+        document.querySelectorAll('.payment-option-card').forEach(function(card) {
+            card.classList.remove('active');
+        });
+        document.querySelector('[data-option="' + option + '"]').classList.add('active');
+        
+        // Update button text
+        var btn = document.getElementById('completeSaleBtn');
+        if (option === 'self') {
+            btn.innerHTML = '<i class="fas fa-hand-holding-usd"></i> Pay Now & Complete Sale';
+            btn.style.background = 'linear-gradient(135deg, #059669, #047857)';
+        } else {
+            btn.innerHTML = '<i class="fas fa-receipt"></i> Send to Cashier';
+            btn.style.background = 'linear-gradient(135deg, #7C3AED, #6D28D9)';
+        }
+    }
+
+    // ================================================================
+    // SELECT PAYMENT METHOD
+    // ================================================================
+    function selectPaymentMethod(method) {
+        document.querySelectorAll('.method-btn').forEach(function(btn) {
+            btn.classList.remove('active');
+        });
+        var btn = document.querySelector('[data-method="' + method + '"]');
+        if (btn) btn.classList.add('active');
+        document.getElementById('selectedPaymentMethod').value = method;
+    }
 
     // ================================================================
     // ADD TO CART
@@ -1596,18 +1800,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // SELECT PAYMENT METHOD
-    // ================================================================
-    function selectPaymentMethod(method) {
-        document.querySelectorAll('.method-btn').forEach(function(btn) {
-            btn.classList.remove('active');
-        });
-        var btn = document.querySelector('[data-method="' + method + '"]');
-        if (btn) btn.classList.add('active');
-        document.getElementById('selectedPaymentMethod').value = method;
-    }
-
-    // ================================================================
     // DARK MODE
     // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
@@ -1709,14 +1901,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c💊 Braick - New OTC Sale (FIXED - Inserts otc_sale_items)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c💊 Braick - New OTC Sale (FIXED - 2 Options)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Medicines in stock: <?= count($medicines) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Discount: Enter amount in TSh (not percentage)', 'font-size:13px; color:#F59E0B;');
-    console.log('%c💳 Bill sent to Cashier for payment', 'font-size:13px; color:#059669;');
+    console.log('%c✅ 2 OPTIONS:', 'font-size:13px; color:#34D399;');
+    console.log('  📤 1. Send to Cashier - Bill goes to Cashier', 'font-size:12px; color:#7C3AED;');
+    console.log('  💳 2. Pay Now (Self) - Pharmacy collects payment', 'font-size:12px; color:#059669;');
     console.log('%c✅ otc_sale_items now inserted correctly', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
