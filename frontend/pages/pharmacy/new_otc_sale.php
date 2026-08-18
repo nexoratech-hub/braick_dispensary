@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
 // PHARMACY - NEW OTC SALE (WITH 2 OPTIONS: PAY NOW OR SEND TO CASHIER)
-// FIXED: Inserts items into otc_sale_items
+// FIXED: Dark Mode works with header button (like inventory.php)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -24,6 +24,7 @@ $user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
 $user_username = $_SESSION['username'] ?? 'pharmacy';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // INCLUDE CONFIG
@@ -47,6 +48,34 @@ $stmt->execute([$user_branch_id]);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
+// GET LOW STOCK COUNT
+// ================================================================
+$low_stock_count = 0;
+try {
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM medications_inventory 
+        WHERE branch_id = ? AND quantity <= reorder_level AND status = 'active'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $low_stock_count = $stmt->fetch()['count'] ?? 0;
+} catch (Exception $e) {
+    $low_stock_count = 0;
+}
+
+// ================================================================
+// GET PENDING PRESCRIPTIONS COUNT
+// ================================================================
+$pending_prescriptions = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
+    $stmt->execute([$user_branch_id]);
+    $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
+} catch (Exception $e) {
+    $pending_prescriptions = 0;
+}
+
+// ================================================================
 // PROCESS OTC SALE - WITH 2 OPTIONS
 // ================================================================
 $message = '';
@@ -58,10 +87,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $payment_method = $_POST['payment_method'] ?? 'cash';
     $discount_amount = (float)($_POST['discount_amount'] ?? 0);
-    $payment_option = $_POST['payment_option'] ?? 'cashier'; // 'cashier' or 'self'
+    $payment_option = $_POST['payment_option'] ?? 'cashier';
     $items = json_decode($_POST['items_json'] ?? '[]', true);
     
-    // Calculate totals
     $subtotal = 0;
     foreach ($items as &$item) {
         $item['total'] = $item['quantity'] * $item['price'];
@@ -74,13 +102,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $grand_total = $subtotal - $discount_amount;
     if ($grand_total < 0) $grand_total = 0;
     
-    // Validation
     $errors = [];
     if (empty($items)) {
         $errors[] = 'Please add at least one medicine';
     }
     
-    // Check stock
     $stock_errors = [];
     foreach ($items as $item) {
         $stmt = $db->prepare("SELECT quantity FROM medications_inventory WHERE id = ? AND branch_id = ?");
@@ -102,9 +128,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $sale_number = 'OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             $bill_number = 'BILL-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
             
-            // ================================================================
-            // 1. CREATE PATIENT BILL
-            // ================================================================
             $patient_id = null;
             if (!empty($customer_phone)) {
                 $stmt_check = $db->prepare("SELECT id FROM patients WHERE phone = ? AND branch_id = ? LIMIT 1");
@@ -125,12 +148,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $patient_id = $db->lastInsertId();
             }
             
-            // Determine payment status
             $payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
             $bill_status = ($payment_option === 'self') ? 'paid' : 'pending';
             $balance = ($payment_option === 'self') ? 0 : $grand_total;
             
-            // Insert bill
             $stmt = $db->prepare("
                 INSERT INTO patient_bills (
                     bill_number, patient_id, 
@@ -152,9 +173,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ]);
             $bill_id = $db->lastInsertId();
             
-            // ================================================================
-            // 2. ADD BILL ITEMS
-            // ================================================================
             foreach ($items as $item) {
                 $stmt = $db->prepare("
                     INSERT INTO bill_items (
@@ -176,9 +194,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ]);
             }
             
-            // ================================================================
-            // 3. CREATE OTC SALE RECORD
-            // ================================================================
             $otc_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
             $payment_notes = ($payment_option === 'self') ? 'Paid by Pharmacy (Self)' : 'OTC Sale - Bill sent to Cashier';
             
@@ -206,11 +221,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ]);
             $sale_id = $db->lastInsertId();
             
-            // ================================================================
-            // ✅ 4. INSERT OTC SALE ITEMS (FIXED - CRITICAL)
-            // ================================================================
             foreach ($items as $item) {
-                // Get inventory_id for the medicine
                 $stmt = $db->prepare("
                     SELECT id FROM medications_inventory 
                     WHERE medication_name = ? AND branch_id = ? AND status = 'active'
@@ -220,7 +231,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $inv = $stmt->fetch(PDO::FETCH_ASSOC);
                 $inventory_id = $inv['id'] ?? null;
                 
-                // ✅ INSERT INTO otc_sale_items
                 $stmt = $db->prepare("
                     INSERT INTO otc_sale_items (
                         sale_id, inventory_id, medicine_name, 
@@ -237,9 +247,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ]);
             }
             
-            // ================================================================
-            // 5. UPDATE STOCK
-            // ================================================================
             foreach ($items as $item) {
                 $stmt = $db->prepare("
                     UPDATE medications_inventory 
@@ -273,9 +280,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
             
-            // ================================================================
-            // 6. IF PAYMENT OPTION IS 'self', CREATE PAYMENT RECORD
-            // ================================================================
             if ($payment_option === 'self' && $grand_total > 0) {
                 $receipt_number = 'RCP-OTC-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                 
@@ -296,7 +300,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     'OTC Sale - Paid by Pharmacy (Self)'
                 ]);
                 
-                // Update bill items to paid
                 $stmt = $db->prepare("
                     UPDATE bill_items 
                     SET payment_status = 'paid', is_paid = 1, paid_at = NOW()
@@ -305,9 +308,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $stmt->execute([$bill_id]);
             }
             
-            // ================================================================
-            // 7. UPDATE OTC SALE WITH BILL ID
-            // ================================================================
             $stmt = $db->prepare("
                 UPDATE otc_sales 
                 SET bill_id = ?, updated_at = NOW() 
@@ -325,7 +325,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $message_type = 'success';
             }
             
-            // Redirect after 2 seconds
             echo '<script>
                 setTimeout(function() {
                     window.location.href = "otc_history.php?success=1";
@@ -346,28 +345,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // ================================================================
 // GET STATISTICS FOR SIDEBAR
 // ================================================================
-$pending_prescriptions = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
-    $stmt->execute([$user_branch_id]);
-    $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
-} catch (Exception $e) {
-    $pending_prescriptions = 0;
-}
-
-$low_stock_count = 0;
-try {
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM medications_inventory 
-        WHERE branch_id = ? AND quantity <= reorder_level AND status = 'active'
-    ");
-    $stmt->execute([$user_branch_id]);
-    $low_stock_count = $stmt->fetch()['count'] ?? 0;
-} catch (Exception $e) {
-    $low_stock_count = 0;
-}
-
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
@@ -377,20 +354,27 @@ try {
     $unread_notifications = 0;
 }
 
-$profile_pic = $_SESSION['profile_pic'] ?? '';
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// ✅ INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
+<!-- STYLES - PAGE-SPECIFIC (Dark mode compatible) -->
 <!-- ================================================================ -->
 <style>
     :root {
@@ -431,6 +415,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         --text-muted: #64748B;
         --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
         --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
+        --primary-light: #1E3A5F;
+        --success-light: #1A3A2A;
+        --warning-light: #3D2E0A;
+        --danger-light: #3A1A1A;
     }
     
     .sale-form-card {
@@ -589,7 +577,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     .cart-item:hover {
-        background: var(--primary-bg);
+        background: var(--primary-light);
     }
     
     .cart-item:last-child {
@@ -871,7 +859,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .payment-option-card.active {
         border-color: var(--primary);
-        background: var(--primary-bg);
+        background: var(--primary-light);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
     }
     
@@ -973,7 +961,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     
     .payment-methods .method-btn.active {
         border-color: var(--primary);
-        background: var(--primary-bg);
+        background: var(--primary-light);
         color: var(--primary);
         box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
     }
@@ -1057,32 +1045,249 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         transform: translateY(-2px);
     }
     
-    .bill-info-box {
-        background: var(--primary-bg);
-        border: 2px solid var(--primary);
-        border-radius: 10px;
-        padding: 12px 18px;
-        margin-top: 12px;
+    /* ================================================================
+       PAGE HEADER - BLUE BACKGROUND
+       ================================================================ */
+    .page-header-blue {
+        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        border-radius: 16px;
+        padding: 24px 32px;
+        margin-bottom: 24px;
+        box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+        position: relative;
+        overflow: hidden;
+        color: white;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+    }
+    
+    .page-header-blue::before {
+        content: '';
+        position: absolute;
+        top: -60%;
+        right: -10%;
+        width: 400px;
+        height: 400px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+    
+    .page-header-blue .page-title {
+        color: white;
+        font-size: 1.6rem;
+        font-weight: 700;
         display: flex;
         align-items: center;
-        gap: 12px;
-        font-size: 0.85rem;
-        color: var(--primary);
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
     }
     
-    .bill-info-box i {
+    .page-header-blue .page-title i {
+        font-size: 1.8rem;
+        opacity: 0.9;
+    }
+    
+    .page-header-blue .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+        margin-top: 4px;
+    }
+    
+    .page-header-blue .page-subtitle strong {
+        color: white;
+        font-weight: 600;
+    }
+    
+    .page-header-blue .stat-chip {
+        background: rgba(255,255,255,0.12);
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        color: rgba(255,255,255,0.9);
+        border: 1px solid rgba(255,255,255,0.1);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        backdrop-filter: blur(4px);
+    }
+    
+    .page-header-blue .stat-chip i {
+        opacity: 0.8;
+    }
+    
+    .page-header-blue .btn-outline-light {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 16px;
+        border-radius: 10px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+    }
+    
+    .page-header-blue .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    
+    /* ================================================================
+       2 CARDS: BLUE + ORANGE
+       ================================================================ */
+    .stats-2-cards {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    
+    .stat-card-2 {
+        border-radius: 14px;
+        padding: 18px 22px;
+        border: none;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        color: white;
+        position: relative;
+        overflow: hidden;
+        min-height: 100px;
+        cursor: default;
+    }
+    
+    .stat-card-2::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 160px;
+        height: 160px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.5s ease;
+    }
+    
+    .stat-card-2::after {
+        content: '';
+        position: absolute;
+        bottom: -40%;
+        left: -10%;
+        width: 120px;
+        height: 120px;
+        background: rgba(255,255,255,0.04);
+        border-radius: 50%;
+        pointer-events: none;
+        transition: all 0.5s ease;
+    }
+    
+    .stat-card-2:hover {
+        transform: translateY(-4px) scale(1.01);
+        box-shadow: 0 10px 32px rgba(0,0,0,0.2);
+    }
+    
+    .stat-card-2:hover::before { transform: scale(1.3); right: -10%; }
+    .stat-card-2:hover::after { transform: scale(1.4); bottom: -30%; }
+    
+    .stat-card-2 .stat-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         font-size: 1.2rem;
+        flex-shrink: 0;
+        background: rgba(255,255,255,0.18);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.12);
+        backdrop-filter: blur(8px);
+        transition: all 0.3s ease;
+        position: relative;
+        z-index: 1;
     }
     
-    .bill-info-box strong {
-        font-weight: 700;
+    .stat-card-2:hover .stat-icon {
+        transform: scale(1.05) rotate(-2deg);
+        background: rgba(255,255,255,0.3);
     }
     
-    [data-theme="dark"] .bill-info-box {
-        background: #1E3A5F;
-        border-color: #3B82F6;
-        color: #93C5FD;
+    .stat-card-2 .stat-content {
+        position: relative;
+        z-index: 1;
+        flex: 1;
     }
+    
+    .stat-card-2 .stat-label {
+        font-size: 0.65rem;
+        color: rgba(255,255,255,0.85);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 0;
+    }
+    
+    .stat-card-2 .stat-number {
+        font-size: 2.2rem;
+        font-weight: 800;
+        color: white;
+        margin: 0;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+    }
+    
+    .stat-card-2 .stat-sub {
+        font-size: 0.65rem;
+        color: rgba(255,255,255,0.8);
+        margin-top: 2px;
+    }
+    
+    .stat-card-2 .stat-arrow {
+        position: absolute;
+        right: 14px;
+        bottom: 14px;
+        color: rgba(255,255,255,0.12);
+        font-size: 0.8rem;
+        transition: all 0.3s ease;
+        z-index: 1;
+    }
+    
+    .stat-card-2:hover .stat-arrow {
+        transform: translateX(6px);
+        color: rgba(255,255,255,0.4);
+    }
+    
+    .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+    .card-blue:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
+    
+    .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
+    .card-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
+    
+    [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
+    [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
     
     .message-box {
         padding: 14px 20px;
@@ -1148,6 +1353,44 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         100% { transform: scale(1); }
     }
     
+    /* Toast */
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 14px 20px;
+        border-radius: 12px;
+        z-index: 999;
+        max-width: 400px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: white;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+    }
+    .toast-custom.show {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    .toast-custom.success { background: var(--success); }
+    .toast-custom.error { background: var(--danger); }
+    .toast-custom.info { background: var(--primary); }
+    .toast-custom.warning { background: var(--warning); }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        transition: all 0.3s ease;
+    }
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    
     @media (max-width: 768px) {
         .sale-form-card {
             padding: 16px 18px;
@@ -1204,8 +1447,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .payment-methods {
             justify-content: center;
         }
-        .cart-summary .summary-row {
-            flex-direction: row;
+        .stats-2-cards {
+            grid-template-columns: 1fr;
+        }
+        .page-header-blue {
+            padding: 18px 20px;
+        }
+        .page-header-blue .page-title {
+            font-size: 1.3rem;
         }
     }
     
@@ -1225,6 +1474,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .discount-display .info-item .value.grand-total {
             font-size: 1rem;
         }
+        .stats-2-cards {
+            grid-template-columns: 1fr;
+        }
+        .page-header-blue .page-title {
+            font-size: 1.1rem;
+        }
+        .page-header-blue .page-subtitle {
+            font-size: 0.8rem;
+        }
+        .page-header-blue .stat-chip {
+            font-size: 0.6rem;
+            padding: 2px 10px;
+        }
     }
 </style>
 
@@ -1233,30 +1495,31 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER - BLUE BACKGROUND -->
+    <!-- ================================================================ -->
+    <div class="page-header-blue animate-fade-in-up">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-plus-circle mr-2" style="color: var(--otc-color);"></i> New OTC Sale
+                <i class="fas fa-plus-circle"></i>
+                New OTC Sale
             </h1>
             <p class="page-subtitle">
                 Sell medicines over-the-counter with discount (TSh amount)
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                <strong><?= htmlspecialchars($user_branch_name) ?></strong>
+                <span class="stat-chip">
+                    <i class="fas fa-pills"></i> <?= count($medicines) ?> medicines in stock
                 </span>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
-                    <i class="fas fa-pills mr-1"></i> <?= count($medicines) ?> medicines in stock
-                </span>
-                <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
-                    <i class="fas fa-cash-register mr-1"></i> 2 Payment Options
+                <span class="stat-chip">
+                    <i class="fas fa-cash-register"></i> 2 Payment Options
                 </span>
             </p>
         </div>
-        <div>
-            <a href="otc_history.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-history"></i> OTC History
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="otc_history.php" class="btn-outline-light">
+                <i class="fas fa-history"></i> History
             </a>
-            <a href="dashboard.php" class="btn btn-outline btn-sm">
+            <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -1271,15 +1534,32 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- BILL INFO -->
+    <!-- 2 CARDS: BLUE + ORANGE -->
     <!-- ================================================================ -->
-    <div class="bill-info-box">
-        <i class="fas fa-info-circle"></i>
-        <span>
-            <strong>💳 Choose Payment Option:</strong> 
-            <strong style="color:var(--purple);">1. Send to Cashier</strong> — Bill goes to Cashier for payment | 
-            <strong style="color:var(--success);">2. Pay Now (Self)</strong> — Pharmacy collects payment immediately
-        </span>
+    <div class="stats-2-cards animate-fade-in-up">
+        
+        <!-- Card 1: Medicines in Stock - BLUE -->
+        <div class="stat-card-2 card-blue">
+            <div class="stat-icon"><i class="fas fa-pills"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Medicines in Stock</p>
+                <p class="stat-number"><?= count($medicines) ?></p>
+                <p class="stat-sub">Active inventory items</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+        
+        <!-- Card 2: Low Stock Alerts - ORANGE -->
+        <div class="stat-card-2 card-orange">
+            <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Low Stock Alerts</p>
+                <p class="stat-number"><?= $low_stock_count ?></p>
+                <p class="stat-sub">Items below reorder level</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+        
     </div>
 
     <!-- ================================================================ -->
@@ -1525,6 +1805,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
+    // DARK MODE - INAFANYA KAZI NA HEADER BUTTON (kama inventory)
+    // ================================================================
+    // Dark mode inashughulikiwa na pharmacy_header.php
+    // Tuna-hakikisha tu kwamba CSS variables zinafanya kazi
+    var htmlElement = document.documentElement;
+    console.log('🌙 Dark mode initialized. Current theme:', htmlElement.getAttribute('data-theme'));
+
+    // ================================================================
     // CART DATA
     // ================================================================
     var cart = [];
@@ -1557,7 +1845,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         });
         document.querySelector('[data-option="' + option + '"]').classList.add('active');
         
-        // Update button text
         var btn = document.getElementById('completeSaleBtn');
         if (option === 'self') {
             btn.innerHTML = '<i class="fas fa-hand-holding-usd"></i> Pay Now & Complete Sale';
@@ -1617,7 +1904,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var inventory_id = parseInt(option.value);
         var total = price * qty;
         
-        // Check if item already in cart
         var existing = cart.find(function(item) { return item.inventory_id === inventory_id; });
         if (existing) {
             existing.quantity += qty;
@@ -1633,7 +1919,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             });
         }
         
-        // Update stock display
         var newStock = stock - qty;
         option.dataset.stock = newStock;
         option.text = option.text.replace(/\(Stock: \d+\)/, '(Stock: ' + newStock + ')');
@@ -1800,36 +2085,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
-
-    // ================================================================
     // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
@@ -1840,25 +2095,32 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             sidebar.classList.toggle('open');
         });
     }
+    
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (sidebar && sidebarToggle) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
+        }
+    });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - UPDATED BY HEADER
     // ================================================================
-    function updateDateTime() {
+    function updateFooterTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
+        var ftEl = document.querySelector('.footer .footer-time');
+        if (ftEl) {
+            ftEl.textContent = timeStr;
         }
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    updateFooterTime();
+    setInterval(updateFooterTime, 1000);
 
     // ================================================================
     // TOAST
@@ -1898,18 +2160,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c💊 Braick - New OTC Sale (FIXED - 2 Options)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
+    console.log('%c💊 Braick - New OTC Sale (Dark Mode FIXED - uses header button)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📦 Medicines in stock: <?= count($medicines) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💰 Discount: Enter amount in TSh (not percentage)', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ 2 OPTIONS:', 'font-size:13px; color:#34D399;');
-    console.log('  📤 1. Send to Cashier - Bill goes to Cashier', 'font-size:12px; color:#7C3AED;');
-    console.log('  💳 2. Pay Now (Self) - Pharmacy collects payment', 'font-size:12px; color:#059669;');
-    console.log('%c✅ otc_sale_items now inserted correctly', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark Mode: Controlled by header button (like inventory.php)', 'font-size:13px; color:#34D399;');
+    console.log('%c🔵 BLUE HEADER with stats', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔵 Card 1: Medicines in Stock (BLUE)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🟠 Card 2: Low Stock Alerts (ORANGE)', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ 2 Payment Options: Send to Cashier | Pay Now (Self)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Dark mode toggle works via header button', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

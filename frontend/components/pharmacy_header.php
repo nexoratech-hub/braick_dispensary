@@ -4,6 +4,7 @@
 // PHARMACY - SHARED HEADER (DARK MODE FIXED)
 // WITH SIDEBAR TOGGLE BUTTON IN HEADER
 // WITH LOGIN PROTECTION
+// FIXED: Date/Time shows on all pages, Dark Mode works with JS
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -114,19 +115,9 @@ if (empty($page_title) || $page_title == '') {
 }
 
 // ================================================================
-// DARK MODE - SESSION BASED
+// DARK MODE - SESSION BASED (FALLBACK)
 // ================================================================
-if (!isset($_SESSION['dark_mode'])) {
-    $_SESSION['dark_mode'] = 'light';
-}
-
-if (isset($_GET['toggle_dark'])) {
-    $_SESSION['dark_mode'] = ($_SESSION['dark_mode'] === 'dark') ? 'light' : 'dark';
-    header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
-    exit;
-}
-
-$dark_mode = $_SESSION['dark_mode'];
+$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode ?>">
@@ -201,6 +192,10 @@ $dark_mode = $_SESSION['dark_mode'];
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
+            --primary: #3B82F6;
+            --primary-dark: #2563EB;
+            --primary-light: #93C5FD;
+            --primary-bg: #1E3A5F;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -268,7 +263,6 @@ $dark_mode = $_SESSION['dark_mode'];
             box-shadow: 0 2px 12px rgba(10, 76, 168, 0.3);
         }
         
-        /* Show toggle button on mobile only */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .header-toggle-btn { display: flex !important; }
@@ -346,6 +340,7 @@ $dark_mode = $_SESSION['dark_mode'];
             font-size: 0.78rem;
             color: var(--text-secondary);
             font-weight: 500;
+            white-space: nowrap;
         }
         
         .top-nav .avatar {
@@ -1008,7 +1003,7 @@ $dark_mode = $_SESSION['dark_mode'];
     <div class="flex items-center gap-4 flex-1">
         
         <!-- ================================================================ -->
-        <!-- SIDEBAR TOGGLE BUTTON IN HEADER - ONE BUTTON ONLY -->
+        <!-- SIDEBAR TOGGLE BUTTON IN HEADER -->
         <!-- ================================================================ -->
         <button class="header-toggle-btn" id="sidebarToggleBtn" aria-label="Toggle Sidebar">
             <i class="fas fa-bars"></i>
@@ -1029,15 +1024,18 @@ $dark_mode = $_SESSION['dark_mode'];
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
+        <!-- ================================================================ -->
+        <!-- DATE & TIME - ALWAYS VISIBLE -->
+        <!-- ================================================================ -->
         <span class="datetime" id="currentDateTime"></span>
         
         <!-- ================================================================ -->
-        <!-- DARK MODE TOGGLE -->
+        <!-- DARK MODE TOGGLE - NOW USING JAVASCRIPT -->
         <!-- ================================================================ -->
-        <a href="?toggle_dark=1" class="dark-toggle-btn" id="darkModeLink">
+        <button class="dark-toggle-btn" id="darkModeToggle" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas <?= $dark_mode === 'dark' ? 'fa-sun' : 'fa-moon' ?>"></i>
             <span id="darkText"><?= $dark_mode === 'dark' ? 'Light' : 'Dark' ?></span>
-        </a>
+        </button>
         
         <!-- Notification Bell -->
         <div class="notif-bell-wrapper">
@@ -1123,6 +1121,62 @@ $dark_mode = $_SESSION['dark_mode'];
 <!-- ================================================================ -->
 <script>
     // ================================================================
+    // DARK MODE TOGGLE - USING JAVASCRIPT (WORKS ON ALL PAGES)
+    // ================================================================
+    (function() {
+        var darkModeToggle = document.getElementById('darkModeToggle');
+        var darkIcon = document.getElementById('darkIcon');
+        var darkText = document.getElementById('darkText');
+        var htmlElement = document.documentElement;
+        
+        // Check saved dark mode preference
+        var savedDarkMode = localStorage.getItem('darkMode');
+        if (savedDarkMode === 'true') {
+            htmlElement.setAttribute('data-theme', 'dark');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
+        } else if (savedDarkMode === 'false') {
+            htmlElement.removeAttribute('data-theme');
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
+        } else {
+            // Check cookie fallback
+            var cookieDark = document.cookie.match(/dark_mode=([^;]+)/);
+            if (cookieDark && cookieDark[1] === 'true') {
+                htmlElement.setAttribute('data-theme', 'dark');
+                if (darkIcon) darkIcon.className = 'fas fa-sun';
+                if (darkText) darkText.textContent = 'Light';
+                localStorage.setItem('darkMode', 'true');
+            }
+        }
+        
+        // Toggle dark mode
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('click', function() {
+                var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+                if (isDark) {
+                    // Switch to light mode
+                    htmlElement.removeAttribute('data-theme');
+                    if (darkIcon) darkIcon.className = 'fas fa-moon';
+                    if (darkText) darkText.textContent = 'Dark';
+                    localStorage.setItem('darkMode', 'false');
+                    document.cookie = "dark_mode=false; path=/; max-age=31536000";
+                } else {
+                    // Switch to dark mode
+                    htmlElement.setAttribute('data-theme', 'dark');
+                    if (darkIcon) darkIcon.className = 'fas fa-sun';
+                    if (darkText) darkText.textContent = 'Light';
+                    localStorage.setItem('darkMode', 'true');
+                    document.cookie = "dark_mode=true; path=/; max-age=31536000";
+                }
+                console.log('🌙 Dark mode toggled to:', htmlElement.getAttribute('data-theme'));
+            });
+        }
+        
+        console.log('🌙 Dark mode initialized. Current:', htmlElement.getAttribute('data-theme'));
+    })();
+
+    // ================================================================
     // SIDEBAR TOGGLE - FROM HEADER BUTTON ONLY
     // ================================================================
     (function() {
@@ -1130,7 +1184,6 @@ $dark_mode = $_SESSION['dark_mode'];
             var toggleBtn = document.getElementById('sidebarToggleBtn');
             var sidebar = document.getElementById('sidebar');
             var overlay = document.getElementById('sidebarOverlay');
-            var closeBtn = document.getElementById('sidebarCloseBtn');
             
             if (!toggleBtn) {
                 console.error('❌ Toggle button not found!');
@@ -1156,8 +1209,9 @@ $dark_mode = $_SESSION['dark_mode'];
                 overlay.style.display = 'block';
                 overlay.classList.add('active');
                 document.body.style.overflow = 'hidden';
-                // Update toggle button icon
-                toggleBtn.innerHTML = '<i class="fas fa-times"></i><span class="toggle-label">CLOSE</span>';
+                if (toggleBtn) {
+                    toggleBtn.innerHTML = '<i class="fas fa-times"></i><span class="toggle-label">CLOSE</span>';
+                }
                 console.log('🔓 Sidebar opened');
             }
             
@@ -1166,8 +1220,9 @@ $dark_mode = $_SESSION['dark_mode'];
                 overlay.style.display = 'none';
                 overlay.classList.remove('active');
                 document.body.style.overflow = '';
-                // Update toggle button icon
-                toggleBtn.innerHTML = '<i class="fas fa-bars"></i><span class="toggle-label">MENU</span>';
+                if (toggleBtn) {
+                    toggleBtn.innerHTML = '<i class="fas fa-bars"></i><span class="toggle-label">MENU</span>';
+                }
                 console.log('🔒 Sidebar closed');
             }
             
@@ -1183,19 +1238,8 @@ $dark_mode = $_SESSION['dark_mode'];
             toggleBtn.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                console.log('🔘 Header toggle clicked!');
                 toggleSidebar();
             });
-            
-            // Close button inside sidebar
-            if (closeBtn) {
-                closeBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    closeSidebar();
-                });
-                console.log('✅ Close button attached');
-            }
             
             // Overlay click
             if (overlay) {
@@ -1204,7 +1248,6 @@ $dark_mode = $_SESSION['dark_mode'];
                         closeSidebar();
                     }
                 });
-                console.log('✅ Overlay click handler attached');
             }
             
             // ESC key
@@ -1222,8 +1265,6 @@ $dark_mode = $_SESSION['dark_mode'];
             });
             
             console.log('✅ Header toggle button initialized!');
-            console.log('🔘 Toggle button:', toggleBtn);
-            console.log('📱 Window width:', window.innerWidth);
         }
         
         if (document.readyState === 'loading') {
@@ -1318,7 +1359,7 @@ $dark_mode = $_SESSION['dark_mode'];
     }
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - UPDATES EVERY SECOND
     // ================================================================
     function updateDateTime() {
         var now = new Date();
@@ -1336,14 +1377,18 @@ $dark_mode = $_SESSION['dark_mode'];
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c💊 Braick Dispensary - Pharmacy Header', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // CONSOLE LOG
+    // ================================================================
+    console.log('%c💊 Braick Dispensary - Pharmacy Header (FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c🌙 Dark Mode: <?= $dark_mode ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c🌙 Dark Mode: <?= $dark_mode ?> (JS Toggle)', 'font-size:12px; color:#D97706;');
     console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Date & Time: Updates every second', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Dark Mode: Uses JavaScript + localStorage + Cookie', 'font-size:12px; color:#34D399;');
     console.log('%c✅ ONE toggle button in header only', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Click MENU button to toggle sidebar', 'font-size:12px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
 </script>
 </body>

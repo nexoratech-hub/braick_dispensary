@@ -2,9 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/otc_history.php
 // PHARMACY - OTC SALES HISTORY
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// FIXED: Shows items correctly (medicine_names)
-// FIXED: Cashier name shows as Reception/Cashier
+// USING SHARED HEADER (FIXED: Date/Time shows correctly)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -28,7 +26,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // ================================================================
 $allowed_roles = ['pharmacy', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
-    // Redirect to their own dashboard
     $role = $_SESSION['role'];
     switch ($role) {
         case 'reception': header('Location: ../reception/dashboard.php'); break;
@@ -50,6 +47,7 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_username = $_SESSION['username'] ?? 'pharmacy';
 $is_admin = ($user_role === 'admin');
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
@@ -74,7 +72,6 @@ if ($user_id <= 0) {
                 $user_branch_id = $user['branch_id'];
                 $is_admin = ($user_role === 'admin');
                 
-                // Get branch name
                 $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
                 $stmt->execute([$user_branch_id]);
                 $branch = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -89,7 +86,6 @@ if ($user_id <= 0) {
     }
 }
 
-// If still no user_id, redirect to login
 if ($user_id <= 0) {
     header('Location: ../login.php');
     exit;
@@ -148,7 +144,6 @@ $query = "
 
 $params = [$user_branch_id];
 
-// Filter by payment_status
 if ($filter === 'pending') {
     $query .= " AND os.payment_status = 'pending'";
 } elseif ($filter === 'paid') {
@@ -161,14 +156,12 @@ if ($filter === 'pending') {
     $query .= " AND DATE(os.created_at) = CURDATE()";
 }
 
-// Date range filter
 if (!empty($date_from) && !empty($date_to)) {
     $query .= " AND DATE(os.created_at) BETWEEN ? AND ?";
     $params[] = $date_from;
     $params[] = $date_to;
 }
 
-// Search filter - customer name or sale number
 if (!empty($search)) {
     $query .= " AND (os.customer_name LIKE ? OR os.sale_number LIKE ?)";
     $search_param = "%$search%";
@@ -185,13 +178,10 @@ $sales = $stmt->fetchAll();
 // ================================================================
 // GET STATISTICS
 // ================================================================
-
-// Total OTC Sales
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ?");
 $stmt->execute([$user_branch_id]);
 $total_otc = $stmt->fetch()['count'] ?? 0;
 
-// Today's OTC Sales
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM otc_sales 
@@ -200,7 +190,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $today_otc = $stmt->fetch()['count'] ?? 0;
 
-// Pending OTC Sales
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM otc_sales 
@@ -209,7 +198,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $pending_count = $stmt->fetch()['count'] ?? 0;
 
-// Paid OTC Sales
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM otc_sales 
@@ -218,7 +206,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $paid_count = $stmt->fetch()['count'] ?? 0;
 
-// Cancelled OTC Sales
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM otc_sales 
@@ -227,7 +214,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $cancelled_count = $stmt->fetch()['count'] ?? 0;
 
-// Partial OTC Sales
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM otc_sales 
@@ -276,7 +262,6 @@ try {
 // ================================================================
 // PROFILE PICTURE
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -287,7 +272,7 @@ $profile_pic_url = !empty($profile_pic)
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
@@ -383,177 +368,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
         
         /* ================================================================
            MAIN CONTENT
@@ -1179,14 +993,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
         
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .stats-grid {
@@ -1234,46 +1044,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION - SHARED HEADER (Rendered by pharmacy_header.php) -->
 <!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search customer, sale #..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display" style="background:var(--primary-bg);color:var(--primary);padding:4px 14px;border-radius:20px;font-size:0.78rem;font-weight:500;">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1414,7 +1186,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- OTC SALES TABLE - FIXED: Shows items correctly -->
+    <!-- OTC SALES TABLE -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="card-header">
@@ -1446,9 +1218,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             $item_count = (int)($sale['item_count'] ?? 0);
                             $medicine_names = $sale['medicine_names'] ?? '';
                             
-                            // ✅ FIX: If item_count is 0 but medicine_names is empty, check if there are items
                             if ($item_count == 0 && empty($medicine_names)) {
-                                // Try to get items directly
                                 $stmt_items = $db->prepare("
                                     SELECT medicine_name, quantity, total_price 
                                     FROM otc_sale_items 
@@ -1464,7 +1234,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 }
                             }
                             
-                            // ✅ FIX: Cashier name - if role is reception or cashier, show as Reception/Cashier
                             $cashier_name = 'Reception/Cashier';
                             if (!empty($sale['cashier_name'])) {
                                 $cashier_name = $sale['cashier_name'];
@@ -1580,39 +1349,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - Handled by shared header (pharmacy_header.php)
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
 
     // ================================================================
-    // SIDEBAR TOGGLE
+    // SIDEBAR TOGGLE - Handled by shared header
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -1656,27 +1397,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - Handled by shared header
     // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) {
-            ftEl.textContent = timeStr;
-        }
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // TOAST
@@ -1714,13 +1436,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick - OTC Sales History (FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c💊 Braick - OTC Sales History', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Shows items correctly (medicine_names)', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Cashier name shows as Reception/Cashier', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Using SHARED HEADER (Date/Time works)', 'font-size:13px; color:#34D399;');
     console.log('%c📊 Total: <?= $total_otc ?> | Paid: <?= $paid_count ?> | Pending: <?= $pending_count ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Login protection added', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
