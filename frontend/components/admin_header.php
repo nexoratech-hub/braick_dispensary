@@ -1,22 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/components/admin_header.php
-// SUPER ADMIN - SHARED HEADER
+// SUPER ADMIN - SHARED HEADER (FIXED)
 // FAVICON: LOGO INAONEKANA
-// WITH SESSION CHECK
+// WITH SESSION CHECK - NO PREMATURE EXIT
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION CHECK - REDIRECT TO LOGIN IF NOT ADMIN
-// ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    header('Location: /dispensary_system/frontend/pages/login.php');
-    exit;
-}
-
-// ================================================================
-// GET SESSION DATA
+// GET SESSION DATA - WITH DEFAULTS
 // ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -52,10 +44,12 @@ $unread_notifications = 0;
 if ($user_id > 0) {
     try {
         require_once __DIR__ . '/../../backend/config/database.php';
-        $db = Database::getInstance()->getConnection();
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$user_id]);
-        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        if (class_exists('Database')) {
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+            $stmt->execute([$user_id]);
+            $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        }
     } catch (Exception $e) {
         $unread_notifications = 0;
     }
@@ -66,12 +60,24 @@ if ($user_id > 0) {
 // ================================================================
 $branches = [];
 try {
-    require_once __DIR__ . '/../../backend/config/database.php';
-    $db = Database::getInstance()->getConnection();
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if (class_exists('Database')) {
+        $db = Database::getInstance()->getConnection();
+        $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+        $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 } catch (Exception $e) {
     $branches = [];
+}
+
+// ================================================================
+// IKIWA HAJALOGIN, FANYA REDIRECT - LAKINI BAADA YA KUTAYARISHA DATA
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    $current_file = basename($_SERVER['PHP_SELF']);
+    if ($current_file !== 'login.php') {
+        header('Location: /dispensary_system/frontend/pages/login.php');
+        exit;
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -79,7 +85,7 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Braick Dispensary - <?= $page_title ?></title>
+    <title>Braick Dispensary - <?= htmlspecialchars($page_title) ?></title>
     
     <!-- ================================================================
          FAVICON - INAONEKANA 100%
