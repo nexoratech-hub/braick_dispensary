@@ -1,6 +1,7 @@
 // ================================================================
 // FILE: frontend/assets/js/doctor_global_stats.js
-// DOCTOR GLOBAL STATS AUTO-UPDATE - UPDATES EVERY 3 SECONDS
+// DOCTOR GLOBAL STATS AUTO-UPDATE - UPDATES EVERY 5 SECONDS
+// FIXED: Proper data parsing, no cache issues, uses visit_date
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -11,9 +12,9 @@
     // CONFIGURATION
     // ================================================================
     var CONFIG = {
-        updateInterval: 3000, // 3 seconds
+        updateInterval: 5000, // 5 seconds
         apiEndpoint: '/dispensary_system/frontend/pages/doctor/get_doctor_stats.php',
-        debug: false // Set to true for console logs
+        debug: true // Set to false for production
     };
     
     // ================================================================
@@ -21,7 +22,6 @@
     // ================================================================
     var state = {
         data: null,
-        hash: null,
         isUpdating: false,
         updateCount: 0,
         initialized: false
@@ -67,11 +67,6 @@
         return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
     
-    function formatCurrency(amount) {
-        if (amount === undefined || amount === null) return 'TSh 0';
-        return 'TSh ' + formatNumber(amount);
-    }
-    
     function escapeHtml(text) {
         if (!text) return '';
         var div = document.createElement('div');
@@ -82,18 +77,6 @@
     function capitalize(text) {
         if (!text) return '';
         return text.charAt(0).toUpperCase() + text.slice(1);
-    }
-    
-    function timeAgo(timestamp) {
-        if (!timestamp) return 'Just now';
-        var now = new Date();
-        var past = new Date(timestamp);
-        var diff = Math.floor((now - past) / 1000);
-        if (diff < 60) return 'Just now';
-        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-        if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
-        return past.toLocaleDateString();
     }
     
     function formatTime(datetime) {
@@ -169,25 +152,52 @@
     }
     
     // ================================================================
-    // UPDATE FUNCTIONS
+    // UPDATE FUNCTIONS - FIXED: Correct data structure
     // ================================================================
     function updateStats(data) {
-        var todayPatients = data.today_patients || { total: 0, pending: 0, completed: 0 };
-        var todayVisits = data.today_visits || { total: 0, pending: 0, completed: 0 };
-        var todayAppointments = data.today_appointments || { total: 0, pending: 0, completed: 0, list: [] };
-        var labTests = data.lab_tests || { total: 0, pending: 0, completed: 0 };
+        // Extract data from nested structure
+        var todayPatients = {
+            total: data.today_patients_total || 0,
+            pending: data.today_patients_pending || 0,
+            completed: data.today_patients_completed || 0
+        };
+        
+        var todayVisits = {
+            total: data.today_visits_total || 0,
+            pending: data.today_visits_pending || 0,
+            completed: data.today_visits_completed || 0
+        };
+        
+        var todayAppointments = {
+            total: data.today_appointments_total || 0,
+            pending: data.today_appointments_pending || 0,
+            completed: data.today_appointments_completed || 0,
+            list: data.today_appointments_list || []
+        };
+        
+        var labTests = {
+            total: data.lab_tests_total || 0,
+            pending: data.lab_tests_pending || 0,
+            completed: data.lab_tests_completed || 0
+        };
+        
         var timestamp = data.timestamp || new Date().toISOString();
         
-        log('Updating doctor stats:', data);
+        log('📊 Updating doctor stats:', {
+            todayPatients: todayPatients,
+            todayVisits: todayVisits,
+            totalPatients: data.total_patients || 0,
+            totalVisits: data.total_visits || 0
+        });
         
         // ================================================================
         // UPDATE MINI STATS (WELCOME SECTION)
         // ================================================================
         if (elements.miniAppointments) {
-            safeText(elements.miniAppointments, todayAppointments.total || 0);
+            safeText(elements.miniAppointments, todayAppointments.total);
         }
         if (elements.miniPending) {
-            safeText(elements.miniPending, todayPatients.pending || 0);
+            safeText(elements.miniPending, todayPatients.pending);
         }
         if (elements.miniTotalPatients) {
             safeText(elements.miniTotalPatients, formatNumber(data.total_patients || 0));
@@ -209,13 +219,13 @@
         // UPDATE CARD 1: Today's Patients
         // ================================================================
         if (elements.todayPatientsTotal) {
-            safeText(elements.todayPatientsTotal, todayPatients.total || 0);
+            safeText(elements.todayPatientsTotal, todayPatients.total);
         }
         if (elements.todayPatientsPending) {
-            safeHTML(elements.todayPatientsPending, '<i class="fas fa-clock"></i> ' + (todayPatients.pending || 0) + ' Pending');
+            safeHTML(elements.todayPatientsPending, '<i class="fas fa-clock"></i> ' + todayPatients.pending + ' Pending');
         }
         if (elements.todayPatientsCompleted) {
-            safeHTML(elements.todayPatientsCompleted, '<i class="fas fa-check-circle"></i> ' + (todayPatients.completed || 0) + ' Complete');
+            safeHTML(elements.todayPatientsCompleted, '<i class="fas fa-check-circle"></i> ' + todayPatients.completed + ' Complete');
         }
         if (elements.todayPatientsProgress) {
             var pct = todayPatients.total > 0 ? Math.min(100, (todayPatients.completed / Math.max(todayPatients.total, 1)) * 100) : 0;
@@ -223,16 +233,17 @@
         }
         
         // ================================================================
-        // UPDATE CARD 2: Today's Visits
+        // UPDATE CARD 2: Today's Visits - FIXED: This is the key card!
         // ================================================================
         if (elements.todayVisitsTotal) {
-            safeText(elements.todayVisitsTotal, todayVisits.total || 0);
+            safeText(elements.todayVisitsTotal, todayVisits.total);
+            console.log('✅ Today\'s Visits updated to:', todayVisits.total);
         }
         if (elements.todayVisitsPending) {
-            safeHTML(elements.todayVisitsPending, '<i class="fas fa-clock"></i> ' + (todayVisits.pending || 0) + ' Pending');
+            safeHTML(elements.todayVisitsPending, '<i class="fas fa-clock"></i> ' + todayVisits.pending + ' Pending');
         }
         if (elements.todayVisitsCompleted) {
-            safeHTML(elements.todayVisitsCompleted, '<i class="fas fa-check-circle"></i> ' + (todayVisits.completed || 0) + ' Complete');
+            safeHTML(elements.todayVisitsCompleted, '<i class="fas fa-check-circle"></i> ' + todayVisits.completed + ' Complete');
         }
         if (elements.todayVisitsProgress) {
             var pct = todayVisits.total > 0 ? Math.min(100, (todayVisits.completed / Math.max(todayVisits.total, 1)) * 100) : 0;
@@ -257,13 +268,13 @@
         // UPDATE CARD 5: Today's Appointments
         // ================================================================
         if (elements.todayAppointmentsTotal) {
-            safeText(elements.todayAppointmentsTotal, todayAppointments.total || 0);
+            safeText(elements.todayAppointmentsTotal, todayAppointments.total);
         }
         if (elements.todayAppointmentsPending) {
-            safeHTML(elements.todayAppointmentsPending, '<i class="fas fa-clock"></i> ' + (todayAppointments.pending || 0) + ' Pending');
+            safeHTML(elements.todayAppointmentsPending, '<i class="fas fa-clock"></i> ' + todayAppointments.pending + ' Pending');
         }
         if (elements.todayAppointmentsCompleted) {
-            safeHTML(elements.todayAppointmentsCompleted, '<i class="fas fa-check-circle"></i> ' + (todayAppointments.completed || 0) + ' Complete');
+            safeHTML(elements.todayAppointmentsCompleted, '<i class="fas fa-check-circle"></i> ' + todayAppointments.completed + ' Complete');
         }
         if (elements.todayAppointmentsProgress) {
             var pct = todayAppointments.total > 0 ? Math.min(100, (todayAppointments.completed / Math.max(todayAppointments.total, 1)) * 100) : 0;
@@ -288,13 +299,13 @@
         // UPDATE CARD 8: Lab Tests
         // ================================================================
         if (elements.labTestsTotal) {
-            safeText(elements.labTestsTotal, formatNumber(labTests.total || 0));
+            safeText(elements.labTestsTotal, formatNumber(labTests.total));
         }
         if (elements.labTestsPending) {
-            safeHTML(elements.labTestsPending, '<i class="fas fa-clock"></i> ' + (labTests.pending || 0) + ' Pending');
+            safeHTML(elements.labTestsPending, '<i class="fas fa-clock"></i> ' + labTests.pending + ' Pending');
         }
         if (elements.labTestsCompleted) {
-            safeHTML(elements.labTestsCompleted, '<i class="fas fa-check-circle"></i> ' + (labTests.completed || 0) + ' Complete');
+            safeHTML(elements.labTestsCompleted, '<i class="fas fa-check-circle"></i> ' + labTests.completed + ' Complete');
         }
         if (elements.labTestsProgress) {
             var pct = labTests.total > 0 ? Math.min(100, (labTests.completed / Math.max(labTests.total, 1)) * 100) : 0;
@@ -322,7 +333,7 @@
         // UPDATE APPOINTMENTS COUNT
         // ================================================================
         if (elements.appointmentsCount) {
-            safeText(elements.appointmentsCount, '(' + (todayAppointments.total || 0) + ')');
+            safeText(elements.appointmentsCount, '(' + todayAppointments.total + ')');
         }
         
         // ================================================================
@@ -432,43 +443,48 @@
     }
     
     // ================================================================
-    // FETCH DATA
+    // FETCH DATA - FIXED: Better error handling and cache busting
     // ================================================================
     function fetchStats() {
         if (state.isUpdating) return;
         state.isUpdating = true;
         
-        fetch(CONFIG.apiEndpoint + '?t=' + new Date().getTime())
-            .then(function(response) {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok: ' + response.status);
-                }
-                return response.json();
-            })
-            .then(function(data) {
-                if (data.success) {
-                    // Check if data has changed
-                    if (state.hash !== data.hash) {
-                        state.hash = data.hash;
-                        state.data = data;
-                        updateStats(data.data);
-                        state.updateCount++;
-                        
-                        // Show notification on change (every 3rd update)
-                        if (state.updateCount > 1 && state.updateCount % 3 === 0) {
-                            console.log('[DoctorStats] Auto-updated at ' + data.data.timestamp);
-                        }
-                    }
-                }
-                state.isUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('[DoctorStats] Error fetching data:', error);
-                if (elements.updateBadge) {
-                    safeHTML(elements.updateBadge, '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Error');
-                }
-                state.isUpdating = false;
-            });
+        var url = CONFIG.apiEndpoint + '?t=' + new Date().getTime();
+        log('🔄 Fetching stats from:', url);
+        
+        fetch(url, {
+            method: 'GET',
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            state.isUpdating = false;
+            
+            if (data.success) {
+                log('✅ Stats received successfully', data.data);
+                // Update the UI with the data
+                updateStats(data.data);
+                state.updateCount++;
+            } else {
+                console.error('❌ API returned error:', data.error || 'Unknown error');
+            }
+        })
+        .catch(function(error) {
+            console.error('❌ Error fetching stats:', error);
+            state.isUpdating = false;
+            if (elements.updateBadge) {
+                safeHTML(elements.updateBadge, '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Error');
+            }
+        });
     }
     
     // ================================================================
@@ -480,8 +496,10 @@
         if (updateInterval) {
             clearInterval(updateInterval);
         }
-        log('Starting auto-update every ' + CONFIG.updateInterval + 'ms');
+        log('▶️ Starting auto-update every ' + CONFIG.updateInterval + 'ms');
+        // Initial fetch immediately
         fetchStats();
+        // Then set interval
         updateInterval = setInterval(fetchStats, CONFIG.updateInterval);
     }
     
@@ -492,7 +510,7 @@
             if (elements.updateBadge) {
                 safeHTML(elements.updateBadge, '<i class="fas fa-pause"></i> Paused');
             }
-            log('Stopped auto-update');
+            log('⏹️ Stopped auto-update');
         }
     }
     
@@ -503,8 +521,7 @@
             btn.disabled = true;
         }
         
-        // Force reset hash to force update
-        state.hash = null;
+        // Force fetch
         fetchStats();
         
         setTimeout(function() {
@@ -512,7 +529,7 @@
                 btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
                 btn.disabled = false;
             }
-        }, 1000);
+        }, 1500);
     }
     
     // ================================================================
@@ -532,16 +549,16 @@
     function init() {
         if (state.initialized) return;
         
-        log('Initializing Doctor Stats System');
+        log('🚀 Initializing Doctor Stats System');
         elements = findPageElements();
         
-        // Start auto-update after 1.5 seconds
+        // Start auto-update after 1 second
         setTimeout(function() {
             startAutoUpdate();
-        }, 1500);
+        }, 1000);
         
         state.initialized = true;
-        log('Doctor Stats System initialized');
+        log('✅ Doctor Stats System initialized');
     }
     
     // ================================================================
@@ -568,6 +585,7 @@
     
     console.log('%c👨‍⚕️ Doctor Stats System Initialized', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🔄 Auto-update every ' + CONFIG.updateInterval / 1000 + ' seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c📊 Using DATE(visit_date) for today\'s stats', 'font-size:12px; color:#059669;');
     console.log('%c💡 Type DoctorStats.start() or DoctorStats.stop() to control', 'font-size:12px; color:#64748B;');
     console.log('%c💡 Type DoctorStats.refresh() for manual refresh', 'font-size:12px; color:#64748B;');
     

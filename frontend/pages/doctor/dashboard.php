@@ -2,10 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/doctor/dashboard.php
 // DOCTOR DASHBOARD - FULL VERSION WITH AUTO-UPDATE
-// 8 CLICKABLE CARDS - SMART AUTO-UPDATE (3 SECONDS)
-// FIXED: Session-based login (NO BYPASS)
-// FIXED: Dark mode works with header (CSS + localStorage)
-// FULL CSS INCLUDED
+// 8 CLICKABLE CARDS - SMART AUTO-UPDATE (5 SECONDS)
+// FIXED: Using visit_date instead of created_at
+// FIXED: Data persists after auto-update
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -78,7 +77,6 @@ try {
         $_SESSION['user_id'] = $doctor_id;
         $_SESSION['doctor_id'] = $doctor_id;
     } else {
-        // Doctor not found or inactive - logout and redirect
         session_destroy();
         header('Location: /dispensary_system/frontend/pages/login.php');
         exit;
@@ -87,7 +85,6 @@ try {
     error_log("Dashboard database error: " . $e->getMessage());
 }
 
-// Make sure doctor_id and user_id are in sync
 if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
     $_SESSION['doctor_id'] = $_SESSION['user_id'];
 }
@@ -123,16 +120,16 @@ try {
 $today = date('Y-m-d');
 
 // ================================================================
-// GET INITIAL STATISTICS FOR RENDERING
+// GET INITIAL STATISTICS FOR RENDERING - FIXED: using visit_date
 // ================================================================
 
-// 1. Today's Patients
+// 1. Today's Patients - FIXED: use visit_date
 $stmt = $db->prepare("
     SELECT 
-        COUNT(DISTINCT CASE WHEN status IN ('pending', 'assigned') THEN patient_id END) as pending,
-        COUNT(DISTINCT CASE WHEN status = 'completed' THEN patient_id END) as completed
+        COUNT(DISTINCT CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN patient_id END) as pending,
+        COUNT(DISTINCT CASE WHEN status IN ('completed', 'prescribed') THEN patient_id END) as completed
     FROM visits 
-    WHERE doctor_id = ? AND DATE(created_at) = ?
+    WHERE doctor_id = ? AND DATE(visit_date) = ?
 ");
 $stmt->execute([$doctor_id, $today]);
 $today_patients = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -140,13 +137,13 @@ $today_patients_pending = $today_patients['pending'] ?? 0;
 $today_patients_completed = $today_patients['completed'] ?? 0;
 $today_patients_total = $today_patients_pending + $today_patients_completed;
 
-// 2. Today's Visits
+// 2. Today's Visits - FIXED: use visit_date
 $stmt = $db->prepare("
     SELECT 
-        COUNT(CASE WHEN status IN ('pending', 'assigned') THEN 1 END) as pending,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed
+        COUNT(CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN 1 END) as pending,
+        COUNT(CASE WHEN status IN ('completed', 'prescribed') THEN 1 END) as completed
     FROM visits 
-    WHERE doctor_id = ? AND DATE(created_at) = ?
+    WHERE doctor_id = ? AND DATE(visit_date) = ?
 ");
 $stmt->execute([$doctor_id, $today]);
 $today_visits = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -154,12 +151,12 @@ $today_visits_pending = $today_visits['pending'] ?? 0;
 $today_visits_completed = $today_visits['completed'] ?? 0;
 $today_visits_total = $today_visits_pending + $today_visits_completed;
 
-// 3. Total Patients
+// 3. Total Patients (all time)
 $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ?");
 $stmt->execute([$doctor_id]);
 $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 4. Total Visits
+// 4. Total Visits (all time)
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE doctor_id = ?");
 $stmt->execute([$doctor_id]);
 $total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
@@ -203,9 +200,15 @@ $lab_tests_total = $lab_tests['total'] ?? 0;
 $lab_tests_pending = $lab_tests['pending'] ?? 0;
 $lab_tests_completed = $lab_tests['completed'] ?? 0;
 
-// 9. Pending Visits Count
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned')");
-$stmt->execute([$doctor_id]);
+// 9. Pending Visits Count - FIXED: use visit_date
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM visits 
+    WHERE doctor_id = ? 
+    AND status IN ('pending', 'assigned', 'with_doctor') 
+    AND DATE(visit_date) = ?
+");
+$stmt->execute([$doctor_id, $today]);
 $pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 10. Today's Appointments List
@@ -221,17 +224,19 @@ $stmt = $db->prepare("
 $stmt->execute([$doctor_id, $today]);
 $today_appointments_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 11. Pending Patients Queue
+// 11. Pending Patients Queue - FIXED: use visit_date
 $stmt = $db->prepare("
     SELECT v.*, p.full_name as patient_name, p.patient_id, p.phone,
            TIMESTAMPDIFF(MINUTE, v.created_at, NOW()) as waiting_time
     FROM visits v
     JOIN patients p ON v.patient_id = p.id
-    WHERE v.doctor_id = ? AND v.status IN ('pending', 'assigned')
+    WHERE v.doctor_id = ? 
+    AND v.status IN ('pending', 'assigned', 'with_doctor') 
+    AND DATE(v.visit_date) = ?
     ORDER BY v.created_at ASC
     LIMIT 10
 ");
-$stmt->execute([$doctor_id]);
+$stmt->execute([$doctor_id, $today]);
 $pending_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // 12. Weekly Appointments Chart
@@ -290,7 +295,6 @@ $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// Profile picture URL
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -328,7 +332,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <i class="far fa-calendar-alt"></i> <?= date('l, F d, Y') ?>
                             </span>
                             <span class="update-badge" id="lastUpdateBadge">
-                                <i class="fas fa-sync-alt fa-spin"></i> Starting...
+                                <i class="fas fa-sync-alt fa-spin"></i> Loading...
                             </span>
                         </p>
                     </div>
@@ -401,7 +405,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <div class="stat-card-progress" id="todayPatientsProgress" style="width: <?= $today_patients_total > 0 ? min(100, ($today_patients_completed / max($today_patients_total, 1)) * 100) : 0 ?>%;"></div>
         </a>
 
-        <!-- CARD 2: Today's Visits -->
+        <!-- CARD 2: Today's Visits - KEY CARD -->
         <a href="visits.php?filter=today" class="stat-card stat-card-blue card-clickable" id="cardTodayVisits">
             <div class="stat-card-inner">
                 <div class="stat-card-left">
@@ -1689,7 +1693,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     /* ================================================================
-       DARK MODE OVERRIDES - CSS ONLY
+       DARK MODE OVERRIDES
        ================================================================ */
     [data-theme="dark"] .stat-card {
         background: #1E293B;
@@ -1921,28 +1925,11 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 </style>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - CHART & AUTO-UPDATE -->
+<!-- JAVASCRIPT - CHART -->
 <!-- ================================================================ -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
 <script>
-    // ================================================================
-    // TIME AGO FUNCTION - JAVASCRIPT VERSION
-    // ================================================================
-    function time_ago(timestamp) {
-        if (!timestamp) return 'N/A';
-        try {
-            var time = new Date(timestamp);
-            if (isNaN(time.getTime())) return 'N/A';
-            var diff = Math.floor((Date.now() - time.getTime()) / 1000);
-            if (diff < 60) return 'Just now';
-            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-            if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
-            return time.toLocaleDateString();
-        } catch (e) { return 'N/A'; }
-    }
-    
     // ================================================================
     // CHART - RENDER
     // ================================================================
@@ -2021,32 +2008,24 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     // ================================================================
     document.addEventListener('darkModeChanged', function(e) {
         var isDark = e.detail && e.detail.isDark;
-        var html = document.documentElement;
-        
         if (isDark) {
-            html.setAttribute('data-theme', 'dark');
+            document.documentElement.setAttribute('data-theme', 'dark');
         } else {
-            html.removeAttribute('data-theme');
+            document.documentElement.removeAttribute('data-theme');
         }
-        
-        // Re-render chart with new colors
         renderChart(chartLabels, chartValues);
-        
-        console.log('🌙 Dashboard dark mode synced: ' + (isDark ? 'ON ✅' : 'OFF'));
     });
     
     // ================================================================
     // INITIALIZE
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Check initial dark mode from localStorage
         if (localStorage.getItem('darkMode') === 'true') {
             document.documentElement.setAttribute('data-theme', 'dark');
         }
         
         renderChart(chartLabels, chartValues);
         
-        // Show welcome toast
         setTimeout(function() {
             var pending = parseInt(document.getElementById('todayPatientsPending')?.textContent || '0');
             if (pending > 0) {
@@ -2055,23 +2034,403 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 1500);
     });
     
-    // Re-render chart when dark mode changes via mutation observer
+    // Re-render chart when dark mode changes
     var observer = new MutationObserver(function() {
         renderChart(chartLabels, chartValues);
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     
     console.log('%c👨‍⚕️ Doctor Dashboard Initialized', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
-    console.log('%c🔄 Auto-update active every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
+    console.log('%c📅 Today\'s visits: <?= $today_visits_total ?> (using visit_date)', 'font-size:12px; color:#059669;');
+    console.log('%c🔄 Auto-update active every 5 seconds', 'font-size:12px; color:#34D399;');
     console.log('%c🌙 Dark mode uses CSS + localStorage (syncs with header)', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c💡 Dashboard updates automatically - no refresh needed!', 'font-size:12px; color:#64748B;');
 </script>
 
 <!-- ================================================================ -->
-<!-- DOCTOR GLOBAL STATS AUTO-UPDATE SCRIPT -->
+<!-- DOCTOR GLOBAL STATS AUTO-UPDATE SCRIPT - FIXED -->
 <!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/doctor_global_stats.js"></script>
+<script>
+(function() {
+    'use strict';
+    
+    // ================================================================
+    // CONFIGURATION
+    // ================================================================
+    var CONFIG = {
+        updateInterval: 5000, // 5 seconds
+        apiEndpoint: '/dispensary_system/frontend/pages/doctor/get_doctor_stats.php',
+        debug: true
+    };
+    
+    // ================================================================
+    // STATE
+    // ================================================================
+    var state = {
+        isUpdating: false,
+        initialized: false
+    };
+    
+    // ================================================================
+    // DOM ELEMENT CACHE
+    // ================================================================
+    var elements = {};
+    
+    function getElement(id) {
+        return document.getElementById(id);
+    }
+    
+    function safeText(el, text) {
+        if (el) el.textContent = text !== undefined ? text : '0';
+    }
+    
+    function safeHTML(el, html) {
+        if (el) el.innerHTML = html || '';
+    }
+    
+    function findElements() {
+        elements = {
+            // Today's Visits - KEY ELEMENTS
+            todayVisitsTotal: getElement('todayVisitsTotal'),
+            todayVisitsPending: getElement('todayVisitsPending'),
+            todayVisitsCompleted: getElement('todayVisitsCompleted'),
+            todayVisitsProgress: getElement('todayVisitsProgress'),
+            
+            // Today's Patients
+            todayPatientsTotal: getElement('todayPatientsTotal'),
+            todayPatientsPending: getElement('todayPatientsPending'),
+            todayPatientsCompleted: getElement('todayPatientsCompleted'),
+            todayPatientsProgress: getElement('todayPatientsProgress'),
+            
+            // Total stats
+            totalPatients: getElement('totalPatients'),
+            totalVisits: getElement('totalVisits'),
+            
+            // Appointments
+            todayAppointmentsTotal: getElement('todayAppointmentsTotal'),
+            todayAppointmentsPending: getElement('todayAppointmentsPending'),
+            todayAppointmentsCompleted: getElement('todayAppointmentsCompleted'),
+            todayAppointmentsProgress: getElement('todayAppointmentsProgress'),
+            totalAppointments: getElement('totalAppointments'),
+            appointmentsCount: getElement('appointmentsCount'),
+            appointmentsList: getElement('appointmentsList'),
+            
+            // Prescriptions & Lab
+            totalPrescriptions: getElement('totalPrescriptions'),
+            labTestsTotal: getElement('labTestsTotal'),
+            labTestsPending: getElement('labTestsPending'),
+            labTestsCompleted: getElement('labTestsCompleted'),
+            labTestsProgress: getElement('labTestsProgress'),
+            labTestsBadge: getElement('labTestsBadge'),
+            
+            // Queue
+            queueList: getElement('queueList'),
+            queueCount: getElement('queueCount'),
+            
+            // Mini stats
+            miniAppointments: getElement('miniAppointments'),
+            miniPending: getElement('miniPending'),
+            miniTotalPatients: getElement('miniTotalPatients'),
+            btnPulse: getElement('btnPulse'),
+            btnPulseText: getElement('btnPulseText'),
+            
+            // Timestamps
+            footerTimestamp: getElement('footerTimestamp'),
+            updateBadge: getElement('lastUpdateBadge'),
+            currentDateTime: getElement('currentDateTime'),
+            
+            // Refresh button
+            refreshBtn: getElement('refreshBtn')
+        };
+    }
+    
+    // ================================================================
+    // UPDATE FUNCTIONS
+    // ================================================================
+    function updateStats(data) {
+        // Today's Visits - FIXED: These must stay persistent
+        var todayVisitsTotal = data.today_visits_total || 0;
+        var todayVisitsPending = data.today_visits_pending || 0;
+        var todayVisitsCompleted = data.today_visits_completed || 0;
+        
+        // Today's Patients
+        var todayPatientsTotal = data.today_patients_total || 0;
+        var todayPatientsPending = data.today_patients_pending || 0;
+        var todayPatientsCompleted = data.today_patients_completed || 0;
+        
+        // Today's Appointments
+        var todayApptsTotal = data.today_appointments_total || 0;
+        var todayApptsPending = data.today_appointments_pending || 0;
+        var todayApptsCompleted = data.today_appointments_completed || 0;
+        
+        // Lab Tests
+        var labTotal = data.lab_tests_total || 0;
+        var labPending = data.lab_tests_pending || 0;
+        var labCompleted = data.lab_tests_completed || 0;
+        
+        console.log('📊 Updating stats - Today Visits:', todayVisitsTotal);
+        
+        // ================================================================
+        // UPDATE TODAY'S VISITS - KEY CARD
+        // ================================================================
+        if (elements.todayVisitsTotal) {
+            elements.todayVisitsTotal.textContent = todayVisitsTotal;
+        }
+        if (elements.todayVisitsPending) {
+            elements.todayVisitsPending.innerHTML = '<i class="fas fa-clock"></i> ' + todayVisitsPending + ' Pending';
+        }
+        if (elements.todayVisitsCompleted) {
+            elements.todayVisitsCompleted.innerHTML = '<i class="fas fa-check-circle"></i> ' + todayVisitsCompleted + ' Complete';
+        }
+        if (elements.todayVisitsProgress) {
+            var pct = todayVisitsTotal > 0 ? Math.min(100, (todayVisitsCompleted / Math.max(todayVisitsTotal, 1)) * 100) : 0;
+            elements.todayVisitsProgress.style.width = pct + '%';
+        }
+        
+        // ================================================================
+        // UPDATE TODAY'S PATIENTS
+        // ================================================================
+        if (elements.todayPatientsTotal) {
+            elements.todayPatientsTotal.textContent = todayPatientsTotal;
+        }
+        if (elements.todayPatientsPending) {
+            elements.todayPatientsPending.innerHTML = '<i class="fas fa-clock"></i> ' + todayPatientsPending + ' Pending';
+        }
+        if (elements.todayPatientsCompleted) {
+            elements.todayPatientsCompleted.innerHTML = '<i class="fas fa-check-circle"></i> ' + todayPatientsCompleted + ' Complete';
+        }
+        if (elements.todayPatientsProgress) {
+            var pct = todayPatientsTotal > 0 ? Math.min(100, (todayPatientsCompleted / Math.max(todayPatientsTotal, 1)) * 100) : 0;
+            elements.todayPatientsProgress.style.width = pct + '%';
+        }
+        
+        // ================================================================
+        // UPDATE TOTAL STATS
+        // ================================================================
+        if (elements.totalPatients) {
+            elements.totalPatients.textContent = formatNumber(data.total_patients || 0);
+        }
+        if (elements.totalVisits) {
+            elements.totalVisits.textContent = formatNumber(data.total_visits || 0);
+        }
+        
+        // ================================================================
+        // UPDATE APPOINTMENTS
+        // ================================================================
+        if (elements.todayAppointmentsTotal) {
+            elements.todayAppointmentsTotal.textContent = todayApptsTotal;
+        }
+        if (elements.todayAppointmentsPending) {
+            elements.todayAppointmentsPending.innerHTML = '<i class="fas fa-clock"></i> ' + todayApptsPending + ' Pending';
+        }
+        if (elements.todayAppointmentsCompleted) {
+            elements.todayAppointmentsCompleted.innerHTML = '<i class="fas fa-check-circle"></i> ' + todayApptsCompleted + ' Complete';
+        }
+        if (elements.todayAppointmentsProgress) {
+            var pct = todayApptsTotal > 0 ? Math.min(100, (todayApptsCompleted / Math.max(todayApptsTotal, 1)) * 100) : 0;
+            elements.todayAppointmentsProgress.style.width = pct + '%';
+        }
+        if (elements.totalAppointments) {
+            elements.totalAppointments.textContent = formatNumber(data.total_appointments || 0);
+        }
+        if (elements.appointmentsCount) {
+            elements.appointmentsCount.textContent = '(' + todayApptsTotal + ')';
+        }
+        
+        // ================================================================
+        // UPDATE PRESCRIPTIONS & LAB
+        // ================================================================
+        if (elements.totalPrescriptions) {
+            elements.totalPrescriptions.textContent = formatNumber(data.total_prescriptions || 0);
+        }
+        if (elements.labTestsTotal) {
+            elements.labTestsTotal.textContent = formatNumber(labTotal);
+        }
+        if (elements.labTestsPending) {
+            elements.labTestsPending.innerHTML = '<i class="fas fa-clock"></i> ' + labPending + ' Pending';
+        }
+        if (elements.labTestsCompleted) {
+            elements.labTestsCompleted.innerHTML = '<i class="fas fa-check-circle"></i> ' + labCompleted + ' Complete';
+        }
+        if (elements.labTestsProgress) {
+            var pct = labTotal > 0 ? Math.min(100, (labCompleted / Math.max(labTotal, 1)) * 100) : 0;
+            elements.labTestsProgress.style.width = pct + '%';
+        }
+        if (elements.labTestsBadge) {
+            if (labPending > 0) {
+                elements.labTestsBadge.textContent = labPending;
+                elements.labTestsBadge.style.display = 'inline-block';
+            } else {
+                elements.labTestsBadge.style.display = 'none';
+            }
+        }
+        
+        // ================================================================
+        // UPDATE MINI STATS
+        // ================================================================
+        if (elements.miniAppointments) {
+            elements.miniAppointments.textContent = todayApptsTotal;
+        }
+        if (elements.miniPending) {
+            elements.miniPending.textContent = todayPatientsPending;
+        }
+        if (elements.miniTotalPatients) {
+            elements.miniTotalPatients.textContent = formatNumber(data.total_patients || 0);
+        }
+        
+        // Pulse button
+        if (elements.btnPulse) {
+            if (todayPatientsPending > 0) {
+                elements.btnPulse.style.display = 'inline-flex';
+                if (elements.btnPulseText) {
+                    elements.btnPulseText.textContent = todayPatientsPending + ' Patient(s) Waiting';
+                }
+            } else {
+                elements.btnPulse.style.display = 'none';
+            }
+        }
+        
+        // ================================================================
+        // UPDATE QUEUE
+        // ================================================================
+        if (elements.queueCount) {
+            elements.queueCount.textContent = '(' + (data.pending_visits || 0) + ' waiting)';
+        }
+        
+        // ================================================================
+        // UPDATE TIMESTAMPS
+        // ================================================================
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        var dateStr = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        
+        if (elements.footerTimestamp) {
+            elements.footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
+        if (elements.currentDateTime) {
+            elements.currentDateTime.textContent = dateStr + ' • ' + timeStr;
+        }
+        if (elements.updateBadge) {
+            elements.updateBadge.innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
+        }
+    }
+    
+    function formatNumber(num) {
+        if (num === undefined || num === null) return '0';
+        return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+    
+    // ================================================================
+    // FETCH DATA
+    // ================================================================
+    function fetchStats() {
+        if (state.isUpdating) return;
+        state.isUpdating = true;
+        
+        var url = CONFIG.apiEndpoint + '?t=' + new Date().getTime();
+        
+        fetch(url, {
+            method: 'GET',
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Network error: ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            state.isUpdating = false;
+            if (data.success) {
+                updateStats(data.data);
+            } else {
+                console.error('❌ API Error:', data.error);
+            }
+        })
+        .catch(function(error) {
+            console.error('❌ Fetch error:', error);
+            state.isUpdating = false;
+            if (elements.updateBadge) {
+                elements.updateBadge.innerHTML = '<i class="fas fa-exclamation-circle" style="color:#EF4444;"></i> Error';
+            }
+        });
+    }
+    
+    // ================================================================
+    // START/STOP
+    // ================================================================
+    var updateInterval = null;
+    
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        fetchStats();
+        updateInterval = setInterval(fetchStats, CONFIG.updateInterval);
+        console.log('🔄 Auto-update started (5s interval)');
+    }
+    
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+        }
+        console.log('⏹️ Auto-update stopped');
+    }
+    
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    function manualRefresh() {
+        var btn = elements.refreshBtn;
+        if (btn) {
+            btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Loading...';
+            btn.disabled = true;
+        }
+        
+        fetchStats();
+        
+        setTimeout(function() {
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+                btn.disabled = false;
+            }
+        }, 1500);
+    }
+    
+    // ================================================================
+    // EXPOSE
+    // ================================================================
+    window.DoctorStats = {
+        start: startAutoUpdate,
+        stop: stopAutoUpdate,
+        refresh: manualRefresh,
+        fetch: fetchStats
+    };
+    
+    // ================================================================
+    // INIT
+    // ================================================================
+    function init() {
+        if (state.initialized) return;
+        findElements();
+        startAutoUpdate();
+        state.initialized = true;
+        console.log('✅ Doctor Stats System initialized (visit_date fixed)');
+    }
+    
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+    
+})();
+</script>
 
 </body>
 </html>

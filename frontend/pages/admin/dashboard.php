@@ -5,6 +5,7 @@
 // 8 CARDS ONLY: Revenue, Expenses, Profit, Prescriptions, OTC, Stock, Expiry, Patients
 // FIXED: Only bills from existing patients
 // FIXED: Column 'branch_id' ambiguous - added table prefixes
+// FIXED: Prescription sales from prescription_sales table
 // SOLID COLORS - CLEAN MODERN LOOK
 // BRAICK DISPENSARY
 // ================================================================
@@ -147,9 +148,20 @@ $stmt = $db->query("
 $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 3. TOTAL REVENUE
+// ✅ 2.5. PRESCRIPTION SALES REVENUE - ADDED
 // ================================================================
-$total_revenue = $patient_bills_revenue + $otc_revenue;
+$stmt = $db->query("
+    SELECT COALESCE(SUM(total_amount), 0) as total 
+    FROM prescription_sales 
+    WHERE status = 'dispensed'
+    $branch_filter
+");
+$prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// ================================================================
+// ✅ 3. TOTAL REVENUE (Includes Patient Bills + OTC + Prescription Sales)
+// ================================================================
+$total_revenue = $patient_bills_revenue + $otc_revenue + $prescription_revenue;
 
 // ================================================================
 // ✅ 4. TOTAL EXPENSES
@@ -182,31 +194,20 @@ $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
 // ================================================================
-// ✅ 6. PRESCRIPTION AMOUNT - ONLY EXISTING PATIENTS
-// ✅ FIXED: Uses pb.branch_id
+// ✅ 6. PRESCRIPTION SALES - FROM prescription_sales TABLE
+// ✅ FIXED: Direct query from prescription_sales
 // ================================================================
 $stmt = $db->query("
-    SELECT COALESCE(SUM(bi.total_price), 0) as total
-    FROM bill_items bi
-    INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-    INNER JOIN patients p ON pb.patient_id = p.id
-    WHERE bi.item_type = 'medication'
-    AND pb.status = 'paid'
-    $branch_filter_pb
+    SELECT 
+        COALESCE(SUM(total_amount), 0) as total,
+        COUNT(*) as count
+    FROM prescription_sales 
+    WHERE status = 'dispensed'
+    $branch_filter
 ");
-$prescription_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// Prescription count - ONLY EXISTING PATIENTS
-$stmt = $db->query("
-    SELECT COUNT(DISTINCT pb.id) as count
-    FROM patient_bills pb
-    INNER JOIN bill_items bi ON bi.bill_id = pb.id
-    INNER JOIN patients p ON pb.patient_id = p.id
-    WHERE bi.item_type = 'medication'
-    AND pb.status = 'paid'
-    $branch_filter_pb
-");
-$prescription_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$prescription_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$prescription_amount = $prescription_data['total'] ?? 0;
+$prescription_count = $prescription_data['count'] ?? 0;
 
 // ================================================================
 // ✅ 7. OTC SALES DETAILS
@@ -275,8 +276,7 @@ $stmt->execute([$today]);
 $today_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // ================================================================
-// CHART DATA - Last 7 Days Revenue (ONLY EXISTING PATIENTS)
-// ✅ FIXED: Uses pb.branch_id
+// CHART DATA - Last 7 Days Revenue
 // ================================================================
 $chart_labels = [];
 $chart_values = [];
@@ -305,6 +305,17 @@ for ($i = 6; $i >= 0; $i--) {
         FROM otc_sales 
         WHERE DATE(created_at) = ? 
         AND payment_status = 'paid'
+        $branch_filter
+    ");
+    $stmt->execute([$date]);
+    $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    
+    // Prescription Sales - ADDED
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(total_amount), 0) as total 
+        FROM prescription_sales 
+        WHERE DATE(created_at) = ? 
+        AND status = 'dispensed'
         $branch_filter
     ");
     $stmt->execute([$date]);
@@ -566,8 +577,8 @@ include_once '../../components/admin_sidebar.php';
             animation: pulse-dot 2s infinite;
         }
         
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
+        .notif-dot.has-notif { background: #EF4444; }
+        .notif-dot.no-notif { background: var(--text-secondary); animation: none; }
         
         @keyframes pulse-dot {
             0%, 100% { transform: scale(1); }
@@ -1446,7 +1457,7 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
@@ -1495,7 +1506,7 @@ include_once '../../components/admin_sidebar.php';
                     <div>
                         <p class="stat-label">Total Revenue</p>
                         <p class="stat-number">TSh <?= number_format($total_revenue) ?></p>
-                        <p class="stat-sub">Patient Bills + OTC Sales</p>
+                        <p class="stat-sub">Bills + OTC + Prescriptions</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
                 </div>
@@ -1548,18 +1559,18 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 4. PRESCRIPTION AMOUNT -->
-        <a href="bills.php?type=prescription&branch=<?= $selected_branch_id ?>" class="stat-card card-prescription">
+        <!-- 4. PRESCRIPTION SALES -->
+        <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="stat-card card-prescription">
             <div class="card-content">
                 <div class="card-top">
                     <div>
-                        <p class="stat-label">Prescription Amount</p>
+                        <p class="stat-label">Prescription Sales</p>
                         <p class="stat-number">TSh <?= number_format($prescription_amount) ?></p>
-                        <p class="stat-sub"><?= $prescription_count ?> prescriptions</p>
+                        <p class="stat-sub"><?= $prescription_count ?> sales</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-prescription"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-pills"></i> Medication bills</div>
+                <div class="stat-trend"><i class="fas fa-pills"></i> Dispensed prescriptions</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1967,7 +1978,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💸 Total Expenses: TSh <?= number_format($total_expenses) ?>', 'font-size:13px; color:#E11D48;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit) ?> (<?= $profit_percentage ?>%)', 'font-size:13px; color:<?= $net_profit >= 0 ? '#059669' : '#EF4444' ?>;');
-    console.log('%c💊 Prescriptions: TSh <?= number_format($prescription_amount) ?> (<?= $prescription_count ?> bills)', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💊 Prescription Sales: TSh <?= number_format($prescription_amount) ?> (<?= $prescription_count ?> sales)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🏪 OTC Sales: TSh <?= number_format($otc_total) ?> (<?= $otc_count ?> transactions)', 'font-size:13px; color:#D97706;');
     console.log('%c📦 Stock Issues: <?= $out_of_stock + $low_stock ?> (Out: <?= $out_of_stock ?>, Low: <?= $low_stock ?>)', 'font-size:13px; color:#0891B2;');
     console.log('%c📅 Expiry Issues: <?= $expired + $expiring_soon ?> (Expired: <?= $expired ?>, Soon: <?= $expiring_soon ?>)', 'font-size:13px; color:#DC2626;');
@@ -1976,6 +1987,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c✅ FIXED: Login session protection active', 'font-size:13px; color:#059669;');
     console.log('%c✅ FIXED: Only bills from existing patients', 'font-size:13px; color:#059669;');
     console.log('%c✅ FIXED: Column "branch_id" ambiguous - added table prefixes', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Prescription sales from prescription_sales table', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

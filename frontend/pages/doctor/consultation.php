@@ -5,6 +5,8 @@
 // FIXED: NO DUPLICATE lab tests - checks pending AND in_progress
 // FIXED: NO DOUBLE BILLING for consultation fee
 // FIXED: Blue theme design with modern cards
+// FIXED: Medications show batch number, expiry date, stock management
+// FIXED: Expired drugs are hidden from list
 // ================================================================
 
 // Start session
@@ -332,14 +334,18 @@ try {
     $procedure_tools = []; 
 }
 
-// 4. Medications - BRANCH SPECIFIC
+// 4. Medications - BRANCH SPECIFIC - FIXED: Only active, in stock, not expired
 $medications_list = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, medication_name, category, unit, selling_price, quantity 
+        SELECT id, medication_name, category, unit, selling_price, quantity, 
+               batch_number, expiry_date
         FROM medications_inventory 
-        WHERE status = 'active' AND quantity > 0 AND branch_id = ?
-        ORDER BY medication_name ASC
+        WHERE status = 'active' 
+        AND quantity > 0 
+        AND branch_id = ?
+        AND (expiry_date IS NULL OR expiry_date > CURDATE())
+        ORDER BY medication_name ASC, expiry_date ASC
     ");
     $stmt->execute([$doctor_branch_id]);
     $medications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -864,7 +870,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD MEDICATION
+    // AJAX: ADD MEDICATION - FIXED: Uses inventory_id, checks stock & expiry
     // ================================================================
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
@@ -885,15 +891,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $response = ['success' => false, 'message' => '', 'medication' => null];
         
         if ($inventory_id > 0 && $quantity > 0) {
+            // Get medication from inventory with stock and expiry check
             $stmt = $db->prepare("
-                SELECT medication_name, selling_price, unit, quantity as stock 
+                SELECT id, medication_name, selling_price, unit, quantity as stock, 
+                       batch_number, expiry_date
                 FROM medications_inventory 
                 WHERE id = ? AND status = 'active' AND branch_id = ?
             ");
             $stmt->execute([$inventory_id, $doctor_branch_id]);
             $med = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            if ($med && $med['stock'] >= $quantity) {
+            if ($med) {
+                // Check expiry
+                if (!empty($med['expiry_date'])) {
+                    $expiry = strtotime($med['expiry_date']);
+                    if ($expiry < time()) {
+                        $response['message'] = '❌ This medication has EXPIRED! Please select another batch.';
+                        echo json_encode($response);
+                        exit;
+                    }
+                    // Warning if expiring soon (less than 30 days)
+                    if ($expiry < strtotime('+30 days')) {
+                        $response['warning'] = '⚠️ This medication expires in ' . ceil(($expiry - time()) / 86400) . ' days.';
+                    }
+                }
+                
+                // Check stock
+                if ($med['stock'] < $quantity) {
+                    $response['message'] = '❌ Insufficient stock! Available: ' . $med['stock'] . ' | Batch: ' . ($med['batch_number'] ?? 'N/A');
+                    echo json_encode($response);
+                    exit;
+                }
+                
+                // Create prescription
                 $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
                 
                 $stmt = $db->prepare("
@@ -941,10 +971,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     $total_price
                 ]);
                 
+                // Update inventory stock
+                $new_stock = $med['stock'] - $quantity;
+                $stmt = $db->prepare("
+                    UPDATE medications_inventory 
+                    SET quantity = ? 
+                    WHERE id = ?
+                ");
+                $stmt->execute([$new_stock, $inventory_id]);
+                
                 $response['success'] = true;
-                $response['message'] = '✅ Medication added to prescription! Bill will be created when Pharmacy dispenses.';
+                $response['message'] = '✅ Medication added! Batch: ' . ($med['batch_number'] ?? 'N/A') . ' | Remaining: ' . $new_stock;
                 $response['medication'] = [
                     'id' => $prescription_id,
+                    'inventory_id' => $inventory_id,
                     'name' => $med['medication_name'],
                     'dosage' => $dosage,
                     'frequency' => $frequency,
@@ -952,10 +992,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     'quantity' => $quantity,
                     'instructions' => $instructions,
                     'unit_price' => $unit_price,
-                    'total_price' => $total_price
+                    'total_price' => $total_price,
+                    'batch_number' => $med['batch_number'] ?? '',
+                    'expiry_date' => $med['expiry_date'] ?? '',
+                    'new_stock' => $new_stock
                 ];
+                $response['new_stock'] = $new_stock;
+                $response['batch_number'] = $med['batch_number'] ?? '';
+                
+                if (isset($response['warning'])) {
+                    $response['message'] .= ' ' . $response['warning'];
+                }
             } else {
-                $response['message'] = '❌ Insufficient stock! Available: ' . ($med['stock'] ?? 0);
+                $response['message'] = '❌ Medication not found or inactive';
             }
         } else {
             $response['message'] = '❌ Please select a medication and quantity';
@@ -966,7 +1015,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: REMOVE MEDICATION
+    // AJAX: REMOVE MEDICATION - FIXED: Returns stock
     // ================================================================
     if ($action === 'remove_medication') {
         header('Content-Type: application/json');
@@ -974,7 +1023,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $response = ['success' => false, 'message' => ''];
         
         if ($prescription_id > 0) {
-            $stmt = $db->prepare("SELECT status FROM prescriptions WHERE id = ? AND visit_id = ?");
+            $stmt = $db->prepare("SELECT status, medication, quantity FROM prescriptions WHERE id = ? AND visit_id = ?");
             $stmt->execute([$prescription_id, $visit_id]);
             $presc = $stmt->fetch(PDO::FETCH_ASSOC);
             
@@ -984,22 +1033,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 exit;
             }
             
+            // Get medication details to return stock
             $stmt = $db->prepare("
-                SELECT pi.medication_name, pi.quantity 
+                SELECT pi.medication_name, pi.quantity, pi.unit_price,
+                       mi.id as inventory_id
                 FROM prescription_items pi
                 JOIN prescriptions p ON pi.prescription_id = p.id
+                LEFT JOIN medications_inventory mi ON mi.medication_name = pi.medication_name AND mi.branch_id = p.branch_id
                 WHERE p.id = ? AND p.visit_id = ?
+                LIMIT 1
             ");
             $stmt->execute([$prescription_id, $visit_id]);
             $med = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            if ($med) {
+            if ($med && $med['inventory_id']) {
+                // Return stock
                 $stmt = $db->prepare("
                     UPDATE medications_inventory 
                     SET quantity = quantity + ? 
-                    WHERE medication_name = ? AND branch_id = ?
+                    WHERE id = ? AND branch_id = ?
                 ");
-                $stmt->execute([$med['quantity'], $med['medication_name'], $doctor_branch_id]);
+                $stmt->execute([$med['quantity'], $med['inventory_id'], $doctor_branch_id]);
             }
             
             $stmt = $db->prepare("DELETE FROM prescription_items WHERE prescription_id = ?");
@@ -1009,7 +1063,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $stmt->execute([$prescription_id, $visit_id]);
             
             $response['success'] = true;
-            $response['message'] = '✅ Medication removed!';
+            $response['message'] = '✅ Medication removed! Stock returned.';
+            $response['medication_name'] = $med['medication_name'] ?? '';
+            $response['quantity_returned'] = $med['quantity'] ?? 0;
         } else {
             $response['message'] = '❌ Invalid medication';
         }
@@ -2375,6 +2431,23 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         [data-theme="dark"] .selected-item { border-color: var(--gray-700); }
         
         /* ================================================================
+           MEDICATION SELECT - BATCH INFO
+           ================================================================ */
+        .med-batch-info {
+            font-size: 0.6rem;
+            color: var(--gray-400);
+            margin-left: 4px;
+        }
+        .med-expiry-warning {
+            color: var(--warning);
+            font-weight: 600;
+        }
+        .med-expiry-danger {
+            color: var(--danger);
+            font-weight: 700;
+        }
+        
+        /* ================================================================
            GRID & UTILITIES
            ================================================================ */
         .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -2424,11 +2497,34 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         [data-theme="dark"] .form-actions { border-color: var(--gray-700); }
         
+        .proc-total-display {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-left: auto;
+        }
+        .proc-total-display .total-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 2px 12px;
+            border-radius: 16px;
+            color: white;
+        }
+        .proc-total-display .total-item .label { opacity: 0.8; font-weight: 400; }
+        .proc-total-display .total-item .amount { font-weight: 700; }
+        .proc-total-display .primary-bg { background: var(--primary); }
+        .proc-total-display .purple-bg { background: var(--purple); }
+        .proc-total-display .warning-bg { background: var(--warning); }
+        
         /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
             .view-summary-grid { grid-template-columns: 1fr 1fr; }
+            .proc-total-display { flex-wrap: wrap; }
         }
         @media (max-width: 768px) {
             .main-content { margin-left: 0; padding: 16px; }
@@ -2449,6 +2545,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 width: 80%;
             }
             .grand-total-bar .total-amount { font-size: 1.3rem; }
+            .proc-total-display { margin-left: 0; width: 100%; justify-content: flex-start; }
         }
         @media (max-width: 480px) {
             .main-content { padding: 12px; }
@@ -2457,6 +2554,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .instructions-grid { grid-template-columns: repeat(2, 1fr); }
             .grand-total-bar { flex-direction: column; text-align: center; }
             .grand-total-bar .total-amount { font-size: 1.1rem; }
+            .proc-total-display { flex-direction: column; align-items: stretch; }
+            .proc-total-display .total-item { justify-content: center; }
         }
     </style>
 </head>
@@ -2983,7 +3082,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
 
-            <!-- SECTION 6: MEDICATIONS -->
+            <!-- SECTION 6: MEDICATIONS - FIXED: With batch, expiry, stock management -->
             <div class="consultation-card mb-6">
                 <h3 class="card-title">
                     <i class="fas fa-prescription title-blue"></i> Medications
@@ -3007,9 +3106,33 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <select name="inventory_id" class="form-control" id="medicationSelect" <?= $sections_frozen ? 'disabled' : '' ?>>
                                 <option value="">Select Medication...</option>
                                 <?php foreach ($medications_list as $med): ?>
-                                    <option value="<?= $med['id'] ?>" data-price="<?= $med['selling_price'] ?>">
+                                    <?php 
+                                        $expiry = !empty($med['expiry_date']) ? strtotime($med['expiry_date']) : null;
+                                        $expiry_warning = '';
+                                        if ($expiry && $expiry < strtotime('+30 days')) {
+                                            $days = ceil(($expiry - time()) / 86400);
+                                            $expiry_warning = $days < 0 ? '❌ EXPIRED' : '⚠️ ' . $days . ' days left';
+                                        }
+                                    ?>
+                                    <option value="<?= $med['id'] ?>" 
+                                            data-price="<?= $med['selling_price'] ?>" 
+                                            data-stock="<?= $med['quantity'] ?>" 
+                                            data-batch="<?= htmlspecialchars($med['batch_number'] ?? '') ?>"
+                                            data-expiry="<?= $med['expiry_date'] ?? '' ?>">
                                         <?= htmlspecialchars($med['medication_name']) ?> 
                                         (<?= $med['quantity'] ?? 0 ?> available) - TSh <?= number_format($med['selling_price'] ?? 0, 0) ?>
+                                        <?php if (!empty($med['batch_number'])): ?>
+                                            [Batch: <?= htmlspecialchars($med['batch_number']) ?>]
+                                        <?php endif; ?>
+                                        <?php if ($expiry): ?>
+                                            <?php if ($expiry < time()): ?>
+                                                <span style="color:#DC2626;font-weight:700;">❌ EXPIRED</span>
+                                            <?php elseif ($expiry < strtotime('+30 days')): ?>
+                                                <span style="color:#D97706;font-weight:600;">⚠️ <?= ceil(($expiry - time()) / 86400) ?> days left</span>
+                                            <?php else: ?>
+                                                <span style="color:#64748B;font-size:0.6rem;">Exp: <?= date('M d, Y', $expiry) ?></span>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
                                     </option>
                                 <?php endforeach; ?>
                                 <?php if (count($medications_list) == 0): ?>
@@ -3492,7 +3615,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     function addLabTest() {
-        // Only allow if no active tests
         if (activeLabCount > 0) {
             showToast('Warning', '⚠️ Lab tests are in progress. Please wait for results.', 'warning');
             return;
@@ -3776,6 +3898,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         document.getElementById('grandTotalAmount').textContent = grandTotal.toLocaleString();
     }
 
+    // ================================================================
+    // ADD MEDICATION - FIXED: With stock, batch, expiry management
+    // ================================================================
     function addMedicationAjax() {
         var medSelect = document.getElementById('medicationSelect');
         var qty = parseInt(document.getElementById('medQuantity').value) || 0;
@@ -3785,9 +3910,32 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var route = document.getElementById('medRoute').value;
         var instructions = document.getElementById('medInstructions').value;
         var unitPrice = parseFloat(medSelect.options[medSelect.selectedIndex]?.dataset?.price) || 0;
+        var stock = parseInt(medSelect.options[medSelect.selectedIndex]?.dataset?.stock) || 0;
+        var batch = medSelect.options[medSelect.selectedIndex]?.dataset?.batch || '';
+        var expiry = medSelect.options[medSelect.selectedIndex]?.dataset?.expiry || '';
         
         if (!medSelect.value) { showToast('Error', 'Please select a medication', 'error'); return; }
         if (qty < 1) { showToast('Error', 'Quantity must be at least 1', 'error'); return; }
+        if (qty > stock) { 
+            showToast('Error', '⚠️ Not enough stock! Available: ' + stock + ' | Batch: ' + batch, 'error'); 
+            return; 
+        }
+        
+        // Check expiry
+        if (expiry) {
+            var expiryDate = new Date(expiry);
+            var today = new Date();
+            var daysUntilExpiry = Math.ceil((expiryDate - today) / (1000 * 60 * 60 * 24));
+            if (daysUntilExpiry < 0) {
+                showToast('Error', '❌ This medication has EXPIRED! Please select another batch.', 'error');
+                return;
+            }
+            if (daysUntilExpiry < 30 && daysUntilExpiry > 0) {
+                if (!confirm('⚠️ This medication expires in ' + daysUntilExpiry + ' days. Continue?')) {
+                    return;
+                }
+            }
+        }
         
         var formData = new FormData();
         formData.append('action', 'add_medication');
@@ -3811,6 +3959,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             if (data.success) {
                 showToast('Success', data.message, 'success');
                 addMedicationToList(data.medication);
+                // Update stock display in dropdown
+                var newStock = stock - qty;
+                medSelect.options[medSelect.selectedIndex].dataset.stock = newStock;
+                var text = medSelect.options[medSelect.selectedIndex].textContent;
+                text = text.replace(/\((\d+) available\)/, function(match, p1) {
+                    return '(' + newStock + ' available)';
+                });
+                medSelect.options[medSelect.selectedIndex].textContent = text;
                 medSelect.value = '';
                 document.getElementById('medQuantity').value = '1';
                 document.getElementById('medDosage').value = '';
@@ -3824,6 +3980,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             } else {
                 showToast('Error', data.message, 'error');
             }
+        })
+        .catch(function(error) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-plus"></i> Add Medication';
+            showToast('Error', 'Network error. Please try again.', 'error');
         });
     }
 
@@ -3843,6 +4004,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span class="med-qty">x${med.quantity}</span>
                 <span class="med-price">TSh ${totalPrice.toLocaleString()}</span>
                 ${med.instructions ? `<span class="med-instruction-tag">${escapeHtml(med.instructions)}</span>` : ''}
+                ${med.batch_number ? `<span class="text-xs text-gray-400 ml-2">Batch: ${escapeHtml(med.batch_number)}</span>` : ''}
                 <span class="med-status-pending">⏳ Pending Dispense</span>
             </div>
             <button type="button" class="btn-remove" onclick="removeMedication(${med.id})"><i class="fas fa-times"></i></button>
@@ -3853,8 +4015,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         updateGrandTotal();
     }
 
+    // ================================================================
+    // REMOVE MEDICATION - FIXED: Returns stock
+    // ================================================================
     function removeMedication(prescriptionId) {
-        if (!confirm('Remove this medication?')) return;
+        if (!confirm('Remove this medication? Stock will be returned.')) return;
         var formData = new FormData();
         formData.append('action', 'remove_medication');
         formData.append('prescription_id', prescriptionId);
@@ -3864,7 +4029,31 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             if (data.success) {
                 showToast('Info', data.message, 'info');
                 var item = document.getElementById('med-item-' + prescriptionId);
-                if (item) item.remove();
+                if (item) {
+                    var nameEl = item.querySelector('.med-name');
+                    var qtyEl = item.querySelector('.med-qty');
+                    if (nameEl && qtyEl) {
+                        var medName = nameEl.textContent;
+                        var qty = parseInt(qtyEl.textContent.replace('x', '')) || 0;
+                        var select = document.getElementById('medicationSelect');
+                        if (select) {
+                            for (var i = 0; i < select.options.length; i++) {
+                                if (select.options[i].textContent.includes(medName)) {
+                                    var currentStock = parseInt(select.options[i].dataset.stock) || 0;
+                                    select.options[i].dataset.stock = currentStock + qty;
+                                    var text = select.options[i].textContent;
+                                    text = text.replace(/\((\d+) available\)/, function(match, p1) {
+                                        var newStock = parseInt(p1) + qty;
+                                        return '(' + newStock + ' available)';
+                                    });
+                                    select.options[i].textContent = text;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    item.remove();
+                }
                 updateMedCount();
                 updateMedTotal();
                 updateGrandTotal();
@@ -4250,6 +4439,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         console.log('%c✅ FIXED: Blue theme with modern cards', 'font-size:12px; color:#34D399;');
         console.log('%c✅ FIXED: NO double billing for consultation fee', 'font-size:12px; color:#34D399;');
         console.log('%c✅ FIXED: Active tests count: ' + activeLabCount, 'font-size:12px; color:#34D399;');
+        console.log('%c✅ FIXED: Medications show batch number, expiry date, stock management', 'font-size:12px; color:#34D399;');
+        console.log('%c✅ FIXED: Expired drugs are hidden from list', 'font-size:12px; color:#34D399;');
     });
 
     <?php endif; ?>
