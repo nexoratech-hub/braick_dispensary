@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/admin/prescriptions.php
 // PRESCRIPTIONS LIST - VIEW ALL PRESCRIPTIONS
-// FIXED: Only 3 buttons: View, Edit, Delete (Delete All removed)
+// FIXED: Branch filter working correctly with statistics
+// FIXED: Shows all prescriptions even without sales
+// FIXED: Branch filter now properly filters by branch_id
 // ================================================================
 
 // ================================================================
@@ -53,17 +55,15 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// ✅ FIXED: HANDLE DELETE PRESCRIPTION
+// HANDLE DELETE PRESCRIPTION
 // ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $delete_id = (int)$_GET['delete'];
     $branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
     
     try {
-        // Start transaction
         $db->beginTransaction();
         
-        // Get prescription details
         $stmt = $db->prepare("SELECT prescription_number, patient_id FROM prescriptions WHERE id = ?");
         $stmt->execute([$delete_id]);
         $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -71,24 +71,19 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
         if ($prescription) {
             $patient_id = $prescription['patient_id'];
             
-            // 1. Delete prescription_sales
             $stmt = $db->prepare("DELETE FROM prescription_sales WHERE prescription_id = ?");
             $stmt->execute([$delete_id]);
             
-            // 2. Delete prescription_items
             $stmt = $db->prepare("DELETE FROM prescription_items WHERE prescription_id = ?");
             $stmt->execute([$delete_id]);
             
-            // 3. Delete prescription
             $stmt = $db->prepare("DELETE FROM prescriptions WHERE id = ?");
             $stmt->execute([$delete_id]);
             
-            // 4. Check if patient has any other prescriptions
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE patient_id = ?");
             $stmt->execute([$patient_id]);
             $count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
             
-            // If no more prescriptions, delete patient_bills and bill_items
             if ($count == 0) {
                 $stmt = $db->prepare("DELETE FROM patient_bills WHERE patient_id = ?");
                 $stmt->execute([$patient_id]);
@@ -96,25 +91,16 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
                 $stmt = $db->prepare("DELETE FROM bill_items WHERE patient_id = ?");
                 $stmt->execute([$patient_id]);
                 
-                // Also delete patient if no other records
                 $stmt = $db->prepare("DELETE FROM patients WHERE id = ?");
                 $stmt->execute([$patient_id]);
             }
-        } else {
-            // Prescription doesn't exist - delete orphaned records
-            $stmt = $db->prepare("DELETE FROM prescription_sales WHERE prescription_id = ?");
-            $stmt->execute([$delete_id]);
         }
         
-        // Commit transaction
         $db->commit();
-        
-        // Redirect with success
         header('Location: prescriptions.php?branch=' . urlencode($branch_id) . '&deleted=1');
         exit;
         
     } catch (Exception $e) {
-        // Rollback on error
         $db->rollBack();
         error_log("Delete error: " . $e->getMessage());
         header('Location: prescriptions.php?branch=' . urlencode($branch_id) . '&error=delete_failed');
@@ -132,7 +118,7 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $offset = ($page - 1) * $per_page;
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -141,8 +127,19 @@ $branches_list = [];
 $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
 $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Get branch name for display
+$selected_branch_name = 'All Branches';
+if ($selected_branch_id !== 'all') {
+    foreach ($branches_list as $b) {
+        if ($b['id'] == $selected_branch_id) {
+            $selected_branch_name = $b['name'];
+            break;
+        }
+    }
+}
+
 // ================================================================
-// BUILD QUERY FROM prescriptions TABLE
+// BUILD QUERY FROM prescriptions TABLE - FIXED
 // ================================================================
 $where_clause = " WHERE 1=1";
 $params = [];
@@ -164,17 +161,17 @@ if (!empty($status_filter)) {
     $params[] = $status_filter;
 }
 
-// Branch filter
+// Branch filter - FIXED: Always apply branch filter when selected
 if ($selected_branch_id !== 'all') {
     $where_clause .= " AND p.branch_id = ?";
     $params[] = (int)$selected_branch_id;
 }
 
 // ================================================================
-// GET PRESCRIPTIONS FROM prescriptions TABLE
+// GET PRESCRIPTIONS FROM prescriptions TABLE - FIXED: LEFT JOIN correctly
 // ================================================================
 
-// Get total count
+// Get total count for pagination
 $count_sql = "
     SELECT COUNT(*) as total 
     FROM prescriptions p
@@ -186,7 +183,7 @@ $stmt->execute($params);
 $total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 $total_pages = ceil($total_prescriptions / $per_page);
 
-// Get prescriptions with doctor name and amount
+// Get prescriptions with doctor name and amount - FIXED: Use LEFT JOIN for prescription_sales
 $sql = "
     SELECT 
         p.*,
@@ -220,47 +217,114 @@ $stmt->execute($params);
 $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - FIXED: Properly filtered by branch
 // ================================================================
 
-// Total prescriptions
-$stmt = $db->query("SELECT COUNT(*) as total FROM prescriptions");
+// Build WHERE clause for statistics
+$stats_where = " WHERE 1=1";
+$stats_params = [];
+
+if ($selected_branch_id !== 'all') {
+    $stats_where .= " AND p.branch_id = ?";
+    $stats_params[] = (int)$selected_branch_id;
+}
+
+// Total prescriptions (filtered by branch)
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where");
+$stmt->execute($stats_params);
 $total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Pending prescriptions
-$stmt = $db->query("SELECT COUNT(*) as total FROM prescriptions WHERE status = 'pending'");
+// Pending prescriptions (filtered by branch)
+$pending_where = $stats_where . " AND p.status = 'pending'";
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $pending_where");
+$stmt->execute($stats_params);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Confirmed prescriptions
-$stmt = $db->query("SELECT COUNT(*) as total FROM prescriptions WHERE status = 'confirmed'");
+// Confirmed prescriptions (filtered by branch)
+$confirmed_where = $stats_where . " AND p.status = 'confirmed'";
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $confirmed_where");
+$stmt->execute($stats_params);
 $confirmed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Dispensed prescriptions
-$stmt = $db->query("SELECT COUNT(*) as total FROM prescriptions WHERE status = 'dispensed'");
+// Dispensed prescriptions (filtered by branch)
+$dispensed_where = $stats_where . " AND p.status = 'dispensed'";
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $dispensed_where");
+$stmt->execute($stats_params);
 $dispensed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Cancelled prescriptions
-$stmt = $db->query("SELECT COUNT(*) as total FROM prescriptions WHERE status = 'cancelled'");
+// Cancelled prescriptions (filtered by branch)
+$cancelled_where = $stats_where . " AND p.status = 'cancelled'";
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $cancelled_where");
+$stmt->execute($stats_params);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Total amount from prescription_sales (paid)
-$stmt = $db->query("SELECT COALESCE(SUM(total_amount), 0) as total_amount FROM prescription_sales WHERE status = 'paid' OR status = 'dispensed'");
+// ================================================================
+// GET AMOUNT STATISTICS - FIXED: Filtered by branch
+// ================================================================
+
+// Build WHERE clause for prescription_sales with branch filter
+$sales_where = " WHERE 1=1";
+$sales_params = [];
+
+if ($selected_branch_id !== 'all') {
+    // Join with prescriptions to filter by branch
+    $sales_where = " WHERE p.branch_id = ?";
+    $sales_params[] = (int)$selected_branch_id;
+}
+
+// Total amount from prescription_sales (paid/dispensed)
+$amount_sql = "
+    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
+    FROM prescription_sales ps
+    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
+    $sales_where AND (ps.status = 'paid' OR ps.status = 'dispensed')
+";
+$stmt = $db->prepare($amount_sql);
+$stmt->execute($sales_params);
 $total_amount_all = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 
 // Pending amount
-$stmt = $db->query("SELECT COALESCE(SUM(total_amount), 0) as total_amount FROM prescription_sales WHERE status = 'pending'");
+$pending_amount_sql = "
+    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
+    FROM prescription_sales ps
+    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
+    $sales_where AND ps.status = 'pending'
+";
+$stmt = $db->prepare($pending_amount_sql);
+$stmt->execute($sales_params);
 $pending_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 
 // Dispensed amount
-$stmt = $db->query("SELECT COALESCE(SUM(total_amount), 0) as total_amount FROM prescription_sales WHERE status = 'dispensed'");
+$dispensed_amount_sql = "
+    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
+    FROM prescription_sales ps
+    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
+    $sales_where AND ps.status = 'dispensed'
+";
+$stmt = $db->prepare($dispensed_amount_sql);
+$stmt->execute($sales_params);
 $dispensed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 
 // Confirmed amount
-$stmt = $db->query("SELECT COALESCE(SUM(total_amount), 0) as total_amount FROM prescription_sales WHERE status = 'confirmed'");
+$confirmed_amount_sql = "
+    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
+    FROM prescription_sales ps
+    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
+    $sales_where AND ps.status = 'confirmed'
+";
+$stmt = $db->prepare($confirmed_amount_sql);
+$stmt->execute($sales_params);
 $confirmed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 
 // Cancelled amount
-$stmt = $db->query("SELECT COALESCE(SUM(total_amount), 0) as total_amount FROM prescription_sales WHERE status = 'cancelled'");
+$cancelled_amount_sql = "
+    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
+    FROM prescription_sales ps
+    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
+    $sales_where AND ps.status = 'cancelled'
+";
+$stmt = $db->prepare($cancelled_amount_sql);
+$stmt->execute($sales_params);
 $cancelled_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 
 // ================================================================
@@ -490,7 +554,6 @@ include_once '../../components/admin_sidebar.php';
     .btn-action:hover i { transform: translateX(2px); }
     .btn-action:active { transform: scale(0.95); }
     
-    /* View - Blue */
     .btn-view {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
         color: white;
@@ -501,7 +564,6 @@ include_once '../../components/admin_sidebar.php';
         background: linear-gradient(135deg, #0A4CA8, #083C8A);
     }
     
-    /* Edit - Orange */
     .btn-edit {
         background: linear-gradient(135deg, #D97706, #B45309);
         color: white;
@@ -512,7 +574,6 @@ include_once '../../components/admin_sidebar.php';
         background: linear-gradient(135deg, #B45309, #92400E);
     }
     
-    /* Delete - Red (Only ONE delete button) */
     .btn-delete {
         background: linear-gradient(135deg, #DC2626, #B91C1C);
         color: white;
@@ -740,6 +801,11 @@ include_once '../../components/admin_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-prescription mr-2"></i> Prescriptions
+                <?php if ($selected_branch_id !== 'all'): ?>
+                    <span class="branch-tag ml-2" style="background:rgba(255,255,255,0.2);color:white;padding:3px 14px;border-radius:20px;font-size:0.7rem;font-weight:600;">
+                        <i class="fas fa-store-alt"></i> <?= htmlspecialchars($selected_branch_name) ?>
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 Manage all prescriptions in the system
@@ -820,23 +886,23 @@ include_once '../../components/admin_sidebar.php';
     <div class="filter-section animate-fade-in-up" style="animation-delay:0.05s;">
         <span class="filter-label"><i class="fas fa-filter"></i> Status:</span>
         
-        <a href="?<?= http_build_query(array_merge($_GET, ['status' => '', 'page' => 1])) ?>" 
+        <a href="?branch=<?= $selected_branch_id ?>&status=&page=1<?= $search ? '&search='.urlencode($search) : '' ?>" 
            class="filter-btn <?= empty($status_filter) ? 'active' : '' ?>">
             <i class="fas fa-globe"></i> All
         </a>
-        <a href="?<?= http_build_query(array_merge($_GET, ['status' => 'pending', 'page' => 1])) ?>" 
+        <a href="?branch=<?= $selected_branch_id ?>&status=pending&page=1<?= $search ? '&search='.urlencode($search) : '' ?>" 
            class="filter-btn <?= $status_filter === 'pending' ? 'active' : '' ?>">
             <i class="fas fa-clock"></i> Pending
         </a>
-        <a href="?<?= http_build_query(array_merge($_GET, ['status' => 'confirmed', 'page' => 1])) ?>" 
+        <a href="?branch=<?= $selected_branch_id ?>&status=confirmed&page=1<?= $search ? '&search='.urlencode($search) : '' ?>" 
            class="filter-btn <?= $status_filter === 'confirmed' ? 'active' : '' ?>">
             <i class="fas fa-check-circle"></i> Confirmed
         </a>
-        <a href="?<?= http_build_query(array_merge($_GET, ['status' => 'dispensed', 'page' => 1])) ?>" 
+        <a href="?branch=<?= $selected_branch_id ?>&status=dispensed&page=1<?= $search ? '&search='.urlencode($search) : '' ?>" 
            class="filter-btn <?= $status_filter === 'dispensed' ? 'active' : '' ?>">
             <i class="fas fa-pills"></i> Dispensed
         </a>
-        <a href="?<?= http_build_query(array_merge($_GET, ['status' => 'cancelled', 'page' => 1])) ?>" 
+        <a href="?branch=<?= $selected_branch_id ?>&status=cancelled&page=1<?= $search ? '&search='.urlencode($search) : '' ?>" 
            class="filter-btn <?= $status_filter === 'cancelled' ? 'active' : '' ?>">
             <i class="fas fa-times-circle"></i> Cancelled
         </a>
@@ -901,24 +967,20 @@ include_once '../../components/admin_sidebar.php';
                                     </td>
                                     <td class="text-xs"><?= date('M d, Y', strtotime($prescription['created_at'])) ?></td>
                                     <td>
-                                        <!-- ✅ ONLY 3 BUTTONS: View, Edit, Delete -->
                                         <div class="action-buttons">
-                                            <!-- 1. View -->
                                             <a href="view_prescription.php?id=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                                class="btn-action btn-view" title="View Prescription">
                                                 <i class="fas fa-eye"></i> View
                                             </a>
                                             
-                                            <!-- 2. Edit -->
                                             <a href="edit_prescription.php?id=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                                class="btn-action btn-edit" title="Edit Prescription">
                                                 <i class="fas fa-edit"></i> Edit
                                             </a>
                                             
-                                            <!-- 3. Delete (ONLY ONE) -->
                                             <a href="?delete=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                                class="btn-action btn-delete" title="Delete Prescription"
-                                               onclick="return confirm('⚠️ Are you sure you want to delete this prescription?\n\nPrescription: <?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?>\nPatient: <?= htmlspecialchars($prescription['patient_name'] ?? 'Unknown') ?>\nAmount: TSh <?= number_format($prescription['prescription_amount'] ?? 0, 0) ?>\n\nThis will also delete:\n• Prescription items\n• Prescription sales\n• Patient bills (if no other prescriptions)\n\nThis action cannot be undone!')">
+                                               onclick="return confirm('⚠️ Are you sure you want to delete this prescription?\n\nPrescription: <?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?>\nPatient: <?= htmlspecialchars($prescription['patient_name'] ?? 'Unknown') ?>\nAmount: TSh <?= number_format($prescription['prescription_amount'] ?? 0, 0) ?>\n\nThis action cannot be undone!')">
                                                 <i class="fas fa-trash"></i> Delete
                                             </a>
                                         </div>
@@ -1118,10 +1180,9 @@ include_once '../../components/admin_sidebar.php';
 
     console.log('%c🏥 Braick Dispensary - Prescriptions Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($selected_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c💊 Total Prescriptions: <?= $total_all ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ ONLY 3 BUTTONS: View, Edit, Delete', 'font-size:13px; color:#34D399;');
-    console.log('%c🗑️ ONE Delete button per row', 'font-size:13px; color:#34D399;');
-    console.log('%c🔵🔵🟠🔵🟢🔴 CARD COLORS', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Statistics filtered by branch', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

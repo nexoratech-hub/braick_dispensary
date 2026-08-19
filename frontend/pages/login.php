@@ -91,7 +91,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 // For demo users with password '12345678'
                 if (!$password_valid && $password === '12345678') {
-                    // Check if user exists with this password
                     $password_valid = true;
                 }
                 
@@ -191,6 +190,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
+
+// ================================================================
+// LOGO PATH
+// ================================================================
+$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.PNG';
+
+$server_root = $_SERVER['DOCUMENT_ROOT'];
+$possible_paths = [
+    $server_root . '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.PNG',
+    $server_root . '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
+    $server_root . '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.jpg',
+];
+
+foreach ($possible_paths as $path) {
+    if (file_exists($path)) {
+        $relative = str_replace($server_root, '', $path);
+        $logo_url = $relative;
+        break;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -198,7 +217,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Braick Dispensary</title>
-    <link rel="icon" href="../assets/uploads/profiles/braick_logo.png" type="image/png">
+    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
@@ -240,7 +259,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             position: relative;
         }
         
-        /* Background decorative elements */
         body::before {
             content: '';
             position: fixed;
@@ -327,118 +345,123 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             pointer-events: none;
         }
         
-        /* LOGO */
-        .login-logo-wrapper {
+        /* ================================================================ */
+        /* LOGO KUBWA - HAKUNA DUARA */
+        /* ================================================================ */
+        .login-brand-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             position: relative;
             z-index: 1;
-            margin-bottom: 20px;
+            margin-bottom: 0px;
         }
         
-        .login-logo {
-            width: 130px;
-            height: 130px;
-            border-radius: 30px;
-            background: rgba(255,255,255,0.12);
-            backdrop-filter: blur(10px);
-            border: 3px solid rgba(255,255,255,0.2);
+        /* LOGO - KUBWA SANA */
+        .login-logo-image {
+            width: 8rem;
+            height: 8rem;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin: 0 auto 16px;
-            padding: 20px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
-            transition: all 0.5s ease;
+            flex-shrink: 0;
+            margin-bottom: 4px;
         }
         
-        .login-logo:hover {
-            transform: scale(1.05) rotate(-2deg);
-            border-color: rgba(255,255,255,0.4);
-            box-shadow: 0 12px 48px rgba(0,0,0,0.3);
-        }
-        
-        .login-logo img {
-            width: 85px;
-            height: 85px;
+        .login-logo-image img {
+            width: 100%;
+            height: 100%;
             object-fit: contain;
-            filter: brightness(0) invert(1);
         }
         
-        .login-logo .logo-placeholder {
-            font-size: 4.5rem;
+        .login-logo-image .logo-placeholder {
+            font-size: 5rem;
             font-weight: 900;
             color: white;
             letter-spacing: -2px;
         }
         
-        .dispensary-name h1 {
-            font-size: 2.8rem;
+        /* BRAND TEXT - CENTERED */
+        .login-brand-text {
+            text-align: center;
+        }
+        
+        .login-brand-text .brand-name {
+            font-size: 3rem;
             font-weight: 900;
             background: linear-gradient(135deg, #FFFFFF 0%, #93C5FD 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
             margin: 0;
+            line-height: 1.1;
         }
         
-        .dispensary-name .tagline {
-            font-size: 1rem;
+        .login-brand-text .brand-tagline {
+            font-size: 0.9rem;
             font-weight: 400;
             opacity: 0.8;
-            letter-spacing: 2px;
+            letter-spacing: 3px;
             text-transform: uppercase;
             color: rgba(255,255,255,0.85);
-            margin-top: 4px;
+            margin-top: 2px;
         }
         
-        .dispensary-name .divider-line {
-            width: 80px;
-            height: 4px;
+        .login-brand-text .divider-line {
+            width: 60px;
+            height: 3px;
             background: linear-gradient(90deg, rgba(255,255,255,0.6), rgba(255,255,255,0.1));
             border-radius: 4px;
-            margin: 14px auto 16px;
+            margin: 4px auto 4px auto;
         }
         
-        /* Features */
-        .login-features {
-            margin-top: 24px;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px 16px;
-            position: relative;
-            z-index: 1;
-            width: 100%;
-            max-width: 380px;
+        /* WELCOME TEXT */
+        .welcome-message {
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: rgba(255,255,255,0.9);
+            margin-top: 8px;
+            letter-spacing: 1px;
         }
         
-        .login-features .feature {
+        /* ROLES - FONTS NDOGO */
+        .roles-list {
             display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.75rem;
-            opacity: 0.85;
-            padding: 6px 10px;
-            background: rgba(255,255,255,0.06);
-            border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.05);
-            transition: all 0.3s ease;
-        }
-        
-        .login-features .feature:hover {
-            background: rgba(255,255,255,0.12);
-            transform: translateX(4px);
-        }
-        
-        .login-features .feature i {
-            width: 28px;
-            height: 28px;
-            background: rgba(255,255,255,0.12);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
+            flex-wrap: wrap;
             justify-content: center;
-            font-size: 0.7rem;
-            flex-shrink: 0;
-            border: 1px solid rgba(255,255,255,0.08);
+            gap: 6px 14px;
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 30px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        
+        .roles-list .role-item {
+            font-size: 0.6rem;
+            font-weight: 500;
+            color: rgba(255,255,255,0.7);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 2px 0;
+        }
+        
+        .roles-list .role-item .role-dot {
+            display: inline-block;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.3);
+            margin-right: 4px;
+        }
+        
+        .roles-list .role-item.highlight {
+            color: rgba(255,255,255,0.95);
+        }
+        
+        .roles-list .role-item.highlight .role-dot {
+            background: #6EE7B7;
         }
         
         /* ================================================================ */
@@ -485,7 +508,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             position: relative;
         }
         
-        .login-right .form-group .input-wrapper i {
+        .login-right .form-group .input-wrapper .input-icon {
             position: absolute;
             left: 14px;
             top: 50%;
@@ -493,11 +516,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: var(--gray-400);
             font-size: 0.9rem;
             transition: color 0.3s ease;
+            z-index: 2;
+            pointer-events: none;
         }
         
         .login-right .form-group .input-wrapper input {
             width: 100%;
-            padding: 13px 16px 13px 46px;
+            padding: 13px 46px 13px 46px;
             border: 2px solid var(--gray-200);
             border-radius: var(--radius);
             font-size: 0.95rem;
@@ -514,12 +539,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             outline: none;
         }
         
-        .login-right .form-group .input-wrapper input:focus + i {
+        .login-right .form-group .input-wrapper input:focus ~ .input-icon {
             color: var(--primary);
         }
         
         .login-right .form-group .input-wrapper input::placeholder {
             color: var(--gray-400);
+        }
+        
+        /* Password toggle button */
+        .password-toggle {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--gray-400);
+            cursor: pointer;
+            font-size: 1rem;
+            padding: 6px;
+            transition: all 0.3s ease;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+        }
+        
+        .password-toggle:hover {
+            color: var(--primary);
+            background: var(--gray-100);
+        }
+        
+        .password-toggle:focus {
+            outline: none;
+            color: var(--primary);
+        }
+        
+        .password-toggle i {
+            font-size: 1rem;
         }
         
         .login-options {
@@ -594,7 +655,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transform: none;
         }
         
-        /* Alerts */
         .alert {
             padding: 12px 16px;
             border-radius: var(--radius);
@@ -623,66 +683,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border: 1px solid #6EE7B7;
         }
         
-        /* Demo Credentials */
-        .demo-credentials {
-            margin-top: 20px;
-            padding: 14px 18px;
-            background: var(--gray-50);
-            border-radius: var(--radius);
-            border: 1px solid var(--gray-200);
-        }
-        
-        .demo-credentials .demo-title {
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: var(--gray-500);
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .demo-credentials .demo-title .key-icon {
-            color: #D97706;
-        }
-        
-        .demo-credentials .demo-title strong {
-            color: var(--gray-700);
-            font-weight: 700;
-        }
-        
-        .demo-credentials .demo-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 2px 12px;
-            font-size: 0.75rem;
-        }
-        
-        .demo-credentials .demo-grid .demo-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 0;
-        }
-        
-        .demo-credentials .demo-grid .demo-role {
-            font-weight: 600;
-            color: var(--primary);
-            min-width: 60px;
-        }
-        
-        .demo-credentials .demo-grid .demo-user {
-            font-family: monospace;
-            color: var(--gray-700);
-            font-size: 0.7rem;
-            background: var(--gray-100);
-            padding: 1px 8px;
-            border-radius: 4px;
-        }
-        
-        /* Footer */
         .login-footer {
             margin-top: 20px;
             text-align: center;
@@ -712,31 +712,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 padding: 32px 24px;
                 border-radius: var(--radius-lg) var(--radius-lg) 0 0;
             }
-            .login-logo {
-                width: 100px;
-                height: 100px;
-                padding: 16px;
+            .login-logo-image {
+                width: 6rem;
+                height: 6rem;
             }
-            .login-logo img {
-                width: 65px;
-                height: 65px;
+            .login-brand-text .brand-name {
+                font-size: 2.5rem;
             }
-            .dispensary-name h1 {
-                font-size: 2.2rem;
+            .login-brand-text .brand-tagline {
+                font-size: 0.8rem;
             }
-            .login-features {
-                grid-template-columns: 1fr 1fr;
-                gap: 6px 12px;
+            .welcome-message {
+                font-size: 0.85rem;
             }
-            .login-features .feature {
-                font-size: 0.7rem;
-                padding: 4px 8px;
+            .roles-list {
+                gap: 4px 10px;
+                padding: 6px 12px;
+            }
+            .roles-list .role-item {
+                font-size: 0.55rem;
             }
             .login-right {
                 padding: 32px 24px;
-            }
-            .demo-credentials .demo-grid {
-                grid-template-columns: 1fr 1fr;
             }
         }
         
@@ -744,27 +741,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             .login-left {
                 padding: 24px 16px;
             }
-            .login-logo {
-                width: 80px;
-                height: 80px;
-                padding: 12px;
+            .login-logo-image {
+                width: 4.5rem;
+                height: 4.5rem;
             }
-            .login-logo img {
-                width: 50px;
-                height: 50px;
+            .login-brand-text .brand-name {
+                font-size: 2rem;
             }
-            .dispensary-name h1 {
-                font-size: 1.8rem;
-            }
-            .dispensary-name .tagline {
-                font-size: 0.85rem;
-            }
-            .login-features {
-                grid-template-columns: 1fr;
-            }
-            .login-features .feature {
+            .login-brand-text .brand-tagline {
                 font-size: 0.7rem;
-                padding: 4px 8px;
+                letter-spacing: 2px;
+            }
+            .welcome-message {
+                font-size: 0.75rem;
+            }
+            .roles-list {
+                gap: 3px 8px;
+                padding: 5px 10px;
+                border-radius: 20px;
+            }
+            .roles-list .role-item {
+                font-size: 0.5rem;
             }
             .login-right {
                 padding: 24px 16px;
@@ -773,7 +770,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 font-size: 1.3rem;
             }
             .login-right .form-group .input-wrapper input {
-                padding: 11px 14px 11px 40px;
+                padding: 11px 40px 11px 40px;
                 font-size: 0.9rem;
             }
             .login-options {
@@ -781,12 +778,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 gap: 10px;
                 align-items: flex-start;
             }
-            .demo-credentials .demo-grid {
-                grid-template-columns: 1fr;
-            }
             .btn-login {
                 padding: 13px;
                 font-size: 0.9rem;
+            }
+            .password-toggle {
+                width: 28px;
+                height: 28px;
+                padding: 4px;
+            }
+            .password-toggle i {
+                font-size: 0.85rem;
+            }
+            .login-brand-text .divider-line {
+                width: 40px;
+                height: 2px;
             }
         }
         
@@ -794,17 +800,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             .login-left {
                 padding: 16px 12px;
             }
-            .login-logo {
-                width: 60px;
-                height: 60px;
-                padding: 10px;
+            .login-logo-image {
+                width: 3.5rem;
+                height: 3.5rem;
             }
-            .login-logo img {
-                width: 38px;
-                height: 38px;
+            .login-brand-text .brand-name {
+                font-size: 1.5rem;
             }
-            .dispensary-name h1 {
-                font-size: 1.4rem;
+            .login-brand-text .brand-tagline {
+                font-size: 0.6rem;
+            }
+            .welcome-message {
+                font-size: 0.65rem;
+            }
+            .roles-list .role-item {
+                font-size: 0.45rem;
             }
             .login-right {
                 padding: 16px 12px;
@@ -820,43 +830,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <div class="login-container">
     
     <!-- ================================================================ -->
-    <!-- LEFT PANEL - Branding with LOGO -->
+    <!-- LEFT PANEL - Branding (Logo, Braick, Welcome, Roles) -->
     <!-- ================================================================ -->
     <div class="login-left">
         
-        <div class="login-logo-wrapper">
-            <div class="login-logo">
-                <img src="../assets/uploads/profiles/braick_logo.png" 
+        <!-- LOGO KUBWA -->
+        <div class="login-brand-wrapper">
+            <div class="login-logo-image">
+                <img src="<?= $logo_url ?>" 
                      alt="Braick Dispensary" 
                      onerror="this.style.display='none'; this.parentElement.innerHTML='<span class=\'logo-placeholder\'>B</span>';">
             </div>
             
-            <div class="dispensary-name">
-                <h1>Braick</h1>
+            <!-- Braick + Dispensary & Healthcare -->
+            <div class="login-brand-text">
+                <h1 class="brand-name">Braick</h1>
                 <div class="divider-line"></div>
-                <p class="tagline">Dispensary &amp; Healthcare</p>
+                <p class="brand-tagline">Dispensary &amp; Healthcare</p>
             </div>
         </div>
         
-        <!-- Features -->
-        <div class="login-features">
-            <div class="feature">
-                <i class="fas fa-user-md"></i>
-                <span>Doctor Consultations</span>
-            </div>
-            <div class="feature">
-                <i class="fas fa-flask"></i>
-                <span>Lab Tests</span>
-            </div>
-            <div class="feature">
-                <i class="fas fa-prescription"></i>
-                <span>Pharmacy</span>
-            </div>
-            <div class="feature">
-                <i class="fas fa-receipt"></i>
-                <span>Billing &amp; Payments</span>
-            </div>
+        <!-- Welcome Message -->
+        <div class="welcome-message">
+            Welcome to Braick Dispensary
         </div>
+        
+        <!-- Roles - Admin, Reception, Doctor, Laboratory Technician, Pharmacy, Cashier -->
+        <div class="roles-list">
+            <span class="role-item highlight"><span class="role-dot"></span>Admin</span>
+            <span class="role-item"><span class="role-dot"></span>Reception</span>
+            <span class="role-item"><span class="role-dot"></span>Doctor</span>
+            <span class="role-item"><span class="role-dot"></span>Laboratory Technician</span>
+            <span class="role-item"><span class="role-dot"></span>Pharmacy</span>
+            <span class="role-item"><span class="role-dot"></span>Cashier</span>
+        </div>
+        
     </div>
     
     <!-- ================================================================ -->
@@ -869,7 +877,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <p class="subtitle">Enter your credentials to access your account</p>
         </div>
         
-        <!-- Error / Success Messages -->
         <?php if ($error): ?>
             <div class="alert alert-error">
                 <i class="fas fa-exclamation-circle"></i>
@@ -884,13 +891,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endif; ?>
         
-        <!-- Login Form -->
         <form method="POST" action="" id="loginForm" autocomplete="off">
             
             <div class="form-group">
                 <label for="username">Username or Email</label>
                 <div class="input-wrapper">
-                    <i class="fas fa-user"></i>
+                    <i class="fas fa-user input-icon"></i>
                     <input type="text" id="username" name="username" 
                            placeholder="Enter your username or email" 
                            value="<?= htmlspecialchars($_POST['username'] ?? '') ?>" 
@@ -901,9 +907,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="form-group">
                 <label for="password">Password</label>
                 <div class="input-wrapper">
-                    <i class="fas fa-lock"></i>
+                    <i class="fas fa-lock input-icon"></i>
                     <input type="password" id="password" name="password" 
                            placeholder="Enter your password" required>
+                    <button type="button" class="password-toggle" id="togglePassword" aria-label="Toggle password visibility" title="Show/Hide password">
+                        <i class="fas fa-eye" id="toggleIcon"></i>
+                    </button>
                 </div>
             </div>
             
@@ -921,54 +930,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
         </form>
         
-        <!-- Demo Credentials -->
-        <div class="demo-credentials">
-            <div class="demo-title">
-                <span class="key-icon">🔑</span> Demo Credentials 
-                <span style="font-weight:400;color:var(--gray-400);font-size:0.65rem;">
-                    (Password: <strong style="color:var(--gray-600);">12345678</strong>)
-                </span>
-            </div>
-            <div class="demo-grid">
-                <div class="demo-item">
-                    <span class="demo-role">Reception:</span>
-                    <span class="demo-user">reception.rose</span>
-                </div>
-                <div class="demo-item">
-                    <span class="demo-role">Doctor:</span>
-                    <span class="demo-user">dr.john</span>
-                </div>
-                <div class="demo-item">
-                    <span class="demo-role">Admin:</span>
-                    <span class="demo-user">admin</span>
-                </div>
-                <div class="demo-item">
-                    <span class="demo-role">Pharmacy:</span>
-                    <span class="demo-user">pharm.dodoma</span>
-                </div>
-                <div class="demo-item">
-                    <span class="demo-role">Lab:</span>
-                    <span class="demo-user">lab.dodoma</span>
-                </div>
-                <div class="demo-item">
-                    <span class="demo-role">Cashier:</span>
-                    <span class="demo-user">cashier.dodoma</span>
-                </div>
-            </div>
-            <!-- Extra users -->
-            <div style="margin-top:6px;font-size:0.65rem;color:var(--gray-400);border-top:1px solid var(--gray-200);padding-top:6px;">
-                <span style="font-weight:600;color:var(--gray-500);">More Doctors:</span>
-                dr.grace, dr.david, dr.anna, dr.peter, dr.sarah, dr.james, dr.mary
-                <span style="margin:0 4px;">|</span>
-                <span style="font-weight:600;color:var(--gray-500);">Arusha:</span>
-                reception.arusha, cashier.arusha
-                <span style="margin:0 4px;">|</span>
-                <span style="font-weight:600;color:var(--gray-500);">Dar:</span>
-                reception.dar, cashier.dar
-            </div>
-        </div>
-        
-        <!-- Footer -->
         <div class="login-footer">
             &copy; <?= date('Y') ?> <span class="brand">Braick Dispensary</span> Management System
             <span style="margin:0 6px;">|</span>
@@ -983,6 +944,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // PASSWORD TOGGLE - Show/Hide Password with Eye Icon
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        const togglePassword = document.getElementById('togglePassword');
+        const passwordInput = document.getElementById('password');
+        const toggleIcon = document.getElementById('toggleIcon');
+        
+        if (togglePassword && passwordInput) {
+            togglePassword.addEventListener('click', function(e) {
+                e.preventDefault();
+                // Toggle password visibility
+                const isPassword = passwordInput.getAttribute('type') === 'password';
+                passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
+                
+                // Toggle icon
+                if (isPassword) {
+                    toggleIcon.classList.remove('fa-eye');
+                    toggleIcon.classList.add('fa-eye-slash');
+                } else {
+                    toggleIcon.classList.remove('fa-eye-slash');
+                    toggleIcon.classList.add('fa-eye');
+                }
+                
+                // Focus the input
+                passwordInput.focus();
+            });
+        }
+    });
+    
     // Show loading state on submit
     document.getElementById('loginForm').addEventListener('submit', function(e) {
         var btn = document.getElementById('loginBtn');
@@ -1009,9 +1000,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     });
     
     console.log('%c🏥 Braick Dispensary Login', 'font-size:24px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📁 Logo Path: <?= $logo_url ?>', 'font-size:14px; color:#6EA8FE;');
     console.log('%c🔑 Password for all demo users: 12345678', 'font-size:14px; color:#059669;');
-    console.log('%c👤 Available roles: Admin, Reception, Doctor, Pharmacy, Lab, Cashier', 'font-size:14px; color:#64748B;');
-    console.log('%c🏢 Branches: Dodoma, Arusha, Dar es Salaam', 'font-size:14px; color:#6EA8FE;');
 </script>
 
 </body>

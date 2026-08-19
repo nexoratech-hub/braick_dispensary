@@ -2,8 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/cashiers.php
 // SUPER ADMIN - VIEW ALL CASHIERS
-// FIXED: No invalid ID error, Custom card colors
-// FIXED: Removed Dashboard button - Keep View & Edit only
+// FIXED: Shows ALL active branches even if they have no cashiers
 // ================================================================
 
 // ================================================================
@@ -71,11 +70,26 @@ try {
 }
 
 // ================================================================
-// GET FILTER PARAMETERS - FIXED: Remove error from URL
+// GET FILTER PARAMETERS - FIXED: Properly handle error parameter
 // ================================================================
 $selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : 'all';
+
+// ===== FIX: If error parameter exists, ignore branch filter =====
+if (isset($_GET['error'])) {
+    $selected_branch_id = 'all';
+    // Clear the error from URL by redirecting
+    $redirect_url = $_SERVER['PHP_SELF'] . '?branch=all';
+    if (!empty($search)) {
+        $redirect_url .= '&search=' . urlencode($search);
+    }
+    if ($status_filter !== 'all') {
+        $redirect_url .= '&status=' . urlencode($status_filter);
+    }
+    header('Location: ' . $redirect_url);
+    exit;
+}
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -216,59 +230,96 @@ function getFinancialSummary($db, $branch_id = 'all') {
 $financial = getFinancialSummary($db, $selected_branch_id);
 
 // ================================================================
-// BUILD QUERY FOR CASHIER BRANCHES
+// BUILD QUERY FOR BRANCHES - SHOW ALL ACTIVE BRANCHES
+// FIXED: Removed the IN clause that was filtering out branches without cashiers
 // ================================================================
 $query = "
     SELECT 
         b.*,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active') as active_cashiers,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier') as total_cashiers,
-        (SELECT COUNT(*) 
-         FROM patient_bills pb
-         INNER JOIN patients p ON pb.patient_id = p.id
-         WHERE pb.branch_id = b.id) as total_bills,
-        (SELECT COUNT(*) 
-         FROM patient_bills pb
-         INNER JOIN patients p ON pb.patient_id = p.id
-         WHERE pb.branch_id = b.id AND pb.status = 'pending') as pending_bills,
-        (SELECT COUNT(*) 
-         FROM patient_bills pb
-         INNER JOIN patients p ON pb.patient_id = p.id
-         WHERE pb.branch_id = b.id AND pb.status = 'paid') as paid_bills,
-        (SELECT COUNT(*) 
-         FROM patient_bills pb
-         INNER JOIN patients p ON pb.patient_id = p.id
-         WHERE pb.branch_id = b.id AND pb.status = 'partial') as partial_bills,
-        (SELECT COUNT(*) 
-         FROM patient_bills pb
-         INNER JOIN patients p ON pb.patient_id = p.id
-         WHERE pb.branch_id = b.id AND pb.status = 'cancelled') as cancelled_bills,
-        (SELECT COALESCE(SUM(pb.total_amount), 0) 
-         FROM patient_bills pb
-         INNER JOIN patients p ON pb.patient_id = p.id
-         WHERE pb.branch_id = b.id AND pb.status = 'paid') as patient_bills_revenue,
-        (SELECT COALESCE(SUM(os.net_amount), 0) 
-         FROM otc_sales os
-         WHERE os.branch_id = b.id AND os.payment_status = 'paid') as otc_revenue,
-        (SELECT COALESCE(SUM(bi.total_price), 0) 
-         FROM bill_items bi
-         INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-         INNER JOIN patients p ON pb.patient_id = p.id
-         WHERE bi.item_type = 'medication' 
-         AND pb.status = 'paid' 
-         AND pb.branch_id = b.id) as prescription_revenue,
-        (SELECT COALESCE(SUM(amount), 0) 
-         FROM expenses 
-         WHERE branch_id = b.id AND status = 'paid') as branch_expenses,
-        (
+        COALESCE(
+            (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active'), 
+            0
+        ) as active_cashiers,
+        COALESCE(
+            (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier'), 
+            0
+        ) as total_cashiers,
+        COALESCE(
+            (SELECT COUNT(*) 
+             FROM patient_bills pb
+             INNER JOIN patients p ON pb.patient_id = p.id
+             WHERE pb.branch_id = b.id), 
+            0
+        ) as total_bills,
+        COALESCE(
+            (SELECT COUNT(*) 
+             FROM patient_bills pb
+             INNER JOIN patients p ON pb.patient_id = p.id
+             WHERE pb.branch_id = b.id AND pb.status = 'pending'), 
+            0
+        ) as pending_bills,
+        COALESCE(
+            (SELECT COUNT(*) 
+             FROM patient_bills pb
+             INNER JOIN patients p ON pb.patient_id = p.id
+             WHERE pb.branch_id = b.id AND pb.status = 'paid'), 
+            0
+        ) as paid_bills,
+        COALESCE(
+            (SELECT COUNT(*) 
+             FROM patient_bills pb
+             INNER JOIN patients p ON pb.patient_id = p.id
+             WHERE pb.branch_id = b.id AND pb.status = 'partial'), 
+            0
+        ) as partial_bills,
+        COALESCE(
+            (SELECT COUNT(*) 
+             FROM patient_bills pb
+             INNER JOIN patients p ON pb.patient_id = p.id
+             WHERE pb.branch_id = b.id AND pb.status = 'cancelled'), 
+            0
+        ) as cancelled_bills,
+        COALESCE(
             (SELECT COALESCE(SUM(pb.total_amount), 0) 
              FROM patient_bills pb
              INNER JOIN patients p ON pb.patient_id = p.id
-             WHERE pb.branch_id = b.id AND pb.status = 'paid') 
-            + 
+             WHERE pb.branch_id = b.id AND pb.status = 'paid'), 
+            0
+        ) as patient_bills_revenue,
+        COALESCE(
             (SELECT COALESCE(SUM(os.net_amount), 0) 
              FROM otc_sales os
-             WHERE os.branch_id = b.id AND os.payment_status = 'paid')
+             WHERE os.branch_id = b.id AND os.payment_status = 'paid'), 
+            0
+        ) as otc_revenue,
+        COALESCE(
+            (SELECT COALESCE(SUM(bi.total_price), 0) 
+             FROM bill_items bi
+             INNER JOIN patient_bills pb ON bi.bill_id = pb.id
+             INNER JOIN patients p ON pb.patient_id = p.id
+             WHERE bi.item_type = 'medication' 
+             AND pb.status = 'paid' 
+             AND pb.branch_id = b.id), 
+            0
+        ) as prescription_revenue,
+        COALESCE(
+            (SELECT COALESCE(SUM(amount), 0) 
+             FROM expenses 
+             WHERE branch_id = b.id AND status = 'paid'), 
+            0
+        ) as branch_expenses,
+        COALESCE(
+            (
+                (SELECT COALESCE(SUM(pb.total_amount), 0) 
+                 FROM patient_bills pb
+                 INNER JOIN patients p ON pb.patient_id = p.id
+                 WHERE pb.branch_id = b.id AND pb.status = 'paid') 
+                + 
+                (SELECT COALESCE(SUM(os.net_amount), 0) 
+                 FROM otc_sales os
+                 WHERE os.branch_id = b.id AND os.payment_status = 'paid')
+            ), 
+            0
         ) as total_revenue
     FROM branches b
     WHERE 1=1
@@ -276,16 +327,37 @@ $query = "
 
 $params = [];
 
-// Branch filter
+// Branch filter - ONLY APPLY IF NOT 'all' AND branch exists
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $query .= " AND b.id = ?";
-    $params[] = (int)$selected_branch_id;
+    // Verify branch exists before filtering
+    $check_stmt = $db->prepare("SELECT id FROM branches WHERE id = ? AND status = 'active'");
+    $check_stmt->execute([(int)$selected_branch_id]);
+    if ($check_stmt->fetch()) {
+        $query .= " AND b.id = ?";
+        $params[] = (int)$selected_branch_id;
+    } else {
+        // Branch doesn't exist - reset to all
+        $selected_branch_id = 'all';
+        // Remove invalid branch from URL
+        $redirect_url = $_SERVER['PHP_SELF'];
+        $params_redirect = [];
+        if (!empty($search)) $params_redirect[] = 'search=' . urlencode($search);
+        if ($status_filter !== 'all') $params_redirect[] = 'status=' . urlencode($status_filter);
+        if (!empty($params_redirect)) {
+            $redirect_url .= '?' . implode('&', $params_redirect);
+        }
+        header('Location: ' . $redirect_url);
+        exit;
+    }
 }
 
-// Status filter
+// Status filter - show only branches with specific status
 if ($status_filter !== 'all') {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
+} else {
+    // Default: show only active branches
+    $query .= " AND b.status = 'active'";
 }
 
 // Search filter
@@ -894,7 +966,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           CASHIER CARDS
+           BRANCH CARDS
            ================================================================ */
         .cashier-grid {
             display: grid;
@@ -1287,7 +1359,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </button>
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search cashiers..." value="<?= htmlspecialchars($search) ?>">
+            <input type="text" id="searchInput" placeholder="Search branches..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -1339,7 +1411,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                <strong><?= $total_cashiers ?></strong> cashier branches found
+                <strong><?= $total_cashiers ?></strong> branches found
                 <span class="header-badge revenue">
                     <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($financial['total_revenue'], 0) ?> Revenue
                 </span>
@@ -1455,14 +1527,31 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- FILTER BAR -->
+    <!-- FILTER BAR - FIXED: Properly handles error parameter -->
     <!-- ================================================================ -->
     <div class="filter-bar animate-fade-in-up" style="animation-delay:0.1s;">
         <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
         <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
-            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
+            <?php 
+            // Preserve all GET parameters except 'error' and 'branch' (branch is controlled by select)
+            $preserve_params = ['search', 'status'];
+            foreach ($_GET as $key => $value) {
+                if (in_array($key, $preserve_params) && !empty($value)) {
+                    echo '<input type="hidden" name="' . htmlspecialchars($key) . '" value="' . htmlspecialchars($value) . '">';
+                }
+            }
+            ?>
             
-            <select name="status" class="flex-1 min-w-[150px]">
+            <select name="branch" class="flex-1 min-w-[150px]" onchange="this.form.submit()">
+                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+                <?php foreach ($branches as $b): ?>
+                    <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
+                        🏥 <?= htmlspecialchars($b['name']) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            
+            <select name="status" class="flex-1 min-w-[150px]" onchange="this.form.submit()">
                 <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Status</option>
                 <option value="active" <?= $status_filter === 'active' ? 'selected' : '' ?>>Active</option>
                 <option value="inactive" <?= $status_filter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
@@ -1471,12 +1560,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <input type="text" name="search" placeholder="Search by name, location..." value="<?= htmlspecialchars($search) ?>" class="flex-1 min-w-[200px]">
             
             <button type="submit" class="btn btn-primary"><i class="fas fa-search"></i> Apply</button>
-            <a href="cashiers.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline"><i class="fas fa-times"></i> Reset</a>
+            <a href="cashiers.php" class="btn btn-outline"><i class="fas fa-times"></i> Reset</a>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- CASHIER GRID -->
+    <!-- BRANCH GRID - SHOWS ALL ACTIVE BRANCHES -->
     <!-- ================================================================ -->
     <?php if (count($cashiers) > 0): ?>
         <div class="cashier-grid animate-fade-in-up" style="animation-delay:0.15s;">
@@ -1485,7 +1574,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <div class="card-top">
                         <div>
                             <div class="name">
-                                <i class="fas fa-cash-register"></i>
+                                <i class="fas fa-store-alt"></i>
                                 <?= htmlspecialchars($cashier['name']) ?>
                             </div>
                             <div class="location-text">
@@ -1573,13 +1662,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
         
         <div class="text-center text-sm text-gray-500 dark:text-gray-400 py-2">
-            Showing <strong><?= count($cashiers) ?></strong> cashier branch<?= count($cashiers) > 1 ? 'es' : '' ?>
+            Showing <strong><?= count($cashiers) ?></strong> branch<?= count($cashiers) > 1 ? 'es' : '' ?>
         </div>
     <?php else: ?>
         <div class="empty-state animate-fade-in-up">
-            <i class="fas fa-cash-register"></i>
-            <h3>No Cashiers Found</h3>
-            <p>Try adjusting your filters or <a href="add_cashier.php" class="text-primary hover:underline">add a new cashier</a></p>
+            <i class="fas fa-store-alt"></i>
+            <h3>No Branches Found</h3>
+            <p>No active branches found. <a href="branches.php" class="text-primary hover:underline">Manage branches</a></p>
         </div>
     <?php endif; ?>
 
@@ -1680,11 +1769,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     
     function performSearch() {
         var query = searchInput.value.trim();
+        var url = new URL(window.location.href);
+        url.searchParams.delete('error');
         if (query.length > 0) {
-            var url = new URL(window.location.href);
             url.searchParams.set('search', query);
-            window.location.href = url.toString();
+        } else {
+            url.searchParams.delete('search');
         }
+        window.location.href = url.toString();
     }
     
     searchBtn?.addEventListener('click', performSearch);
@@ -1710,17 +1802,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     console.log('%c💰 Braick Dispensary - Cashiers', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Total Cashiers: <?= $total_cashiers ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ 8 CARDS COLORS:', 'font-size:13px; font-weight:bold; color:#34D399;');
-    console.log('  1. Total Revenue: 🔵 BLUE', 'font-size:12px; color:#60A5FA;');
-    console.log('  2. Total Expenses: 🔴 RED', 'font-size:12px; color:#F87171;');
-    console.log('  3. Net Profit: 🟢 GREEN', 'font-size:12px; color:#34D399;');
-    console.log('  4. Prescription Revenue: 🔵 BLUE', 'font-size:12px; color:#60A5FA;');
-    console.log('  5. OTC Revenue: 🔵 BLUE', 'font-size:12px; color:#60A5FA;');
-    console.log('  6. Paid Bills: 🟢 GREEN', 'font-size:12px; color:#34D399;');
-    console.log('  7. Pending Bills: 🟠 ORANGE', 'font-size:12px; color:#FBBF24;');
-    console.log('  8. Cancelled Bills: 🔴 RED', 'font-size:12px; color:#F87171;');
-    console.log('%c✅ DASHBOARD BUTTON REMOVED - View & Edit only', 'font-size:13px; color:#34D399;');
+    console.log('%c🏢 Total Branches: <?= $total_cashiers ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ FIXED: Shows ALL active branches even without cashiers', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Branches: Dodoma, Arusha, Dar es Salaam, Mbeya', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

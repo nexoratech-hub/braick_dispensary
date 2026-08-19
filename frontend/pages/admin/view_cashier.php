@@ -4,6 +4,8 @@
 // ADMIN - VIEW CASHIER BRANCH DETAILS WITH REVENUE CARDS
 // FIXED: NO DOUBLE COUNTING - Total Revenue = Patient Bills ONLY
 // FIXED: Revenue cards with navigation to respective pages
+// FIXED: Other Bills card now shows consultation bills only
+// ADDED: Lab Test Revenue card (BLUE)
 // ================================================================
 
 // ================================================================
@@ -133,29 +135,37 @@ try {
     $procedures_tools_revenue = 0;
 }
 
-// 3. LAB REVENUE - BREAKDOWN ONLY
-$lab_revenue = 0;
+// 3. LAB TESTS REVENUE - FROM lab_tests AND lab_requests (NEW)
+$lab_tests_revenue = 0;
 try {
+    // From lab_tests table (completed tests)
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(lab_total), 0) as lab_revenue
-        FROM lab_requests 
-        WHERE branch_id = ? AND status = 'completed'
-    ");
-    $stmt->execute([$cashier_id]);
-    $lab_revenue_requests = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
-    
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(test_price), 0) as lab_revenue
+        SELECT COALESCE(SUM(test_price), 0) as lab_tests_revenue
         FROM lab_tests 
         WHERE branch_id = ? AND status = 'completed'
     ");
     $stmt->execute([$cashier_id]);
-    $lab_revenue_tests = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
-    
-    $lab_revenue = $lab_revenue_requests + $lab_revenue_tests;
+    $lab_tests_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_tests_revenue'] ?? 0;
 } catch (Exception $e) {
-    $lab_revenue = 0;
+    $lab_tests_revenue = 0;
 }
+
+$lab_requests_revenue = 0;
+try {
+    // From lab_requests table (completed requests)
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(lab_total), 0) as lab_requests_revenue
+        FROM lab_requests 
+        WHERE branch_id = ? AND status = 'completed'
+    ");
+    $stmt->execute([$cashier_id]);
+    $lab_requests_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_requests_revenue'] ?? 0;
+} catch (Exception $e) {
+    $lab_requests_revenue = 0;
+}
+
+// Total Lab Revenue
+$lab_total_revenue = $lab_tests_revenue + $lab_requests_revenue;
 
 // 4. PRESCRIPTION REVENUE - SEPARATE FROM patient_bills
 try {
@@ -228,8 +238,28 @@ try {
     $registration_revenue = 0;
 }
 
-// OTHER SERVICES TOTAL = Consultation + Medication + Registration (BREAKDOWN ONLY)
-$other_services_total = $consultation_revenue + $medication_revenue + $registration_revenue;
+// ================================================================
+// OTHER BILLS - CONSULTATION BILLS ONLY
+// These are bills that have consultation items
+// ================================================================
+$other_bills_count = 0;
+try {
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT pb.id) as other_bills_count
+        FROM patient_bills pb
+        INNER JOIN bill_items bi ON bi.bill_id = pb.id
+        WHERE pb.branch_id = ? 
+        AND bi.item_type = 'consultation'
+        AND pb.status != 'cancelled'
+    ");
+    $stmt->execute([$cashier_id]);
+    $other_bills_count = $stmt->fetch(PDO::FETCH_ASSOC)['other_bills_count'] ?? 0;
+} catch (Exception $e) {
+    $other_bills_count = 0;
+}
+
+// OTHER BILLS REVENUE - Total from consultation bills
+$other_bills_revenue = $consultation_revenue;
 
 // ================================================================
 // TOTAL REVENUE - NO DOUBLE COUNTING
@@ -251,7 +281,7 @@ try {
     $total_expenses = 0;
 }
 
-// 11. NET PROFIT = TOTAL REVENUE - EXPENSES
+// NET PROFIT = TOTAL REVENUE - EXPENSES
 $net_profit = $total_revenue - $total_expenses;
 
 // ================================================================
@@ -808,11 +838,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           8 REVENUE CARDS - 4 per row
+           9 REVENUE CARDS - 3 per row
            ================================================================ */
         .revenue-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(3, 1fr);
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -932,9 +962,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .card-green { background: linear-gradient(135deg, #059669, #047857); }
         .card-green:hover { box-shadow: 0 8px 25px rgba(5, 150, 105, 0.4); }
         
+        .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+        .card-purple:hover { box-shadow: 0 8px 25px rgba(124, 58, 237, 0.4); }
+        
+        .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+        .card-cyan:hover { box-shadow: 0 8px 25px rgba(8, 145, 178, 0.4); }
+        
         [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
         [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
+        [data-theme="dark"] .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+        [data-theme="dark"] .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
         
         /* ================================================================
            DATA TABLE
@@ -1287,7 +1325,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 8 REVENUE CARDS - WITH NAVIGATION -->
+    <!-- 9 REVENUE CARDS - WITH NAVIGATION -->
     <!-- ================================================================ -->
     <div class="revenue-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
@@ -1339,7 +1377,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 6. PRESCRIPTION REVENUE - BLUE -->
+        <!-- 6. LAB TEST REVENUE - BLUE (NEW) -->
+        <a href="lab_tests.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
+            <div class="card-icon"><i class="fas fa-flask"></i></div>
+            <p class="card-amount"><?= formatCurrency($lab_total_revenue) ?></p>
+            <p class="card-label">Lab Test Revenue</p>
+            <p class="card-sub">From lab_tests + lab_requests</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <!-- 7. PRESCRIPTION REVENUE - BLUE -->
         <a href="prescriptions.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-prescription-bottle"></i></div>
             <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
@@ -1348,7 +1395,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 7. OTC REVENUE - BLUE -->
+        <!-- 8. OTC REVENUE - BLUE -->
         <a href="otc_sales.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-cash-register"></i></div>
             <p class="card-amount"><?= formatCurrency($otc_revenue) ?></p>
@@ -1357,12 +1404,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 8. OTHER SERVICES - BLUE (BREAKDOWN ONLY) -->
-        <a href="services.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
-            <div class="card-icon"><i class="fas fa-file-medical"></i></div>
-            <p class="card-amount"><?= formatCurrency($other_services_total) ?></p>
-            <p class="card-label">Other Services</p>
-            <p class="card-sub">Consultation + Medication + Registration (Breakdown)</p>
+        <!-- 9. OTHER BILLS - CONSULTATION BILLS ONLY - PURPLE -->
+        <a href="consultation_bills.php?branch=<?= $cashier_id ?>" class="revenue-card card-purple">
+            <div class="card-icon"><i class="fas fa-file-medical-alt"></i></div>
+            <p class="card-amount"><?= number_format($other_bills_count) ?></p>
+            <p class="card-label">Other Bills</p>
+            <p class="card-sub">Consultation bills: <?= formatCurrency($other_bills_revenue) ?></p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1722,12 +1769,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c📊 Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Patient Bills: <?= formatCurrency($patient_bills_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Procedures & Tools: <?= formatCurrency($procedures_tools_revenue) ?> (Breakdown)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Lab Test Revenue: <?= formatCurrency($lab_total_revenue) ?> (NEW)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Prescription: <?= formatCurrency($prescription_revenue) ?> (Separate)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 OTC: <?= formatCurrency($otc_revenue) ?> (Separate)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Other Services: <?= formatCurrency($other_services_total) ?> (Breakdown)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Other Bills: <?= number_format($other_bills_count) ?> bills, <?= formatCurrency($other_bills_revenue) ?> (Consultation bills only)', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ ADDED: Lab Test Revenue card (BLUE)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Other Bills card shows consultation bills only', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FIXED: NO DOUBLE COUNTING - Total Revenue = Patient Bills + Prescription + OTC', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Procedures, Consultation, Medication are breakdowns only', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Cards navigate to respective pages', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: 9 cards in 3x3 grid', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

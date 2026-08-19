@@ -661,7 +661,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS - BLUE THEME
+           STATS CARDS - BLUE BACKGROUND, WHITE TEXT
            ================================================================ */
         .stats-grid {
             display: grid;
@@ -671,41 +671,60 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .stat-card {
-            background: var(--bg-card);
+            background: var(--primary-gradient);
             border-radius: var(--radius);
             padding: 18px 20px;
-            border: 2px solid var(--border-color);
             display: flex;
             align-items: center;
             gap: 14px;
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.25);
             text-decoration: none;
-            color: inherit;
+            color: white;
             position: relative;
             overflow: hidden;
+            border: none;
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -30%;
+            width: 150px;
+            height: 150px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+            transition: all 0.5s ease;
         }
         
         .stat-card::after {
             content: '';
             position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--primary-gradient);
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            bottom: -30%;
+            left: -20%;
+            width: 100px;
+            height: 100px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 50%;
+            pointer-events: none;
+            transition: all 0.5s ease;
         }
         
         .stat-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-lg);
+            transform: translateY(-4px) scale(1.01);
+            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.4);
+        }
+        
+        .stat-card:hover::before {
+            transform: scale(1.3);
+            right: -20%;
         }
         
         .stat-card:hover::after {
-            opacity: 1;
+            transform: scale(1.3);
+            bottom: -20%;
         }
         
         .stat-icon {
@@ -717,54 +736,60 @@ include_once '../../components/admin_sidebar.php';
             justify-content: center;
             font-size: 1.2rem;
             flex-shrink: 0;
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
         }
-        
-        .stat-icon.blue { background: var(--primary-bg); color: var(--primary); }
-        .stat-icon.green { background: #ECFDF5; color: #059669; }
-        .stat-icon.orange { background: #FFFBEB; color: #F59E0B; }
-        .stat-icon.purple { background: #F5F3FF; color: #7C3AED; }
-        .stat-icon.red { background: #FEF2F2; color: #DC2626; }
-        .stat-icon.teal { background: #ECFDF5; color: #0D9488; }
-        .stat-icon.pink { background: #FDF2F8; color: #EC4899; }
-        .stat-icon.indigo { background: #EEF2FF; color: #4F46E5; }
-        
-        [data-theme="dark"] .stat-icon.blue { background: #1E3A5F; color: #3B82F6; }
-        [data-theme="dark"] .stat-icon.green { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .stat-icon.orange { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .stat-icon.purple { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .stat-icon.red { background: #3A1A1A; color: #F87171; }
-        [data-theme="dark"] .stat-icon.teal { background: #1A3A2A; color: #2DD4BF; }
-        [data-theme="dark"] .stat-icon.pink { background: #3A1A2A; color: #F472B6; }
-        [data-theme="dark"] .stat-icon.indigo { background: #1A1A3A; color: #818CF8; }
         
         .stat-label {
             font-size: 0.65rem;
-            color: var(--text-secondary);
+            color: rgba(255,255,255,0.8);
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             margin: 0;
+            position: relative;
+            z-index: 1;
         }
         
         .stat-value {
             font-size: 1.3rem;
             font-weight: 700;
-            color: var(--text-primary);
+            color: white;
             margin: 0;
             line-height: 1.2;
+            position: relative;
+            z-index: 1;
         }
         
-        .stat-value.blue-text { color: var(--primary); }
-        .stat-value.green-text { color: #059669; }
-        .stat-value.orange-text { color: #F59E0B; }
-        .stat-value.purple-text { color: #7C3AED; }
-        .stat-value.red-text { color: #DC2626; }
-        .stat-value.teal-text { color: #0D9488; }
+        .stat-value.blue-text,
+        .stat-value.green-text,
+        .stat-value.orange-text,
+        .stat-value.purple-text,
+        .stat-value.red-text,
+        .stat-value.teal-text {
+            color: white;
+        }
         
         .stat-sub {
             font-size: 0.6rem;
-            color: var(--text-secondary);
+            color: rgba(255,255,255,0.7);
             margin-top: 2px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        /* Dark mode - cards remain blue */
+        [data-theme="dark"] .stat-card {
+            background: linear-gradient(135deg, #1D4ED8, #1E40AF);
+            box-shadow: 0 4px 16px rgba(29, 78, 216, 0.3);
+        }
+        
+        [data-theme="dark"] .stat-card:hover {
+            box-shadow: 0 8px 32px rgba(29, 78, 216, 0.5);
         }
         
         /* ================================================================
@@ -1066,7 +1091,20 @@ include_once '../../components/admin_sidebar.php';
             .page-title, .page-subtitle, .role-badge-display, .header-badge {
                 color: white !important;
             }
-            .stat-card { border: 1px solid #ddd !important; box-shadow: none !important; }
+            .stat-card { 
+                background: #0B5ED7 !important;
+                color: white !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                border: none !important;
+                box-shadow: none !important;
+            }
+            .stat-card .stat-label,
+            .stat-card .stat-value,
+            .stat-card .stat-sub,
+            .stat-card .stat-icon {
+                color: white !important;
+            }
             .alert { display: none !important; }
         }
     </style>
@@ -1171,70 +1209,70 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
+    <!-- STATS CARDS - BLUE BACKGROUND, WHITE TEXT -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="stat-card">
-            <div class="stat-icon blue">
+            <div class="stat-icon">
                 <i class="fas fa-flask"></i>
             </div>
             <div>
                 <p class="stat-label">Total Tests</p>
-                <p class="stat-value blue-text"><?= number_format($total_tests) ?></p>
+                <p class="stat-value"><?= number_format($total_tests) ?></p>
             </div>
         </a>
         
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=completed" class="stat-card">
-            <div class="stat-icon green">
+            <div class="stat-icon">
                 <i class="fas fa-check-circle"></i>
             </div>
             <div>
                 <p class="stat-label">Completed</p>
-                <p class="stat-value green-text"><?= number_format($completed_tests) ?></p>
+                <p class="stat-value"><?= number_format($completed_tests) ?></p>
                 <p class="stat-sub">Tests finalized</p>
             </div>
         </a>
         
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=in_progress" class="stat-card">
-            <div class="stat-icon orange">
+            <div class="stat-icon">
                 <i class="fas fa-spinner fa-spin"></i>
             </div>
             <div>
                 <p class="stat-label">In Progress</p>
-                <p class="stat-value orange-text"><?= number_format($in_progress_tests) ?></p>
+                <p class="stat-value"><?= number_format($in_progress_tests) ?></p>
                 <p class="stat-sub">Tests running</p>
             </div>
         </a>
         
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=pending" class="stat-card">
-            <div class="stat-icon red">
+            <div class="stat-icon">
                 <i class="fas fa-clock"></i>
             </div>
             <div>
                 <p class="stat-label">Pending</p>
-                <p class="stat-value red-text"><?= number_format($pending_tests) ?></p>
+                <p class="stat-value"><?= number_format($pending_tests) ?></p>
                 <p class="stat-sub">Tests waiting</p>
             </div>
         </a>
         
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=cancelled" class="stat-card">
-            <div class="stat-icon purple">
+            <div class="stat-icon">
                 <i class="fas fa-times-circle"></i>
             </div>
             <div>
                 <p class="stat-label">Cancelled</p>
-                <p class="stat-value purple-text"><?= number_format($cancelled_tests) ?></p>
+                <p class="stat-value"><?= number_format($cancelled_tests) ?></p>
                 <p class="stat-sub">Cancelled tests</p>
             </div>
         </a>
         
         <a href="reports.php?branch=<?= urlencode($selected_branch_id) ?>&type=lab" class="stat-card">
-            <div class="stat-icon teal">
+            <div class="stat-icon">
                 <i class="fas fa-money-bill-wave"></i>
             </div>
             <div>
                 <p class="stat-label">Total Revenue</p>
-                <p class="stat-value teal-text">TSh <?= number_format($total_revenue, 0) ?></p>
+                <p class="stat-value">TSh <?= number_format($total_revenue, 0) ?></p>
                 <p class="stat-sub">Lab fees total</p>
             </div>
         </a>
