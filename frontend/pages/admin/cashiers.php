@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/cashiers.php
 // SUPER ADMIN - VIEW ALL CASHIERS
 // FIXED: No invalid ID error, Custom card colors
+// FIXED: Removed Dashboard button - Keep View & Edit only
 // ================================================================
 
 // ================================================================
@@ -1556,15 +1557,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </div>
                     </div>
                     
+                    <!-- ============================================================ -->
+                    <!-- CARD ACTIONS - View & Edit ONLY (Dashboard REMOVED) -->
+                    <!-- ============================================================ -->
                     <div class="card-actions">
-                        <a href="view_cashier.php?id=<?= $cashier['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action primary">
+                        <a href="view_cashier.php?id=<?= (int)$cashier['id'] ?>" class="btn-action primary">
                             <i class="fas fa-eye"></i> View
                         </a>
-                        <a href="edit_cashier.php?id=<?= $cashier['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-action">
+                        <a href="edit_cashier.php?id=<?= (int)$cashier['id'] ?>" class="btn-action">
                             <i class="fas fa-edit"></i> Edit
-                        </a>
-                        <a href="cashier_dashboard.php?id=<?= $cashier['id'] ?>" class="btn-action">
-                            <i class="fas fa-chart-bar"></i> Dashboard
                         </a>
                     </div>
                 </div>
@@ -1719,7 +1720,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('  6. Paid Bills: 🟢 GREEN', 'font-size:12px; color:#34D399;');
     console.log('  7. Pending Bills: 🟠 ORANGE', 'font-size:12px; color:#FBBF24;');
     console.log('  8. Cancelled Bills: 🔴 RED', 'font-size:12px; color:#F87171;');
-    console.log('%c✅ ERROR "invalid cashier ID" - FIXED', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ DASHBOARD BUTTON REMOVED - View & Edit only', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

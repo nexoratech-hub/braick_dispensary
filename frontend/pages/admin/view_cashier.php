@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_cashier.php
 // ADMIN - VIEW CASHIER BRANCH DETAILS WITH REVENUE CARDS
-// BRAICK DISPENSARY - GREEN THEME - FIXED
+// FIXED: NO DOUBLE COUNTING - Total Revenue = Patient Bills ONLY
 // ================================================================
 
 // ================================================================
@@ -56,7 +56,7 @@ require_once __DIR__ . '/../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET BRANCH ID - FIXED: Use default if not provided
+// GET BRANCH ID
 // ================================================================
 $cashier_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? 'all';
@@ -68,7 +68,7 @@ if ($cashier_id <= 0) {
 }
 
 // ================================================================
-// FETCH CASHIER BRANCH DETAILS
+// FETCH CASHIER BRANCH DETAILS - ONLY SELECTED BRANCH
 // ================================================================
 try {
     $stmt = $db->prepare("
@@ -100,35 +100,77 @@ try {
 }
 
 // ================================================================
-// ✅ FIXED: REVENUE QUERIES - WITH PROPER JOINS
+// REVENUE QUERIES - ONLY SELECTED BRANCH (NO DOUBLE COUNTING)
 // ================================================================
 
-// 1. TOTAL REVENUE - All payments
+// 1. PATIENT BILLS REVENUE (From patient_bills - paid)
+// This is the MAIN revenue source - includes all bill items
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(amount), 0) as total_revenue
-        FROM payments 
-        WHERE branch_id = ?
+        SELECT COALESCE(SUM(total_amount), 0) as patient_bills_revenue
+        FROM patient_bills 
+        WHERE branch_id = ? AND status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $total_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total_revenue'] ?? 0;
+    $patient_bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['patient_bills_revenue'] ?? 0;
 } catch (Exception $e) {
-    $total_revenue = 0;
+    $patient_bills_revenue = 0;
 }
 
-// 2. PHARMACY REVENUE (Prescribe + OTC)
+// 2. PROCEDURES & TOOLS REVENUE - BREAKDOWN ONLY (already included in patient_bills)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as prescribe_revenue
+        SELECT COALESCE(SUM(bi.total_price), 0) as procedures_tools_revenue
+        FROM bill_items bi
+        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
+        WHERE pb.branch_id = ? 
+        AND bi.item_type IN ('procedure', 'tool') 
+        AND bi.payment_status = 'paid'
+    ");
+    $stmt->execute([$cashier_id]);
+    $procedures_tools_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['procedures_tools_revenue'] ?? 0;
+} catch (Exception $e) {
+    $procedures_tools_revenue = 0;
+}
+
+// 3. LAB REVENUE - BREAKDOWN ONLY (already included in patient_bills)
+$lab_revenue = 0;
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(lab_total), 0) as lab_revenue
+        FROM lab_requests 
+        WHERE branch_id = ? AND status = 'completed'
+    ");
+    $stmt->execute([$cashier_id]);
+    $lab_revenue_requests = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
+    
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(test_price), 0) as lab_revenue
+        FROM lab_tests 
+        WHERE branch_id = ? AND status = 'completed'
+    ");
+    $stmt->execute([$cashier_id]);
+    $lab_revenue_tests = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
+    
+    $lab_revenue = $lab_revenue_requests + $lab_revenue_tests;
+} catch (Exception $e) {
+    $lab_revenue = 0;
+}
+
+// 4. PRESCRIPTION REVENUE - SEPARATE FROM patient_bills (over-the-counter prescriptions)
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(net_amount), 0) as prescription_revenue
         FROM prescription_sales 
         WHERE branch_id = ? AND payment_status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $prescribe_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['prescribe_revenue'] ?? 0;
+    $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
 } catch (Exception $e) {
-    $prescribe_revenue = 0;
+    $prescription_revenue = 0;
 }
 
+// 5. OTC REVENUE - SEPARATE FROM patient_bills (over-the-counter sales)
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(net_amount), 0) as otc_revenue
@@ -141,93 +183,64 @@ try {
     $otc_revenue = 0;
 }
 
-$pharmacy_total = $prescribe_revenue + $otc_revenue;
-
-// 3. ✅ LAB REVENUE - FROM BOTH lab_requests AND lab_tests
-$lab_revenue = 0;
-try {
-    // From lab_requests
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(lab_total), 0) as lab_revenue
-        FROM lab_requests 
-        WHERE branch_id = ? AND status = 'completed'
-    ");
-    $stmt->execute([$cashier_id]);
-    $lab_revenue_requests = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
-    
-    // From lab_tests
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(test_price), 0) as lab_revenue
-        FROM lab_tests 
-        WHERE branch_id = ? AND status = 'completed'
-    ");
-    $stmt->execute([$cashier_id]);
-    $lab_revenue_tests = $stmt->fetch(PDO::FETCH_ASSOC)['lab_revenue'] ?? 0;
-    
-    // Total lab revenue
-    $lab_revenue = $lab_revenue_requests + $lab_revenue_tests;
-} catch (Exception $e) {
-    $lab_revenue = 0;
-}
-
-// 4. ✅ PROCEDURES REVENUE - FROM bill_items with proper join
+// 6. CONSULTATION REVENUE - BREAKDOWN ONLY (already included in patient_bills)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as procedures_revenue
+        SELECT COALESCE(SUM(bi.total_price), 0) as consultation_revenue
         FROM bill_items bi
         INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.branch_id = ? AND bi.item_type = 'procedure' AND bi.payment_status = 'paid'
+        WHERE pb.branch_id = ? 
+        AND bi.item_type = 'consultation' 
+        AND bi.payment_status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $procedures_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['procedures_revenue'] ?? 0;
+    $consultation_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['consultation_revenue'] ?? 0;
 } catch (Exception $e) {
-    $procedures_revenue = 0;
-}
-
-// 5. ✅ TOOLS REVENUE - FROM bill_items with proper join
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as tools_revenue
-        FROM bill_items bi
-        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.branch_id = ? AND bi.item_type = 'tool' AND bi.payment_status = 'paid'
-    ");
-    $stmt->execute([$cashier_id]);
-    $tools_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['tools_revenue'] ?? 0;
-} catch (Exception $e) {
-    $tools_revenue = 0;
-}
-
-// 6. PROCEDURES + TOOLS TOTAL
-$procedures_tools_total = $procedures_revenue + $tools_revenue;
-
-// 7. ✅ OTHER SERVICES - FROM visits with proper status
-try {
-    $stmt = $db->prepare("
-        SELECT 
-            COALESCE(SUM(registration_fee), 0) as registration_revenue,
-            COALESCE(SUM(consultation_fee), 0) as consultation_revenue
-        FROM visits 
-        WHERE branch_id = ? AND status = 'completed'
-    ");
-    $stmt->execute([$cashier_id]);
-    $visit_fees = $stmt->fetch(PDO::FETCH_ASSOC);
-    $registration_revenue = $visit_fees['registration_revenue'] ?? 0;
-    $consultation_revenue = $visit_fees['consultation_revenue'] ?? 0;
-} catch (Exception $e) {
-    $registration_revenue = 0;
     $consultation_revenue = 0;
 }
 
-$other_services_total = $registration_revenue + $consultation_revenue;
+// 7. MEDICATION REVENUE - BREAKDOWN ONLY (already included in patient_bills)
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(bi.total_price), 0) as medication_revenue
+        FROM bill_items bi
+        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
+        WHERE pb.branch_id = ? 
+        AND bi.item_type = 'medication' 
+        AND bi.payment_status = 'paid'
+    ");
+    $stmt->execute([$cashier_id]);
+    $medication_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['medication_revenue'] ?? 0;
+} catch (Exception $e) {
+    $medication_revenue = 0;
+}
 
-// 8. ✅ GRAND TOTAL REVENUE (All sources combined)
-$grand_total_revenue = $pharmacy_total + $lab_revenue + $procedures_tools_total + $other_services_total;
+// 8. REGISTRATION REVENUE - BREAKDOWN ONLY (already included in patient_bills)
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(registration_fee), 0) as registration_revenue
+        FROM patient_bills 
+        WHERE branch_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$cashier_id]);
+    $registration_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['registration_revenue'] ?? 0;
+} catch (Exception $e) {
+    $registration_revenue = 0;
+}
+
+// OTHER SERVICES TOTAL = Consultation + Medication + Registration (BREAKDOWN ONLY)
+$other_services_total = $consultation_revenue + $medication_revenue + $registration_revenue;
 
 // ================================================================
-// ✅ EXPENSES
+// TOTAL REVENUE - NO DOUBLE COUNTING
 // ================================================================
-$total_expenses = 0;
+// Patient Bills already includes: procedures, consultation, medication, registration, lab fees
+// So Total Revenue = Patient Bills + Separate Prescriptions + Separate OTC
+$total_revenue = $patient_bills_revenue + $prescription_revenue + $otc_revenue;
+
+// ================================================================
+// EXPENSES (ONLY SELECTED BRANCH)
+// ================================================================
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(amount), 0) as total_expenses
@@ -240,10 +253,8 @@ try {
     $total_expenses = 0;
 }
 
-// ================================================================
-// ✅ NET PROFIT
-// ================================================================
-$net_profit = $grand_total_revenue - $total_expenses;
+// 11. NET PROFIT = TOTAL REVENUE - EXPENSES
+$net_profit = $total_revenue - $total_expenses;
 
 // ================================================================
 // GET CASHIERS FOR THIS BRANCH
@@ -393,9 +404,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - GREEN THEME
-           ================================================================ */
         :root {
             --primary: #059669;
             --primary-dark: #047857;
@@ -404,30 +412,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --primary-gradient: linear-gradient(135deg, #059669, #047857);
             --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
             
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
             --danger-dark: #B91C1C;
             --danger-light: #F87171;
             --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --orange: #F59E0B;
-            --orange-bg: #FFFBEB;
-            
-            --blue: #0B5ED7;
-            --blue-bg: #E8F0FE;
             
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -489,9 +477,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -660,9 +645,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-color: var(--primary);
         }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -670,9 +652,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - GREEN THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
@@ -801,9 +780,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           DETAILS CARD
-           ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -834,7 +810,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           REVENUE CARDS - GREEN BACKGROUND
+           8 REVENUE CARDS - 4 per row
            ================================================================ */
         .revenue-grid {
             display: grid;
@@ -844,7 +820,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         .revenue-card {
-            background: var(--primary-gradient-strong);
             border-radius: var(--radius);
             padding: 18px 20px;
             border: 2px solid rgba(255,255,255,0.1);
@@ -884,7 +859,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         .revenue-card:hover {
             transform: translateY(-4px);
-            box-shadow: 0 8px 25px rgba(5, 150, 105, 0.3);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
             border-color: rgba(255,255,255,0.3);
         }
         
@@ -946,6 +921,22 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transform: translateX(4px);
             color: rgba(255,255,255,0.9);
         }
+        
+        /* ================================================================
+           CARD COLOR CLASSES
+           ================================================================ */
+        .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+        .card-blue:hover { box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4); }
+        
+        .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+        .card-red:hover { box-shadow: 0 8px 25px rgba(220, 38, 38, 0.4); }
+        
+        .card-green { background: linear-gradient(135deg, #059669, #047857); }
+        .card-green:hover { box-shadow: 0 8px 25px rgba(5, 150, 105, 0.4); }
+        
+        [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
+        [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+        [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
         
         /* ================================================================
            DATA TABLE
@@ -1033,9 +1024,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-bottom: none;
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -1058,9 +1046,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
-        /* ================================================================
-           STAT MINI CARDS
-           ================================================================ */
         .stat-mini {
             background: var(--bg-card);
             border-radius: var(--radius);
@@ -1091,9 +1076,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 800;
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -1108,9 +1090,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 700;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1137,9 +1116,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .data-table thead th, .data-table td { padding: 4px 6px; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1150,9 +1126,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1176,14 +1149,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             opacity: 1;
         }
         
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
+        .toast-custom.success { background: #059669; }
+        .toast-custom.error { background: #DC2626; }
+        .toast-custom.info { background: #0B5ED7; }
+        .toast-custom.warning { background: #D97706; }
         
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
@@ -1274,7 +1244,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <?= ucfirst($cashier['status'] ?? 'Active') ?>
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-money-bill-wave"></i> <?= formatCurrency($grand_total_revenue) ?> Revenue
+                    <i class="fas fa-money-bill-wave"></i> <?= formatCurrency($total_revenue) ?> Revenue
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
                     <i class="fas fa-file-invoice"></i> <?= $cashier['total_bills'] ?? 0 ?> Bills
@@ -1287,10 +1257,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="edit_cashier.php?id=<?= $cashier['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-edit"></i> Edit
-            </a>
+        <div style="position:relative;z-index:1;">
             <a href="cashiers.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
@@ -1322,93 +1289,84 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 8 REVENUE CARDS WITH GREEN BACKGROUND -->
+    <!-- 8 REVENUE CARDS - NO DOUBLE COUNTING -->
     <!-- ================================================================ -->
     <div class="revenue-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
-        <!-- 1. TOTAL REVENUE -->
-        <a href="payments.php?branch=<?= $cashier_id ?>" class="revenue-card">
+        <!-- 1. TOTAL REVENUE - BLUE -->
+        <div class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
-            <p class="card-amount"><?= formatCurrency($grand_total_revenue) ?></p>
+            <p class="card-amount"><?= formatCurrency($total_revenue) ?></p>
             <p class="card-label">Total Revenue</p>
-            <p class="card-sub">All payments combined</p>
+            <p class="card-sub">Patient Bills + Prescription + OTC</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
+        </div>
         
-        <!-- 2. PHARMACY REVENUE -->
-        <a href="pharmacy_revenue.php?branch=<?= $cashier_id ?>" class="revenue-card">
-            <div class="card-icon"><i class="fas fa-prescription-bottle"></i></div>
-            <p class="card-amount"><?= formatCurrency($pharmacy_total) ?></p>
-            <p class="card-label">Pharmacy Revenue</p>
-            <p class="card-sub">
-                Prescribe: <span class="highlight"><?= formatCurrency($prescribe_revenue) ?></span> | 
-                OTC: <span class="highlight"><?= formatCurrency($otc_revenue) ?></span>
-            </p>
+        <!-- 2. EXPENSES - RED -->
+        <div class="revenue-card card-red">
+            <div class="card-icon"><i class="fas fa-arrow-up"></i></div>
+            <p class="card-amount"><?= formatCurrency($total_expenses) ?></p>
+            <p class="card-label">Total Expenses</p>
+            <p class="card-sub">From expenses (paid)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
+        </div>
         
-        <!-- 3. LAB REVENUE -->
-        <a href="lab_revenue.php?branch=<?= $cashier_id ?>" class="revenue-card">
-            <div class="card-icon"><i class="fas fa-flask"></i></div>
-            <p class="card-amount"><?= formatCurrency($lab_revenue) ?></p>
-            <p class="card-label">Lab Revenue</p>
-            <p class="card-sub">From lab_requests + lab_tests</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 4. PROCEDURES REVENUE -->
-        <a href="procedures_revenue.php?branch=<?= $cashier_id ?>" class="revenue-card">
-            <div class="card-icon"><i class="fas fa-syringe"></i></div>
-            <p class="card-amount"><?= formatCurrency($procedures_revenue) ?></p>
-            <p class="card-label">Procedures Revenue</p>
-            <p class="card-sub">All procedure charges</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 5. TOOLS REVENUE -->
-        <a href="tools_revenue.php?branch=<?= $cashier_id ?>" class="revenue-card">
-            <div class="card-icon"><i class="fas fa-tools"></i></div>
-            <p class="card-amount"><?= formatCurrency($tools_revenue) ?></p>
-            <p class="card-label">Tools Revenue</p>
-            <p class="card-sub">All tool/supply charges</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 6. PROCEDURES + TOOLS TOTAL -->
-        <a href="procedures_tools_revenue.php?branch=<?= $cashier_id ?>" class="revenue-card">
-            <div class="card-icon"><i class="fas fa-toolbox"></i></div>
-            <p class="card-amount"><?= formatCurrency($procedures_tools_total) ?></p>
-            <p class="card-label">Procedures &amp; Tools</p>
-            <p class="card-sub">
-                Procedures: <span class="highlight"><?= formatCurrency($procedures_revenue) ?></span> | 
-                Tools: <span class="highlight"><?= formatCurrency($tools_revenue) ?></span>
-            </p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 7. OTHER SERVICES -->
-        <a href="other_services_revenue.php?branch=<?= $cashier_id ?>" class="revenue-card">
-            <div class="card-icon"><i class="fas fa-file-medical"></i></div>
-            <p class="card-amount"><?= formatCurrency($other_services_total) ?></p>
-            <p class="card-label">Other Services</p>
-            <p class="card-sub">
-                Registration: <span class="highlight"><?= formatCurrency($registration_revenue) ?></span> | 
-                Consultation: <span class="highlight"><?= formatCurrency($consultation_revenue) ?></span>
-            </p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 8. NET PROFIT -->
-        <a href="profit.php?branch=<?= $cashier_id ?>" class="revenue-card">
+        <!-- 3. NET PROFIT - GREEN -->
+        <div class="revenue-card card-green">
             <div class="card-icon"><i class="fas fa-chart-line"></i></div>
             <p class="card-amount"><?= formatCurrency($net_profit) ?></p>
             <p class="card-label">Net Profit</p>
             <p class="card-sub">
-                Revenue: <span class="highlight"><?= formatCurrency($grand_total_revenue) ?></span> | 
+                Revenue: <span class="highlight"><?= formatCurrency($total_revenue) ?></span> | 
                 Expenses: <span class="highlight"><?= formatCurrency($total_expenses) ?></span>
             </p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
+        </div>
+        
+        <!-- 4. PATIENT BILLS REVENUE - BLUE -->
+        <div class="revenue-card card-blue">
+            <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
+            <p class="card-amount"><?= formatCurrency($patient_bills_revenue) ?></p>
+            <p class="card-label">Patient Bills</p>
+            <p class="card-sub">Includes procedures + consultation + medication</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </div>
+        
+        <!-- 5. PROCEDURES & TOOLS REVENUE - BLUE (BREAKDOWN ONLY) -->
+        <div class="revenue-card card-blue">
+            <div class="card-icon"><i class="fas fa-toolbox"></i></div>
+            <p class="card-amount"><?= formatCurrency($procedures_tools_revenue) ?></p>
+            <p class="card-label">Procedures &amp; Tools</p>
+            <p class="card-sub">Breakdown (included in Patient Bills)</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </div>
+        
+        <!-- 6. PRESCRIPTION REVENUE - BLUE -->
+        <div class="revenue-card card-blue">
+            <div class="card-icon"><i class="fas fa-prescription-bottle"></i></div>
+            <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
+            <p class="card-label">Prescription Revenue</p>
+            <p class="card-sub">From prescription_sales (paid)</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </div>
+        
+        <!-- 7. OTC REVENUE - BLUE -->
+        <div class="revenue-card card-blue">
+            <div class="card-icon"><i class="fas fa-cash-register"></i></div>
+            <p class="card-amount"><?= formatCurrency($otc_revenue) ?></p>
+            <p class="card-label">OTC Revenue</p>
+            <p class="card-sub">From otc_sales (paid)</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </div>
+        
+        <!-- 8. OTHER SERVICES - BLUE (BREAKDOWN ONLY) -->
+        <div class="revenue-card card-blue">
+            <div class="card-icon"><i class="fas fa-file-medical"></i></div>
+            <p class="card-amount"><?= formatCurrency($other_services_total) ?></p>
+            <p class="card-label">Other Services</p>
+            <p class="card-sub">Consultation + Medication + Registration (Breakdown)</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </div>
         
     </div>
 
@@ -1646,9 +1604,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1678,9 +1633,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     var searchBtn = document.getElementById('searchBtn');
@@ -1735,9 +1687,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1758,10 +1707,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    // Check for error in URL
     <?php if (isset($_GET['error']) && $_GET['error'] === 'invalid_id'): ?>
         showToast('⚠️ Error', 'Invalid cashier ID provided. Please select a valid cashier.', 'error');
-        // Clean URL after 2 seconds
         setTimeout(function() {
             var cleanUrl = window.location.href.split('?')[0] + '?branch=<?= $selected_branch_id ?>';
             if (window.history && window.history.replaceState) {
@@ -1770,19 +1717,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }, 2000);
     <?php endif; ?>
 
-    console.log('%c💰 Braick Dispensary - View Cashier (FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick Dispensary - View Cashier (NO DOUBLE COUNTING)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c💵 Total Revenue: <?= formatCurrency($grand_total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📋 Total Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#EF4444;');
-    console.log('%c📈 Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💊 Pharmacy Revenue: <?= formatCurrency($pharmacy_total) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🧪 Lab Revenue: <?= formatCurrency($lab_revenue) ?> (FROM lab_requests + lab_tests)', 'font-size:13px; color:#0D9488;');
-    console.log('%c🔧 Procedures: <?= formatCurrency($procedures_revenue) ?>', 'font-size:13px; color:#EC4899;');
-    console.log('%c🛠️ Tools: <?= formatCurrency($tools_revenue) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c📋 Other Services: <?= formatCurrency($other_services_total) ?>', 'font-size:13px; color:#4F46E5;');
-    console.log('%c✅ FIXED: All revenue queries with proper joins', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Lab revenue from both tables', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Error handling for invalid ID', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 Total Revenue: <?= formatCurrency($total_revenue) ?> (Patient Bills + Prescription + OTC)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c📊 Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📊 Patient Bills: <?= formatCurrency($patient_bills_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Procedures & Tools: <?= formatCurrency($procedures_tools_revenue) ?> (Breakdown)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Prescription: <?= formatCurrency($prescription_revenue) ?> (Separate)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 OTC: <?= formatCurrency($otc_revenue) ?> (Separate)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Other Services: <?= formatCurrency($other_services_total) ?> (Breakdown)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ FIXED: NO DOUBLE COUNTING - Total Revenue = Patient Bills + Prescription + OTC', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Procedures, Consultation, Medication are breakdowns only', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: For Arusha, Total Revenue = 330,000 (not 660,000)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

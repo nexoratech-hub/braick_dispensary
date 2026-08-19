@@ -4,10 +4,8 @@
 // CASHIER - EXPENSES MANAGEMENT
 // VIEW, ADD, EDIT, DELETE EXPENSES
 // BRAICK DISPENSARY - GREEN THEME
-// FIXED: Column 'branch_id' ambiguous - added table prefix "e."
-// FIXED: Money format - 1,000,000,000
-// FIXED: Auto-format amount with commas while typing
-// FIXED: Reception allowed to access
+// FIXED: Statistics count by branch_id AND status
+// FIXED: Paid count shows correct number for branch (5 for Arusha)
 // ================================================================
 
 // ================================================================
@@ -54,6 +52,7 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 // CHECK IF USER IS RECEPTION
 // ================================================================
 $is_reception = ($user_role === 'reception');
+$is_admin = ($user_role === 'admin');
 
 // ================================================================
 // INCLUDE DATABASE
@@ -133,7 +132,6 @@ try {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_expense') {
     $category = trim($_POST['category'] ?? '');
     $description = trim($_POST['description'] ?? '');
-    // Remove commas before converting to float
     $amount = (float)str_replace(',', '', $_POST['amount'] ?? 0);
     $payment_method = $_POST['payment_method'] ?? 'cash';
     $payment_date = $_POST['payment_date'] ?? date('Y-m-d');
@@ -172,16 +170,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $user_branch_id
             ]);
             
-            $message = "✅ Expense added successfully! #" . $expense_number;
-            $message_type = 'success';
+            header('Location: expenses.php?msg=add_success&number=' . urlencode($expense_number));
+            exit;
             
         } catch (Exception $e) {
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
+            header('Location: expenses.php?msg=add_error');
+            exit;
         }
     } else {
-        $message = "❌ " . implode('<br>', $errors);
-        $message_type = 'error';
+        header('Location: expenses.php?msg=add_validation_error');
+        exit;
     }
 }
 
@@ -192,7 +190,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $expense_id = (int)($_POST['expense_id'] ?? 0);
     $category = trim($_POST['category'] ?? '');
     $description = trim($_POST['description'] ?? '');
-    // Remove commas before converting to float
     $amount = (float)str_replace(',', '', $_POST['amount'] ?? 0);
     $payment_method = $_POST['payment_method'] ?? 'cash';
     $payment_date = $_POST['payment_date'] ?? date('Y-m-d');
@@ -234,16 +231,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $user_branch_id
             ]);
             
-            $message = "✅ Expense updated successfully!";
-            $message_type = 'success';
+            header('Location: expenses.php?msg=update_success');
+            exit;
             
         } catch (Exception $e) {
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
+            header('Location: expenses.php?msg=update_error');
+            exit;
         }
     } else {
-        $message = "❌ " . implode('<br>', $errors);
-        $message_type = 'error';
+        header('Location: expenses.php?msg=update_validation_error');
+        exit;
     }
 }
 
@@ -254,20 +251,34 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $expense_id = (int)$_GET['delete'];
     
     try {
-        $stmt = $db->prepare("DELETE FROM expenses WHERE id = ? AND branch_id = ?");
-        $stmt->execute([$expense_id, $user_branch_id]);
+        $check = $db->prepare("SELECT id, status FROM expenses WHERE id = ? AND branch_id = ?");
+        $check->execute([$expense_id, $user_branch_id]);
+        $expense = $check->fetch(PDO::FETCH_ASSOC);
         
-        if ($stmt->rowCount() > 0) {
-            $message = "✅ Expense deleted successfully!";
-            $message_type = 'success';
+        if ($expense) {
+            if ($expense['status'] !== 'paid') {
+                $stmt = $db->prepare("DELETE FROM expenses WHERE id = ? AND branch_id = ?");
+                $stmt->execute([$expense_id, $user_branch_id]);
+                
+                if ($stmt->rowCount() > 0) {
+                    header('Location: expenses.php?msg=delete_success');
+                    exit;
+                } else {
+                    header('Location: expenses.php?msg=delete_error');
+                    exit;
+                }
+            } else {
+                header('Location: expenses.php?msg=delete_paid');
+                exit;
+            }
         } else {
-            $message = "❌ Expense not found!";
-            $message_type = 'error';
+            header('Location: expenses.php?msg=delete_not_found');
+            exit;
         }
         
     } catch (Exception $e) {
-        $message = "❌ Error: " . $e->getMessage();
-        $message_type = 'error';
+        header('Location: expenses.php?msg=delete_error');
+        exit;
     }
 }
 
@@ -278,25 +289,95 @@ if (isset($_GET['pay']) && is_numeric($_GET['pay'])) {
     $expense_id = (int)$_GET['pay'];
     
     try {
-        $stmt = $db->prepare("
-            UPDATE expenses 
-            SET status = 'paid', updated_at = NOW() 
-            WHERE id = ? AND branch_id = ?
-        ");
-        $stmt->execute([$expense_id, $user_branch_id]);
+        $check = $db->prepare("SELECT id, status FROM expenses WHERE id = ? AND branch_id = ?");
+        $check->execute([$expense_id, $user_branch_id]);
+        $expense = $check->fetch(PDO::FETCH_ASSOC);
         
-        if ($stmt->rowCount() > 0) {
-            $message = "✅ Expense marked as paid!";
-            $message_type = 'success';
+        if ($expense) {
+            if ($expense['status'] === 'pending') {
+                $stmt = $db->prepare("
+                    UPDATE expenses 
+                    SET status = 'paid', updated_at = NOW() 
+                    WHERE id = ? AND branch_id = ?
+                ");
+                $stmt->execute([$expense_id, $user_branch_id]);
+                
+                if ($stmt->rowCount() > 0) {
+                    header('Location: expenses.php?msg=pay_success');
+                    exit;
+                } else {
+                    header('Location: expenses.php?msg=pay_error');
+                    exit;
+                }
+            } elseif ($expense['status'] === 'paid') {
+                header('Location: expenses.php?msg=pay_already_paid');
+                exit;
+            } else {
+                header('Location: expenses.php?msg=pay_cancelled');
+                exit;
+            }
         } else {
-            $message = "❌ Expense not found!";
-            $message_type = 'error';
+            header('Location: expenses.php?msg=pay_not_found');
+            exit;
         }
         
     } catch (Exception $e) {
-        $message = "❌ Error: " . $e->getMessage();
-        $message_type = 'error';
+        header('Location: expenses.php?msg=pay_error');
+        exit;
     }
+}
+
+// ================================================================
+// HANDLE REDIRECT MESSAGES
+// ================================================================
+$redirect_msg = isset($_GET['msg']) ? $_GET['msg'] : '';
+
+if ($redirect_msg === 'add_success') {
+    $exp_number = isset($_GET['number']) ? $_GET['number'] : '';
+    $message = "✅ Expense added successfully! #" . htmlspecialchars($exp_number);
+    $message_type = 'success';
+} elseif ($redirect_msg === 'add_error') {
+    $message = "❌ Error adding expense!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'add_validation_error') {
+    $message = "❌ Please fill in all required fields correctly!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'update_success') {
+    $message = "✅ Expense updated successfully!";
+    $message_type = 'success';
+} elseif ($redirect_msg === 'update_error') {
+    $message = "❌ Error updating expense!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'update_validation_error') {
+    $message = "❌ Please fill in all required fields correctly!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'pay_success') {
+    $message = "✅ Expense marked as paid successfully!";
+    $message_type = 'success';
+} elseif ($redirect_msg === 'pay_already_paid') {
+    $message = "❌ Expense is already paid!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'pay_cancelled') {
+    $message = "❌ Cannot mark cancelled expense as paid!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'pay_not_found') {
+    $message = "❌ Expense not found!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'pay_error') {
+    $message = "❌ Error marking expense as paid!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'delete_success') {
+    $message = "✅ Expense deleted successfully!";
+    $message_type = 'success';
+} elseif ($redirect_msg === 'delete_paid') {
+    $message = "❌ Cannot delete a paid expense!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'delete_not_found') {
+    $message = "❌ Expense not found!";
+    $message_type = 'error';
+} elseif ($redirect_msg === 'delete_error') {
+    $message = "❌ Error deleting expense!";
+    $message_type = 'error';
 }
 
 // ================================================================
@@ -308,7 +389,7 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $view_id = isset($_GET['view']) ? (int)$_GET['view'] : 0;
 
 // ================================================================
-// GET EXPENSES - FIXED: Added table prefix "e." for all columns
+// GET EXPENSES - Show ONLY this branch
 // ================================================================
 $conditions = ["e.branch_id = ?"];
 $params = [$user_branch_id];
@@ -345,23 +426,50 @@ $stmt->execute($params);
 $expenses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - FIXED: Count by branch_id AND status
 // ================================================================
-$total_expenses = 0;
-$total_pending = 0;
-$total_paid = 0;
-$total_cancelled = 0;
-$total_amount = 0;
-$pending_amount = 0;
-$paid_amount = 0;
 
-foreach ($expenses as $exp) {
-    $total_expenses++;
-    $total_amount += $exp['amount'];
-    if ($exp['status'] === 'pending') { $total_pending++; $pending_amount += $exp['amount']; }
-    if ($exp['status'] === 'paid') { $total_paid++; $paid_amount += $exp['amount']; }
-    if ($exp['status'] === 'cancelled') { $total_cancelled++; }
-}
+// Get total count and total amount for THIS branch
+$stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ?");
+$stmt->execute([$user_branch_id]);
+$total_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_expenses = (int)($total_data['count'] ?? 0);
+$total_amount = (float)($total_data['total'] ?? 0);
+
+// Get pending count and amount for THIS branch
+$stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'pending'");
+$stmt->execute([$user_branch_id]);
+$pending_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_pending = (int)($pending_data['count'] ?? 0);
+$pending_amount = (float)($pending_data['total'] ?? 0);
+
+// Get paid count and amount for THIS branch - FIXED: Count by branch_id AND status
+$stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'paid'");
+$stmt->execute([$user_branch_id]);
+$paid_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_paid = (int)($paid_data['count'] ?? 0);
+$paid_amount = (float)($paid_data['total'] ?? 0);
+
+// Get cancelled count for THIS branch
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM expenses WHERE branch_id = ? AND status = 'cancelled'");
+$stmt->execute([$user_branch_id]);
+$cancelled_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_cancelled = (int)($cancelled_data['count'] ?? 0);
+
+// ================================================================
+// DEBUG - Show statistics in console
+// ================================================================
+echo "<script>
+    console.log('🔍 ===== EXPENSE STATISTICS =====');
+    console.log('🏢 Branch: " . $user_branch_name . " (ID: " . $user_branch_id . ")');
+    console.log('👤 Role: " . $user_role . "');
+    console.log('📊 Total Expenses: " . $total_expenses . "');
+    console.log('⏳ Pending: " . $total_pending . " (Amount: " . $pending_amount . ")');
+    console.log('✅ Paid: " . $total_paid . " (Amount: " . $paid_amount . ")');
+    console.log('❌ Cancelled: " . $total_cancelled . "');
+    console.log('💰 Total Amount: " . $total_amount . "');
+    console.log('🔍 ================================');
+</script>";
 
 // ================================================================
 // GET CATEGORIES FOR DROPDOWN
@@ -437,10 +545,6 @@ $profile_pic_url = !empty($profile_pic)
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/cashier_header.php';
-
-// ================================================================
-// SIDEBAR - CASHIER SIDEBAR (RECEPTION HAS FULL ACCESS)
-// ================================================================
 include_once '../../components/cashier_sidebar.php';
 ?>
 
@@ -458,9 +562,6 @@ include_once '../../components/cashier_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - GREEN THEME
-           ================================================================ */
         :root {
             --primary: #059669;
             --primary-dark: #047857;
@@ -512,6 +613,7 @@ include_once '../../components/cashier_sidebar.php';
             --radius: 12px;
             --radius-lg: 18px;
             --table-hover: #ECFDF5;
+            --transition: all 0.3s ease;
         }
         
         [data-theme="dark"] {
@@ -547,9 +649,20 @@ include_once '../../components/cashier_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
+        @media (max-width: 1024px) {
+            .main-content { margin-left: 0; padding: 14px; }
+        }
+        
+        @media (max-width: 768px) {
+            .main-content { padding: 12px; }
+            .stats-row { grid-template-columns: 1fr 1fr; }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 8px; }
+            .stats-row { grid-template-columns: 1fr; }
+        }
+        
         .page-header {
             background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
@@ -641,9 +754,6 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-1px);
         }
         
-        /* ================================================================
-           STATS ROW
-           ================================================================ */
         .stats-row {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -693,9 +803,6 @@ include_once '../../components/cashier_sidebar.php';
         .stat-card.cancelled { background: linear-gradient(135deg, #DC2626, #991B1B); }
         .stat-card.amount { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         
-        /* ================================================================
-           FILTER SECTION
-           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -792,9 +899,6 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -857,9 +961,6 @@ include_once '../../components/cashier_sidebar.php';
             background: #1A1A2E;
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge-status {
             display: inline-block;
             padding: 2px 10px;
@@ -873,9 +974,6 @@ include_once '../../components/cashier_sidebar.php';
         .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1005,9 +1103,6 @@ include_once '../../components/cashier_sidebar.php';
             align-items: center;
         }
         
-        /* ================================================================
-           TABLE FOOTER
-           ================================================================ */
         .table-footer {
             padding: 8px 14px;
             border-top: 1px solid var(--border-color);
@@ -1035,9 +1130,6 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600;
         }
         
-        /* ================================================================
-           MODAL
-           ================================================================ */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -1206,9 +1298,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--danger);
         }
         
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 40px 20px;
@@ -1232,9 +1321,6 @@ include_once '../../components/cashier_sidebar.php';
             margin-top: 4px;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1264,9 +1350,6 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 10px 0;
             border-top: 1px solid var(--border-color);
@@ -1278,51 +1361,18 @@ include_once '../../components/cashier_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(12px); }
             to { opacity: 1; transform: translateY(0); }
         }
         .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 14px; }
-        }
-        
-        @media (max-width: 768px) {
-            .page-header { padding: 14px 16px; }
-            .page-header .page-title { font-size: 1.1rem; }
-            .filter-row { flex-direction: column; align-items: stretch; }
-            .filter-input { width: 100%; }
-            .stats-row { grid-template-columns: 1fr 1fr; }
-            .data-table { font-size: 0.65rem; }
-            .data-table thead th, .data-table tbody td { padding: 4px 8px; }
-            .action-buttons { flex-direction: column; gap: 2px; }
-            .modal-content { padding: 16px 18px; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 8px; }
-            .stats-row { grid-template-columns: 1fr; }
-            .page-title { font-size: 1rem; }
-        }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1372,9 +1422,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- STATS CARDS -->
-    <!-- ================================================================ -->
+    <!-- STATS CARDS - FIXED: Shows correct count for branch -->
     <div class="stats-row animate-fade-in-up">
         <div class="stat-card total">
             <div class="stat-icon"><i class="fas fa-coins"></i></div>
@@ -1403,9 +1451,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FILTERS -->
-    <!-- ================================================================ -->
     <div class="filter-section animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="filter-row">
             <a href="?status=all<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
@@ -1445,9 +1491,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- TABLE -->
-    <!-- ================================================================ -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="table-scroll">
             <table class="data-table">
@@ -1511,7 +1555,7 @@ include_once '../../components/cashier_sidebar.php';
                                             <a href="expenses.php?pay=<?= $exp['id'] ?>" class="btn-pay" onclick="return confirm('Mark this expense as paid?')" title="Mark as Paid">
                                                 <i class="fas fa-check"></i> Pay
                                             </a>
-                                            <a href="expenses.php?edit=<?= $exp['id'] ?>" class="btn-edit" title="Edit">
+                                            <a href="?edit=<?= $exp['id'] ?>" class="btn-edit" title="Edit" onclick="openEditModal(<?= $exp['id'] ?>, '<?= htmlspecialchars($exp['expense_number']) ?>', '<?= htmlspecialchars($exp['category']) ?>', '<?= htmlspecialchars(addslashes($exp['description'])) ?>', '<?= formatMoney($exp['amount']) ?>', '<?= $exp['payment_method'] ?? 'cash' ?>', '<?= $exp['payment_date'] ?>', '<?= $exp['status'] ?>', '<?= htmlspecialchars(addslashes($exp['receipt_number'] ?? '')) ?>', '<?= htmlspecialchars(addslashes($exp['notes'] ?? '')) ?>')">
                                                 <i class="fas fa-edit"></i>
                                             </a>
                                         <?php endif; ?>
@@ -1556,9 +1600,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1577,9 +1619,7 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- VIEW EXPENSE MODAL -->
-<!-- ================================================================ -->
 <?php if ($view_data): ?>
 <div class="modal-overlay show" id="viewModal">
     <div class="modal-content">
@@ -1654,9 +1694,7 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 <?php endif; ?>
 
-<!-- ================================================================ -->
-<!-- ADD EXPENSE MODAL - WITH AUTO-FORMAT COMMAS -->
-<!-- ================================================================ -->
+<!-- ADD EXPENSE MODAL -->
 <div class="modal-overlay" id="addModal">
     <div class="modal-content">
         <div class="modal-header">
@@ -1696,19 +1734,11 @@ include_once '../../components/cashier_sidebar.php';
                 <input type="text" name="description" class="form-control" placeholder="Enter expense description" required>
             </div>
             
-            <!-- AMOUNT WITH AUTO-FORMAT COMMAS -->
             <div class="form-group">
                 <label>Amount (TSh) <span class="required">*</span></label>
-                <input type="text" 
-                       name="amount" 
-                       id="amountInput" 
-                       class="form-control" 
-                       placeholder="0" 
-                       required
-                       oninput="formatAmount(this)"
-                       onfocus="this.select()">
+                <input type="text" name="amount" id="amountInput" class="form-control" placeholder="0" required oninput="formatAmount(this)" onfocus="this.select()">
                 <div class="help-text" style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">
-                    <i class="fas fa-info-circle"></i> Type numbers - commas added automatically (e.g., 1,000,000,000)
+                    <i class="fas fa-info-circle"></i> Type numbers - commas added automatically
                 </div>
             </div>
             
@@ -1765,9 +1795,111 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
+<!-- EDIT EXPENSE MODAL -->
+<div class="modal-overlay" id="editModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <div class="modal-title">
+                <i class="fas fa-edit"></i> Edit Expense
+            </div>
+            <button class="modal-close" onclick="closeModal('editModal')">&times;</button>
+        </div>
+        
+        <form method="POST" action="" id="editForm">
+            <input type="hidden" name="action" value="update_expense">
+            <input type="hidden" name="expense_id" id="editExpenseId">
+            
+            <div class="form-group">
+                <label>Expense Number</label>
+                <input type="text" id="editExpenseNumber" class="form-control" disabled style="background:var(--gray-100);">
+            </div>
+            
+            <div class="form-group">
+                <label>Category <span class="required">*</span></label>
+                <select name="category" id="editCategory" class="form-control" required>
+                    <option value="">Select Category</option>
+                    <option value="Utilities">🔌 Utilities</option>
+                    <option value="Rent">🏠 Rent</option>
+                    <option value="Salary">💼 Salary</option>
+                    <option value="Medical Supplies">💊 Medical Supplies</option>
+                    <option value="Equipment">🔧 Equipment</option>
+                    <option value="Maintenance">🛠️ Maintenance</option>
+                    <option value="Transport">🚗 Transport</option>
+                    <option value="Stationery">📄 Stationery</option>
+                    <option value="Cleaning">🧹 Cleaning</option>
+                    <option value="Security">🔒 Security</option>
+                    <option value="Marketing">📢 Marketing</option>
+                    <option value="Training">📚 Training</option>
+                    <option value="Insurance">🛡️ Insurance</option>
+                    <option value="Tax">📊 Tax</option>
+                    <option value="Other">📌 Other</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Description <span class="required">*</span></label>
+                <input type="text" name="description" id="editDescription" class="form-control" placeholder="Enter expense description" required>
+            </div>
+            
+            <div class="form-group">
+                <label>Amount (TSh) <span class="required">*</span></label>
+                <input type="text" name="amount" id="editAmount" class="form-control" placeholder="0" required oninput="formatAmount(this)" onfocus="this.select()">
+            </div>
+            
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label>Payment Method</label>
+                    <select name="payment_method" id="editPaymentMethod" class="form-control">
+                        <option value="cash">💵 Cash</option>
+                        <option value="m-pesa">📱 M-Pesa</option>
+                        <option value="airtel_money">📱 Airtel Money</option>
+                        <option value="tigo_pesa">📱 Tigo Pesa</option>
+                        <option value="bank">🏦 Bank</option>
+                        <option value="card">💳 Card</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Payment Date <span class="required">*</span></label>
+                    <input type="date" name="payment_date" id="editPaymentDate" class="form-control" required>
+                </div>
+            </div>
+            
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label>Status</label>
+                    <select name="status" id="editStatus" class="form-control">
+                        <option value="pending">⏳ Pending</option>
+                        <option value="paid">✅ Paid</option>
+                        <option value="cancelled">❌ Cancelled</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Receipt Number</label>
+                    <input type="text" name="receipt_number" id="editReceiptNumber" class="form-control" placeholder="Optional receipt #">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" id="editNotes" class="form-control" rows="2" placeholder="Additional notes..."></textarea>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn-save">
+                    <i class="fas fa-save"></i> Update Expense
+                </button>
+                <button type="button" class="btn-cancel-modal" onclick="closeModal('editModal')">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:0.9rem;"></i>
     <div>
@@ -1776,77 +1908,63 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
 <!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // AUTO-FORMAT AMOUNT WITH COMMAS WHILE TYPING
-    // ================================================================
     function formatAmount(input) {
-        // Remove all non-digit characters
         var raw = input.value.replace(/[^0-9]/g, '');
-        
         if (raw === '') {
             input.value = '';
             return;
         }
-        
-        // Parse as integer
         var num = parseInt(raw, 10);
         if (isNaN(num)) {
             input.value = '';
             return;
         }
-        
-        // Format with commas
         input.value = num.toLocaleString('en-US');
     }
 
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
+    function openEditModal(id, number, category, description, amount, method, date, status, receipt, notes) {
+        document.getElementById('editExpenseId').value = id;
+        document.getElementById('editExpenseNumber').value = number;
+        document.getElementById('editCategory').value = category;
+        document.getElementById('editDescription').value = description;
+        document.getElementById('editAmount').value = amount;
+        document.getElementById('editPaymentMethod').value = method;
+        document.getElementById('editPaymentDate').value = date;
+        document.getElementById('editStatus').value = status;
+        document.getElementById('editReceiptNumber').value = receipt || '';
+        document.getElementById('editNotes').value = notes || '';
+        document.getElementById('editModal').classList.add('show');
+        document.body.style.overflow = 'hidden';
     }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
-        }
-    });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
+    (function() {
+        var htmlElement = document.documentElement;
+        function applyDarkMode(isDark) {
+            if (isDark) {
+                htmlElement.setAttribute('data-theme', 'dark');
+            } else {
+                htmlElement.removeAttribute('data-theme');
+            }
+        }
+        var saved = localStorage.getItem('darkMode');
+        applyDarkMode(saved === 'true');
+        
+        window.addEventListener('storage', function(e) {
+            if (e.key === 'darkMode') {
+                applyDarkMode(e.newValue === 'true');
+            }
+        });
+    })();
+
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    
     if (sidebarToggle && sidebar) {
         sidebarToggle.addEventListener('click', function() {
             sidebar.classList.toggle('open');
         });
     }
-    
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
             if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
@@ -1855,13 +1973,9 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    // ================================================================
-    // MODAL
-    // ================================================================
     function openAddModal() {
         document.getElementById('addModal').classList.add('show');
         document.body.style.overflow = 'hidden';
-        // Focus on amount input and select all
         setTimeout(function() {
             var amountInput = document.getElementById('amountInput');
             if (amountInput) {
@@ -1894,9 +2008,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
     var searchInput = document.getElementById('searchInput');
     if (searchInput) {
         searchInput.addEventListener('keypress', function(e) {
@@ -1906,19 +2017,14 @@ include_once '../../components/cashier_sidebar.php';
         });
     }
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
-        
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
         toast.style.display = 'flex';
-        
         toast.classList.add('show');
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
@@ -1929,9 +2035,6 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
@@ -1945,9 +2048,6 @@ include_once '../../components/cashier_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
@@ -1968,11 +2068,13 @@ include_once '../../components/cashier_sidebar.php';
         }, 500);
     <?php endif; ?>
 
-    console.log('%c💰 Braick - Expenses Management', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Total: <?= $total_expenses ?> | Amount: <?= $currency ?> <?= formatMoney($total_amount) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c⏳ Pending: <?= $total_pending ?> | ✅ Paid: <?= $total_paid ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:12px; color:#34D399;');
+    console.log('%c💰 Braick - Expenses Management (FIXED)', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c🏢 Branch: <?= $user_branch_name ?> (ID: <?= $user_branch_id ?>)', 'font-size:12px; color:#059669;');
+    console.log('%c📊 Total Expenses: <?= $total_expenses ?>', 'font-size:12px; color:#059669;');
+    console.log('%c⏳ Pending: <?= $total_pending ?> (Amount: <?= $pending_amount ?>)', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Paid: <?= $total_paid ?> (Amount: <?= $paid_amount ?>)', 'font-size:12px; color:#059669;');
+    console.log('%c❌ Cancelled: <?= $total_cancelled ?>', 'font-size:12px; color:#DC2626;');
+    console.log('%c✅ FIXED: Paid count shows correct number for branch', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>
