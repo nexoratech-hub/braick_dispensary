@@ -4,8 +4,12 @@
 // CASHIER - EXPENSES MANAGEMENT
 // VIEW, ADD, EDIT, DELETE EXPENSES
 // BRAICK DISPENSARY - GREEN THEME
-// FIXED: Statistics count by branch_id AND status
-// FIXED: Paid count shows correct number for branch (5 for Arusha)
+// FIXED: Single Total Expenses card - RED background
+// FIXED: Paid = Only VIEW button
+// FIXED: Pending = VIEW + PAY buttons (no delete)
+// FIXED: After PAY -> status becomes PAID, only VIEW remains
+// FIXED: Filters - Daily, Week, Monthly, 3 Months, 6 Months, 1 Year, All
+// FIXED: Date range filter (From - To)
 // ================================================================
 
 // ================================================================
@@ -14,6 +18,20 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
+
+// ================================================================
+// FORCE CLEAR SESSION CACHE
+// ================================================================
+unset($_SESSION['expenses_stats']);
+unset($_SESSION['expenses_paid']);
+unset($_SESSION['expenses_total']);
+
+// ================================================================
+// FORCE NO CACHE HEADERS
+// ================================================================
+header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+header("Cache-Control: post-check=0, pre-check=0", false);
+header("Pragma: no-cache");
 
 // ================================================================
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
@@ -84,7 +102,7 @@ try {
 }
 
 // ================================================================
-// MONEY FORMAT FUNCTION - 1,000,000,000
+// MONEY FORMAT FUNCTION
 // ================================================================
 function formatMoney($amount) {
     if ($amount === null || $amount === '') {
@@ -94,7 +112,7 @@ function formatMoney($amount) {
 }
 
 // ================================================================
-// CHECK IF EXPENSES TABLE EXISTS - CREATE IF NOT
+// CHECK IF EXPENSES TABLE EXISTS
 // ================================================================
 try {
     $stmt = $db->query("SHOW TABLES LIKE 'expenses'");
@@ -108,7 +126,7 @@ try {
                 `amount` decimal(10,2) NOT NULL,
                 `payment_method` enum('cash','m-pesa','airtel_money','tigo_pesa','bank','card','other') DEFAULT 'cash',
                 `payment_date` date NOT NULL,
-                `status` enum('pending','paid','cancelled') DEFAULT 'pending',
+                `status` enum('pending','paid','cancelled') DEFAULT 'paid',
                 `receipt_number` varchar(50) DEFAULT NULL,
                 `notes` text DEFAULT NULL,
                 `created_by` int(11) NOT NULL,
@@ -118,16 +136,17 @@ try {
                 PRIMARY KEY (`id`),
                 KEY `idx_branch` (`branch_id`),
                 KEY `idx_status` (`status`),
-                KEY `idx_category` (`category`)
+                KEY `idx_category` (`category`),
+                KEY `idx_payment_date` (`payment_date`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
     }
 } catch (Exception $e) {
-    // Table creation failed - handle gracefully
+    // Table creation failed
 }
 
 // ================================================================
-// HANDLE ADD EXPENSE
+// HANDLE ADD EXPENSE - DEFAULT STATUS = 'paid'
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_expense') {
     $category = trim($_POST['category'] ?? '');
@@ -135,7 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $amount = (float)str_replace(',', '', $_POST['amount'] ?? 0);
     $payment_method = $_POST['payment_method'] ?? 'cash';
     $payment_date = $_POST['payment_date'] ?? date('Y-m-d');
-    $status = $_POST['status'] ?? 'pending';
+    $status = 'paid';
     $receipt_number = trim($_POST['receipt_number'] ?? '');
     $notes = trim($_POST['notes'] ?? '');
     
@@ -193,7 +212,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $amount = (float)str_replace(',', '', $_POST['amount'] ?? 0);
     $payment_method = $_POST['payment_method'] ?? 'cash';
     $payment_date = $_POST['payment_date'] ?? date('Y-m-d');
-    $status = $_POST['status'] ?? 'pending';
+    $status = $_POST['status'] ?? 'paid';
     $receipt_number = trim($_POST['receipt_number'] ?? '');
     $notes = trim($_POST['notes'] ?? '');
     
@@ -245,7 +264,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // ================================================================
-// HANDLE DELETE EXPENSE
+// HANDLE DELETE EXPENSE - ONLY FOR PENDING (NOT ALLOWED FOR PAID)
 // ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $expense_id = (int)$_GET['delete'];
@@ -256,6 +275,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
         $expense = $check->fetch(PDO::FETCH_ASSOC);
         
         if ($expense) {
+            // Only allow delete if status is NOT paid
             if ($expense['status'] !== 'paid') {
                 $stmt = $db->prepare("DELETE FROM expenses WHERE id = ? AND branch_id = ?");
                 $stmt->execute([$expense_id, $user_branch_id]);
@@ -268,7 +288,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
                     exit;
                 }
             } else {
-                header('Location: expenses.php?msg=delete_paid');
+                header('Location: expenses.php?msg=delete_paid_not_allowed');
                 exit;
             }
         } else {
@@ -283,7 +303,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
 }
 
 // ================================================================
-// HANDLE PAY EXPENSE (Mark as paid)
+// HANDLE PAY EXPENSE (Mark as paid) - ONLY FOR PENDING
 // ================================================================
 if (isset($_GET['pay']) && is_numeric($_GET['pay'])) {
     $expense_id = (int)$_GET['pay'];
@@ -355,8 +375,8 @@ if ($redirect_msg === 'add_success') {
     $message = "✅ Expense marked as paid successfully!";
     $message_type = 'success';
 } elseif ($redirect_msg === 'pay_already_paid') {
-    $message = "❌ Expense is already paid!";
-    $message_type = 'error';
+    $message = "ℹ️ Expense is already paid!";
+    $message_type = 'info';
 } elseif ($redirect_msg === 'pay_cancelled') {
     $message = "❌ Cannot mark cancelled expense as paid!";
     $message_type = 'error';
@@ -369,7 +389,7 @@ if ($redirect_msg === 'add_success') {
 } elseif ($redirect_msg === 'delete_success') {
     $message = "✅ Expense deleted successfully!";
     $message_type = 'success';
-} elseif ($redirect_msg === 'delete_paid') {
+} elseif ($redirect_msg === 'delete_paid_not_allowed') {
     $message = "❌ Cannot delete a paid expense!";
     $message_type = 'error';
 } elseif ($redirect_msg === 'delete_not_found') {
@@ -389,26 +409,81 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $view_id = isset($_GET['view']) ? (int)$_GET['view'] : 0;
 
 // ================================================================
-// GET EXPENSES - Show ONLY this branch
+// NEW FILTERS - Date Range & Period
+// ================================================================
+$period = isset($_GET['period']) ? $_GET['period'] : 'all';
+$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
+$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
+
+// Calculate date ranges based on period
+$today = date('Y-m-d');
+$date_conditions = [];
+$date_params = [];
+
+if ($period === 'daily') {
+    $date_from = $today;
+    $date_to = $today;
+} elseif ($period === 'week') {
+    $date_from = date('Y-m-d', strtotime('-7 days'));
+    $date_to = $today;
+} elseif ($period === 'monthly') {
+    $date_from = date('Y-m-d', strtotime('-30 days'));
+    $date_to = $today;
+} elseif ($period === '3months') {
+    $date_from = date('Y-m-d', strtotime('-90 days'));
+    $date_to = $today;
+} elseif ($period === '6months') {
+    $date_from = date('Y-m-d', strtotime('-180 days'));
+    $date_to = $today;
+} elseif ($period === '1year') {
+    $date_from = date('Y-m-d', strtotime('-365 days'));
+    $date_to = $today;
+} elseif ($period === 'custom' && !empty($date_from) && !empty($date_to)) {
+    // Custom range - keep as is
+} else {
+    // 'all' or invalid - no date filter
+    $period = 'all';
+    $date_from = '';
+    $date_to = '';
+}
+
+// Add date conditions if we have valid dates
+if (!empty($date_from) && !empty($date_to)) {
+    $date_conditions[] = "e.payment_date BETWEEN ? AND ?";
+    $date_params[] = $date_from;
+    $date_params[] = $date_to;
+}
+
+// ================================================================
+// GET EXPENSES - Show ONLY this branch with filters
 // ================================================================
 $conditions = ["e.branch_id = ?"];
 $params = [$user_branch_id];
 
+// Status filter
 if ($filter_status !== 'all') {
     $conditions[] = "e.status = ?";
     $params[] = $filter_status;
 }
 
+// Category filter
 if (!empty($filter_category)) {
     $conditions[] = "e.category = ?";
     $params[] = $filter_category;
 }
 
+// Search filter
 if (!empty($search)) {
     $conditions[] = "(e.description LIKE ? OR e.category LIKE ? OR e.expense_number LIKE ?)";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
+}
+
+// Date filter
+if (!empty($date_conditions)) {
+    $conditions = array_merge($conditions, $date_conditions);
+    $params = array_merge($params, $date_params);
 }
 
 $where_clause = implode(" AND ", $conditions);
@@ -418,7 +493,7 @@ $sql = "
     FROM expenses e
     LEFT JOIN users u ON e.created_by = u.id
     WHERE $where_clause
-    ORDER BY e.created_at DESC
+    ORDER BY e.payment_date DESC, e.created_at DESC
 ";
 
 $stmt = $db->prepare($sql);
@@ -426,50 +501,58 @@ $stmt->execute($params);
 $expenses = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS - FIXED: Count by branch_id AND status
+// GET TOTAL EXPENSES - Only count, no breakdown
 // ================================================================
-
-// Get total count and total amount for THIS branch
-$stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ?");
-$stmt->execute([$user_branch_id]);
-$total_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_expenses = (int)($total_data['count'] ?? 0);
-$total_amount = (float)($total_data['total'] ?? 0);
-
-// Get pending count and amount for THIS branch
-$stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'pending'");
-$stmt->execute([$user_branch_id]);
-$pending_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_pending = (int)($pending_data['count'] ?? 0);
-$pending_amount = (float)($pending_data['total'] ?? 0);
-
-// Get paid count and amount for THIS branch - FIXED: Count by branch_id AND status
-$stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'paid'");
-$stmt->execute([$user_branch_id]);
-$paid_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_paid = (int)($paid_data['count'] ?? 0);
-$paid_amount = (float)($paid_data['total'] ?? 0);
-
-// Get cancelled count for THIS branch
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM expenses WHERE branch_id = ? AND status = 'cancelled'");
-$stmt->execute([$user_branch_id]);
-$cancelled_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_cancelled = (int)($cancelled_data['count'] ?? 0);
-
-// ================================================================
-// DEBUG - Show statistics in console
-// ================================================================
-echo "<script>
-    console.log('🔍 ===== EXPENSE STATISTICS =====');
-    console.log('🏢 Branch: " . $user_branch_name . " (ID: " . $user_branch_id . ")');
-    console.log('👤 Role: " . $user_role . "');
-    console.log('📊 Total Expenses: " . $total_expenses . "');
-    console.log('⏳ Pending: " . $total_pending . " (Amount: " . $pending_amount . ")');
-    console.log('✅ Paid: " . $total_paid . " (Amount: " . $paid_amount . ")');
-    console.log('❌ Cancelled: " . $total_cancelled . "');
-    console.log('💰 Total Amount: " . $total_amount . "');
-    console.log('🔍 ================================');
-</script>";
+try {
+    // Build total query with same filters
+    $total_conditions = ["branch_id = ?"];
+    $total_params = [$user_branch_id];
+    
+    if ($filter_status !== 'all') {
+        $total_conditions[] = "status = ?";
+        $total_params[] = $filter_status;
+    }
+    
+    if (!empty($filter_category)) {
+        $total_conditions[] = "category = ?";
+        $total_params[] = $filter_category;
+    }
+    
+    if (!empty($search)) {
+        $total_conditions[] = "(description LIKE ? OR category LIKE ? OR expense_number LIKE ?)";
+        $total_params[] = "%$search%";
+        $total_params[] = "%$search%";
+        $total_params[] = "%$search%";
+    }
+    
+    if (!empty($date_conditions)) {
+        $total_conditions[] = "payment_date BETWEEN ? AND ?";
+        $total_params[] = $date_from;
+        $total_params[] = $date_to;
+    }
+    
+    $total_where = implode(" AND ", $total_conditions);
+    
+    $total_sql = "
+        SELECT 
+            COUNT(*) as count,
+            COALESCE(SUM(amount), 0) as total
+        FROM expenses
+        WHERE $total_where
+    ";
+    
+    $stmt = $db->prepare($total_sql);
+    $stmt->execute($total_params);
+    $total_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $total_expenses = (int)($total_data['count'] ?? 0);
+    $total_amount = (float)($total_data['total'] ?? 0);
+    
+} catch (Exception $e) {
+    error_log("ERROR getting total expenses: " . $e->getMessage());
+    $total_expenses = 0;
+    $total_amount = 0;
+}
 
 // ================================================================
 // GET CATEGORIES FOR DROPDOWN
@@ -655,12 +738,10 @@ include_once '../../components/cashier_sidebar.php';
         
         @media (max-width: 768px) {
             .main-content { padding: 12px; }
-            .stats-row { grid-template-columns: 1fr 1fr; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 8px; }
-            .stats-row { grid-template-columns: 1fr; }
         }
         
         .page-header {
@@ -754,59 +835,75 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-1px);
         }
         
-        .stats-row {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-        
-        .stat-card {
+        /* ================================================================
+           SINGLE TOTAL EXPENSES CARD - RED BACKGROUND
+           ================================================================ */
+        .total-expenses-card {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
             border-radius: var(--radius-lg);
-            padding: 12px 16px;
-            border: none;
-            transition: var(--transition);
+            padding: 20px 28px;
+            margin-bottom: 20px;
             color: white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            text-decoration: none;
-            display: block;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            box-shadow: 0 4px 20px rgba(220, 38, 38, 0.3);
+            transition: var(--transition);
         }
         
-        .stat-card:hover {
+        .total-expenses-card:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+            box-shadow: 0 8px 30px rgba(220, 38, 38, 0.4);
         }
         
-        .stat-card .stat-number {
-            font-size: 1.3rem;
-            font-weight: 700;
-            line-height: 1.2;
+        .total-expenses-card .total-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
         }
         
-        .stat-card .stat-label {
-            font-size: 0.6rem;
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
+        .total-expenses-card .total-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .total-expenses-card .total-number {
+            font-size: 2.2rem;
+            font-weight: 800;
+            line-height: 1;
+        }
+        
+        .total-expenses-card .total-label {
+            font-size: 0.8rem;
             opacity: 0.85;
-            margin-top: 1px;
+            font-weight: 500;
         }
         
-        .stat-card .stat-icon {
-            font-size: 0.9rem;
-            opacity: 0.8;
+        .total-expenses-card .total-amount {
+            font-size: 1.6rem;
+            font-weight: 700;
+            background: rgba(255,255,255,0.12);
+            padding: 6px 20px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.08);
         }
         
-        .stat-card.total { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.pending { background: linear-gradient(135deg, #D97706, #B45309); }
-        .stat-card.paid { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.cancelled { background: linear-gradient(135deg, #DC2626, #991B1B); }
-        .stat-card.amount { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        
+        /* ================================================================
+           FILTER SECTION
+           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            padding: 12px 16px;
+            padding: 16px 20px;
             border: 1px solid var(--border-color);
             margin-bottom: 20px;
         }
@@ -814,13 +911,22 @@ include_once '../../components/cashier_sidebar.php';
         .filter-row {
             display: flex;
             flex-wrap: wrap;
-            gap: 6px;
+            gap: 8px;
             align-items: center;
         }
         
-        .filter-btn {
-            padding: 4px 12px;
-            border-radius: 16px;
+        .filter-label {
+            font-size: 0.65rem;
+            font-weight: 700;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-right: 4px;
+        }
+        
+        .period-btn {
+            padding: 5px 14px;
+            border-radius: 20px;
             font-size: 0.65rem;
             font-weight: 600;
             border: 2px solid var(--border-color);
@@ -829,22 +935,25 @@ include_once '../../components/cashier_sidebar.php';
             cursor: pointer;
             transition: var(--transition);
             text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
         
-        .filter-btn:hover {
+        .period-btn:hover {
             border-color: var(--primary);
             color: var(--primary);
             background: var(--primary-bg);
         }
         
-        .filter-btn.active {
+        .period-btn.active {
             background: var(--primary);
             color: white;
             border-color: var(--primary);
         }
         
         .filter-input {
-            padding: 5px 10px;
+            padding: 5px 12px;
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
             font-size: 0.75rem;
@@ -852,8 +961,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
             outline: none;
             transition: var(--transition);
-            flex: 1;
-            min-width: 120px;
         }
         
         .filter-input:focus {
@@ -861,8 +968,12 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
         }
         
+        .filter-input.date-input {
+            min-width: 130px;
+        }
+        
         .btn-search {
-            padding: 5px 14px;
+            padding: 5px 16px;
             background: var(--primary);
             color: white;
             border: none;
@@ -899,6 +1010,27 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
+        .btn-reset {
+            padding: 5px 14px;
+            border-radius: var(--radius);
+            font-size: 0.7rem;
+            font-weight: 600;
+            border: 2px solid var(--border-color);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: var(--transition);
+            text-decoration: none;
+        }
+        
+        .btn-reset:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+        
+        /* ================================================================
+           TABLE
+           ================================================================ */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -974,6 +1106,9 @@ include_once '../../components/cashier_sidebar.php';
         .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
         
+        /* ================================================================
+           BUTTONS - Custom per status
+           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -986,27 +1121,6 @@ include_once '../../components/cashier_sidebar.php';
             cursor: pointer;
             border: none;
             text-decoration: none;
-        }
-        
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-1px);
-            box-shadow: 0 3px 10px rgba(5, 150, 105, 0.25);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 1.5px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
         }
         
         .btn-view {
@@ -1096,13 +1210,50 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 3px 10px rgba(5, 150, 105, 0.25);
         }
         
+        .btn-edit-disabled {
+            background: #94A3B8;
+            color: #E2E8F0;
+            padding: 3px 10px;
+            border-radius: 5px;
+            font-weight: 600;
+            font-size: 0.55rem;
+            cursor: not-allowed;
+            opacity: 0.5;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        
+        .btn-delete-disabled {
+            background: #94A3B8;
+            color: #E2E8F0;
+            padding: 3px 10px;
+            border-radius: 5px;
+            font-weight: 600;
+            font-size: 0.55rem;
+            cursor: not-allowed;
+            opacity: 0.5;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        
         .action-buttons {
             display: flex;
             flex-wrap: wrap;
             gap: 3px;
             align-items: center;
+            justify-content: center;
         }
         
+        .action-buttons .btn-only-view {
+            display: flex;
+            gap: 3px;
+        }
+        
+        /* ================================================================
+           TABLE FOOTER
+           ================================================================ */
         .table-footer {
             padding: 8px 14px;
             border-top: 1px solid var(--border-color);
@@ -1130,6 +1281,49 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600;
         }
         
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            color: var(--border-color);
+            display: block;
+            margin-bottom: 12px;
+        }
+        
+        .empty-state p {
+            font-size: 0.9rem;
+        }
+        
+        .empty-state .sub {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+        
+        .footer {
+            padding: 10px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
+        
+        /* ================================================================
+           MODAL
+           ================================================================ */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -1298,29 +1492,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--danger);
         }
         
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i {
-            font-size: 3rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 12px;
-        }
-        
-        .empty-state p {
-            font-size: 0.9rem;
-        }
-        
-        .empty-state .sub {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-top: 4px;
-        }
-        
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1350,29 +1521,33 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        .footer {
-            padding: 10px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.65rem;
-            color: var(--text-secondary);
+        .filter-divider {
+            width: 1px;
+            height: 28px;
+            background: var(--border-color);
+            margin: 0 4px;
         }
         
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
+        @media (max-width: 768px) {
+            .filter-divider { display: none; }
+            .total-expenses-card { flex-direction: column; text-align: center; }
+            .total-expenses-card .total-left { flex-direction: column; }
+            .filter-row { flex-direction: column; align-items: stretch; }
+            .period-btn { text-align: center; }
+            .filter-input.date-input { width: 100%; }
         }
-        .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
     </style>
 </head>
 <body>
 
+<!-- ================================================================ -->
+<!-- MAIN CONTENT -->
+<!-- ================================================================ -->
 <main class="main-content">
 
+    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1384,22 +1559,15 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-check-circle"></i> Full Access
                     </span>
                 <?php endif; ?>
-                <span class="header-badge">
-                    <i class="fas fa-list"></i> <?= $total_expenses ?> Total
-                </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.2);color:#34D399;">
-                    <i class="fas fa-money-bill-wave"></i> <?= $currency ?> <?= formatMoney($total_amount) ?>
-                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-arrow-right"></i>
                 Manage all branch expenses
-                <span class="header-badge" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.1);font-size:0.5rem;">
-                    <i class="fas fa-clock"></i> Pending: <?= $total_pending ?> (<?= $currency ?> <?= formatMoney($pending_amount) ?>)
-                </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.1);font-size:0.5rem;">
-                    <i class="fas fa-check-circle"></i> Paid: <?= $total_paid ?> (<?= $currency ?> <?= formatMoney($paid_amount) ?>)
-                </span>
+                <?php if ($period !== 'all' && !empty($date_from) && !empty($date_to)): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.1);font-size:0.5rem;">
+                        <i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($date_from)) ?> - <?= date('M d, Y', strtotime($date_to)) ?>
+                    </span>
+                <?php endif; ?>
                 <?php if ($is_reception): ?>
                     <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);font-size:0.5rem;">
                         <i class="fas fa-user-tag"></i> Reception Access
@@ -1416,82 +1584,93 @@ include_once '../../components/cashier_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-3 rounded-lg mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>" style="max-width:1200px;margin:0 auto 12px;font-size:0.8rem;">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
+        <div class="p-3 rounded-lg mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : ($message_type === 'info' ? 'bg-blue-100 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800') ?>" style="max-width:1200px;margin:0 auto 12px;font-size:0.8rem;">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'info' ? 'fa-info-circle' : 'fa-exclamation-circle') ?> mr-2"></i>
             <?= $message ?>
         </div>
     <?php endif; ?>
 
-    <!-- STATS CARDS - FIXED: Shows correct count for branch -->
-    <div class="stats-row animate-fade-in-up">
-        <div class="stat-card total">
-            <div class="stat-icon"><i class="fas fa-coins"></i></div>
-            <div class="stat-number"><?= $total_expenses ?></div>
-            <div class="stat-label">Total Expenses</div>
+    <!-- ================================================================ -->
+    <!-- SINGLE TOTAL EXPENSES CARD - RED BACKGROUND -->
+    <!-- ================================================================ -->
+    <div class="total-expenses-card animate-fade-in-up">
+        <div class="total-left">
+            <div class="total-icon">
+                <i class="fas fa-coins"></i>
+            </div>
+            <div>
+                <div class="total-label">Total Expenses</div>
+                <div class="total-number"><?= number_format($total_expenses) ?></div>
+            </div>
         </div>
-        <div class="stat-card pending">
-            <div class="stat-icon"><i class="fas fa-clock"></i></div>
-            <div class="stat-number"><?= $total_pending ?></div>
-            <div class="stat-label">⏳ Pending (<?= $currency ?> <?= formatMoney($pending_amount) ?>)</div>
-        </div>
-        <div class="stat-card paid">
-            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
-            <div class="stat-number"><?= $total_paid ?></div>
-            <div class="stat-label">✅ Paid (<?= $currency ?> <?= formatMoney($paid_amount) ?>)</div>
-        </div>
-        <div class="stat-card cancelled">
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-            <div class="stat-number"><?= $total_cancelled ?></div>
-            <div class="stat-label">❌ Cancelled</div>
-        </div>
-        <div class="stat-card amount">
-            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
-            <div class="stat-number"><?= $currency ?> <?= formatMoney($total_amount) ?></div>
-            <div class="stat-label">Total Amount</div>
+        <div class="total-amount">
+            <?= $currency ?> <?= formatMoney($total_amount) ?>
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- FILTERS -->
+    <!-- ================================================================ -->
     <div class="filter-section animate-fade-in-up" style="animation-delay:0.05s;">
-        <div class="filter-row">
-            <a href="?status=all<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
-            <a href="?status=pending<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
-            <a href="?status=paid<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'paid' ? 'active' : '' ?>">✅ Paid</a>
-            <a href="?status=cancelled<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
-            
-            <?php if (!empty($categories)): ?>
-            <select name="category" class="filter-input" style="flex:0 1 auto;min-width:100px;" onchange="window.location.href='?status=<?= $filter_status ?>&category='+this.value+'<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>'">
-                <option value="">All Categories</option>
-                <?php foreach ($categories as $cat): ?>
-                    <option value="<?= htmlspecialchars($cat['category']) ?>" <?= $filter_category === $cat['category'] ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($cat['category']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            <?php endif; ?>
-            
-            <div style="flex:1;"></div>
-            
-            <form method="GET" class="filter-row" style="flex:1;gap:6px;" id="filterForm">
-                <input type="hidden" name="status" id="filterStatus" value="<?= htmlspecialchars($filter_status) ?>">
-                <input type="text" name="search" class="filter-input" id="searchInput" placeholder="Search description..." value="<?= htmlspecialchars($search) ?>">
-                <button type="submit" class="btn-search">
-                    <i class="fas fa-search"></i>
-                </button>
-                <?php if (!empty($search) || $filter_status !== 'all'): ?>
-                    <a href="expenses.php" class="btn btn-outline" style="padding:5px 10px;font-size:0.6rem;">
-                        <i class="fas fa-times"></i>
-                    </a>
+        <form method="GET" action="" id="filterForm">
+            <div class="filter-row">
+                <span class="filter-label"><i class="fas fa-clock"></i> Period:</span>
+                
+                <a href="?period=daily&status=<?= $filter_status ?>&category=<?= urlencode($filter_category) ?>&search=<?= urlencode($search) ?>" class="period-btn <?= $period === 'daily' ? 'active' : '' ?>">📅 Daily</a>
+                <a href="?period=week&status=<?= $filter_status ?>&category=<?= urlencode($filter_category) ?>&search=<?= urlencode($search) ?>" class="period-btn <?= $period === 'week' ? 'active' : '' ?>">📆 Week</a>
+                <a href="?period=monthly&status=<?= $filter_status ?>&category=<?= urlencode($filter_category) ?>&search=<?= urlencode($search) ?>" class="period-btn <?= $period === 'monthly' ? 'active' : '' ?>">📊 Monthly</a>
+                <a href="?period=3months&status=<?= $filter_status ?>&category=<?= urlencode($filter_category) ?>&search=<?= urlencode($search) ?>" class="period-btn <?= $period === '3months' ? 'active' : '' ?>">3 Months</a>
+                <a href="?period=6months&status=<?= $filter_status ?>&category=<?= urlencode($filter_category) ?>&search=<?= urlencode($search) ?>" class="period-btn <?= $period === '6months' ? 'active' : '' ?>">6 Months</a>
+                <a href="?period=1year&status=<?= $filter_status ?>&category=<?= urlencode($filter_category) ?>&search=<?= urlencode($search) ?>" class="period-btn <?= $period === '1year' ? 'active' : '' ?>">1 Year</a>
+                <a href="?period=all&status=<?= $filter_status ?>&category=<?= urlencode($filter_category) ?>&search=<?= urlencode($search) ?>" class="period-btn <?= $period === 'all' ? 'active' : '' ?>">🌐 All</a>
+                
+                <span class="filter-divider"></span>
+                
+                <span class="filter-label"><i class="fas fa-calendar-alt"></i> Range:</span>
+                <input type="date" name="date_from" class="filter-input date-input" value="<?= $date_from ?>" placeholder="From">
+                <span style="font-size:0.7rem;color:var(--text-secondary);">to</span>
+                <input type="date" name="date_to" class="filter-input date-input" value="<?= $date_to ?>" placeholder="To">
+                
+                <span class="filter-divider"></span>
+                
+                <select name="status" class="filter-input" style="min-width:120px;">
+                    <option value="all" <?= $filter_status === 'all' ? 'selected' : '' ?>>All Status</option>
+                    <option value="paid" <?= $filter_status === 'paid' ? 'selected' : '' ?>>✅ Paid</option>
+                    <option value="pending" <?= $filter_status === 'pending' ? 'selected' : '' ?>>⏳ Pending</option>
+                    <option value="cancelled" <?= $filter_status === 'cancelled' ? 'selected' : '' ?>>❌ Cancelled</option>
+                </select>
+                
+                <?php if (!empty($categories)): ?>
+                <select name="category" class="filter-input" style="min-width:120px;">
+                    <option value="">All Categories</option>
+                    <?php foreach ($categories as $cat): ?>
+                        <option value="<?= htmlspecialchars($cat['category']) ?>" <?= $filter_category === $cat['category'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($cat['category']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
                 <?php endif; ?>
-            </form>
-            
-            <button onclick="openAddModal()" class="btn-add">
-                <i class="fas fa-plus"></i> Add
-            </button>
-        </div>
+                
+                <input type="text" name="search" class="filter-input" style="min-width:150px;flex:1;" placeholder="Search..." value="<?= htmlspecialchars($search) ?>">
+                
+                <button type="submit" class="btn-search">
+                    <i class="fas fa-search"></i> Filter
+                </button>
+                
+                <a href="expenses.php" class="btn-reset">
+                    <i class="fas fa-times"></i> Reset
+                </a>
+                
+                <button type="button" onclick="openAddModal()" class="btn-add">
+                    <i class="fas fa-plus"></i> Add
+                </button>
+            </div>
+        </form>
     </div>
 
+    <!-- ================================================================ -->
     <!-- TABLE -->
+    <!-- ================================================================ -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="table-scroll">
             <table class="data-table">
@@ -1546,24 +1725,35 @@ include_once '../../components/cashier_sidebar.php';
                                     </span>
                                 </td>
                                 <td style="text-align:center;">
-                                    <div class="action-buttons" style="justify-content:center;">
-                                        <a href="expenses.php?view=<?= $exp['id'] ?>" class="btn-view" title="View Details">
-                                            <i class="fas fa-eye"></i>
+                                    <div class="action-buttons">
+                                        <!-- =========================================================== -->
+                                        <!-- VIEW BUTTON - Always visible for all statuses -->
+                                        <!-- =========================================================== -->
+                                        <a href="expenses.php?view=<?= $exp['id'] ?><?= !empty($period) ? '&period=' . $period : '' ?><?= !empty($date_from) ? '&date_from=' . $date_from : '' ?><?= !empty($date_to) ? '&date_to=' . $date_to : '' ?><?= $filter_status !== 'all' ? '&status=' . $filter_status : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="btn-view" title="View Details">
+                                            <i class="fas fa-eye"></i> View
                                         </a>
                                         
+                                        <!-- =========================================================== -->
+                                        <!-- STATUS = PAID: Only VIEW button (NO Edit, NO Delete) -->
+                                        <!-- =========================================================== -->
+                                        <?php if ($exp['status'] === 'paid'): ?>
+                                            <!-- Paid: Only View - No other buttons -->
+                                        <?php endif; ?>
+                                        
+                                        <!-- =========================================================== -->
+                                        <!-- STATUS = PENDING: VIEW + PAY buttons (NO Delete) -->
+                                        <!-- =========================================================== -->
                                         <?php if ($exp['status'] === 'pending'): ?>
                                             <a href="expenses.php?pay=<?= $exp['id'] ?>" class="btn-pay" onclick="return confirm('Mark this expense as paid?')" title="Mark as Paid">
                                                 <i class="fas fa-check"></i> Pay
                                             </a>
-                                            <a href="?edit=<?= $exp['id'] ?>" class="btn-edit" title="Edit" onclick="openEditModal(<?= $exp['id'] ?>, '<?= htmlspecialchars($exp['expense_number']) ?>', '<?= htmlspecialchars($exp['category']) ?>', '<?= htmlspecialchars(addslashes($exp['description'])) ?>', '<?= formatMoney($exp['amount']) ?>', '<?= $exp['payment_method'] ?? 'cash' ?>', '<?= $exp['payment_date'] ?>', '<?= $exp['status'] ?>', '<?= htmlspecialchars(addslashes($exp['receipt_number'] ?? '')) ?>', '<?= htmlspecialchars(addslashes($exp['notes'] ?? '')) ?>')">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
                                         <?php endif; ?>
                                         
-                                        <?php if ($exp['status'] !== 'paid'): ?>
-                                            <a href="expenses.php?delete=<?= $exp['id'] ?>" class="btn-delete" onclick="return confirm('Delete this expense? This action cannot be undone!')" title="Delete">
-                                                <i class="fas fa-trash"></i>
-                                            </a>
+                                        <!-- =========================================================== -->
+                                        <!-- STATUS = CANCELLED: Only VIEW button -->
+                                        <!-- =========================================================== -->
+                                        <?php if ($exp['status'] === 'cancelled'): ?>
+                                            <!-- Cancelled: Only View - No other buttons -->
                                         <?php endif; ?>
                                     </div>
                                 </td>
@@ -1575,7 +1765,7 @@ include_once '../../components/cashier_sidebar.php';
                                 <div class="empty-state">
                                     <i class="fas fa-coins"></i>
                                     <p>No expenses found</p>
-                                    <?php if (!empty($search) || !empty($filter_category) || $filter_status !== 'all'): ?>
+                                    <?php if (!empty($search) || !empty($filter_category) || $filter_status !== 'all' || $period !== 'all'): ?>
                                         <p class="sub">Try adjusting your filters</p>
                                     <?php else: ?>
                                         <p class="sub">Click "Add Expense" to get started</p>
@@ -1600,7 +1790,9 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- FOOTER -->
+    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1619,7 +1811,9 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
+<!-- ================================================================ -->
 <!-- VIEW EXPENSE MODAL -->
+<!-- ================================================================ -->
 <?php if ($view_data): ?>
 <div class="modal-overlay show" id="viewModal">
     <div class="modal-content">
@@ -1627,7 +1821,7 @@ include_once '../../components/cashier_sidebar.php';
             <div class="modal-title">
                 <i class="fas fa-eye"></i> Expense Details
             </div>
-            <a href="expenses.php" class="modal-close">&times;</a>
+            <a href="expenses.php<?= !empty($period) ? '?period=' . $period : '' ?><?= !empty($date_from) ? '&date_from=' . $date_from : '' ?><?= !empty($date_to) ? '&date_to=' . $date_to : '' ?><?= $filter_status !== 'all' ? '&status=' . $filter_status : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="modal-close">&times;</a>
         </div>
         
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
@@ -1686,7 +1880,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
         
         <div class="form-actions">
-            <a href="expenses.php" class="btn-cancel-modal">
+            <a href="expenses.php<?= !empty($period) ? '?period=' . $period : '' ?><?= !empty($date_from) ? '&date_from=' . $date_from : '' ?><?= !empty($date_to) ? '&date_to=' . $date_to : '' ?><?= $filter_status !== 'all' ? '&status=' . $filter_status : '' ?><?= !empty($filter_category) ? '&category=' . urlencode($filter_category) : '' ?><?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="btn-cancel-modal">
                 <i class="fas fa-times"></i> Close
             </a>
         </div>
@@ -1694,7 +1888,9 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 <?php endif; ?>
 
+<!-- ================================================================ -->
 <!-- ADD EXPENSE MODAL -->
+<!-- ================================================================ -->
 <div class="modal-overlay" id="addModal">
     <div class="modal-content">
         <div class="modal-header">
@@ -1736,7 +1932,14 @@ include_once '../../components/cashier_sidebar.php';
             
             <div class="form-group">
                 <label>Amount (TSh) <span class="required">*</span></label>
-                <input type="text" name="amount" id="amountInput" class="form-control" placeholder="0" required oninput="formatAmount(this)" onfocus="this.select()">
+                <input type="text" 
+                       name="amount" 
+                       id="amountInput" 
+                       class="form-control" 
+                       placeholder="0" 
+                       required
+                       oninput="formatAmount(this)"
+                       onfocus="this.select()">
                 <div class="help-text" style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">
                     <i class="fas fa-info-circle"></i> Type numbers - commas added automatically
                 </div>
@@ -1767,7 +1970,7 @@ include_once '../../components/cashier_sidebar.php';
                     <label>Status</label>
                     <select name="status" class="form-control">
                         <option value="pending">⏳ Pending</option>
-                        <option value="paid">✅ Paid</option>
+                        <option value="paid" selected>✅ Paid</option>
                         <option value="cancelled">❌ Cancelled</option>
                     </select>
                 </div>
@@ -1795,111 +1998,9 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- EDIT EXPENSE MODAL -->
-<div class="modal-overlay" id="editModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-edit"></i> Edit Expense
-            </div>
-            <button class="modal-close" onclick="closeModal('editModal')">&times;</button>
-        </div>
-        
-        <form method="POST" action="" id="editForm">
-            <input type="hidden" name="action" value="update_expense">
-            <input type="hidden" name="expense_id" id="editExpenseId">
-            
-            <div class="form-group">
-                <label>Expense Number</label>
-                <input type="text" id="editExpenseNumber" class="form-control" disabled style="background:var(--gray-100);">
-            </div>
-            
-            <div class="form-group">
-                <label>Category <span class="required">*</span></label>
-                <select name="category" id="editCategory" class="form-control" required>
-                    <option value="">Select Category</option>
-                    <option value="Utilities">🔌 Utilities</option>
-                    <option value="Rent">🏠 Rent</option>
-                    <option value="Salary">💼 Salary</option>
-                    <option value="Medical Supplies">💊 Medical Supplies</option>
-                    <option value="Equipment">🔧 Equipment</option>
-                    <option value="Maintenance">🛠️ Maintenance</option>
-                    <option value="Transport">🚗 Transport</option>
-                    <option value="Stationery">📄 Stationery</option>
-                    <option value="Cleaning">🧹 Cleaning</option>
-                    <option value="Security">🔒 Security</option>
-                    <option value="Marketing">📢 Marketing</option>
-                    <option value="Training">📚 Training</option>
-                    <option value="Insurance">🛡️ Insurance</option>
-                    <option value="Tax">📊 Tax</option>
-                    <option value="Other">📌 Other</option>
-                </select>
-            </div>
-            
-            <div class="form-group">
-                <label>Description <span class="required">*</span></label>
-                <input type="text" name="description" id="editDescription" class="form-control" placeholder="Enter expense description" required>
-            </div>
-            
-            <div class="form-group">
-                <label>Amount (TSh) <span class="required">*</span></label>
-                <input type="text" name="amount" id="editAmount" class="form-control" placeholder="0" required oninput="formatAmount(this)" onfocus="this.select()">
-            </div>
-            
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div class="form-group">
-                    <label>Payment Method</label>
-                    <select name="payment_method" id="editPaymentMethod" class="form-control">
-                        <option value="cash">💵 Cash</option>
-                        <option value="m-pesa">📱 M-Pesa</option>
-                        <option value="airtel_money">📱 Airtel Money</option>
-                        <option value="tigo_pesa">📱 Tigo Pesa</option>
-                        <option value="bank">🏦 Bank</option>
-                        <option value="card">💳 Card</option>
-                        <option value="other">Other</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label>Payment Date <span class="required">*</span></label>
-                    <input type="date" name="payment_date" id="editPaymentDate" class="form-control" required>
-                </div>
-            </div>
-            
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                <div class="form-group">
-                    <label>Status</label>
-                    <select name="status" id="editStatus" class="form-control">
-                        <option value="pending">⏳ Pending</option>
-                        <option value="paid">✅ Paid</option>
-                        <option value="cancelled">❌ Cancelled</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label>Receipt Number</label>
-                    <input type="text" name="receipt_number" id="editReceiptNumber" class="form-control" placeholder="Optional receipt #">
-                </div>
-            </div>
-            
-            <div class="form-group">
-                <label>Notes</label>
-                <textarea name="notes" id="editNotes" class="form-control" rows="2" placeholder="Additional notes..."></textarea>
-            </div>
-            
-            <div class="form-actions">
-                <button type="submit" class="btn-save">
-                    <i class="fas fa-save"></i> Update Expense
-                </button>
-                <button type="button" class="btn-cancel-modal" onclick="closeModal('editModal')">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-            </div>
-        </form>
-    </div>
-</div>
-
+<!-- ================================================================ -->
 <!-- TOAST -->
+<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:0.9rem;"></i>
     <div>
@@ -1908,8 +2009,13 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
+<!-- ================================================================ -->
 <!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
+    // ================================================================
+    // AUTO-FORMAT AMOUNT WITH COMMAS WHILE TYPING
+    // ================================================================
     function formatAmount(input) {
         var raw = input.value.replace(/[^0-9]/g, '');
         if (raw === '') {
@@ -1924,21 +2030,9 @@ include_once '../../components/cashier_sidebar.php';
         input.value = num.toLocaleString('en-US');
     }
 
-    function openEditModal(id, number, category, description, amount, method, date, status, receipt, notes) {
-        document.getElementById('editExpenseId').value = id;
-        document.getElementById('editExpenseNumber').value = number;
-        document.getElementById('editCategory').value = category;
-        document.getElementById('editDescription').value = description;
-        document.getElementById('editAmount').value = amount;
-        document.getElementById('editPaymentMethod').value = method;
-        document.getElementById('editPaymentDate').value = date;
-        document.getElementById('editStatus').value = status;
-        document.getElementById('editReceiptNumber').value = receipt || '';
-        document.getElementById('editNotes').value = notes || '';
-        document.getElementById('editModal').classList.add('show');
-        document.body.style.overflow = 'hidden';
-    }
-
+    // ================================================================
+    // DARK MODE - Sync with header
+    // ================================================================
     (function() {
         var htmlElement = document.documentElement;
         function applyDarkMode(isDark) {
@@ -1958,6 +2052,9 @@ include_once '../../components/cashier_sidebar.php';
         });
     })();
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     if (sidebarToggle && sidebar) {
@@ -1973,6 +2070,9 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
+    // ================================================================
+    // MODAL
+    // ================================================================
     function openAddModal() {
         document.getElementById('addModal').classList.add('show');
         document.body.style.overflow = 'hidden';
@@ -2008,6 +2108,9 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SEARCH - Enter key submits form
+    // ================================================================
     var searchInput = document.getElementById('searchInput');
     if (searchInput) {
         searchInput.addEventListener('keypress', function(e) {
@@ -2017,6 +2120,9 @@ include_once '../../components/cashier_sidebar.php';
         });
     }
 
+    // ================================================================
+    // TOAST
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -2035,6 +2141,9 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
@@ -2048,6 +2157,9 @@ include_once '../../components/cashier_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
@@ -2061,20 +2173,21 @@ include_once '../../components/cashier_sidebar.php';
 
     <?php if ($message && $message_type): ?>
         setTimeout(function() {
-            showToast('<?= $message_type === 'success' ? '✅ Success' : '❌ Error' ?>', 
+            showToast('<?= $message_type === 'success' ? '✅ Success' : ($message_type === 'info' ? 'ℹ️ Info' : '❌ Error') ?>', 
                 '<?= addslashes($message) ?>', 
                 '<?= $message_type ?>'
             );
         }, 500);
     <?php endif; ?>
 
-    console.log('%c💰 Braick - Expenses Management (FIXED)', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick - Expenses Management', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Branch: <?= $user_branch_name ?> (ID: <?= $user_branch_id ?>)', 'font-size:12px; color:#059669;');
     console.log('%c📊 Total Expenses: <?= $total_expenses ?>', 'font-size:12px; color:#059669;');
-    console.log('%c⏳ Pending: <?= $total_pending ?> (Amount: <?= $pending_amount ?>)', 'font-size:12px; color:#D97706;');
-    console.log('%c✅ Paid: <?= $total_paid ?> (Amount: <?= $paid_amount ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c❌ Cancelled: <?= $total_cancelled ?>', 'font-size:12px; color:#DC2626;');
-    console.log('%c✅ FIXED: Paid count shows correct number for branch', 'font-size:12px; color:#34D399;');
+    console.log('%c💰 Total Amount: <?= $total_amount ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📅 Period: <?= $period ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Total Expenses Card = RED BACKGROUND', 'font-size:12px; color:#DC2626;');
+    console.log('%c✅ Paid = Only VIEW button', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Pending = VIEW + PAY buttons (no delete)', 'font-size:12px; color:#FBBF24;');
 </script>
 
 </body>
