@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/view_cashier.php
 // ADMIN - VIEW CASHIER BRANCH DETAILS WITH REVENUE CARDS
 // FIXED: NO DOUBLE COUNTING - Total Revenue = Patient Bills ONLY
+// FIXED: Revenue cards with navigation to respective pages
 // ================================================================
 
 // ================================================================
@@ -104,7 +105,6 @@ try {
 // ================================================================
 
 // 1. PATIENT BILLS REVENUE (From patient_bills - paid)
-// This is the MAIN revenue source - includes all bill items
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(total_amount), 0) as patient_bills_revenue
@@ -117,7 +117,7 @@ try {
     $patient_bills_revenue = 0;
 }
 
-// 2. PROCEDURES & TOOLS REVENUE - BREAKDOWN ONLY (already included in patient_bills)
+// 2. PROCEDURES & TOOLS REVENUE - BREAKDOWN ONLY
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(bi.total_price), 0) as procedures_tools_revenue
@@ -133,7 +133,7 @@ try {
     $procedures_tools_revenue = 0;
 }
 
-// 3. LAB REVENUE - BREAKDOWN ONLY (already included in patient_bills)
+// 3. LAB REVENUE - BREAKDOWN ONLY
 $lab_revenue = 0;
 try {
     $stmt = $db->prepare("
@@ -157,7 +157,7 @@ try {
     $lab_revenue = 0;
 }
 
-// 4. PRESCRIPTION REVENUE - SEPARATE FROM patient_bills (over-the-counter prescriptions)
+// 4. PRESCRIPTION REVENUE - SEPARATE FROM patient_bills
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(net_amount), 0) as prescription_revenue
@@ -170,7 +170,7 @@ try {
     $prescription_revenue = 0;
 }
 
-// 5. OTC REVENUE - SEPARATE FROM patient_bills (over-the-counter sales)
+// 5. OTC REVENUE - SEPARATE FROM patient_bills
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(net_amount), 0) as otc_revenue
@@ -183,7 +183,7 @@ try {
     $otc_revenue = 0;
 }
 
-// 6. CONSULTATION REVENUE - BREAKDOWN ONLY (already included in patient_bills)
+// 6. CONSULTATION REVENUE - BREAKDOWN ONLY
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(bi.total_price), 0) as consultation_revenue
@@ -199,7 +199,7 @@ try {
     $consultation_revenue = 0;
 }
 
-// 7. MEDICATION REVENUE - BREAKDOWN ONLY (already included in patient_bills)
+// 7. MEDICATION REVENUE - BREAKDOWN ONLY
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(bi.total_price), 0) as medication_revenue
@@ -215,7 +215,7 @@ try {
     $medication_revenue = 0;
 }
 
-// 8. REGISTRATION REVENUE - BREAKDOWN ONLY (already included in patient_bills)
+// 8. REGISTRATION REVENUE - BREAKDOWN ONLY
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(registration_fee), 0) as registration_revenue
@@ -234,8 +234,6 @@ $other_services_total = $consultation_revenue + $medication_revenue + $registrat
 // ================================================================
 // TOTAL REVENUE - NO DOUBLE COUNTING
 // ================================================================
-// Patient Bills already includes: procedures, consultation, medication, registration, lab fees
-// So Total Revenue = Patient Bills + Separate Prescriptions + Separate OTC
 $total_revenue = $patient_bills_revenue + $prescription_revenue + $otc_revenue;
 
 // ================================================================
@@ -1289,30 +1287,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 8 REVENUE CARDS - NO DOUBLE COUNTING -->
+    <!-- 8 REVENUE CARDS - WITH NAVIGATION -->
     <!-- ================================================================ -->
     <div class="revenue-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
         <!-- 1. TOTAL REVENUE - BLUE -->
-        <div class="revenue-card card-blue">
+        <a href="revenue.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
             <p class="card-amount"><?= formatCurrency($total_revenue) ?></p>
             <p class="card-label">Total Revenue</p>
             <p class="card-sub">Patient Bills + Prescription + OTC</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </div>
+        </a>
         
         <!-- 2. EXPENSES - RED -->
-        <div class="revenue-card card-red">
+        <a href="expenses.php?branch=<?= $cashier_id ?>" class="revenue-card card-red">
             <div class="card-icon"><i class="fas fa-arrow-up"></i></div>
             <p class="card-amount"><?= formatCurrency($total_expenses) ?></p>
             <p class="card-label">Total Expenses</p>
             <p class="card-sub">From expenses (paid)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </div>
+        </a>
         
         <!-- 3. NET PROFIT - GREEN -->
-        <div class="revenue-card card-green">
+        <a href="profit.php?branch=<?= $cashier_id ?>" class="revenue-card card-green">
             <div class="card-icon"><i class="fas fa-chart-line"></i></div>
             <p class="card-amount"><?= formatCurrency($net_profit) ?></p>
             <p class="card-label">Net Profit</p>
@@ -1321,52 +1319,52 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 Expenses: <span class="highlight"><?= formatCurrency($total_expenses) ?></span>
             </p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </div>
+        </a>
         
         <!-- 4. PATIENT BILLS REVENUE - BLUE -->
-        <div class="revenue-card card-blue">
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
             <p class="card-amount"><?= formatCurrency($patient_bills_revenue) ?></p>
             <p class="card-label">Patient Bills</p>
             <p class="card-sub">Includes procedures + consultation + medication</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </div>
+        </a>
         
         <!-- 5. PROCEDURES & TOOLS REVENUE - BLUE (BREAKDOWN ONLY) -->
-        <div class="revenue-card card-blue">
+        <a href="procedures.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-toolbox"></i></div>
             <p class="card-amount"><?= formatCurrency($procedures_tools_revenue) ?></p>
             <p class="card-label">Procedures &amp; Tools</p>
             <p class="card-sub">Breakdown (included in Patient Bills)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </div>
+        </a>
         
         <!-- 6. PRESCRIPTION REVENUE - BLUE -->
-        <div class="revenue-card card-blue">
+        <a href="prescriptions.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-prescription-bottle"></i></div>
             <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
             <p class="card-label">Prescription Revenue</p>
             <p class="card-sub">From prescription_sales (paid)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </div>
+        </a>
         
         <!-- 7. OTC REVENUE - BLUE -->
-        <div class="revenue-card card-blue">
+        <a href="otc_sales.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-cash-register"></i></div>
             <p class="card-amount"><?= formatCurrency($otc_revenue) ?></p>
             <p class="card-label">OTC Revenue</p>
             <p class="card-sub">From otc_sales (paid)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </div>
+        </a>
         
         <!-- 8. OTHER SERVICES - BLUE (BREAKDOWN ONLY) -->
-        <div class="revenue-card card-blue">
+        <a href="services.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-file-medical"></i></div>
             <p class="card-amount"><?= formatCurrency($other_services_total) ?></p>
             <p class="card-label">Other Services</p>
             <p class="card-sub">Consultation + Medication + Registration (Breakdown)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </div>
+        </a>
         
     </div>
 
@@ -1729,7 +1727,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c📊 Other Services: <?= formatCurrency($other_services_total) ?> (Breakdown)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ FIXED: NO DOUBLE COUNTING - Total Revenue = Patient Bills + Prescription + OTC', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FIXED: Procedures, Consultation, Medication are breakdowns only', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: For Arusha, Total Revenue = 330,000 (not 660,000)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Cards navigate to respective pages', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
