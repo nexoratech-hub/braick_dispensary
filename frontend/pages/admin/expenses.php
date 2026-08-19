@@ -605,6 +605,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             display: flex;
             align-items: center;
             gap: 6px;
+            white-space: nowrap;
         }
         
         .top-nav .avatar {
@@ -808,9 +809,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* ================================================================
-           STATS CARDS
-           ================================================================ */
         .stats-row {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -860,9 +858,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .stat-card.cancelled { background: linear-gradient(135deg, #DC2626, #991B1B); }
         .stat-card.amount { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         
-        /* ================================================================
-           FILTER SECTION
-           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -975,9 +970,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--danger);
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1053,9 +1045,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
         
-        /* ================================================================
-           BUTTONS - View, Edit, Delete
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1210,9 +1199,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
         
-        /* ================================================================
-           MODAL
-           ================================================================ */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -1463,11 +1449,23 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <?php endforeach; ?>
         </select>
         
-        <span class="datetime" id="currentDateTime"></span>
+        <!-- ============================================================ -->
+        <!-- DATE & TIME - FIXED: Now showing correctly -->
+        <!-- ============================================================ -->
+        <span class="datetime" id="currentDateTime">
+            <i class="far fa-calendar-alt mr-1"></i>
+            <span id="dateDisplay"><?= date('M d, Y') ?></span>
+            <span class="mx-1">|</span>
+            <i class="far fa-clock mr-1"></i>
+            <span id="timeDisplay"><?= date('h:i:s A') ?></span>
+        </span>
         
+        <!-- ============================================================ -->
+        <!-- DARK MODE TOGGLE - FIXED: Now working -->
+        <!-- ============================================================ -->
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
+            <i id="darkIcon" class="fas <?= (isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true') ? 'fa-sun' : 'fa-moon' ?>"></i>
+            <span id="darkText"><?= (isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true') ? 'Light' : 'Dark' ?></span>
         </button>
         
         <button class="icon-btn">
@@ -1620,7 +1618,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TABLE - WITH VIEW, EDIT, DELETE BUTTONS -->
+    <!-- TABLE -->
     <!-- ================================================================ -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="table-scroll">
@@ -1683,23 +1681,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 </td>
                                 <td style="text-align:center;">
                                     <div class="action-buttons">
-                                        <!-- =========================================================== -->
-                                        <!-- VIEW BUTTON -->
-                                        <!-- =========================================================== -->
                                         <a href="expenses.php?view=<?= $exp['id'] ?>&branch=<?= $selected_branch_id ?>&status=<?= $filter_status ?>&category=<?= urlencode($filter_category) ?>&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="btn-view" title="View Details">
                                             <i class="fas fa-eye"></i> View
                                         </a>
                                         
-                                        <!-- =========================================================== -->
-                                        <!-- EDIT BUTTON -->
-                                        <!-- =========================================================== -->
-                                        <a href="#" class="btn-edit" title="Edit" onclick="openEditModal(<?= $exp['id'] ?>, <?= $exp['branch_id'] ?>, '<?= htmlspecialchars($exp['expense_number']) ?>', '<?= htmlspecialchars($exp['category']) ?>', '<?= htmlspecialchars(addslashes($exp['description'])) ?>', '<?= formatMoney($exp['amount']) ?>', '<?= $exp['payment_method'] ?? 'cash' ?>', '<?= $exp['payment_date'] ?>', '<?= $exp['status'] ?>', '<?= htmlspecialchars(addslashes($exp['receipt_number'] ?? '')) ?>', '<?= htmlspecialchars(addslashes($exp['notes'] ?? '')) ?>')">
+                                        <a href="#" class="btn-edit" title="Edit" onclick="openEditModal(<?= $exp['id'] ?>, <?= $exp['branch_id'] ?>, '<?= htmlspecialchars($exp['expense_number']) ?>', '<?= htmlspecialchars(addslashes($exp['category'])) ?>', '<?= htmlspecialchars(addslashes($exp['description'])) ?>', '<?= formatMoney($exp['amount']) ?>', '<?= $exp['payment_method'] ?? 'cash' ?>', '<?= $exp['payment_date'] ?>', '<?= $exp['status'] ?>', '<?= htmlspecialchars(addslashes($exp['receipt_number'] ?? '')) ?>', '<?= htmlspecialchars(addslashes($exp['notes'] ?? '')) ?>')">
                                             <i class="fas fa-edit"></i> Edit
                                         </a>
                                         
-                                        <!-- =========================================================== -->
-                                        <!-- DELETE BUTTON -->
-                                        <!-- =========================================================== -->
                                         <a href="expenses.php?delete=<?= $exp['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-delete" onclick="return confirm('Delete this expense? This action cannot be undone!')" title="Delete">
                                             <i class="fas fa-trash"></i> Delete
                                         </a>
@@ -2125,26 +2114,85 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // DARK MODE
+    // DARK MODE - FIXED: Now working properly
     // ================================================================
     (function() {
         var htmlElement = document.documentElement;
+        var darkIcon = document.getElementById('darkIcon');
+        var darkText = document.getElementById('darkText');
+        var darkToggle = document.getElementById('darkModeToggle');
+        
         function applyDarkMode(isDark) {
             if (isDark) {
                 htmlElement.setAttribute('data-theme', 'dark');
+                document.cookie = "dark_mode=true; path=/";
+                if (darkIcon) { darkIcon.className = 'fas fa-sun'; }
+                if (darkText) { darkText.textContent = 'Light'; }
+                localStorage.setItem('darkMode', 'true');
             } else {
                 htmlElement.removeAttribute('data-theme');
+                document.cookie = "dark_mode=false; path=/";
+                if (darkIcon) { darkIcon.className = 'fas fa-moon'; }
+                if (darkText) { darkText.textContent = 'Dark'; }
+                localStorage.setItem('darkMode', 'false');
             }
         }
+        
+        // Load saved preference
         var saved = localStorage.getItem('darkMode');
+        if (saved === null) {
+            // Check cookie
+            var cookieMatch = document.cookie.match(/dark_mode=([^;]+)/);
+            saved = cookieMatch ? cookieMatch[1] : 'false';
+        }
         applyDarkMode(saved === 'true');
         
+        // Toggle on button click
+        if (darkToggle) {
+            darkToggle.addEventListener('click', function() {
+                var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+                applyDarkMode(!isDark);
+                // Notify other pages
+                window.dispatchEvent(new StorageEvent('storage', {
+                    key: 'darkMode',
+                    newValue: isDark ? 'false' : 'true'
+                }));
+            });
+        }
+        
+        // Listen for changes from other tabs
         window.addEventListener('storage', function(e) {
             if (e.key === 'darkMode') {
                 applyDarkMode(e.newValue === 'true');
             }
         });
     })();
+
+    // ================================================================
+    // DATE & TIME - FIXED: Now showing live updates
+    // ================================================================
+    function updateDateTime() {
+        var now = new Date();
+        var options = { year: 'numeric', month: 'short', day: 'numeric' };
+        var dateStr = now.toLocaleDateString('en-US', options);
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        
+        var dateDisplay = document.getElementById('dateDisplay');
+        var timeDisplay = document.getElementById('timeDisplay');
+        var updateTimeDisplay = document.getElementById('updateTimeDisplay');
+        
+        if (dateDisplay) dateDisplay.textContent = dateStr;
+        if (timeDisplay) timeDisplay.textContent = timeStr;
+        if (updateTimeDisplay) updateTimeDisplay.textContent = 'Last update: ' + timeStr;
+    }
+    
+    // Initial update
+    updateDateTime();
+    
+    // Update every second
+    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -2223,6 +2271,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             }
         });
     }
+    
+    // Search button
+    var searchBtn = document.getElementById('searchBtn');
+    if (searchBtn) {
+        searchBtn.addEventListener('click', function() {
+            document.getElementById('filterForm').submit();
+        });
+    }
 
     // ================================================================
     // TOAST
@@ -2244,22 +2300,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             }, 400);
         }, 3500);
     }
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var updateTimeDisplay = document.getElementById('updateTimeDisplay');
-        if (updateTimeDisplay) {
-            updateTimeDisplay.textContent = 'Last update: ' + timeStr;
-        }
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // KEYBOARD SHORTCUTS
@@ -2288,7 +2328,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= $branch_name ?> (ID: <?= $selected_branch_id ?>)', 'font-size:12px; color:#059669;');
     console.log('%c📊 Total Expenses: <?= $total_expenses ?>', 'font-size:12px; color:#059669;');
-    console.log('%c✅ With VIEW, EDIT, DELETE buttons', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ WITH VIEW, EDIT, DELETE buttons', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>
