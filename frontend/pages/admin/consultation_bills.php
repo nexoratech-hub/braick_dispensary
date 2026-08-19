@@ -1,11 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/consultation_bills.php
-// ADMIN - VIEW CONSULTATION BILLS
-// Shows all bills that have consultation items
-// FIXED: Branch name now displays correctly (Arusha for ID 2)
-// FIXED: BLUE theme
-// FIXED: Branch selector now shows correct branch
+// ADMIN - VIEW CONSULTATION BILLS ONLY
+// FIXED: Shows correct branch in header
+// FIXED: "All Branches" when no branch selected
+// FIXED: Uses patient's branch from patients table
+// FIXED: Removed "New Bill" button
+// BLUE THEME
 // ================================================================
 
 // ================================================================
@@ -59,9 +60,40 @@ require_once __DIR__ . '/../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET BRANCH ID FROM URL - FIXED: Properly handle branch parameter
+// GET BRANCH ID FROM FILTER
 // ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
+
+// ================================================================
+// GET BRANCHES FOR FILTER
+// ================================================================
+$branches = [];
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
+}
+
+// ================================================================
+// GET BRANCH NAME - ONLY if a specific branch is selected
+// ================================================================
+$branch_name = 'All Branches';
+
+if ($branch_id > 0) {
+    try {
+        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+        $stmt->execute([$branch_id]);
+        $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($branch) {
+            $branch_name = $branch['name'];
+        } else {
+            $branch_name = 'Unknown Branch';
+        }
+    } catch (Exception $e) {
+        $branch_name = 'Unknown Branch';
+    }
+}
 
 // ================================================================
 // GET FILTER PARAMETERS
@@ -72,41 +104,8 @@ $from_date = isset($_GET['from_date']) ? trim($_GET['from_date']) : '';
 $to_date = isset($_GET['to_date']) ? trim($_GET['to_date']) : '';
 
 // ================================================================
-// GET BRANCH DETAILS - FIXED: Properly fetch branch name by ID
-// ================================================================
-$branch_name = 'All Branches';
-$branches = [];
-
-// First, get all branches for dropdown
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
-}
-
-// Then get the specific branch name
-if ($branch_id > 0) {
-    try {
-        $stmt = $db->prepare("SELECT id, name FROM branches WHERE id = ?");
-        $stmt->execute([$branch_id]);
-        $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($branch) {
-            $branch_name = $branch['name']; // This will be 'Arusha' for ID 2
-        } else {
-            $branch_name = 'Unknown Branch';
-        }
-    } catch (Exception $e) {
-        $branch_name = 'Unknown Branch';
-        error_log("Error fetching branch name: " . $e->getMessage());
-    }
-} else {
-    // If no branch selected, show all branches
-    $branch_name = 'All Branches';
-}
-
-// ================================================================
-// BUILD QUERY FOR CONSULTATION BILLS
+// BUILD QUERY FOR CONSULTATION BILLS - ONLY consultation items
+// USING PATIENT'S BRANCH FROM patients table
 // ================================================================
 $query = "
     SELECT 
@@ -122,6 +121,10 @@ $query = "
         pat.full_name as patient_name,
         pat.phone as patient_phone,
         pat.email as patient_email,
+        pat.branch_id as patient_branch_id,
+        b.id as branch_id,
+        b.name as branch_name,
+        b.location as branch_location,
         (
             SELECT COUNT(*) 
             FROM bill_items bi 
@@ -142,6 +145,7 @@ $query = "
         ) as consultation_items
     FROM patient_bills pb
     INNER JOIN patients pat ON pb.patient_id = pat.id
+    LEFT JOIN branches b ON pat.branch_id = b.id
     WHERE 1=1
     AND EXISTS (
         SELECT 1 
@@ -153,9 +157,9 @@ $query = "
 
 $params = [];
 
-// Branch filter
+// Branch filter - using patient's branch
 if ($branch_id > 0) {
-    $query .= " AND pb.branch_id = ?";
+    $query .= " AND pat.branch_id = ?";
     $params[] = $branch_id;
 }
 
@@ -202,6 +206,7 @@ try {
 // ================================================================
 $total_bills = count($consultation_bills);
 $total_consultation_revenue = 0;
+$total_bill_amount = 0;
 $total_paid = 0;
 $total_pending = 0;
 $total_partial = 0;
@@ -209,16 +214,46 @@ $total_cancelled = 0;
 $total_paid_amount = 0;
 $total_balance = 0;
 
+// Track unique branches for display
+$unique_branches = [];
+
 foreach ($consultation_bills as $bill) {
-    $total_consultation_revenue += $bill['consultation_total'] ?? 0;
+    // Use consultation_total ONLY (not total_amount)
+    $consultation_amount = $bill['consultation_total'] ?? 0;
+    $total_consultation_revenue += $consultation_amount;
+    $total_bill_amount += $bill['total_amount'] ?? 0;
     $total_paid_amount += $bill['paid_amount'] ?? 0;
     $total_balance += $bill['balance'] ?? 0;
+    
+    // Track unique branches
+    if (!empty($bill['branch_name']) && !in_array($bill['branch_name'], $unique_branches)) {
+        $unique_branches[] = $bill['branch_name'];
+    }
     
     switch ($bill['status']) {
         case 'paid': $total_paid++; break;
         case 'pending': $total_pending++; break;
         case 'partial': $total_partial++; break;
         case 'cancelled': $total_cancelled++; break;
+    }
+}
+
+// ================================================================
+// DETERMINE BRANCH DISPLAY NAME - FIXED
+// ================================================================
+$branch_display_name = 'All Branches';
+
+if ($branch_id > 0) {
+    // If a specific branch is selected, use its name
+    $branch_display_name = $branch_name;
+} else {
+    // If "All Branches" is selected
+    if (count($unique_branches) == 1) {
+        $branch_display_name = $unique_branches[0];
+    } elseif (count($unique_branches) > 1) {
+        $branch_display_name = 'Multiple Branches (' . count($unique_branches) . ')';
+    } else {
+        $branch_display_name = 'All Branches';
     }
 }
 
@@ -273,7 +308,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Consultation Bills - <?= htmlspecialchars($branch_name) ?> - Braick Dispensary</title>
+    <title>Consultation Bills - <?= htmlspecialchars($branch_display_name) ?> - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -282,7 +317,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ... (same styles as before) ... */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -291,8 +325,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
             
-            --blue-light: #60A5FA;
-            --blue-dark: #1D4ED8;
+            --blue: #0B5ED7;
+            --blue-dark: #0A4CA8;
+            --blue-light: #3B82F6;
             
             --danger: #DC2626;
             --danger-dark: #B91C1C;
@@ -316,7 +351,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
             
-            --bg-body: #F0F7FF;
+            --bg-body: #EFF6FF;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
@@ -338,13 +373,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --primary-dark: #2563EB;
             --primary-light: #60A5FA;
             --primary-bg: #1E3A5F;
-            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
-            --primary-gradient-strong: linear-gradient(135deg, #1D4ED8, #1E3A5F);
+            --blue: #3B82F6;
+            --blue-dark: #2563EB;
+            --table-hover: #1A2A4A;
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1A2A3A;
-            --border-color: #334155;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -535,9 +569,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - BLUE THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
@@ -642,6 +673,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transform: translateY(-1px);
         }
         
+        .page-header .header-badge.consult {
+            background: rgba(147, 51, 234, 0.25);
+            border-color: rgba(147, 51, 234, 0.3);
+            color: #C084FC;
+        }
+        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.12);
             color: white;
@@ -667,7 +704,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS - BLUE THEME
+           STATS CARDS - WITH BACKGROUND COLORS AND WHITE TEXT
+           BLUE THEME
            ================================================================ */
         .stats-grid {
             display: grid;
@@ -763,26 +801,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         /* ================================================================
            CARD COLOR CLASSES - BLUE THEME
            ================================================================ */
-        .card-blue-primary { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .card-blue-primary:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
+        .card-blue-dark { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
+        .card-blue-dark:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
         
-        .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        .card-green:hover { box-shadow: 0 10px 32px rgba(5, 150, 105, 0.4); }
+        .card-blue-green { background: linear-gradient(135deg, #059669, #047857); }
+        .card-blue-green:hover { box-shadow: 0 10px 32px rgba(5, 150, 105, 0.4); }
         
-        .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        .card-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
+        .card-blue-orange { background: linear-gradient(135deg, #D97706, #B45309); }
+        .card-blue-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
         
-        .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .card-red:hover { box-shadow: 0 10px 32px rgba(220, 38, 38, 0.4); }
+        .card-blue-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+        .card-blue-red:hover { box-shadow: 0 10px 32px rgba(220, 38, 38, 0.4); }
         
-        .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
-        .card-cyan:hover { box-shadow: 0 10px 32px rgba(8, 145, 178, 0.4); }
+        .card-blue-light { background: linear-gradient(135deg, #3B82F6, #2563EB); }
+        .card-blue-light:hover { box-shadow: 0 10px 32px rgba(59, 130, 246, 0.4); }
         
-        [data-theme="dark"] .card-blue-primary { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
-        [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        [data-theme="dark"] .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+        .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+        .card-purple:hover { box-shadow: 0 10px 32px rgba(124, 58, 237, 0.4); }
+        
+        [data-theme="dark"] .card-blue-dark { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
+        [data-theme="dark"] .card-blue-green { background: linear-gradient(135deg, #059669, #047857); }
+        [data-theme="dark"] .card-blue-orange { background: linear-gradient(135deg, #D97706, #B45309); }
+        [data-theme="dark"] .card-blue-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
+        [data-theme="dark"] .card-blue-light { background: linear-gradient(135deg, #3B82F6, #2563EB); }
+        [data-theme="dark"] .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
         
         .filter-bar {
             background: var(--bg-card);
@@ -957,6 +999,23 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
+        .consult-badge {
+            background: rgba(124, 58, 237, 0.12);
+            color: #7C3AED;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            display: inline-block;
+            border: 1px solid rgba(124, 58, 237, 0.2);
+        }
+        
+        [data-theme="dark"] .consult-badge {
+            background: rgba(124, 58, 237, 0.2);
+            color: #C084FC;
+            border-color: rgba(124, 58, 237, 0.3);
+        }
+        
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -988,6 +1047,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
             margin-bottom: 8px;
         }
+        
+        .text-blue { color: #0B5ED7; }
+        .bg-blue { background: #0B5ED7; }
+        .border-blue { border-color: #0B5ED7; }
+        
+        [data-theme="dark"] .text-blue { color: #3B82F6; }
+        [data-theme="dark"] .bg-blue { background: #3B82F6; }
         
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
@@ -1025,13 +1091,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
-        
-        .text-blue { color: #0B5ED7; }
-        .bg-blue { background: #0B5ED7; }
-        .border-blue { border-color: #0B5ED7; }
-        
-        [data-theme="dark"] .text-blue { color: #60A5FA; }
-        [data-theme="dark"] .bg-blue { background: #2563EB; }
     </style>
 </head>
 <body>
@@ -1055,10 +1114,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
     
     <div class="flex items-center gap-3">
-        <!-- FIXED: Branch selector now shows the correct branch -->
         <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
+            <option value="0" <?= $branch_id == 0 ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= ($branch_id == $b['id']) ? 'selected' : '' ?>>
+                <option value="<?= $b['id'] ?>" <?= $branch_id == $b['id'] ? 'selected' : '' ?>>
                     🏥 <?= htmlspecialchars($b['name']) ?>
                 </option>
             <?php endforeach; ?>
@@ -1089,24 +1148,30 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER - BLUE THEME - FIXED: Shows correct branch name -->
+    <!-- PAGE HEADER - BLUE THEME (NO "NEW BILL" BUTTON) -->
+    <!-- FIXED: Shows correct branch name or "All Branches" -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-file-medical-alt"></i>
+                <i class="fas fa-stethoscope"></i>
                 Consultation Bills
                 <span class="role-badge-display">ADMIN</span>
+                <span class="consult-badge">
+                    <i class="fas fa-filter"></i> Consultations Only
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-store-alt"></i>
-                <!-- FIXED: This now shows the correct branch name -->
-                <strong><?= htmlspecialchars($branch_name) ?></strong>
+                <strong><?= htmlspecialchars($branch_display_name) ?></strong>
                 <span class="header-badge">
                     <i class="fas fa-file-invoice"></i> <?= number_format($total_bills) ?> Bills
                 </span>
-                <span class="header-badge" style="background:rgba(96,165,250,0.2);border-color:rgba(96,165,250,0.3);color:#60A5FA;">
+                <span class="header-badge" style="background:rgba(59,130,246,0.2);border-color:rgba(59,130,246,0.3);color:#60A5FA;">
                     <i class="fas fa-money-bill-wave"></i> <?= formatCurrency($total_consultation_revenue) ?> Revenue
+                </span>
+                <span class="header-badge consult" style="background:rgba(147,51,234,0.25);border-color:rgba(147,51,234,0.3);color:#C084FC;">
+                    <i class="fas fa-user-md"></i> <?= number_format($total_consultation_revenue > 0 ? round(($total_consultation_revenue / max($total_bill_amount, 1)) * 100, 1) : 0) ?>% Consult
                 </span>
             </p>
         </div>
@@ -1118,48 +1183,49 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- SUMMARY STATS - BLUE THEME -->
+    <!-- SUMMARY STATS - WITH BACKGROUND COLORS AND WHITE TEXT -->
+    <!-- BLUE THEME -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
-        <!-- 1. Total Bills - BLUE -->
-        <div class="stat-card card-blue-primary">
+        <!-- 1. Total Bills - BLUE DARK -->
+        <div class="stat-card card-blue-dark">
             <div class="stat-icon-bg"><i class="fas fa-file-invoice"></i></div>
             <p class="stat-label"><i class="fas fa-file-invoice mr-1"></i> Total Bills</p>
             <p class="stat-number"><?= number_format($total_bills) ?></p>
             <p class="stat-sub">All consultation bills</p>
         </div>
         
-        <!-- 2. Paid - GREEN -->
-        <div class="stat-card card-green">
+        <!-- 2. Paid - BLUE GREEN -->
+        <div class="stat-card card-blue-green">
             <div class="stat-icon-bg"><i class="fas fa-check-circle"></i></div>
             <p class="stat-label"><i class="fas fa-check-circle mr-1"></i> Paid</p>
             <p class="stat-number"><?= number_format($total_paid) ?></p>
             <p class="stat-sub"><?= $total_bills > 0 ? round(($total_paid / $total_bills) * 100, 1) : 0 ?>% of total</p>
         </div>
         
-        <!-- 3. Pending - ORANGE -->
-        <div class="stat-card card-orange">
+        <!-- 3. Pending - BLUE ORANGE -->
+        <div class="stat-card card-blue-orange">
             <div class="stat-icon-bg"><i class="fas fa-clock"></i></div>
             <p class="stat-label"><i class="fas fa-clock mr-1"></i> Pending</p>
             <p class="stat-number"><?= number_format($total_pending) ?></p>
             <p class="stat-sub">Awaiting payment</p>
         </div>
         
-        <!-- 4. Cancelled - RED -->
-        <div class="stat-card card-red">
+        <!-- 4. Cancelled - BLUE RED -->
+        <div class="stat-card card-blue-red">
             <div class="stat-icon-bg"><i class="fas fa-times-circle"></i></div>
             <p class="stat-label"><i class="fas fa-times-circle mr-1"></i> Cancelled</p>
             <p class="stat-number"><?= number_format($total_cancelled) ?></p>
             <p class="stat-sub">Voided transactions</p>
         </div>
         
-        <!-- 5. Total Revenue - CYAN -->
-        <div class="stat-card card-cyan">
+        <!-- 5. Total Revenue - PURPLE (Consultation only) -->
+        <div class="stat-card card-purple">
             <div class="stat-icon-bg"><i class="fas fa-money-bill-wave"></i></div>
-            <p class="stat-label"><i class="fas fa-money-bill-wave mr-1"></i> Total Revenue</p>
+            <p class="stat-label"><i class="fas fa-money-bill-wave mr-1"></i> Consult Revenue</p>
             <p class="stat-number"><?= formatCurrency($total_consultation_revenue) ?></p>
-            <p class="stat-sub">From consultation items</p>
+            <p class="stat-sub">From consultation items only</p>
         </div>
         
     </div>
@@ -1197,8 +1263,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <div class="table-container animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-file-medical-alt"></i>
+                <i class="fas fa-stethoscope"></i>
                 Consultation Bills (<?= number_format($total_bills) ?>)
+                <span style="font-size:0.6rem;opacity:0.7;font-weight:400;margin-left:4px;">
+                    <i class="fas fa-filter"></i> Only consultation items
+                </span>
             </h3>
             <div class="flex items-center gap-3">
                 <span class="card-action">
@@ -1220,8 +1289,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <tr>
                             <th>Bill #</th>
                             <th>Patient</th>
+                            <th>Branch</th>
                             <th>Consultation Items</th>
-                            <th>Consultation Total</th>
+                            <th>Consult Total</th>
                             <th>Bill Total</th>
                             <th>Paid</th>
                             <th>Balance</th>
@@ -1241,12 +1311,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                     <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['patient_phone'] ?? '') ?></div>
                                 </td>
                                 <td>
+                                    <div class="font-medium text-sm"><?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['branch_location'] ?? '') ?></div>
+                                </td>
+                                <td>
                                     <div class="font-medium"><?= number_format($bill['consultation_count'] ?? 0) ?> items</div>
                                     <div class="text-xs text-gray-400 truncate max-w-[150px]" title="<?= htmlspecialchars($bill['consultation_items'] ?? '') ?>">
                                         <?= htmlspecialchars($bill['consultation_items'] ?? '') ?>
                                     </div>
                                 </td>
-                                <td class="font-semibold text-blue"><?= formatCurrency($bill['consultation_total'] ?? 0) ?></td>
+                                <td class="font-semibold text-purple-600 dark:text-purple-400">
+                                    <?= formatCurrency($bill['consultation_total'] ?? 0) ?>
+                                </td>
                                 <td class="font-semibold"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
                                 <td class="text-green-600"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
                                 <td>
@@ -1279,9 +1355,26 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </tbody>
                 </table>
             </div>
+            
+            <!-- Summary row -->
+            <div style="padding:10px 20px;background:var(--bg-body);border-top:2px solid var(--border-color);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:0.75rem;">
+                <div>
+                    <span class="font-semibold">Total Bills:</span> <?= number_format($total_bills) ?>
+                    <span class="mx-2 text-gray-400">|</span>
+                    <span class="font-semibold">Consult Revenue:</span> <?= formatCurrency($total_consultation_revenue) ?>
+                    <?php if ($branch_id > 0): ?>
+                        <span class="mx-2 text-gray-400">|</span>
+                        <span class="font-semibold">Branch:</span> <?= htmlspecialchars($branch_name) ?>
+                    <?php endif; ?>
+                </div>
+                <div class="text-gray-500">
+                    <i class="fas fa-info-circle"></i> Using patient's branch from <strong class="text-blue">patients</strong> table
+                </div>
+            </div>
+            
         <?php else: ?>
             <div class="empty-state">
-                <i class="fas fa-file-medical-alt"></i>
+                <i class="fas fa-stethoscope"></i>
                 <h3>No Consultation Bills Found</h3>
                 <p>Try adjusting your filters or <a href="consultation_bills.php?branch=<?= $branch_id ?>" class="text-blue hover:underline">reset all filters</a></p>
             </div>
@@ -1295,7 +1388,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Consultation Bills - <?= htmlspecialchars($branch_name) ?>
+            Consultation Bills - <?= htmlspecialchars($branch_display_name) ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1374,7 +1467,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
-        url.searchParams.delete('branch_id');
+        url.searchParams.delete('status');
+        url.searchParams.delete('search');
+        url.searchParams.delete('from_date');
+        url.searchParams.delete('to_date');
         window.location.href = url.toString();
     }
 
@@ -1395,11 +1491,26 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🔵 Braick Dispensary - Consultation Bills (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔵 Braick Dispensary - Consultation Bills', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c🏢 Branch Display: <?= htmlspecialchars($branch_display_name) ?> (Filter ID: <?= $branch_id ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💰 Total Revenue: <?= formatCurrency($total_consultation_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ FIXED: Branch name now displays correctly', 'font-size:13px; color:#059669;');
+    console.log('%c💰 Consult Revenue: <?= formatCurrency($total_consultation_revenue) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Using patient\'s branch from patients table', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Filtered: item_type = "consultation" ONLY', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ "New Bill" button REMOVED', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Header shows: "<?= htmlspecialchars($branch_display_name) ?>"', 'font-size:13px; color:#34D399;');
+    
+    <?php if (!empty($consultation_bills)): ?>
+        console.log('%c📋 Branch details from patients:', 'font-size:12px; font-weight:bold; color:#34D399;');
+        <?php 
+        $count = 0;
+        foreach ($consultation_bills as $bill): 
+            if ($count >= 5) break;
+            $count++;
+        ?>
+            console.log('  Bill #<?= $bill['bill_number'] ?>: Patient = "<?= addslashes($bill['patient_name'] ?? 'N/A') ?>" | Branch = "<?= addslashes($bill['branch_name'] ?? 'N/A') ?>"');
+        <?php endforeach; ?>
+    <?php endif; ?>
 </script>
 
 </body>
