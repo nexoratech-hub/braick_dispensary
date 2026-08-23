@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/notifications.php
 // PHARMACY - VIEW NOTIFICATIONS
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY - BLUE THEME
 // ================================================================
 
@@ -26,7 +26,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // ================================================================
 $allowed_roles = ['pharmacy', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
-    // Redirect to their own dashboard
     $role = $_SESSION['role'];
     switch ($role) {
         case 'reception': header('Location: ../reception/dashboard.php'); break;
@@ -58,7 +57,7 @@ if ($user_id <= 0) {
     if (isset($user_username) && !empty($user_username)) {
         require_once __DIR__ . '/../../../backend/config/database.php';
         try {
-            $db = getDB();
+            $db = Database::getInstance()->getConnection();
             $stmt = $db->prepare("SELECT id, full_name, role, branch_id, email, phone, profile_pic FROM users WHERE username = ? AND status = 'active'");
             $stmt->execute([$user_username]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -100,11 +99,15 @@ if ($user_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -116,7 +119,7 @@ $offset = isset($_GET['page']) ? ((int)$_GET['page'] - 1) * $limit : 0;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 
 // ================================================================
-// GET NOTIFICATIONS COUNT
+// GET NOTIFICATIONS COUNT - NEW DATABASE
 // ================================================================
 $count_query = "
     SELECT COUNT(*) as total 
@@ -143,7 +146,7 @@ $total_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 $total_pages = ceil($total_notifications / $limit);
 
 // ================================================================
-// GET NOTIFICATIONS
+// GET NOTIFICATIONS - NEW DATABASE
 // ================================================================
 $query = "
     SELECT 
@@ -153,7 +156,8 @@ $query = "
         type,
         link,
         is_read,
-        created_at
+        created_at,
+        updated_at
     FROM notifications 
     WHERE user_id = ?
 ";
@@ -180,7 +184,7 @@ $stmt->execute($params);
 $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET UNREAD COUNT
+// GET UNREAD COUNT - NEW DATABASE
 // ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as unread 
@@ -191,17 +195,18 @@ $stmt->execute([$user_id]);
 $unread_count = $stmt->fetch(PDO::FETCH_ASSOC)['unread'] ?? 0;
 
 // ================================================================
-// MARK ALL AS READ
+// MARK ALL AS READ - NEW DATABASE
 // ================================================================
 if (isset($_GET['mark_all_read'])) {
     $stmt = $db->prepare("
         UPDATE notifications 
-        SET is_read = 1 
+        SET is_read = 1,
+            updated_at = NOW()
         WHERE user_id = ? AND is_read = 0
     ");
     $stmt->execute([$user_id]);
     
-    // Log activity
+    // Log activity - NEW DATABASE
     try {
         $stmt = $db->prepare("
             INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
@@ -221,7 +226,7 @@ if (isset($_GET['mark_all_read'])) {
 }
 
 // ================================================================
-// MARK SINGLE AS READ (AJAX)
+// MARK SINGLE AS READ (AJAX) - NEW DATABASE
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'mark_read') {
     $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
@@ -229,7 +234,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if ($notification_id > 0) {
         $stmt = $db->prepare("
             UPDATE notifications 
-            SET is_read = 1 
+            SET is_read = 1,
+                updated_at = NOW()
             WHERE id = ? AND user_id = ?
         ");
         $stmt->execute([$notification_id, $user_id]);
@@ -242,7 +248,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // ================================================================
-// DELETE NOTIFICATION (AJAX)
+// DELETE NOTIFICATION (AJAX) - NEW DATABASE
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete') {
     $notification_id = isset($_POST['notification_id']) ? (int)$_POST['notification_id'] : 0;
@@ -262,11 +268,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// GET BRANCHES FOR FILTER - NEW DATABASE
 // ================================================================
 $branches = [];
 try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $stmt = $db->prepare("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $stmt->execute();
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $branches = [];
@@ -282,9 +289,13 @@ function getNotificationIcon($type) {
         'warning' => 'fa-exclamation-triangle',
         'danger' => 'fa-times-circle',
         'bill' => 'fa-file-invoice',
-        'prescription' => 'fa-prescription',
+        'prescription' => 'fa-prescription-bottle',
         'lab' => 'fa-flask',
-        'payment' => 'fa-money-bill-wave'
+        'payment' => 'fa-money-bill-wave',
+        'stock' => 'fa-boxes',
+        'expiry' => 'fa-clock',
+        'doctor' => 'fa-user-md',
+        'patient' => 'fa-user'
     ];
     return $icons[$type] ?? 'fa-bell';
 }
@@ -298,7 +309,11 @@ function getNotificationColor($type) {
         'bill' => 'blue',
         'prescription' => 'purple',
         'lab' => 'teal',
-        'payment' => 'green'
+        'payment' => 'green',
+        'stock' => 'orange',
+        'expiry' => 'red',
+        'doctor' => 'purple',
+        'patient' => 'blue'
     ];
     return $colors[$type] ?? 'gray';
 }
@@ -321,12 +336,13 @@ function getTimeAgo($datetime) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -736,6 +752,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        .page-header .new-db-tag {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.7);
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.08);
+            letter-spacing: 0.03em;
+        }
+        
         /* ================================================================
            FILTER TABS
            ================================================================ */
@@ -1048,6 +1076,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             font-weight: 700;
         }
         
+        .footer .new-db-footer {
+            color: var(--success);
+            font-weight: 600;
+            font-size: 0.65rem;
+        }
+        
         /* ================================================================
            RESPONSIVE
            ================================================================ */
@@ -1147,7 +1181,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='<?= $logo_path ?>'">
         </a>
     </div>
 </nav>
@@ -1166,6 +1200,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <i class="fas fa-bell"></i>
                 Notifications
                 <span class="role-badge-display">PHARMACY</span>
+                <span class="new-db-tag">
+                    <i class="fas fa-database"></i> New DB
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-envelope"></i>
@@ -1354,6 +1391,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             Notifications
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="new-db-footer"><i class="fas fa-database"></i> New DB</span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1627,12 +1666,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c🔔 Braick Dispensary - Notifications', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔔 Braick Dispensary - Notifications (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📬 Total: <?= $total_notifications ?> | Unread: <?= $unread_count ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Tables: notifications, users, branches, activity_logs', 'font-size:13px; color:#34D399;');
     console.log('%c🔵 Blue Theme Applied', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Login protection added', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/expiring_soon.php
 // PHARMACY - EXPIRING SOON MEDICINES
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -26,7 +26,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // ================================================================
 $allowed_roles = ['pharmacy', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
-    // Redirect to their own dashboard
     $role = $_SESSION['role'];
     switch ($role) {
         case 'reception': header('Location: ../reception/dashboard.php'); break;
@@ -47,6 +46,7 @@ $user_role = $_SESSION['role'] ?? 'pharmacy';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_username = $_SESSION['username'] ?? 'pharmacy';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
 // IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
@@ -55,7 +55,7 @@ if ($user_id <= 0) {
     if (isset($user_username) && !empty($user_username)) {
         require_once __DIR__ . '/../../../backend/config/database.php';
         try {
-            $db = getDB();
+            $db = Database::getInstance()->getConnection();
             $stmt = $db->prepare("SELECT id, full_name, role, branch_id FROM users WHERE username = ? AND status = 'active'");
             $stmt->execute([$user_username]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -91,11 +91,15 @@ if ($user_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET BRANCH FILTER
@@ -110,18 +114,19 @@ if ($user_role !== 'admin') {
 }
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// GET BRANCHES FOR FILTER - NEW DB
 // ================================================================
 $branches = [];
 try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $stmt = $db->prepare("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $stmt->execute();
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $branches = [];
 }
 
 // ================================================================
-// GET EXPIRING SOON MEDICINES
+// GET EXPIRING SOON MEDICINES - NEW DB
 // ================================================================
 $today = date('Y-m-d');
 $expiry_threshold = date('Y-m-d', strtotime("+$days_filter days"));
@@ -192,7 +197,7 @@ foreach ($expiring_medicines as $medicine) {
 $total_expiring = count($expiring_medicines);
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS
+// GET UNREAD NOTIFICATIONS - NEW DB
 // ================================================================
 $unread_notifications = 0;
 try {
@@ -201,6 +206,34 @@ try {
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
+}
+
+// ================================================================
+// GET PENDING PRESCRIPTIONS - NEW DB
+// ================================================================
+$pending_prescriptions = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
+    $stmt->execute([$user_branch_id]);
+    $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
+} catch (Exception $e) {
+    $pending_prescriptions = 0;
+}
+
+// ================================================================
+// GET LOW STOCK COUNT - NEW DB
+// ================================================================
+$low_stock_count = 0;
+try {
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM medications_inventory 
+        WHERE branch_id = ? AND quantity > 0 AND quantity <= reorder_level AND status = 'active'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $low_stock_count = $stmt->fetch()['count'] ?? 0;
+} catch (Exception $e) {
+    $low_stock_count = 0;
 }
 
 // ================================================================
@@ -229,10 +262,13 @@ function getExpiryIcon($status) {
 }
 
 // ================================================================
-// LOGO PATH
+// PROFILE PICTURE URL
 // ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$profile_pic_url = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -249,19 +285,21 @@ include_once '../../components/pharmacy_sidebar.php';
     <title>Expiring Soon - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
         /* ================================================================
-           CUSTOM STYLES
+           ROOT VARIABLES
            ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
+            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --success: #059669;
             --success-dark: #047857;
             --success-bg: #D1FAE5;
@@ -290,6 +328,7 @@ include_once '../../components/pharmacy_sidebar.php';
             --border-color: #E2E8F0;
             --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
             --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
             --table-hover: #E8F0FE;
         }
         
@@ -312,7 +351,13 @@ include_once '../../components/pharmacy_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        /* Top Navigation */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        
+        /* ================================================================
+           TOP NAV
+           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -360,7 +405,7 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
+            background: var(--primary-gradient);
             color: white;
             border: none;
             padding: 8px 16px;
@@ -478,9 +523,11 @@ include_once '../../components/pharmacy_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* Page Header */
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            background: var(--primary-gradient);
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -583,7 +630,21 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* Stat Cards */
+        .page-header .new-db-badge {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.7);
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.08);
+            letter-spacing: 0.03em;
+        }
+        
+        /* ================================================================
+           STAT CARDS
+           ================================================================ */
         .stat-card {
             border-radius: 12px;
             padding: 16px 18px;
@@ -594,6 +655,7 @@ include_once '../../components/pharmacy_sidebar.php';
             display: block;
             position: relative;
             overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
         
         .stat-card:hover {
@@ -601,9 +663,14 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 8px 25px rgba(0,0,0,0.15);
         }
         
-        .stat-card.orange { background: #D97706; }
-        .stat-card.orange-dark { background: #B45309; }
-        .stat-card.red { background: #DC2626; }
+        .stat-card:active {
+            transform: scale(0.97);
+        }
+        
+        .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
+        .stat-card.orange-dark { background: linear-gradient(135deg, #B45309, #92400E); }
+        .stat-card.red { background: linear-gradient(135deg, #DC2626, #991B1B); }
+        .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         
         .stat-card .stat-icon {
             width: 40px;
@@ -616,6 +683,12 @@ include_once '../../components/pharmacy_sidebar.php';
             background: rgba(255,255,255,0.2);
             color: white;
             flex-shrink: 0;
+            transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover .stat-icon {
+            transform: scale(1.1) rotate(-5deg);
+            background: rgba(255,255,255,0.3);
         }
         
         .stat-card .stat-number {
@@ -643,7 +716,27 @@ include_once '../../components/pharmacy_sidebar.php';
             margin-top: 2px;
         }
         
-        /* Card */
+        /* ================================================================
+           GRID
+           ================================================================ */
+        .grid {
+            display: grid;
+            gap: 16px;
+        }
+        
+        .grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
+        .grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+        
+        @media (min-width: 640px) {
+            .sm\:grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+        }
+        
+        .mb-5 { margin-bottom: 20px; }
+        .gap-4 { gap: 16px; }
+        
+        /* ================================================================
+           CARD
+           ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -656,6 +749,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .card:hover {
             box-shadow: var(--shadow-md);
+            border-color: var(--primary-light);
         }
         
         .card-header {
@@ -686,7 +780,9 @@ include_once '../../components/pharmacy_sidebar.php';
         .title-blue { color: var(--primary); }
         .title-green { color: var(--success); }
         
-        /* Filter Section */
+        /* ================================================================
+           FILTER SECTION
+           ================================================================ */
         .filter-section {
             padding: 16px 20px;
         }
@@ -733,6 +829,11 @@ include_once '../../components/pharmacy_sidebar.php';
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
         }
         
+        .filter-select:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
         .filter-actions {
             display: flex;
             gap: 6px;
@@ -740,7 +841,60 @@ include_once '../../components/pharmacy_sidebar.php';
             align-items: center;
         }
         
-        /* Data Table */
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-sm { padding: 3px 10px; font-size: 0.65rem; }
+        
+        .btn-blue { background: var(--primary); color: white; }
+        .btn-blue:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(11,94,215,0.3); }
+        
+        .btn-green { background: var(--success); color: white; }
+        .btn-green:hover { background: var(--success-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(5,150,105,0.3); }
+        
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: #991B1B; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(220,38,38,0.3); }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+            transform: translateY(-1px);
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        /* ================================================================
+           DATA TABLE
+           ================================================================ */
+        .overflow-x-auto {
+            overflow-x: auto;
+        }
+        
         .data-table {
             width: 100%;
             border-collapse: separate;
@@ -800,7 +954,9 @@ include_once '../../components/pharmacy_sidebar.php';
         .data-table .block { display: block; }
         .data-table .text-danger { color: var(--danger) !important; }
         
-        /* Row Styles */
+        /* ================================================================
+           ROW STYLES
+           ================================================================ */
         .expired-row td {
             background: #FEE2E2 !important;
             color: #991B1B !important;
@@ -841,7 +997,9 @@ include_once '../../components/pharmacy_sidebar.php';
             color: #FCD34D !important;
         }
         
-        /* Badges */
+        /* ================================================================
+           BADGES
+           ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -861,7 +1019,6 @@ include_once '../../components/pharmacy_sidebar.php';
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
-        /* Category Badge */
         .category-badge {
             display: inline-block;
             padding: 2px 10px;
@@ -877,7 +1034,6 @@ include_once '../../components/pharmacy_sidebar.php';
             color: #6EA8FE;
         }
         
-        /* Quantity Badge */
         .quantity-badge {
             display: inline-block;
             padding: 2px 8px;
@@ -913,7 +1069,6 @@ include_once '../../components/pharmacy_sidebar.php';
             color: #F87171;
         }
         
-        /* Days Remaining */
         .days-remaining {
             font-weight: 600;
             font-size: 0.85rem;
@@ -927,7 +1082,6 @@ include_once '../../components/pharmacy_sidebar.php';
             color: var(--warning);
         }
         
-        /* Branch Badge Small */
         .branch-badge-sm {
             display: inline-block;
             padding: 2px 8px;
@@ -943,52 +1097,9 @@ include_once '../../components/pharmacy_sidebar.php';
             color: #94A3B8;
         }
         
-        /* Buttons */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 6px 14px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.75rem;
-            transition: all 0.3s;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-sm { padding: 3px 10px; font-size: 0.65rem; }
-        
-        .btn-blue { background: var(--primary); color: white; }
-        .btn-blue:hover { background: var(--primary-dark); transform: translateY(-1px); }
-        
-        .btn-green { background: var(--success); color: white; }
-        .btn-green:hover { background: var(--success-dark); transform: translateY(-1px); }
-        
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-danger:hover { background: var(--danger-dark); transform: translateY(-1px); }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-            transform: translateY(-1px);
-        }
-        
-        .action-buttons {
-            display: flex;
-            gap: 4px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        
-        /* Footer */
+        /* ================================================================
+           FOOTER
+           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1000,19 +1111,59 @@ include_once '../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* Grid */
-        .grid {
-            display: grid;
-            gap: 16px;
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 18px;
+            border-radius: 10px;
+            z-index: 999;
+            max-width: 380px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+            font-size: 0.85rem;
         }
         
-        .grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
-        
-        @media (min-width: 640px) {
-            .sm\:grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
         }
         
-        /* Responsive */
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: #D97706; }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        .animate-fade-in-up:nth-child(1) { animation-delay: 0.05s; }
+        .animate-fade-in-up:nth-child(2) { animation-delay: 0.1s; }
+        .animate-fade-in-up:nth-child(3) { animation-delay: 0.15s; }
+        .animate-fade-in-up:nth-child(4) { animation-delay: 0.2s; }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1032,7 +1183,7 @@ include_once '../../components/pharmacy_sidebar.php';
             .data-table thead th { font-size: 0.55rem; padding: 6px 8px; }
             .action-buttons { flex-direction: column; gap: 3px; }
             .action-buttons .btn { width: 100%; justify-content: center; }
-            .grid-cols-2 { grid-template-columns: 1fr; }
+            .grid-cols-4 { grid-template-columns: 1fr 1fr; }
             .card-header { flex-direction: column; align-items: flex-start; gap: 8px; }
         }
         
@@ -1044,6 +1195,8 @@ include_once '../../components/pharmacy_sidebar.php';
             .stat-card .stat-icon { width: 32px; height: 32px; font-size: 0.9rem; }
             .filter-actions { flex-direction: column; }
             .filter-actions .btn { width: 100%; justify-content: center; }
+            .grid-cols-4 { grid-template-columns: 1fr 1fr; }
+            .data-table td { font-size: 0.6rem; }
         }
     </style>
 </head>
@@ -1086,7 +1239,7 @@ include_once '../../components/pharmacy_sidebar.php';
         
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='<?= $logo_path ?>'">
         </a>
     </div>
 </nav>
@@ -1104,6 +1257,9 @@ include_once '../../components/pharmacy_sidebar.php';
                 Expiring Soon
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                </span>
+                <span class="new-db-badge">
+                    <i class="fas fa-database"></i> New DB
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -1128,11 +1284,11 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
         
-        <div class="stat-card orange">
+        <div class="stat-card orange animate-fade-in-up">
             <div class="flex items-center justify-between">
                 <div>
                     <p class="stat-label">Total Expiring</p>
-                    <p class="stat-number"><?= number_format($total_expiring) ?></p>
+                    <p class="stat-number" id="statTotal"><?= number_format($total_expiring) ?></p>
                     <span class="stat-trend">Within <?= $days_filter ?> days</span>
                 </div>
                 <div class="stat-icon">
@@ -1141,11 +1297,11 @@ include_once '../../components/pharmacy_sidebar.php';
             </div>
         </div>
         
-        <div class="stat-card red">
+        <div class="stat-card red animate-fade-in-up">
             <div class="flex items-center justify-between">
                 <div>
                     <p class="stat-label">Critical</p>
-                    <p class="stat-number"><?= number_format($critical_count) ?></p>
+                    <p class="stat-number" id="statCritical"><?= number_format($critical_count) ?></p>
                     <span class="stat-trend">Within 7 days</span>
                 </div>
                 <div class="stat-icon">
@@ -1154,11 +1310,11 @@ include_once '../../components/pharmacy_sidebar.php';
             </div>
         </div>
         
-        <div class="stat-card orange-dark">
+        <div class="stat-card orange-dark animate-fade-in-up">
             <div class="flex items-center justify-between">
                 <div>
                     <p class="stat-label">Urgent</p>
-                    <p class="stat-number"><?= number_format($urgent_count) ?></p>
+                    <p class="stat-number" id="statUrgent"><?= number_format($urgent_count) ?></p>
                     <span class="stat-trend">8-14 days</span>
                 </div>
                 <div class="stat-icon">
@@ -1167,11 +1323,11 @@ include_once '../../components/pharmacy_sidebar.php';
             </div>
         </div>
         
-        <div class="stat-card red">
+        <div class="stat-card red animate-fade-in-up">
             <div class="flex items-center justify-between">
                 <div>
                     <p class="stat-label">Expired</p>
-                    <p class="stat-number"><?= number_format($expired_count) ?></p>
+                    <p class="stat-number" id="statExpired"><?= number_format($expired_count) ?></p>
                     <span class="stat-trend">Already expired</span>
                 </div>
                 <div class="stat-icon">
@@ -1185,7 +1341,7 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- FILTERS -->
     <!-- ================================================================ -->
-    <div class="card">
+    <div class="card animate-fade-in-up">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-filter title-blue"></i> Filters
@@ -1236,13 +1392,13 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- EXPIRING SOON TABLE -->
     <!-- ================================================================ -->
-    <div class="card">
+    <div class="card animate-fade-in-up">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-list title-blue"></i> Expiring Medicines
-                <span class="text-xs text-gray-400 font-normal">(<?= number_format($total_expiring) ?> items)</span>
+                <span class="text-xs text-gray-400 font-normal">(<span id="totalItems"><?= number_format($total_expiring) ?></span> items)</span>
             </h3>
-            <div class="flex gap-2">
+            <div class="flex gap-2 flex-wrap">
                 <button onclick="window.print()" class="btn btn-outline btn-sm">
                     <i class="fas fa-print"></i> Print
                 </button>
@@ -1327,9 +1483,9 @@ include_once '../../components/pharmacy_sidebar.php';
                                 </td>
                                 <td>
                                     <div class="action-buttons">
-                                        <a href="edit_medicine.php?id=<?= $medicine['id'] ?>" 
-                                           class="btn btn-sm btn-blue" title="Edit">
-                                            <i class="fas fa-edit"></i>
+                                        <a href="view_inventory.php?id=<?= $medicine['id'] ?>&type=medicine" 
+                                           class="btn btn-sm btn-blue" title="View Details">
+                                            <i class="fas fa-eye"></i>
                                         </a>
                                         <button onclick="markAsExpired(<?= $medicine['id'] ?>)" 
                                                 class="btn btn-sm btn-danger" title="Mark as Expired">
@@ -1364,11 +1520,26 @@ include_once '../../components/pharmacy_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
+            <span style="color:var(--primary);font-weight:600;font-size:0.65rem;">
+                <i class="fas fa-database"></i> New DB
+            </span>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle"></i>
+    <div>
+        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
@@ -1463,6 +1634,29 @@ include_once '../../components/pharmacy_sidebar.php';
     });
 
     // ================================================================
+    // TOAST
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3500);
+    }
+
+    // ================================================================
     // EXPORT CSV
     // ================================================================
     function exportCSV() {
@@ -1514,34 +1708,59 @@ include_once '../../components/pharmacy_sidebar.php';
             return;
         }
         
-        fetch('mark_medicine_expired.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: 'id=' + id + '&branch=<?= $selected_branch_id ?>'
-        })
-        .then(function(response) {
-            return response.json();
-        })
-        .then(function(data) {
-            if (data.success) {
-                alert('✅ Medicine marked as expired successfully!');
-                location.reload();
-            } else {
-                alert('❌ Error: ' + (data.message || 'Failed to mark as expired'));
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', 'mark_medicine_expired.php', true);
+        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+        
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        if (data.success) {
+                            showToast('✅ Success', 'Medicine marked as expired successfully!', 'success');
+                            setTimeout(function() {
+                                location.reload();
+                            }, 1000);
+                        } else {
+                            showToast('❌ Error', data.message || 'Failed to mark as expired', 'error');
+                        }
+                    } catch (e) {
+                        showToast('❌ Error', 'Invalid response from server', 'error');
+                    }
+                } else {
+                    showToast('❌ Error', 'Network error. Please try again.', 'error');
+                }
             }
-        })
-        .catch(function(error) {
-            alert('❌ Network error. Please try again.');
-        });
+        };
+        
+        xhr.send('id=' + id + '&branch=<?= $selected_branch_id ?>');
     }
 
-    console.log('%c💊 Pharmacy - Expiring Soon Medicines', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            searchInput?.focus();
+            searchInput?.select();
+        }
+        if (e.key === 'Escape') {
+            if (searchInput && document.activeElement === searchInput) {
+                searchInput.value = '';
+                searchInput.blur();
+            }
+        }
+    });
+
+    console.log('%c💊 Pharmacy - Expiring Soon (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Total Expiring: <?= number_format($total_expiring) ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔴 Critical: <?= number_format($critical_count) ?> | 🟠 Urgent: <?= number_format($urgent_count) ?> | ⚪ Warning: <?= number_format($warning_count) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Tables: medications_inventory, branches, notifications, prescriptions', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Export CSV available', 'font-size:13px; color:#059669;');
 </script>
 

@@ -2,11 +2,16 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/export_pdf.php
 // PHARMACY - EXPORT REPORT AS PDF (WITH PREVIEW)
-// FIXED: Login session - no default user bypass
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
 // CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
@@ -25,14 +30,18 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
 $user_username = $_SESSION['username'] ?? 'pharmacy';
 $is_admin = $_SESSION['role'] === 'admin' || ($_SESSION['is_admin'] ?? false);
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE CONFIG
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // LOGO PATH
@@ -44,9 +53,6 @@ $logo_base64 = '';
 if (file_exists($_SERVER['DOCUMENT_ROOT'] . $logo_path)) {
     $logo_data = file_get_contents($_SERVER['DOCUMENT_ROOT'] . $logo_path);
     $logo_base64 = 'data:image/png;base64,' . base64_encode($logo_data);
-} else {
-    // Fallback: create simple text logo
-    $logo_base64 = '';
 }
 
 // ================================================================
@@ -55,17 +61,30 @@ if (file_exists($_SERVER['DOCUMENT_ROOT'] . $logo_path)) {
 $report_type = isset($_GET['type']) ? $_GET['type'] : 'stock';
 $branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $user_branch_id;
 
+// If user is not admin, force their branch
+if (!$is_admin) {
+    $branch_id = $user_branch_id;
+}
+
 // ================================================================
-// GET DATA FOR REPORT
+// GET DATA FOR REPORT - NEW DATABASE
 // ================================================================
 
 // 1. Total Medicines
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM medications_inventory WHERE branch_id = ? AND status = 'active'");
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM medications_inventory 
+    WHERE branch_id = ? AND status = 'active'
+");
 $stmt->execute([$branch_id]);
 $total_medicines = $stmt->fetch()['count'] ?? 0;
 
 // 2. Total Stock Quantity
-$stmt = $db->prepare("SELECT SUM(quantity) as total FROM medications_inventory WHERE branch_id = ? AND status = 'active'");
+$stmt = $db->prepare("
+    SELECT SUM(quantity) as total 
+    FROM medications_inventory 
+    WHERE branch_id = ? AND status = 'active'
+");
 $stmt->execute([$branch_id]);
 $total_stock = $stmt->fetch()['total'] ?? 0;
 
@@ -121,7 +140,7 @@ $categories_breakdown = $stmt->fetchAll();
 
 // 8. Low Stock Items
 $stmt = $db->prepare("
-    SELECT medication_name, quantity, reorder_level, unit
+    SELECT medication_name, quantity, reorder_level, unit, batch_number
     FROM medications_inventory 
     WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
     ORDER BY quantity ASC
@@ -132,7 +151,7 @@ $low_stock_items = $stmt->fetchAll();
 
 // 9. Expired Items
 $stmt = $db->prepare("
-    SELECT medication_name, quantity, expiry_date, status
+    SELECT medication_name, quantity, expiry_date, status, batch_number
     FROM medications_inventory 
     WHERE branch_id = ? AND expiry_date IS NOT NULL 
     AND expiry_date < CURDATE()
@@ -142,61 +161,80 @@ $stmt = $db->prepare("
 $stmt->execute([$branch_id]);
 $expired_items = $stmt->fetchAll();
 
-// 10. Most Dispensed Medicines
+// 10. Most Dispensed Medicines - NEW DB (prescriptions + prescription_items)
 $stmt = $db->prepare("
     SELECT 
-        medicine_name,
-        SUM(quantity) as total_dispensed,
-        COUNT(*) as times_dispensed
-    FROM prescription_sale_items psi
-    JOIN prescription_sales ps ON psi.sale_id = ps.id
-    WHERE ps.branch_id = ? AND ps.status = 'dispensed'
-    GROUP BY medicine_name
+        pi.medication_name as medicine_name,
+        SUM(pi.quantity) as total_dispensed,
+        COUNT(DISTINCT p.id) as times_dispensed
+    FROM prescription_items pi
+    JOIN prescriptions p ON pi.prescription_id = p.id
+    WHERE p.branch_id = ? AND p.status = 'dispensed'
+    GROUP BY pi.medication_name
     ORDER BY total_dispensed DESC
     LIMIT 10
 ");
 $stmt->execute([$branch_id]);
 $most_dispensed = $stmt->fetchAll();
 
-// 11. Top OTC Medicines
+// 11. Top OTC Medicines - NEW DB (otc_sale_items + otc_sales)
 $stmt = $db->prepare("
     SELECT 
-        medicine_name,
-        SUM(quantity) as total_sold,
-        COUNT(*) as times_sold
-    FROM otc_sale_items osi
-    JOIN otc_sales os ON osi.sale_id = os.id
-    WHERE os.branch_id = ?
-    GROUP BY medicine_name
+        oi.item_name as medicine_name,
+        SUM(oi.quantity) as total_sold,
+        COUNT(DISTINCT os.id) as times_sold
+    FROM otc_sale_items oi
+    JOIN otc_sales os ON oi.sale_id = os.id
+    WHERE os.branch_id = ? AND os.payment_status = 'paid'
+    GROUP BY oi.item_name
     ORDER BY total_sold DESC
     LIMIT 10
 ");
 $stmt->execute([$branch_id]);
 $top_otc = $stmt->fetchAll();
 
-// 12. Financial (Admin only)
+// 12. Financial (Admin only) - NEW DB (bills)
 $total_revenue = 0;
 $total_prescription_revenue = 0;
 $total_otc_revenue = 0;
 
 if ($is_admin) {
+    // Prescription revenue from bills
     $stmt = $db->prepare("
         SELECT SUM(total_amount) as total 
-        FROM prescription_sales 
-        WHERE branch_id = ? AND status = 'dispensed'
+        FROM bills 
+        WHERE branch_id = ? AND status = 'paid'
     ");
     $stmt->execute([$branch_id]);
     $total_prescription_revenue = $stmt->fetch()['total'] ?? 0;
 
+    // OTC revenue from bills
     $stmt = $db->prepare("
         SELECT SUM(total_amount) as total 
-        FROM otc_sales 
-        WHERE branch_id = ?
+        FROM bills 
+        WHERE branch_id = ? AND status = 'paid' AND bill_number LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$branch_id]);
     $total_otc_revenue = $stmt->fetch()['total'] ?? 0;
 
     $total_revenue = $total_prescription_revenue + $total_otc_revenue;
+}
+
+// 13. Revenue by Month (Admin only)
+$revenue_by_month = [];
+if ($is_admin) {
+    $stmt = $db->prepare("
+        SELECT 
+            DATE_FORMAT(created_at, '%Y-%m') as month,
+            SUM(total_amount) as total_revenue
+        FROM bills 
+        WHERE branch_id = ? AND status = 'paid'
+        AND created_at >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+        ORDER BY month ASC
+    ");
+    $stmt->execute([$branch_id]);
+    $revenue_by_month = $stmt->fetchAll();
 }
 
 // ================================================================
@@ -231,7 +269,7 @@ if ($is_admin) {
             max-width: 1100px;
             margin: 0 auto;
             background: #ffffff;
-            padding: 50px 60px 40px 60px; /* TOP RIGHT BOTTOM LEFT */
+            padding: 50px 60px 40px 60px;
             border-radius: 12px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.08);
         }
@@ -243,7 +281,7 @@ if ($is_admin) {
                 background: #ffffff;
             }
             .report-container {
-                padding: 60px 70px 50px 70px; /* TOP RIGHT BOTTOM LEFT */
+                padding: 60px 70px 50px 70px;
                 margin: 0;
                 border-radius: 0;
                 box-shadow: none;
@@ -251,9 +289,14 @@ if ($is_admin) {
                 height: 100%;
                 min-height: 100vh;
             }
-            /* Ensure content fits in one page */
             .page-break {
                 page-break-before: always;
+            }
+            .action-bar {
+                display: none !important;
+            }
+            .no-print {
+                display: none !important;
             }
         }
         
@@ -300,6 +343,18 @@ if ($is_admin) {
             font-weight: 400;
         }
         
+        .report-header .brand-text .new-db-tag {
+            display: inline-block;
+            font-size: 7px;
+            font-weight: 700;
+            color: #059669;
+            background: #D1FAE5;
+            padding: 1px 8px;
+            border-radius: 10px;
+            margin-top: 2px;
+            letter-spacing: 0.03em;
+        }
+        
         .report-header .header-right {
             text-align: right;
         }
@@ -308,6 +363,10 @@ if ($is_admin) {
             font-size: 18px;
             font-weight: 700;
             color: #1E293B;
+        }
+        
+        .report-header .header-right .title .icon {
+            margin-right: 6px;
         }
         
         .report-header .header-right .subtitle {
@@ -338,6 +397,12 @@ if ($is_admin) {
             border-radius: 8px;
             padding: 12px 14px;
             text-align: center;
+            transition: all 0.2s ease;
+        }
+        
+        .stat-box:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.06);
         }
         
         .stat-box .number {
@@ -354,11 +419,18 @@ if ($is_admin) {
             letter-spacing: 0.05em;
         }
         
+        .stat-box .sub-label {
+            font-size: 8px;
+            color: #94A3B8;
+            margin-top: 1px;
+        }
+        
         .stat-box.orange .number { color: #D97706; }
         .stat-box.red .number { color: #DC2626; }
         .stat-box.purple .number { color: #7C3AED; }
         .stat-box.green .number { color: #059669; }
         .stat-box.pink .number { color: #DB2777; }
+        .stat-box.teal .number { color: #0D9488; }
         
         /* ================================================================
            SECTIONS
@@ -374,6 +446,18 @@ if ($is_admin) {
             padding-bottom: 6px;
             border-bottom: 2px solid #E2E8F0;
             margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .section-title .badge-count {
+            background: #0B5ED7;
+            color: white;
+            font-size: 8px;
+            padding: 1px 10px;
+            border-radius: 12px;
+            font-weight: 600;
         }
         
         /* ================================================================
@@ -434,6 +518,40 @@ if ($is_admin) {
         .rank-badge.bronze { background: #CD7F32; }
         .rank-badge.normal { background: #0B5ED7; }
         
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 8px;
+            font-weight: 600;
+        }
+        
+        .status-badge.active { background: #D1FAE5; color: #059669; }
+        .status-badge.inactive { background: #FEE2E2; color: #DC2626; }
+        .status-badge.expired { background: #FEE2E2; color: #DC2626; }
+        
+        /* ================================================================
+           WATERMARK - NEW DB
+           ================================================================ */
+        .watermark {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            font-size: 12px;
+            font-weight: 700;
+            color: rgba(5, 150, 105, 0.08);
+            transform: rotate(-15deg);
+            pointer-events: none;
+            z-index: 0;
+            letter-spacing: 2px;
+        }
+        
+        @media print {
+            .watermark {
+                display: block;
+            }
+        }
+        
         /* ================================================================
            ACTION BUTTONS
            ================================================================ */
@@ -486,6 +604,18 @@ if ($is_admin) {
             box-shadow: 0 6px 20px rgba(11, 94, 215, 0.35);
         }
         
+        .btn-success {
+            background: #059669;
+            color: white;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+        }
+        
+        .btn-success:hover {
+            background: #047857;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
+        }
+        
         .btn-outline {
             background: transparent;
             color: #64748B;
@@ -518,6 +648,12 @@ if ($is_admin) {
         .report-footer .brand {
             color: #0B5ED7;
             font-weight: 600;
+        }
+        
+        .report-footer .new-db-footer {
+            color: #059669;
+            font-weight: 600;
+            font-size: 8px;
         }
         
         /* ================================================================
@@ -569,7 +705,6 @@ if ($is_admin) {
             .btn {
                 justify-content: center;
             }
-            /* Print margins for mobile */
             @media print {
                 .report-container {
                     padding: 40px 30px 30px 30px;
@@ -585,7 +720,7 @@ if ($is_admin) {
                 padding: 60px 70px 50px 70px;
             }
             .action-bar {
-                display: none;
+                display: none !important;
             }
             .stat-box {
                 break-inside: avoid;
@@ -601,10 +736,16 @@ if ($is_admin) {
                 border-top: none;
                 margin: 0;
             }
+            .no-print {
+                display: none !important;
+            }
         }
     </style>
 </head>
 <body>
+
+<!-- Watermark -->
+<div class="watermark">NEW DB</div>
 
 <div class="report-container">
 
@@ -623,6 +764,7 @@ if ($is_admin) {
             <div class="brand-text">
                 <div class="brand-name">Braick Dispensary</div>
                 <div class="brand-sub">Pharmacy Department</div>
+                <span class="new-db-tag"><i class="fas fa-database"></i> New Database</span>
             </div>
         </div>
         <div class="header-right">
@@ -656,43 +798,51 @@ if ($is_admin) {
         <div class="stat-box">
             <div class="number"><?= number_format($total_medicines) ?></div>
             <div class="label">Total Medicines</div>
+            <div class="sub-label">Active in inventory</div>
         </div>
         <div class="stat-box orange">
             <div class="number"><?= number_format($low_stock_count) ?></div>
             <div class="label">Low Stock</div>
+            <div class="sub-label">Below reorder level</div>
         </div>
         <div class="stat-box red">
             <div class="number"><?= number_format($out_of_stock) ?></div>
             <div class="label">Out of Stock</div>
+            <div class="sub-label">Quantity = 0</div>
         </div>
         <div class="stat-box pink">
             <div class="number"><?= number_format($expired_count) ?></div>
             <div class="label">Expired</div>
+            <div class="sub-label">Past expiry date</div>
         </div>
         <div class="stat-box purple">
             <div class="number"><?= number_format($expiring_soon) ?></div>
             <div class="label">Expiring Soon</div>
+            <div class="sub-label">Within 30 days</div>
         </div>
     </div>
     
     <!-- Categories Breakdown -->
     <div class="section">
-        <div class="section-title">📂 Categories Breakdown</div>
+        <div class="section-title">
+            📂 Categories Breakdown
+            <span class="badge-count"><?= count($categories_breakdown) ?></span>
+        </div>
         <?php if (count($categories_breakdown) > 0): ?>
         <table>
             <thead>
                 <tr>
                     <th>Category</th>
-                    <th>Number of Medicines</th>
-                    <th>Total Quantity</th>
+                    <th style="text-align:center;">Medicines</th>
+                    <th style="text-align:right;">Total Quantity</th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($categories_breakdown as $cat): ?>
                     <tr>
                         <td><strong><?= htmlspecialchars($cat['category'] ?? 'Uncategorized') ?></strong></td>
-                        <td><?= $cat['count'] ?></td>
-                        <td><?= number_format($cat['total_quantity'] ?? 0) ?></td>
+                        <td style="text-align:center;"><?= $cat['count'] ?></td>
+                        <td style="text-align:right;"><?= number_format($cat['total_quantity'] ?? 0) ?></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
@@ -704,43 +854,44 @@ if ($is_admin) {
     
     <!-- Low Stock Items -->
     <div class="section">
-        <div class="section-title">⚠️ Low Stock Items</div>
+        <div class="section-title">⚠️ Low Stock Items <span class="badge-count"><?= count($low_stock_items) ?></span></div>
         <?php if (count($low_stock_items) > 0): ?>
         <table>
             <thead>
                 <tr>
                     <th>Medicine</th>
-                    <th>Current Qty</th>
-                    <th>Reorder Level</th>
-                    <th>Unit</th>
+                    <th style="text-align:center;">Current Qty</th>
+                    <th style="text-align:center;">Reorder Level</th>
+                    <th>Batch</th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($low_stock_items as $item): ?>
                     <tr>
                         <td><strong><?= htmlspecialchars($item['medication_name']) ?></strong></td>
-                        <td style="color:#D97706;font-weight:600;"><?= $item['quantity'] ?></td>
-                        <td><?= $item['reorder_level'] ?></td>
-                        <td><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></td>
+                        <td style="text-align:center;color:#D97706;font-weight:600;"><?= $item['quantity'] ?></td>
+                        <td style="text-align:center;"><?= $item['reorder_level'] ?></td>
+                        <td><?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
         </table>
         <?php else: ?>
-        <p style="color:#94A3B8; text-align:center; padding:20px;">No low stock items</p>
+        <p style="color:#94A3B8; text-align:center; padding:20px;">✅ No low stock items</p>
         <?php endif; ?>
     </div>
     
     <!-- Expired Items -->
     <div class="section">
-        <div class="section-title">🗑️ Expired Items</div>
+        <div class="section-title">🗑️ Expired Items <span class="badge-count"><?= count($expired_items) ?></span></div>
         <?php if (count($expired_items) > 0): ?>
         <table>
             <thead>
                 <tr>
                     <th>Medicine</th>
-                    <th>Quantity</th>
+                    <th style="text-align:center;">Quantity</th>
                     <th>Expiry Date</th>
+                    <th>Batch</th>
                     <th>Status</th>
                 </tr>
             </thead>
@@ -748,15 +899,20 @@ if ($is_admin) {
                 <?php foreach ($expired_items as $item): ?>
                     <tr>
                         <td><strong><?= htmlspecialchars($item['medication_name']) ?></strong></td>
-                        <td><?= $item['quantity'] ?></td>
+                        <td style="text-align:center;"><?= $item['quantity'] ?></td>
                         <td style="color:#DC2626;font-weight:600;"><?= date('d/m/Y', strtotime($item['expiry_date'])) ?></td>
-                        <td><?= ucfirst($item['status'] ?? 'active') ?></td>
+                        <td><?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?></td>
+                        <td>
+                            <span class="status-badge <?= ($item['status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?>">
+                                <?= ucfirst($item['status'] ?? 'Active') ?>
+                            </span>
+                        </td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
         </table>
         <?php else: ?>
-        <p style="color:#94A3B8; text-align:center; padding:20px;">No expired items</p>
+        <p style="color:#94A3B8; text-align:center; padding:20px;">✅ No expired items</p>
         <?php endif; ?>
     </div>
     
@@ -769,15 +925,15 @@ if ($is_admin) {
     
     <!-- Most Dispensed -->
     <div class="section">
-        <div class="section-title">💊 Most Dispensed (Prescriptions)</div>
+        <div class="section-title">💊 Most Dispensed (Prescriptions) <span class="badge-count">Top 10</span></div>
         <?php if (count($most_dispensed) > 0): ?>
         <table>
             <thead>
                 <tr>
                     <th style="width:40px;">#</th>
                     <th>Medicine</th>
-                    <th>Total Qty</th>
-                    <th>Times</th>
+                    <th style="text-align:right;">Total Qty</th>
+                    <th style="text-align:right;">Times</th>
                 </tr>
             </thead>
             <tbody>
@@ -790,8 +946,8 @@ if ($is_admin) {
                             </span>
                         </td>
                         <td><strong><?= htmlspecialchars($med['medicine_name']) ?></strong></td>
-                        <td><?= number_format($med['total_dispensed']) ?></td>
-                        <td><?= number_format($med['times_dispensed']) ?></td>
+                        <td style="text-align:right;"><?= number_format($med['total_dispensed']) ?></td>
+                        <td style="text-align:right;"><?= number_format($med['times_dispensed']) ?></td>
                     </tr>
                     <?php $rank++; ?>
                 <?php endforeach; ?>
@@ -804,15 +960,15 @@ if ($is_admin) {
     
     <!-- Top OTC -->
     <div class="section">
-        <div class="section-title">🛒 Top OTC Medicines</div>
+        <div class="section-title">🛒 Top OTC Medicines <span class="badge-count">Top 10</span></div>
         <?php if (count($top_otc) > 0): ?>
         <table>
             <thead>
                 <tr>
                     <th style="width:40px;">#</th>
                     <th>Medicine</th>
-                    <th>Total Qty</th>
-                    <th>Times</th>
+                    <th style="text-align:right;">Total Qty</th>
+                    <th style="text-align:right;">Times</th>
                 </tr>
             </thead>
             <tbody>
@@ -825,8 +981,8 @@ if ($is_admin) {
                             </span>
                         </td>
                         <td><strong><?= htmlspecialchars($med['medicine_name']) ?></strong></td>
-                        <td><?= number_format($med['total_sold']) ?></td>
-                        <td><?= number_format($med['times_sold']) ?></td>
+                        <td style="text-align:right;"><?= number_format($med['total_sold']) ?></td>
+                        <td style="text-align:right;"><?= number_format($med['times_sold']) ?></td>
                     </tr>
                     <?php $rank++; ?>
                 <?php endforeach; ?>
@@ -849,50 +1005,38 @@ if ($is_admin) {
         <div class="stat-box green">
             <div class="number">TSh <?= number_format($total_revenue) ?></div>
             <div class="label">Total Revenue</div>
+            <div class="sub-label">All paid bills</div>
         </div>
         <div class="stat-box blue">
             <div class="number">TSh <?= number_format($total_prescription_revenue) ?></div>
             <div class="label">Prescription Revenue</div>
+            <div class="sub-label">From prescriptions</div>
         </div>
         <div class="stat-box purple">
             <div class="number">TSh <?= number_format($total_otc_revenue) ?></div>
             <div class="label">OTC Revenue</div>
+            <div class="sub-label">From OTC sales</div>
         </div>
     </div>
     
     <!-- Revenue by Month -->
     <div class="section">
         <div class="section-title">📊 Revenue by Month (Last 6 Months)</div>
-        <?php 
-        $stmt = $db->prepare("
-            SELECT 
-                DATE_FORMAT(created_at, '%Y-%m') as month,
-                SUM(total_amount) as total_revenue
-            FROM (
-                SELECT created_at, total_amount FROM prescription_sales WHERE branch_id = ? AND status = 'dispensed'
-                UNION ALL
-                SELECT created_at, total_amount FROM otc_sales WHERE branch_id = ?
-            ) as combined
-            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
-            GROUP BY DATE_FORMAT(created_at, '%Y-%m')
-            ORDER BY month ASC
-        ");
-        $stmt->execute([$branch_id, $branch_id]);
-        $revenue_by_month = $stmt->fetchAll();
-        ?>
         <?php if (count($revenue_by_month) > 0): ?>
         <table>
             <thead>
                 <tr>
                     <th>Month</th>
-                    <th>Revenue (TSh)</th>
+                    <th style="text-align:right;">Revenue (TSh)</th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($revenue_by_month as $month): ?>
                     <tr>
                         <td><strong><?= date('F Y', strtotime($month['month'] . '-01')) ?></strong></td>
-                        <td>TSh <?= number_format($month['total_revenue'] ?? 0) ?></td>
+                        <td style="text-align:right;font-weight:600;color:#0B5ED7;">
+                            TSh <?= number_format($month['total_revenue'] ?? 0) ?>
+                        </td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
@@ -907,7 +1051,7 @@ if ($is_admin) {
     <!-- ================================================================ -->
     <!-- ACTION BUTTONS -->
     <!-- ================================================================ -->
-    <div class="action-bar">
+    <div class="action-bar no-print">
         <button onclick="downloadPDF()" class="btn btn-pdf">
             <i class="fas fa-file-pdf"></i> Download as PDF
         </button>
@@ -930,17 +1074,19 @@ if ($is_admin) {
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
             Generated: <?= date('Y-m-d H:i:s') ?>
             <span style="color:#CBD5E1;margin:0 8px;">|</span>
+            <span class="new-db-footer"><i class="fas fa-database"></i> New DB</span>
+            <span style="color:#CBD5E1;margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
         <p style="margin-top:4px;font-size:8px;color:#CBD5E1;">
-            This report was generated automatically from the Braick Dispensary System.
             <?php if ($report_type === 'stock'): ?>
-            Report includes stock summary, categories, low stock and expired items.
+            📦 Stock summary, categories, low stock and expired items.
             <?php elseif ($report_type === 'medicines'): ?>
-            Report includes most dispensed and top OTC medicines.
+            💊 Most dispensed (prescriptions) and top OTC medicines.
             <?php elseif ($report_type === 'financial'): ?>
-            Report includes revenue summary and monthly breakdown.
+            💰 Revenue summary and monthly breakdown.
             <?php endif; ?>
+            <span style="margin-left:10px;">🔒 Generated by <?= htmlspecialchars($user_full_name) ?></span>
         </p>
     </div>
 
@@ -970,29 +1116,32 @@ if ($is_admin) {
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
+        // Ctrl+P - Print
         if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
             e.preventDefault();
             window.print();
         }
+        // Ctrl+D - Download PDF
         if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
             e.preventDefault();
             downloadPDF();
         }
+        // Ctrl+B - Back
         if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
             e.preventDefault();
             window.location.href = 'reports.php?type=<?= $report_type ?>';
         }
     });
 
-    console.log('%c📄 Pharmacy Report Preview (With Logo & Margins)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Report Type: <?= ucfirst($report_type) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#64748B;');
-    console.log('%c🖼️ Logo: <?= !empty($logo_base64) ? '✅ Loaded' : '❌ Using fallback' ?>', 'font-size:12px; color:#34D399;');
-    console.log('%c📐 Margins: TOP:60px RIGHT:70px BOTTOM:50px LEFT:70px', 'font-size:12px; color:#34D399;');
-    console.log('%c⌨️ Ctrl+P - Print | Ctrl+D - Download PDF | Ctrl+B - Back', 'font-size:12px; color:#34D399;');
-    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📄 Braick - Pharmacy Report (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📊 Report Type: <?= ucfirst($report_type) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🖼️ Logo: <?= !empty($logo_base64) ? '✅ Loaded' : '❌ Using fallback' ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c📐 Margins: TOP:60px RIGHT:70px BOTTOM:50px LEFT:70px', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Tables: medications_inventory, prescriptions, prescription_items, otc_sales, otc_sale_items, bills', 'font-size:13px; color:#34D399;');
+    console.log('%c⌨️ Ctrl+P - Print | Ctrl+D - Download PDF | Ctrl+B - Back', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -4,11 +4,16 @@
 // PHARMACY - VIEW PRESCRIPTION DETAILS
 // READ-ONLY MODE - No status update buttons
 // NO VIEW BILL BUTTON
-// FIXED: Uses shared header & sidebar
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
 // CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
@@ -29,12 +34,16 @@ $user_username = $_SESSION['username'] ?? 'pharmacy';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
 $currency = 'TSh';
@@ -50,7 +59,7 @@ if ($prescription_id <= 0) {
 }
 
 // ================================================================
-// GET PRESCRIPTION DETAILS
+// GET PRESCRIPTION DETAILS - NEW DATABASE
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -76,41 +85,19 @@ $stmt = $db->prepare("
         v.symptoms,
         v.notes as visit_notes,
         ph.full_name as pharmacy_name,
-        (
-            SELECT id FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_id,
-        (
-            SELECT bill_number FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_number,
-        (
-            SELECT total_amount FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_total,
-        (
-            SELECT discount_amount FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_discount,
-        (
-            SELECT balance FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_balance,
-        (
-            SELECT status FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_status
+        -- Get bill info from bills table
+        b.id as bill_id,
+        b.bill_number,
+        b.total_amount as bill_total,
+        b.discount_amount as bill_discount,
+        b.balance as bill_balance,
+        b.status as bill_status
     FROM prescriptions p
     JOIN patients pat ON p.patient_id = pat.id
     LEFT JOIN users u ON p.doctor_id = u.id
     LEFT JOIN visits v ON p.visit_id = v.id
     LEFT JOIN users ph ON p.pharmacy_id = ph.id
+    LEFT JOIN bills b ON b.visit_id = p.visit_id AND b.patient_id = p.patient_id
     WHERE p.id = ? AND p.branch_id = ?
 ");
 $stmt->execute([$prescription_id, $user_branch_id]);
@@ -122,7 +109,7 @@ if (!$prescription) {
 }
 
 // ================================================================
-// GET PRESCRIPTION ITEMS
+// GET PRESCRIPTION ITEMS - NEW DATABASE
 // ================================================================
 $stmt = $db->prepare("
     SELECT * FROM prescription_items 
@@ -221,412 +208,486 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
 // ================================================================
-// ✅ INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/pharmacy_header.php';
 include_once '../../components/pharmacy_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC STYLES -->
-<!-- ================================================================ -->
-<style>
-    :root {
-        --primary: #0B5ED7;
-        --primary-dark: #0A4CA8;
-        --primary-light: #6EA8FE;
-        --primary-bg: #E8F0FE;
-        --success: #059669;
-        --success-dark: #047857;
-        --success-bg: #D1FAE5;
-        --danger: #DC2626;
-        --danger-bg: #FEE2E2;
-        --warning: #D97706;
-        --warning-bg: #FEF3C7;
-        --gray-50: #F8FAFC;
-        --gray-100: #F1F5F9;
-        --gray-200: #E2E8F0;
-        --gray-300: #CBD5E1;
-        --gray-400: #94A3B8;
-        --gray-500: #64748B;
-        --gray-600: #475569;
-        --gray-700: #334155;
-        --gray-800: #1E293B;
-        --gray-900: #0F172A;
-        --radius: 10px;
-        --radius-lg: 14px;
-        --transition: all 0.3s ease;
-        --bg-body: #F1F5F9;
-        --bg-card: #FFFFFF;
-        --bg-nav: #FFFFFF;
-        --text-primary: #1E293B;
-        --text-secondary: #64748B;
-        --border-color: #E2E8F0;
-        --shadow: 0 1px 3px rgba(0,0,0,0.06);
-        --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
-    }
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>View Prescription - Braick Dispensary</title>
     
-    [data-theme="dark"] {
-        --bg-body: #0F172A;
-        --bg-card: #1E293B;
-        --bg-nav: #1E293B;
-        --text-primary: #F1F5F9;
-        --text-secondary: #94A3B8;
-        --border-color: #334155;
-    }
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
-    .main-content {
-        margin-left: 270px;
-        margin-top: 68px;
-        padding: 28px 32px;
-        min-height: calc(100vh - 68px);
-    }
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
-    .page-header {
-        background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-        border-radius: 16px;
-        padding: 24px 32px;
-        margin-bottom: 28px;
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: space-between;
-        align-items: center;
-        gap: 16px;
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
-        position: relative;
-        overflow: hidden;
-    }
-    
-    .page-header::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        right: -20%;
-        width: 300px;
-        height: 300px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 50%;
-        pointer-events: none;
-    }
-    
-    .page-header .page-title {
-        color: white;
-        font-size: 1.8rem;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-        position: relative;
-        z-index: 1;
-    }
-    
-    .page-header .page-title i {
-        font-size: 2rem;
-        opacity: 0.9;
-    }
-    
-    .page-header .page-subtitle {
-        color: rgba(255,255,255,0.85);
-        font-size: 0.95rem;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-        position: relative;
-        z-index: 1;
-    }
-    
-    .page-header .page-subtitle strong {
-        color: white;
-        font-weight: 600;
-    }
-    
-    .page-header .btn-outline-light {
-        background: rgba(255,255,255,0.15);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.2);
-        padding: 8px 18px;
-        border-radius: 10px;
-        font-weight: 500;
-        font-size: 0.82rem;
-        transition: all 0.3s;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        backdrop-filter: blur(4px);
-        position: relative;
-        z-index: 1;
-    }
-    
-    .page-header .btn-outline-light:hover {
-        background: rgba(255,255,255,0.25);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    }
-    
-    .page-header .badge-display {
-        background: rgba(255,255,255,0.2);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        backdrop-filter: blur(4px);
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    /* Cards */
-    .card {
-        background: var(--bg-card);
-        border-radius: var(--radius-lg);
-        border: 1px solid var(--border-color);
-        padding: 24px 28px;
-        margin-bottom: 20px;
-        box-shadow: var(--shadow);
-        transition: var(--transition);
-    }
-    
-    .card:hover {
-        border-color: var(--primary-light);
-        box-shadow: var(--shadow-md);
-    }
-    
-    .card-title {
-        font-size: 1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        border-bottom: 2px solid var(--border-color);
-        padding-bottom: 12px;
-        margin-bottom: 16px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-    
-    .card-title i {
-        color: var(--primary);
-        font-size: 1.1rem;
-    }
-    
-    .card-title .badge-count {
-        background: var(--primary);
-        color: white;
-        padding: 2px 12px;
-        border-radius: 20px;
-        font-size: 0.6rem;
-        font-weight: 600;
-    }
-    
-    .detail-row {
-        display: flex;
-        padding: 6px 0;
-        border-bottom: 1px solid var(--border-color);
-        font-size: 0.85rem;
-    }
-    
-    .detail-row:last-child {
-        border-bottom: none;
-    }
-    
-    .detail-label {
-        font-weight: 600;
-        color: var(--text-secondary);
-        width: 140px;
-        flex-shrink: 0;
-    }
-    
-    .detail-value {
-        flex: 1;
-        color: var(--text-primary);
-    }
-    
-    .badge-status {
-        display: inline-block;
-        padding: 2px 12px;
-        border-radius: 20px;
-        font-size: 0.6rem;
-        font-weight: 600;
-    }
-    
-    .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
-    .badge-info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
-    .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-    .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
-    
-    /* Items Table */
-    .table-wrap {
-        overflow-x: auto;
-    }
-    
-    .items-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.82rem;
-    }
-    
-    .items-table thead th {
-        text-align: left;
-        padding: 8px 12px;
-        font-weight: 600;
-        font-size: 0.65rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--text-secondary);
-        background: var(--bg-body);
-        border-bottom: 2px solid var(--border-color);
-        white-space: nowrap;
-    }
-    
-    .items-table thead th:last-child { text-align: right; }
-    .items-table tbody td {
-        padding: 6px 12px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-        vertical-align: middle;
-    }
-    
-    .items-table tbody td:last-child { text-align: right; font-weight: 600; font-family: monospace; }
-    .items-table tbody tr:hover td { background: var(--primary-bg); }
-    .items-table .total-row td {
-        font-weight: 700;
-        border-top: 2px solid var(--primary);
-        background: var(--primary-bg);
-        padding: 8px 12px;
-    }
-    .items-table .total-row td:last-child {
-        color: var(--primary);
-        font-size: 1rem;
-    }
-    
-    /* Bill Summary */
-    .bill-summary-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 12px;
-        margin-top: 12px;
-    }
-    
-    .bill-summary-item {
-        background: var(--bg-body);
-        border-radius: var(--radius);
-        padding: 10px 14px;
-        text-align: center;
-        border: 1px solid var(--border-color);
-    }
-    
-    .bill-summary-item .label {
-        font-size: 0.6rem;
-        text-transform: uppercase;
-        color: var(--text-secondary);
-        font-weight: 600;
-        letter-spacing: 0.05em;
-    }
-    
-    .bill-summary-item .value {
-        font-size: 1.2rem;
-        font-weight: 700;
-        font-family: monospace;
-        margin-top: 2px;
-    }
-    
-    .bill-summary-item .value.green { color: var(--success); }
-    .bill-summary-item .value.red { color: var(--danger); }
-    .bill-summary-item .value.blue { color: var(--primary); }
-    .bill-summary-item .value.orange { color: var(--warning); }
-    
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 8px 20px;
-        border-radius: var(--radius);
-        font-weight: 600;
-        font-size: 0.85rem;
-        transition: var(--transition);
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-    }
-    
-    .btn-primary {
-        background: var(--primary);
-        color: white;
-    }
-    
-    .btn-primary:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: var(--primary);
-        color: var(--primary);
-    }
-    
-    .btn-success-custom {
-        background: var(--success);
-        color: white;
-    }
-    
-    .btn-success-custom:hover {
-        background: var(--success-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
-    
-    .read-only-badge {
-        display: inline-block;
-        background: var(--gray-500);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-    }
-    
-    .footer {
-        padding: 14px 0;
-        border-top: 1px solid var(--border-color);
-        margin-top: 24px;
-        text-align: center;
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    
-    .footer .footer-brand { color: var(--primary); font-weight: 600; }
-    
-    @media (max-width: 1024px) {
-        .main-content { margin-left: 0; padding: 16px; }
-    }
-    
-    @media (max-width: 768px) {
-        .page-header { padding: 16px 18px; }
-        .page-header .page-title { font-size: 1.3rem; }
-        .detail-row { flex-direction: column; }
-        .detail-label { width: 100%; margin-bottom: 2px; }
-        .bill-summary-grid { grid-template-columns: 1fr 1fr; }
-        .items-table { font-size: 0.7rem; }
-        .card { padding: 16px; }
-    }
-    
-    @media (max-width: 480px) {
-        .main-content { padding: 10px; }
-        .bill-summary-grid { grid-template-columns: 1fr; }
-        .btn { width: 100%; justify-content: center; }
-    }
-</style>
+    <style>
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-dark: #047857;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --radius: 10px;
+            --radius-lg: 14px;
+            --transition: all 0.3s ease;
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --bg-nav: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+        }
+        
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --bg-nav: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+        
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+        
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 28px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .page-header .page-title {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .page-title i {
+            font-size: 2rem;
+            opacity: 0.9;
+        }
+        
+        .page-header .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .page-subtitle strong {
+            color: white;
+            font-weight: 600;
+        }
+        
+        .page-header .btn-outline-light {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 18px;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        .page-header .badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .page-header .new-db-tag {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.7);
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.08);
+            letter-spacing: 0.03em;
+        }
+        
+        /* ================================================================
+           CARDS
+           ================================================================ */
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            padding: 24px 28px;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow);
+            transition: var(--transition);
+        }
+        
+        .card:hover {
+            border-color: var(--primary-light);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .card-title i {
+            color: var(--primary);
+            font-size: 1.1rem;
+        }
+        
+        .card-title .badge-count {
+            background: var(--primary);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+        }
+        
+        .card-title .badge-count.success {
+            background: var(--success);
+        }
+        
+        .card-title .badge-count.gray {
+            background: var(--gray-500);
+        }
+        
+        .detail-row {
+            display: flex;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.85rem;
+        }
+        
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        
+        .detail-label {
+            font-weight: 600;
+            color: var(--text-secondary);
+            width: 140px;
+            flex-shrink: 0;
+        }
+        
+        .detail-value {
+            flex: 1;
+            color: var(--text-primary);
+        }
+        
+        /* ================================================================
+           BADGES
+           ================================================================ */
+        .badge-status {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+        }
+        
+        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+        .badge-info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
+        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+        
+        .read-only-badge {
+            display: inline-block;
+            background: var(--gray-500);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        
+        /* ================================================================
+           ITEMS TABLE
+           ================================================================ */
+        .table-wrap {
+            overflow-x: auto;
+        }
+        
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+        
+        .items-table thead th {
+            text-align: left;
+            padding: 8px 12px;
+            font-weight: 600;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            background: var(--bg-body);
+            border-bottom: 2px solid var(--border-color);
+            white-space: nowrap;
+        }
+        
+        .items-table thead th:last-child { text-align: right; }
+        .items-table tbody td {
+            padding: 6px 12px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        
+        .items-table tbody td:last-child { text-align: right; font-weight: 600; font-family: monospace; }
+        .items-table tbody tr:hover td { background: var(--primary-bg); }
+        .items-table .total-row td {
+            font-weight: 700;
+            border-top: 2px solid var(--primary);
+            background: var(--primary-bg);
+            padding: 8px 12px;
+        }
+        .items-table .total-row td:last-child {
+            color: var(--primary);
+            font-size: 1rem;
+        }
+        
+        /* ================================================================
+           BILL SUMMARY
+           ================================================================ */
+        .bill-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+        
+        .bill-summary-item {
+            background: var(--bg-body);
+            border-radius: var(--radius);
+            padding: 10px 14px;
+            text-align: center;
+            border: 1px solid var(--border-color);
+        }
+        
+        .bill-summary-item .label {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+        
+        .bill-summary-item .value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            font-family: monospace;
+            margin-top: 2px;
+        }
+        
+        .bill-summary-item .value.green { color: var(--success); }
+        .bill-summary-item .value.red { color: var(--danger); }
+        .bill-summary-item .value.blue { color: var(--primary); }
+        .bill-summary-item .value.orange { color: var(--warning); }
+        
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 20px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: var(--transition);
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-success-custom {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-success-custom:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        .footer .new-db-footer {
+            color: var(--success);
+            font-weight: 600;
+            font-size: 0.65rem;
+        }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .main-content { margin-left: 0; padding: 16px; }
+        }
+        
+        @media (max-width: 768px) {
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .detail-row { flex-direction: column; }
+            .detail-label { width: 100%; margin-bottom: 2px; }
+            .bill-summary-grid { grid-template-columns: 1fr 1fr; }
+            .items-table { font-size: 0.7rem; }
+            .card { padding: 16px; }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+            .bill-summary-grid { grid-template-columns: 1fr; }
+            .btn { width: 100%; justify-content: center; }
+            .page-header .btn-outline-light { padding: 4px 10px; font-size: 0.7rem; }
+        }
+    </style>
+</head>
+<body>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -644,6 +705,9 @@ include_once '../../components/pharmacy_sidebar.php';
                 <span class="badge-display"><?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?></span>
                 <span class="badge-status <?= getStatusBadgeClass($prescription['status'] ?? 'pending') ?>" style="background:rgba(255,255,255,0.2);color:white;border-color:rgba(255,255,255,0.3);">
                     <?= getStatusLabel($prescription['status'] ?? 'pending') ?>
+                </span>
+                <span class="new-db-tag">
+                    <i class="fas fa-database"></i> New DB
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -771,7 +835,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <i class="fas fa-pills"></i>
             Prescription Items
             <span class="badge-count"><?= count($prescription_items) ?> items</span>
-            <span class="badge-count" style="background:var(--success);">Total Qty: <?= $total_quantity ?></span>
+            <span class="badge-count success">Total Qty: <?= $total_quantity ?></span>
         </h3>
         
         <div class="table-wrap">
@@ -835,7 +899,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <?php if ($prescription['bill_number']): ?>
             <span class="badge-count">#<?= htmlspecialchars($prescription['bill_number']) ?></span>
             <?php endif; ?>
-            <span class="badge-count" style="background:var(--gray-500);">
+            <span class="badge-count gray">
                 <i class="fas fa-info-circle"></i> Prescription Bill Only
             </span>
         </h3>
@@ -863,7 +927,6 @@ include_once '../../components/pharmacy_sidebar.php';
             </div>
         </div>
         
-        <!-- ✅ NO VIEW BILL BUTTON HERE -->
         <div style="margin-top:12px;font-size:0.75rem;color:var(--text-secondary);">
             <i class="fas fa-info-circle"></i> 
             Bill details are for reference only. Payment is handled by Cashier.
@@ -913,7 +976,6 @@ include_once '../../components/pharmacy_sidebar.php';
                 </div>
             <?php endif; ?>
             
-            <!-- ✅ ONLY BACK BUTTON - NO VIEW BILL -->
             <a href="<?= $prescription['status'] === 'dispensed' ? 'dispensed_prescriptions.php' : 'pending_prescriptions.php' ?>" class="btn btn-outline">
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
@@ -937,6 +999,8 @@ include_once '../../components/pharmacy_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
+            <span class="new-db-footer"><i class="fas fa-database"></i> New DB</span>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -948,7 +1012,7 @@ include_once '../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // SIDEBAR TOGGLE - INAFANYA KAZI NA SHARED SIDEBAR
+    // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -981,15 +1045,29 @@ include_once '../../components/pharmacy_sidebar.php';
     updateFooterTime();
     setInterval(updateFooterTime, 1000);
 
-    console.log('%c💊 Braick - View Prescription (FIXED - Shared Header)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Using shared pharmacy_header.php & pharmacy_sidebar.php', 'font-size:13px; color:#34D399;');
-    console.log('%c🕐 Time & date displayed in header (via shared header)', 'font-size:13px; color:#34D399;');
+    // ================================================================
+    // DARK MODE SYNC
+    // ================================================================
+    document.addEventListener('darkModeChanged', function(e) {
+        var isDark = e.detail && e.detail.isDark;
+        var html = document.documentElement;
+        if (isDark) {
+            html.setAttribute('data-theme', 'dark');
+        } else {
+            html.removeAttribute('data-theme');
+        }
+    });
+
+    console.log('%c💊 Braick - View Prescription (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Prescription: <?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($prescription['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📦 Items: <?= count($prescription_items) ?> | Total Qty: <?= $total_quantity ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Total: <?= number_format($total_price, 2) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Tables: prescriptions, prescription_items, patients, users, visits, bills', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 READ ONLY - No status update buttons', 'font-size:13px; color:#DC2626;');
     console.log('%c🚫 NO VIEW BILL BUTTON', 'font-size:13px; color:#DC2626;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

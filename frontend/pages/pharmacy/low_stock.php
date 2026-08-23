@@ -2,11 +2,17 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/low_stock.php
 // PHARMACY - LOW STOCK & OUT OF STOCK REPORT
-// FIXED: Login session - no default user bypass
+// USING NEW DATABASE: dispensary_db
+// WITH SHARED HEADER & AUTO-DISMISS MESSAGE
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
 // CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
@@ -24,14 +30,18 @@ $user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
 $user_username = $_SESSION['username'] ?? 'pharmacy';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE CONFIG
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET FILTERS
@@ -40,10 +50,24 @@ $filter = isset($_GET['filter']) ? $_GET['filter'] : 'all'; // all, low, out
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ================================================================
-// BUILD QUERY - SORT: EXPIRING FIRST
+// BUILD QUERY - SORT: EXPIRING FIRST - NEW DATABASE
 // ================================================================
 $query = "
-    SELECT *, 
+    SELECT 
+        id,
+        medication_name,
+        category,
+        unit,
+        quantity,
+        reorder_level,
+        selling_price,
+        unit_cost,
+        supplier,
+        expiry_date,
+        batch_number,
+        status,
+        created_at,
+        updated_at,
         DATEDIFF(expiry_date, CURDATE()) as days_remaining
     FROM medications_inventory 
     WHERE branch_id = ?
@@ -69,9 +93,7 @@ if (!empty($search)) {
     $params[] = "%$search%";
 }
 
-// ================================================================
-// FIX: Sort by expiry date first (expiring soon at top)
-// ================================================================
+// Sort by expiry date first (expiring soon at top)
 $query .= " ORDER BY 
     CASE 
         WHEN expiry_date IS NULL THEN 2
@@ -86,10 +108,10 @@ $query .= " ORDER BY
 
 $stmt = $db->prepare($query);
 $stmt->execute($params);
-$medicines = $stmt->fetchAll();
+$medicines = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - NEW DATABASE
 // ================================================================
 
 // Low Stock Count (quantity <= reorder_level AND quantity > 0)
@@ -114,7 +136,7 @@ $out_of_stock_count = $stmt->fetch()['count'] ?? 0;
 $total_low_stock = $low_stock_count + $out_of_stock_count;
 
 // ================================================================
-// GET EXPIRING SOON COUNT (for header badge)
+// GET EXPIRING SOON COUNT - NEW DATABASE
 // ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
@@ -128,40 +150,30 @@ $stmt->execute([$user_branch_id]);
 $expiring_soon_count = $stmt->fetch()['count'] ?? 0;
 
 // ================================================================
-// GET STATISTICS FOR SIDEBAR
+// GET UNREAD NOTIFICATIONS - NEW DATABASE
 // ================================================================
-$pending_prescriptions = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescription_sales WHERE branch_id = ? AND status = 'pending'");
-    $stmt->execute([$user_branch_id]);
-    $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
-} catch (Exception $e) {
-    $pending_prescriptions = 0;
-}
-
 $unread_notifications = 0;
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as total 
+        FROM notifications 
+        WHERE user_id = ? AND is_read = 0
+    ");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch()['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
 }
 
-$profile_pic = $_SESSION['profile_pic'] ?? '';
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- STYLES -->
+<!-- PAGE-SPECIFIC STYLES -->
 <!-- ================================================================ -->
 <style>
     :root {
@@ -180,6 +192,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         --bg-body: #F1F5F9;
         --bg-card: #FFFFFF;
+        --bg-nav: #FFFFFF;
         --border-color: #E2E8F0;
         --text-primary: #0F172A;
         --text-secondary: #475569;
@@ -191,6 +204,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     [data-theme="dark"] {
         --bg-body: #0F172A;
         --bg-card: #1E293B;
+        --bg-nav: #1E293B;
         --border-color: #334155;
         --text-primary: #F1F5F9;
         --text-secondary: #94A3B8;
@@ -199,9 +213,147 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
     }
     
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+        font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+        background: var(--bg-body);
+        color: var(--text-primary);
+        transition: background 0.3s ease, color 0.3s ease;
+    }
+    
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg-body); }
+    ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+    
+    /* ================================================================
+       MAIN CONTENT
+       ================================================================ */
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 28px 32px;
+        min-height: calc(100vh - 68px);
+    }
+    
+    /* ================================================================
+       PAGE HEADER - ORANGE THEME
+       ================================================================ */
+    .page-header {
+        background: linear-gradient(135deg, #D97706, #B45309);
+        border-radius: 16px;
+        padding: 24px 32px;
+        margin-bottom: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 20px rgba(217, 119, 6, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .page-header::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 300px;
+        height: 300px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+    
+    .page-header .page-title {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .page-header .page-title i {
+        font-size: 2rem;
+        opacity: 0.9;
+    }
+    
+    .page-header .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .page-header .page-subtitle strong {
+        color: white;
+        font-weight: 600;
+    }
+    
+    .page-header .branch-tag {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 2px 12px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .page-header .btn-outline-light {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.2);
+        padding: 8px 16px;
+        border-radius: 10px;
+        font-weight: 500;
+        font-size: 0.82rem;
+        transition: all 0.3s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+    }
+    
+    .page-header .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    
+    .page-header .badge-count {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 3px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    /* ================================================================
+       STATS CARDS
+       ================================================================ */
     .stats-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        grid-template-columns: repeat(4, 1fr);
         gap: 16px;
         margin-bottom: 24px;
     }
@@ -218,11 +370,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         justify-content: space-between;
         cursor: pointer;
         min-height: 90px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
     
     .stat-card:hover {
         transform: translateY(-4px);
         box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+    
+    .stat-card:active {
+        transform: scale(0.97);
     }
     
     .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
@@ -274,12 +431,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         margin-top: 4px;
     }
     
+    /* ================================================================
+       CARDS
+       ================================================================ */
     .card {
         background: var(--bg-card);
         border-radius: 16px;
         padding: 20px 24px;
         border: 2px solid var(--border-color);
         transition: all 0.3s ease;
+        margin-bottom: 20px;
     }
     
     .card:hover {
@@ -515,7 +676,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         vertical-align: middle;
     }
     
-    /* Status badges */
+    /* ================================================================
+       BADGES
+       ================================================================ */
     .stock-badge {
         padding: 2px 10px;
         border-radius: 10px;
@@ -632,7 +795,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         color: #6EA8FE;
     }
     
-    /* ✅ FIX: Only View button - no Edit or Add */
+    /* ================================================================
+       ACTION BUTTON - ONLY VIEW
+       ================================================================ */
     .action-btn {
         padding: 4px 12px;
         border-radius: 6px;
@@ -657,75 +822,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         transform: scale(1.05);
     }
     
-    .empty-state {
-        text-align: center;
-        padding: 50px 20px;
-        color: var(--text-secondary);
-    }
-    
-    .empty-state i {
-        font-size: 3rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 12px;
-    }
-    
-    .empty-state p {
-        font-size: 0.95rem;
-    }
-    
-    .empty-state .sub {
-        font-size: 0.8rem;
-        color: var(--text-muted);
-        margin-top: 4px;
-    }
-    
-    .message-box {
-        padding: 14px 20px;
-        border-radius: 12px;
-        margin-bottom: 16px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        font-weight: 500;
-        animation: slideDown 0.4s ease;
-    }
-    
-    @keyframes slideDown {
-        from { opacity: 0; transform: translateY(-10px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    
-    .message-box.success {
-        background: var(--success-light);
-        color: #065F46;
-        border: 2px solid #6EE7B7;
-    }
-    
-    .message-box.error {
-        background: var(--danger-light);
-        color: #991B1B;
-        border: 2px solid #FCA5A5;
-    }
-    
-    .message-box i {
-        font-size: 1.3rem;
-    }
-    
-    [data-theme="dark"] .message-box.success {
-        background: #1A3A2A;
-        color: #34D399;
-        border-color: #34D399;
-    }
-    
-    [data-theme="dark"] .message-box.error {
-        background: #3A1A1A;
-        color: #F87171;
-        border-color: #F87171;
-    }
-    
     /* ================================================================
-       EXPIRING SOON HIGHLIGHT ROW
+       ROW STYLES
        ================================================================ */
     .row-expiring-soon {
         border-left: 4px solid var(--warning) !important;
@@ -756,7 +854,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
-       DAYS REMAINING STYLES
+       DAYS REMAINING
        ================================================================ */
     .days-remaining {
         font-size: 0.7rem;
@@ -801,6 +899,135 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
+       EMPTY STATE
+       ================================================================ */
+    .empty-state {
+        text-align: center;
+        padding: 50px 20px;
+        color: var(--text-secondary);
+    }
+    
+    .empty-state i {
+        font-size: 3rem;
+        color: var(--border-color);
+        display: block;
+        margin-bottom: 12px;
+    }
+    
+    .empty-state p {
+        font-size: 0.95rem;
+    }
+    
+    .empty-state .sub {
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        margin-top: 4px;
+    }
+    
+    /* ================================================================
+       MESSAGE - WITH AUTO-DISMISS
+       ================================================================ */
+    .message-box {
+        padding: 14px 20px;
+        border-radius: 12px;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 500;
+        animation: slideDown 0.4s ease;
+        transition: opacity 0.5s ease, transform 0.5s ease;
+    }
+    
+    .message-box.hide {
+        opacity: 0;
+        transform: translateY(-10px);
+        max-height: 0;
+        padding: 0 20px;
+        margin: 0;
+        overflow: hidden;
+    }
+    
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .message-box.success {
+        background: var(--success-light);
+        color: #065F46;
+        border: 2px solid #6EE7B7;
+    }
+    
+    .message-box.error {
+        background: var(--danger-light);
+        color: #991B1B;
+        border: 2px solid #FCA5A5;
+    }
+    
+    .message-box i {
+        font-size: 1.3rem;
+    }
+    
+    [data-theme="dark"] .message-box.success {
+        background: #1A3A2A;
+        color: #34D399;
+        border-color: #34D399;
+    }
+    
+    [data-theme="dark"] .message-box.error {
+        background: #3A1A1A;
+        color: #F87171;
+        border-color: #F87171;
+    }
+    
+    /* ================================================================
+       FOOTER
+       ================================================================ */
+    .footer {
+        padding: 14px 0;
+        border-top: 1px solid var(--border-color);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand { color: var(--primary); font-weight: 600; }
+    
+    /* ================================================================
+       TOAST
+       ================================================================ */
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 12px 18px;
+        border-radius: 10px;
+        z-index: 999;
+        max-width: 380px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: white;
+        box-shadow: var(--shadow-lg);
+        font-size: 0.85rem;
+    }
+    
+    .toast-custom.show {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    
+    .toast-custom.success { background: var(--success); }
+    .toast-custom.error { background: var(--danger); }
+    .toast-custom.info { background: var(--primary); }
+    .toast-custom.warning { background: #D97706; }
+    
+    /* ================================================================
        ANIMATIONS
        ================================================================ */
     .animate-fade-in-up {
@@ -811,6 +1038,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     .animate-fade-in-up:nth-child(1) { animation-delay: 0.05s; }
     .animate-fade-in-up:nth-child(2) { animation-delay: 0.1s; }
     .animate-fade-in-up:nth-child(3) { animation-delay: 0.15s; }
+    .animate-fade-in-up:nth-child(4) { animation-delay: 0.2s; }
     
     @keyframes fadeInUp {
         from { opacity: 0; transform: translateY(20px); }
@@ -818,9 +1046,55 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
+       RECOMMENDATIONS GRID
+       ================================================================ */
+    .grid {
+        display: grid;
+        gap: 16px;
+    }
+    
+    .grid-cols-1 { grid-template-columns: 1fr; }
+    .grid-cols-3 { grid-template-columns: repeat(3, 1fr); }
+    
+    @media (min-width: 768px) {
+        .md\:grid-cols-3 { grid-template-columns: repeat(3, 1fr); }
+    }
+    
+    .gap-4 { gap: 16px; }
+    .mt-4 { margin-top: 16px; }
+    
+    .p-4 { padding: 16px; }
+    .border { border: 1px solid var(--border-color); }
+    .rounded-lg { border-radius: 10px; }
+    
+    .text-sm { font-size: 0.85rem; }
+    .text-xs { font-size: 0.7rem; }
+    .text-gray-600 { color: var(--text-secondary); }
+    .text-gray-400 { color: var(--text-muted); }
+    .text-red-500 { color: var(--danger); }
+    .text-red-600 { color: var(--danger); }
+    .text-orange-600 { color: var(--warning); }
+    .text-green-600 { color: var(--success); }
+    
+    .font-semibold { font-weight: 600; }
+    .font-bold { font-weight: 700; }
+    .block { display: block; }
+    .mt-1 { margin-top: 4px; }
+    .mb-2 { margin-bottom: 8px; }
+    .mr-1 { margin-right: 4px; }
+    .mr-2 { margin-right: 8px; }
+    .ml-2 { margin-left: 8px; }
+    
+    /* ================================================================
        RESPONSIVE
        ================================================================ */
+    @media (max-width: 1024px) {
+        .main-content { margin-left: 0; padding: 16px; }
+    }
+    
     @media (max-width: 768px) {
+        .page-header { padding: 16px 18px; }
+        .page-header .page-title { font-size: 1.3rem; }
         .stats-grid {
             grid-template-columns: repeat(2, 1fr);
         }
@@ -856,6 +1130,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             height: 36px;
             font-size: 1rem;
         }
+        .grid-cols-3 {
+            grid-template-columns: 1fr 1fr;
+        }
     }
     
     @media (max-width: 480px) {
@@ -884,6 +1161,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .data-table td {
             padding: 4px 6px;
         }
+        .main-content { padding: 10px; }
+        .page-header .page-title { font-size: 1.1rem; }
+        .grid-cols-3 {
+            grid-template-columns: 1fr;
+        }
     }
 </style>
 
@@ -893,28 +1175,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-exclamation-triangle mr-2" style="color: var(--danger);"></i> Low Stock Report
+                <i class="fas fa-exclamation-triangle mr-2"></i> Low Stock Report
+                <span class="badge-count"><?= $total_low_stock ?> need attention</span>
             </h1>
             <p class="page-subtitle">
                 View all medicines with low or out of stock
                 <span class="branch-tag ml-2">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
-                <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
-                    <i class="fas fa-exclamation-triangle mr-1"></i> <?= $total_low_stock ?> need attention
-                </span>
                 <?php if ($expiring_soon_count > 0): ?>
-                <span class="ml-2 inline-flex bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs border border-yellow-200 animate-pulse">
+                <span class="branch-tag" style="background:rgba(239,68,68,0.3);color:#FCA5A5;border-color:rgba(239,68,68,0.2);">
                     <i class="fas fa-clock mr-1"></i> <?= $expiring_soon_count ?> expiring soon
                 </span>
                 <?php endif; ?>
             </p>
         </div>
-        <div>
-            <a href="inventory.php" class="btn-outline">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="inventory.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Inventory
             </a>
         </div>
@@ -937,7 +1217,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <div>
                 <p class="stat-label">Low Stock</p>
                 <p class="stat-number"><?= number_format($low_stock_count) ?></p>
-                <span class="stat-trend"><i class="fas fa-exclamation-triangle"></i> Below reorder level</span>
+                <span class="stat-trend"><i class="fas fa-exclamation-triangle"></i> Below reorder</span>
             </div>
             <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
         </a>
@@ -962,19 +1242,31 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- MESSAGE -->
+    <!-- MESSAGE - AUTO-DISMISS AFTER 5 SECONDS -->
     <!-- ================================================================ -->
     <?php if (count($medicines) == 0 && empty($search)): ?>
-        <div class="message-box success">
+        <div class="message-box success" id="successMessage">
             <i class="fas fa-check-circle"></i>
             🎉 All medicines are well stocked! No low stock items found.
         </div>
+        <script>
+            // Auto-dismiss after 5 seconds
+            setTimeout(function() {
+                var msg = document.getElementById('successMessage');
+                if (msg) {
+                    msg.classList.add('hide');
+                    setTimeout(function() {
+                        msg.style.display = 'none';
+                    }, 500);
+                }
+            }, 5000);
+        </script>
     <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- FILTERS & SEARCH -->
     <!-- ================================================================ -->
-    <div class="card mb-5 animate-fade-in-up">
+    <div class="card animate-fade-in-up">
         <div class="filter-group">
             <a href="low_stock.php?filter=all" class="filter-btn <?= $filter === 'all' ? 'active' : '' ?>">
                 <i class="fas fa-list"></i> All
@@ -1140,8 +1432,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 </td>
                                 <td><?= htmlspecialchars($item['supplier'] ?? 'N/A') ?></td>
                                 <td>
-                                    <!-- ✅ ONLY VIEW BUTTON - No Edit or Add -->
-                                    <a href="view_inventory.php?id=<?= $item['id'] ?>" 
+                                    <a href="view_inventory.php?id=<?= $item['id'] ?>&type=medicine" 
                                        class="action-btn view" title="View Details">
                                         <i class="fas fa-eye"></i> View
                                     </a>
@@ -1186,6 +1477,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     <?php if (count($expired_items) > 0): ?>
                         <span class="block text-xs text-red-500 mt-1 font-semibold">
                             ⚠️ Should be removed from inventory!
+                        </span>
+                        <span class="block text-xs text-gray-400 mt-1">
+                            <?php 
+                                $names = array_slice(array_column($expired_items, 'medication_name'), 0, 5);
+                                echo implode(', ', $names);
+                                if (count($expired_items) > 5) echo ' and ' . (count($expired_items) - 5) . ' more';
+                            ?>
                         </span>
                     <?php endif; ?>
                 </p>
@@ -1241,11 +1539,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Low Stock Report
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTime"><?= date('h:i:s A') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1259,8 +1559,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
     <div>
-        <p id="toastTitle">Notification</p>
-        <p id="toastMessage"></p>
+        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
@@ -1269,71 +1569,50 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - SYNC WITH HEADER
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+    document.addEventListener('darkModeChanged', function(e) {
+        var isDark = e.detail && e.detail.isDark;
+        var html = document.documentElement;
+        
         if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
+            html.setAttribute('data-theme', 'dark');
         } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
+            html.removeAttribute('data-theme');
         }
     });
 
     // ================================================================
-    // SIDEBAR TOGGLE
+    // SIDEBAR TOGGLE - SYNC WITH HEADER
     // ================================================================
     var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
+    var sidebarToggle = document.getElementById('sidebarToggleBtn');
     
     if (sidebarToggle) {
         sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
+            if (sidebar) sidebar.classList.toggle('open');
         });
     }
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (sidebar && sidebarToggle) {
-                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                    sidebar.classList.remove('open');
-                }
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                sidebar.classList.remove('open');
             }
         }
     });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - UPDATE LIVE
     // ================================================================
     function updateDateTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) {
+            ftEl.textContent = timeStr;
         }
     }
     updateDateTime();
@@ -1363,18 +1642,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchInput = document.querySelector('.search-form input[type="text"]');
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                this.closest('form').submit();
-            }
-        });
-    }
-
-    // ================================================================
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
@@ -1393,16 +1660,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick - Low Stock Report (Expiring First)', 'font-size:18px; font-weight:bold; color:#D97706;');
-    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    // ================================================================
+    // CONSOLE
+    // ================================================================
+    console.log('%c💊 Braick - Low Stock Report (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c✅ Using SHARED HEADER with date & time', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Success message auto-dismiss after 5 seconds', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📦 Low Stock: <?= $low_stock_count ?> | Out of Stock: <?= $out_of_stock_count ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c⏰ Expiring Soon: <?= $expiring_soon_count ?> (shown first)', 'font-size:13px; color:#DC2626;');
-    console.log('%c⚠️ Total items needing attention: <?= $total_low_stock ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Sorted by: Expiry Date (expiring first) → Quantity ASC → Name ASC', 'font-size:13px; color:#34D399;');
-    console.log('%c👁️ Only View button available (Edit and Add removed)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
-
 </body>
 </html>

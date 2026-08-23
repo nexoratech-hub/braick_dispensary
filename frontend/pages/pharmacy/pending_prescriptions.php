@@ -1,12 +1,18 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/pending_prescriptions.php
-// PHARMACY - PENDING PRESCRIPTIONS
-// FIXED: Login session - no default user bypass
+// PHARMACY - PRESCRIPTIONS (Pending, Confirmed, Dispensed)
+// WITH INSTRUCTIONS EDITING (Drop-down + Manual)
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
 // CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
@@ -24,21 +30,48 @@ $user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
 $user_username = $_SESSION['username'] ?? 'pharmacy';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
 $currency = 'TSh';
 
+// ================================================================
+// PRE-DEFINED INSTRUCTIONS OPTIONS
+// ================================================================
+$instruction_options = [
+    'Take with food',
+    'Take on empty stomach',
+    'Take after meals',
+    'Take before meals',
+    'Take with plenty of water',
+    'Do not crush or chew',
+    'Take at bedtime',
+    'Take in the morning',
+    'Take with milk',
+    'Avoid alcohol',
+    'Avoid driving',
+    'Complete full course',
+    'Store in a cool dry place',
+    'Keep out of reach of children',
+    'As directed by doctor',
+    'Other - Please specify'
+];
+
 try {
     // ================================================================
-    // GET SYSTEM SETTINGS
+    // GET SYSTEM SETTINGS - NEW DB
     // ================================================================
     $settings = [];
     $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
@@ -46,6 +79,57 @@ try {
         $settings[$row['setting_key']] = $row['setting_value'];
     }
     $currency = $settings['currency'] ?? 'TSh';
+    
+    // ================================================================
+    // ✅ AJAX HANDLER - Update pharmacy instructions
+    // ================================================================
+    if (isset($_POST['action']) && $_POST['action'] === 'update_instructions') {
+        header('Content-Type: application/json');
+        
+        $prescription_id = isset($_POST['prescription_id']) ? (int)$_POST['prescription_id'] : 0;
+        $item_id = isset($_POST['item_id']) ? (int)$_POST['item_id'] : 0;
+        $instructions = isset($_POST['instructions']) ? trim($_POST['instructions']) : '';
+        $mode = isset($_POST['mode']) ? $_POST['mode'] : 'manual';
+        
+        if ($prescription_id > 0 && $item_id > 0) {
+            try {
+                $stmt = $db->prepare("
+                    UPDATE prescription_items 
+                    SET pharmacy_instructions = ?,
+                        pharmacy_instruction_mode = ?,
+                        pharmacy_instruction_updated_at = NOW(),
+                        pharmacy_instruction_updated_by = ?
+                    WHERE id = ? AND prescription_id = ? AND prescription_id IN (
+                        SELECT id FROM prescriptions WHERE branch_id = ? AND status IN ('pending', 'confirmed', 'dispensed')
+                    )
+                ");
+                $stmt->execute([
+                    $instructions,
+                    $mode,
+                    $user_id,
+                    $item_id,
+                    $prescription_id,
+                    $user_branch_id
+                ]);
+                
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'Instructions updated successfully'
+                ]);
+            } catch (Exception $e) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Error: ' . $e->getMessage()
+                ]);
+            }
+        } else {
+            echo json_encode([
+                'success' => false,
+                'message' => 'Invalid prescription or item ID'
+            ]);
+        }
+        exit;
+    }
     
     // ================================================================
     // ✅ AJAX HANDLER - Get updated prescription status
@@ -57,18 +141,22 @@ try {
         $filter_status = isset($_POST['filter_status']) ? $_POST['filter_status'] : 'all';
         $search = isset($_POST['search']) ? trim($_POST['search']) : '';
         
-        // Build query for prescriptions
-        $conditions = ["p.branch_id = ?", "p.status IN ('pending', 'confirmed')"];
+        // Build query for prescriptions - NEW DB
+        $conditions = ["p.branch_id = ?"];
         $params = [$branch_id];
         
-        if ($filter_status !== 'all') {
+        // Handle all statuses including dispensed
+        if ($filter_status === 'all') {
+            $conditions[] = "p.status IN ('pending', 'confirmed', 'dispensed')";
+        } elseif ($filter_status === 'dispensed') {
+            $conditions[] = "p.status = 'dispensed'";
+        } else {
             $conditions[] = "p.status = ?";
             $params[] = $filter_status;
         }
         
         if (!empty($search)) {
-            $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR p.medication LIKE ?)";
-            $params[] = "%$search%";
+            $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ?)";
             $params[] = "%$search%";
             $params[] = "%$search%";
             $params[] = "%$search%";
@@ -79,57 +167,51 @@ try {
         $sql = "
             SELECT 
                 p.id,
-                p.status,
                 p.prescription_number,
-                p.medication,
-                p.quantity,
+                p.total_amount,
+                p.status,
                 p.created_at,
+                p.dispensed_at,
+                pat.id as patient_id,
                 pat.full_name as patient_name,
                 pat.patient_id as patient_code,
                 pat.phone,
                 pat.gender,
                 pat.date_of_birth,
                 u.full_name as doctor_name,
+                u.specialty,
                 v.visit_number,
-                (SELECT b.id FROM patient_bills b 
-                 JOIN bill_items bi ON bi.bill_id = b.id
-                 WHERE b.visit_id = p.visit_id 
-                 AND bi.item_type = 'medication'
-                 ORDER BY b.id DESC LIMIT 1) as bill_id,
-                (SELECT b.status FROM patient_bills b 
-                 JOIN bill_items bi ON bi.bill_id = b.id
-                 WHERE b.visit_id = p.visit_id 
-                 AND bi.item_type = 'medication'
-                 ORDER BY b.id DESC LIMIT 1) as bill_status,
-                (SELECT b.total_amount FROM patient_bills b 
-                 JOIN bill_items bi ON bi.bill_id = b.id
-                 WHERE b.visit_id = p.visit_id 
-                 AND bi.item_type = 'medication'
-                 ORDER BY b.id DESC LIMIT 1) as bill_total,
-                (SELECT b.bill_number FROM patient_bills b 
-                 JOIN bill_items bi ON bi.bill_id = b.id
-                 WHERE b.visit_id = p.visit_id 
-                 AND bi.item_type = 'medication'
-                 ORDER BY b.id DESC LIMIT 1) as bill_number
+                ph.full_name as pharmacy_name,
+                -- Get bill info from bills table
+                b.id as bill_id,
+                b.bill_number,
+                b.total_amount as bill_total,
+                b.discount_amount as bill_discount,
+                b.balance as bill_balance,
+                b.status as bill_status
             FROM prescriptions p
-            LEFT JOIN patients pat ON p.patient_id = pat.id
+            JOIN patients pat ON p.patient_id = pat.id
             LEFT JOIN users u ON p.doctor_id = u.id
             LEFT JOIN visits v ON p.visit_id = v.id
+            LEFT JOIN users ph ON p.pharmacy_id = ph.id
+            LEFT JOIN bills b ON b.visit_id = p.visit_id AND b.patient_id = p.patient_id
             WHERE $where_clause
+            GROUP BY p.id
             ORDER BY 
                 CASE 
                     WHEN p.status = 'pending' THEN 0 
                     WHEN p.status = 'confirmed' THEN 1 
-                    ELSE 2 
+                    WHEN p.status = 'dispensed' THEN 2 
+                    ELSE 3 
                 END,
-                p.created_at ASC
+                p.created_at DESC
         ";
         
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // Get status counts
+        // Get status counts - NEW DB
         $status_counts = [];
         foreach (['pending', 'confirmed', 'dispensed'] as $status) {
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = ?");
@@ -137,7 +219,7 @@ try {
             $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         }
         
-        $total_count = $status_counts['pending'] + $status_counts['confirmed'];
+        $total_count = $status_counts['pending'] + $status_counts['confirmed'] + $status_counts['dispensed'];
         
         // Build HTML for each row
         $rows_html = '';
@@ -150,6 +232,131 @@ try {
                 $status = $pres['status'] ?? 'pending';
                 $status_label = getStatusLabel($status);
                 $status_badge_class = getStatusBadgeClass($status);
+                $is_dispensed = ($status === 'dispensed');
+                
+                // Get prescription items with instructions
+                $stmt_items = $db->prepare("
+                    SELECT 
+                        pi.*,
+                        pi.instructions as doctor_instructions,
+                        pi.pharmacy_instructions,
+                        pi.pharmacy_instruction_mode,
+                        pi.pharmacy_instruction_updated_at,
+                        pu.full_name as instruction_updated_by_name
+                    FROM prescription_items pi
+                    LEFT JOIN users pu ON pi.pharmacy_instruction_updated_by = pu.id
+                    WHERE pi.prescription_id = ?
+                ");
+                $stmt_items->execute([$pres['id']]);
+                $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
+                
+                $medication_list = '';
+                $total_qty = 0;
+                $item_data = [];
+                foreach ($items as $item) {
+                    $medication_list .= '<div class="text-xs">' . htmlspecialchars($item['medication_name']) . 
+                                       ' (' . $item['quantity'] . ')</div>';
+                    $total_qty += $item['quantity'];
+                    $item_data[] = $item;
+                }
+                if (empty($medication_list)) {
+                    $medication_list = '<span class="text-xs text-gray-400">No items</span>';
+                }
+                
+                // Build instructions HTML for each item - FIXED: Removed syntax errors
+                $instructions_html = '';
+                foreach ($item_data as $idx => $item) {
+                    $item_id = $item['id'];
+                    $doctor_instr = $item['doctor_instructions'] ?? '';
+                    $pharmacy_instr = $item['pharmacy_instructions'] ?? '';
+                    $has_pharmacy_instr = !empty($pharmacy_instr);
+                    $updated_by = $item['instruction_updated_by_name'] ?? '';
+                    $updated_at = !empty($item['pharmacy_instruction_updated_at']) ? formatDate($item['pharmacy_instruction_updated_at']) : '';
+                    
+                    $instructions_html .= '
+                    <div class="instruction-item mb-2 p-2 border rounded" style="border-color:var(--border-color);background:var(--bg-body);">
+                        <div class="flex items-center justify-between flex-wrap gap-1">
+                            <span class="font-medium text-xs">' . htmlspecialchars($item['medication_name']) . '</span>
+                            <span class="text-xs text-gray-400">Qty: ' . $item['quantity'] . '</span>
+                        </div>
+                        
+                        <!-- Doctor Instructions (Read-only) -->
+                        <div class="doctor-instructions mt-1 p-1 bg-blue-50 dark:bg-blue-900/20 rounded" style="border-left:3px solid var(--primary);">
+                            <span class="text-xs font-semibold" style="color:var(--primary);">
+                                <i class="fas fa-user-md"></i> Doctor\'s Instructions:
+                            </span>
+                            <span class="text-xs" style="color:var(--text-secondary);">
+                                ' . (!empty($doctor_instr) ? nl2br(htmlspecialchars($doctor_instr)) : '<em>No instructions from doctor</em>') . '
+                            </span>
+                        </div>
+                        
+                        <!-- Pharmacy Instructions -->
+                        <div class="pharmacy-instructions mt-2">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-xs font-semibold" style="color:var(--success);">
+                                    <i class="fas fa-prescription-bottle"></i> Pharmacy Instructions:
+                                </span>';
+                                
+                    if ($is_dispensed) {
+                        $instructions_html .= '
+                                <span class="text-xs text-green-600">' . ($has_pharmacy_instr ? '✅ Added' : 'Not added') . '</span>';
+                    } else {
+                        $instructions_html .= '
+                                <span class="text-xs text-gray-400" id="instr_status_' . $item_id . '">
+                                    ' . ($has_pharmacy_instr ? '✅ Added' : '⏳ Not added') . '
+                                </span>';
+                    }
+                    
+                    $instructions_html .= '
+                                ' . (!empty($updated_by) ? '<span class="text-xs text-gray-400">by ' . htmlspecialchars($updated_by) . '</span>' : '') . '
+                                ' . (!empty($updated_at) ? '<span class="text-xs text-gray-400">' . $updated_at . '</span>' : '') . '
+                            </div>
+                            
+                            <!-- Current Pharmacy Instructions Display -->
+                            <div class="mt-1" id="instr_display_' . $item_id . '">
+                                ' . ($has_pharmacy_instr ? 
+                                    '<div class="text-xs p-1 bg-green-50 dark:bg-green-900/20 rounded" style="border-left:3px solid var(--success);">
+                                        <span style="color:var(--text-primary);">' . nl2br(htmlspecialchars($pharmacy_instr)) . '</span>
+                                    </div>' : 
+                                    '<div class="text-xs text-gray-400 italic">No pharmacy instructions added yet</div>'
+                                ) . '
+                            </div>';
+                    
+                    // Edit Form - Only for non-dispensed
+                    if (!$is_dispensed) {
+                        $instructions_html .= '
+                            <div class="mt-1 flex flex-wrap gap-1" id="instr_form_' . $item_id . '">
+                                <select class="instr-select text-xs p-1 border rounded" 
+                                        style="border-color:var(--border-color);background:var(--bg-card);color:var(--text-primary);min-width:160px;"
+                                        onchange="toggleInstructionInput(this, ' . $item_id . ')" id="instr_select_' . $item_id . '">
+                                    <option value="">-- Select Instruction --</option>';
+                        foreach ($instruction_options as $opt) {
+                            $instructions_html .= '<option value="' . htmlspecialchars($opt) . '">' . htmlspecialchars($opt) . '</option>';
+                        }
+                        $instructions_html .= '
+                                    <option value="__custom__">✏️ Custom...</option>
+                                </select>
+                                <input type="text" class="instr-input text-xs p-1 border rounded" 
+                                       style="border-color:var(--border-color);background:var(--bg-card);color:var(--text-primary);flex:1;min-width:120px;display:none;"
+                                       placeholder="Enter custom instructions..."
+                                       id="instr_input_' . $item_id . '">
+                                <button class="btn-save-instr text-xs px-2 py-1 rounded" 
+                                        style="background:var(--success);color:white;border:none;cursor:pointer;"
+                                        onclick="saveInstructions(' . $pres['id'] . ', ' . $item_id . ')">
+                                    <i class="fas fa-save"></i> Save
+                                </button>
+                                <button class="btn-clear-instr text-xs px-2 py-1 rounded" 
+                                        style="background:var(--danger);color:white;border:none;cursor:pointer;"
+                                        onclick="clearInstructions(' . $pres['id'] . ', ' . $item_id . ')">
+                                    <i class="fas fa-trash"></i> Clear
+                                </button>
+                            </div>';
+                    }
+                    
+                    $instructions_html .= '
+                        </div>
+                    </div>';
+                }
                 
                 $rows_html .= '
                 <tr data-prescription-id="' . $pres['id'] . '" data-status="' . $status . '">
@@ -158,6 +365,8 @@ try {
                         <span class="font-mono font-semibold" style="color:var(--primary);font-size:0.7rem;">
                             ' . htmlspecialchars($pres['prescription_number'] ?? 'N/A') . '
                         </span>
+                        ' . (!empty($pres['visit_number']) ? '<div class="text-xs text-gray-400">Visit: ' . htmlspecialchars($pres['visit_number']) . '</div>' : '') . '
+                        ' . (!empty($pres['doctor_name']) ? '<div class="text-xs text-gray-400">Dr. ' . htmlspecialchars($pres['doctor_name']) . '</div>' : '') . '
                     </td>
                     <td>
                         <div class="font-medium" style="font-size:0.75rem;">' . htmlspecialchars($pres['patient_name'] ?? 'Unknown') . '</div>
@@ -168,10 +377,11 @@ try {
                         ' . (!empty($pres['phone']) ? '<div class="text-xs" style="color:var(--text-secondary);">📱 ' . htmlspecialchars($pres['phone']) . '</div>' : '') . '
                     </td>
                     <td>
-                        <span class="font-semibold" style="font-size:0.75rem;">' . htmlspecialchars($pres['medication'] ?? 'N/A') . '</span>
+                        ' . $medication_list . '
+                        <div class="text-xs text-gray-400">Total: ' . $total_qty . ' items</div>
                     </td>
                     <td style="text-align:center;">
-                        <span class="font-semibold" style="font-size:0.75rem;">' . ($pres['quantity'] ?? 0) . '</span>
+                        <span class="font-semibold" style="font-size:0.75rem;">' . $total_qty . '</span>
                     </td>
                     <td style="text-align:center;">
                         <span class="badge-status ' . $status_badge_class . '">
@@ -179,6 +389,7 @@ try {
                         </span>
                         ' . ($status === 'confirmed' && !$is_paid ? '<div class="text-xs" style="color:var(--warning);">⏳ Waiting for payment</div>' : '') . '
                         ' . ($status === 'confirmed' && $is_paid ? '<div class="text-xs" style="color:var(--success);">✅ Payment confirmed</div>' : '') . '
+                        ' . ($status === 'dispensed' && !empty($pres['pharmacy_name']) ? '<div class="text-xs" style="color:var(--success);">by ' . htmlspecialchars($pres['pharmacy_name']) . '</div>' : '') . '
                     </td>
                     <td style="text-align:center;">
                         ' . ($bill_exists ? ($is_paid ? 
@@ -187,30 +398,37 @@ try {
                         ) : '<span class="text-xs" style="color:var(--text-secondary);">No bill</span>') . '
                     </td>
                     <td style="text-align:center;">
-                        <span class="text-xs">' . formatDate($pres['created_at'] ?? '') . '</span>
-                        ' . (!empty($pres['visit_number']) ? '<div class="text-xs" style="color:var(--text-secondary);">Visit: ' . htmlspecialchars($pres['visit_number']) . '</div>' : '') . '
+                        <span class="text-xs">' . ($status === 'dispensed' && !empty($pres['dispensed_at']) ? formatDate($pres['dispensed_at']) : formatDate($pres['created_at'] ?? '')) . '</span>
                     </td>
                     <td style="text-align:center;">
-                        <div class="action-buttons" style="justify-content:center;">
-                            <a href="view_prescription.php?id=' . $pres['id'] . '" class="btn-view" title="View Prescription Details">
-                                <i class="fas fa-eye"></i> View
-                            </a>
-                            ' . ($status === 'dispensed' ? 
-                                '<span class="btn-dispensed"><i class="fas fa-check-circle"></i> Dispensed</span>' :
-                                ($status === 'confirmed' && $is_paid ? 
-                                    '<span class="btn-auto-dispensed"><i class="fas fa-check-circle"></i> Auto-Dispensed</span>' :
-                                    ($status === 'confirmed' ? 
-                                        '<span class="btn-auto-dispensed"><i class="fas fa-clock"></i> Awaiting Pay</span>' :
-                                        '<form method="POST" action="" style="display:inline;" onsubmit="return confirm(\'Confirm this prescription?\\n\\n✅ Status will change to: Confirmed\\n💳 Bill will be created and sent to Cashier.\\n\\n💊 Medication: ' . addslashes($pres['medication'] ?? 'N/A') . '\\n📦 Quantity: ' . ($pres['quantity'] ?? 0) . '\\n👤 Patient: ' . addslashes($pres['patient_name'] ?? 'Unknown') . '\\n\\n⚠️ After payment, status will auto-change to: Dispensed\');">
-                                            <input type="hidden" name="action" value="confirm_prescription">
-                                            <input type="hidden" name="prescription_id" value="' . $pres['id'] . '">
-                                            <button type="submit" class="btn-confirm" title="Confirm - Send Bill to Cashier">
-                                                <i class="fas fa-check-circle"></i> Confirm
-                                            </button>
-                                        </form>'
+                        <div class="action-buttons" style="justify-content:center;flex-direction:column;gap:4px;">
+                            <!-- Instructions Section -->
+                            <div class="instructions-section w-full" style="max-width:320px;">
+                                ' . $instructions_html . '
+                            </div>
+                            
+                            <!-- Action Buttons -->
+                            <div class="flex flex-wrap gap-1 justify-center">
+                                <a href="view_prescription.php?id=' . $pres['id'] . '" class="btn-view" title="View Prescription Details">
+                                    <i class="fas fa-eye"></i> View
+                                </a>
+                                ' . ($status === 'dispensed' ? 
+                                    '<span class="btn-dispensed"><i class="fas fa-check-circle"></i> Dispensed</span>' :
+                                    ($status === 'confirmed' && $is_paid ? 
+                                        '<span class="btn-auto-dispensed"><i class="fas fa-check-circle"></i> Auto-Dispensed</span>' :
+                                        ($status === 'confirmed' ? 
+                                            '<span class="btn-auto-dispensed"><i class="fas fa-clock"></i> Awaiting Pay</span>' :
+                                            '<form method="POST" action="" style="display:inline;" onsubmit="return confirm(\'Confirm this prescription?\\n\\n✅ Status will change to: Confirmed\\n💳 Bill will be created and sent to Cashier.\\n\\n👤 Patient: ' . addslashes($pres['patient_name'] ?? 'Unknown') . '\\n📦 Items: ' . $total_qty . '\\n\\n⚠️ After payment, status will auto-change to: Dispensed\');">
+                                                <input type="hidden" name="action" value="confirm_prescription">
+                                                <input type="hidden" name="prescription_id" value="' . $pres['id'] . '">
+                                                <button type="submit" class="btn-confirm" title="Confirm - Send Bill to Cashier">
+                                                    <i class="fas fa-check-circle"></i> Confirm
+                                                </button>
+                                            </form>'
+                                        )
                                     )
-                                )
-                            ) . '
+                                ) . '
+                            </div>
                         </div>
                     </td>
                 </tr>';
@@ -221,11 +439,11 @@ try {
                 <td colspan="9">
                     <div class="text-center py-6" style="color:var(--text-secondary);">
                         <i class="fas fa-prescription text-2xl block mb-2" style="color:var(--border-color);"></i>
-                        <p style="font-size:0.85rem;">No pending prescriptions found</p>
+                        <p style="font-size:0.85rem;">No prescriptions found</p>
                         <p class="text-xs mt-1" style="color:var(--text-secondary);">
                             ' . (!empty($search) ? 'No results for "<strong>' . htmlspecialchars($search) . '</strong>"' : 
                             ($filter_status !== 'all' ? 'No ' . ucfirst($filter_status) . ' prescriptions' : 
-                            'All prescriptions have been processed ✅')) . '
+                            'No prescriptions found')) . '
                         </p>
                         <a href="prescription_history.php" class="btn btn-primary mt-3">
                             <i class="fas fa-history"></i> View History
@@ -252,24 +470,26 @@ try {
     // ================================================================
     $auto_dispensed_count = 0;
     try {
+        // Get confirmed prescriptions with paid bills - NEW DB
         $stmt = $db->prepare("
             SELECT 
                 p.id as prescription_id,
                 p.patient_id,
-                p.medication,
-                p.quantity,
                 p.visit_id,
                 p.prescription_number,
+                p.total_amount,
                 b.id as bill_id,
                 b.bill_number
             FROM prescriptions p
-            JOIN patient_bills b ON b.visit_id = p.visit_id
-            JOIN bill_items bi ON bi.bill_id = b.id
+            JOIN bills b ON b.visit_id = p.visit_id AND b.patient_id = p.patient_id
             WHERE p.branch_id = ? 
             AND p.status = 'confirmed'
             AND b.status = 'paid'
-            AND bi.item_type = 'medication'
-            AND p.id NOT IN (SELECT prescription_id FROM prescription_sales WHERE prescription_id = p.id)
+            AND p.id NOT IN (
+                SELECT pi.prescription_id 
+                FROM prescription_items pi 
+                WHERE pi.prescription_id = p.id AND pi.dispensed_at IS NOT NULL
+            )
             GROUP BY p.id
         ");
         $stmt->execute([$user_branch_id]);
@@ -279,21 +499,43 @@ try {
             try {
                 $db->beginTransaction();
                 
-                // ✅ FIXED: Get price from stock with quantity > 0, order by latest
-                $stmt = $db->prepare("
-                    SELECT selling_price FROM medications_inventory 
-                    WHERE medication_name = ? 
-                    AND branch_id = ? 
-                    AND status = 'active'
-                    AND quantity > 0
-                    ORDER BY created_at DESC
-                    LIMIT 1
+                // Get prescription items
+                $stmt_items = $db->prepare("
+                    SELECT * FROM prescription_items 
+                    WHERE prescription_id = ?
                 ");
-                $stmt->execute([$item['medication'], $user_branch_id]);
-                $price_result = $stmt->fetch(PDO::FETCH_ASSOC);
-                $unit_price = $price_result['selling_price'] ?? 0;
-                $total_amount = $unit_price * $item['quantity'];
+                $stmt_items->execute([$item['prescription_id']]);
+                $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
                 
+                if (empty($items)) {
+                    $db->rollBack();
+                    continue;
+                }
+                
+                // Check stock for each item
+                $stock_errors = [];
+                foreach ($items as $pres_item) {
+                    $stmt_stock = $db->prepare("
+                        SELECT SUM(quantity) as total_available 
+                        FROM medications_inventory 
+                        WHERE medication_name = ? AND branch_id = ? AND status = 'active' AND quantity > 0
+                    ");
+                    $stmt_stock->execute([$pres_item['medication_name'], $user_branch_id]);
+                    $stock = $stmt_stock->fetch(PDO::FETCH_ASSOC);
+                    $available = $stock['total_available'] ?? 0;
+                    
+                    if ($available < $pres_item['quantity']) {
+                        $stock_errors[] = "{$pres_item['medication_name']} - Required: {$pres_item['quantity']}, Available: {$available}";
+                    }
+                }
+                
+                if (!empty($stock_errors)) {
+                    $db->rollBack();
+                    error_log("Auto-dispense stock error: " . implode(', ', $stock_errors));
+                    continue;
+                }
+                
+                // Update prescription status to dispensed
                 $stmt = $db->prepare("
                     UPDATE prescriptions 
                     SET status = 'dispensed', 
@@ -304,40 +546,106 @@ try {
                 ");
                 $stmt->execute([$user_id, $item['prescription_id'], $user_branch_id]);
                 
-                $sale_number = 'SALE-' . date('Ymd') . '-' . str_pad($item['prescription_id'], 6, '0', STR_PAD_LEFT);
+                // Update prescription items with dispensed_at
                 $stmt = $db->prepare("
-                    INSERT INTO prescription_sales (
-                        sale_number, prescription_id, patient_id, visit_id,
-                        total_amount, dispensed_by, status, payment_method,
-                        payment_status, branch_id, created_at, dispensed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'dispensed', 'cash', 'paid', ?, NOW(), NOW())
+                    UPDATE prescription_items 
+                    SET dispensed_at = NOW(),
+                        dispensed_by = ?
+                    WHERE prescription_id = ?
+                ");
+                $stmt->execute([$user_id, $item['prescription_id']]);
+                
+                // Update inventory - FIFO
+                foreach ($items as $pres_item) {
+                    $needed = $pres_item['quantity'];
+                    
+                    // Get batches ordered by expiry date (earliest first)
+                    $stmt_batches = $db->prepare("
+                        SELECT id, medication_name, quantity, batch_number, expiry_date
+                        FROM medications_inventory 
+                        WHERE medication_name = ? AND branch_id = ? AND status = 'active' AND quantity > 0
+                        ORDER BY expiry_date ASC
+                    ");
+                    $stmt_batches->execute([$pres_item['medication_name'], $user_branch_id]);
+                    $batches = $stmt_batches->fetchAll(PDO::FETCH_ASSOC);
+                    
+                    foreach ($batches as $batch) {
+                        if ($needed <= 0) break;
+                        
+                        $deduct = min($needed, $batch['quantity']);
+                        $new_qty = $batch['quantity'] - $deduct;
+                        
+                        // Update inventory
+                        $stmt_update = $db->prepare("
+                            UPDATE medications_inventory 
+                            SET quantity = ?,
+                                updated_at = NOW()
+                            WHERE id = ? AND branch_id = ?
+                        ");
+                        $stmt_update->execute([$new_qty, $batch['id'], $user_branch_id]);
+                        
+                        // LOG STOCK MOVEMENT
+                        $stmt_log = $db->prepare("
+                            INSERT INTO stock_movements (
+                                inventory_id,
+                                patient_id,
+                                movement_type,
+                                quantity,
+                                previous_stock,
+                                new_stock,
+                                reference_type,
+                                reference_id,
+                                performed_by,
+                                branch_id,
+                                notes,
+                                created_at
+                            ) VALUES (?, ?, 'out', ?, ?, ?, 'prescription', ?, ?, ?, ?, NOW())
+                        ");
+                        $stmt_log->execute([
+                            $batch['id'],
+                            $item['patient_id'],
+                            $deduct,
+                            $batch['quantity'],
+                            $new_qty,
+                            $item['prescription_id'],
+                            $user_id,
+                            $user_branch_id,
+                            "Auto-dispensed from batch {$batch['batch_number']} - Prescription #{$item['prescription_number']}"
+                        ]);
+                        
+                        $needed -= $deduct;
+                    }
+                }
+                
+                // Update bill items to paid
+                $stmt = $db->prepare("
+                    UPDATE bill_items 
+                    SET status = 'paid',
+                        updated_at = NOW()
+                    WHERE bill_id = ? AND reference_type = 'prescription' AND reference_id = ?
+                ");
+                $stmt->execute([$item['bill_id'], $item['prescription_id']]);
+                
+                // Update bill
+                $stmt = $db->prepare("
+                    UPDATE bills 
+                    SET status = 'paid',
+                        paid_amount = total_amount,
+                        balance = 0,
+                        updated_at = NOW()
+                    WHERE id = ? AND visit_id = ?
+                ");
+                $stmt->execute([$item['bill_id'], $item['visit_id']]);
+                
+                // Log activity
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                    VALUES (?, ?, 'prescription_auto_dispensed', ?, NOW())
                 ");
                 $stmt->execute([
-                    $sale_number,
-                    $item['prescription_id'],
-                    $item['patient_id'],
-                    $item['visit_id'],
-                    $total_amount,
                     $user_id,
-                    $user_branch_id
-                ]);
-                
-                $stmt = $db->prepare("
-                    UPDATE medications_inventory 
-                    SET quantity = quantity - ? 
-                    WHERE medication_name = ? AND branch_id = ? AND status = 'active'
-                    ORDER BY created_at ASC
-                    LIMIT 1
-                ");
-                $stmt->execute([$item['quantity'], $item['medication'], $user_branch_id]);
-                
-                $stmt = $db->prepare("
-                    INSERT INTO activity_logs (user_id, action, details, created_at)
-                    VALUES (?, 'prescription_auto_dispensed', ?, NOW())
-                ");
-                $stmt->execute([
-                    $user_id,
-                    "Prescription #" . $item['prescription_number'] . " auto-dispensed after payment (Bill: " . $item['bill_number'] . ") - Price: $unit_price, Qty: " . $item['quantity']
+                    $user_branch_id,
+                    "Prescription #{$item['prescription_number']} auto-dispensed after payment - Bill: {$item['bill_number']}"
                 ]);
                 
                 $db->commit();
@@ -359,7 +667,7 @@ try {
     }
     
     // ================================================================
-    // ✅ HANDLE CONFIRM ACTION
+    // ✅ HANDLE CONFIRM ACTION - NEW DB
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'confirm_prescription') {
         $prescription_id = isset($_POST['prescription_id']) ? (int)$_POST['prescription_id'] : 0;
@@ -368,6 +676,7 @@ try {
             try {
                 $db->beginTransaction();
                 
+                // Get prescription details - NEW DB
                 $stmt = $db->prepare("
                     SELECT p.*, pat.id as patient_id, pat.full_name as patient_name, 
                            pat.patient_id as patient_code, v.id as visit_id
@@ -380,133 +689,165 @@ try {
                 $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($prescription) {
-                    // ✅ FIXED: Get price from stock with quantity > 0, order by latest
-                    $stmt = $db->prepare("
-                        SELECT selling_price FROM medications_inventory 
-                        WHERE medication_name = ? 
-                        AND branch_id = ? 
-                        AND status = 'active'
-                        AND quantity > 0
-                        ORDER BY created_at DESC
-                        LIMIT 1
+                    // Get prescription items
+                    $stmt_items = $db->prepare("
+                        SELECT * FROM prescription_items 
+                        WHERE prescription_id = ?
                     ");
-                    $stmt->execute([$prescription['medication'], $user_branch_id]);
-                    $price_result = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $unit_price = $price_result['selling_price'] ?? 0;
+                    $stmt_items->execute([$prescription_id]);
+                    $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
                     
-                    $quantity = (int)$prescription['quantity'];
-                    $total_amount = $unit_price * $quantity;
-                    
-                    $bill_number = 'BILL-PRES-' . date('Ymd') . '-' . str_pad($prescription['patient_id'], 4, '0', STR_PAD_LEFT);
-                    
-                    $stmt = $db->prepare("SELECT id FROM patient_bills WHERE bill_number = ?");
-                    $stmt->execute([$bill_number]);
-                    if ($stmt->fetch()) {
-                        $bill_number = 'BILL-PRES-' . date('Ymd') . '-' . str_pad($prescription['patient_id'], 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                    if (empty($items)) {
+                        throw new Exception("No items found in this prescription");
                     }
                     
-                    $stmt = $db->prepare("
-                        SELECT b.id, b.bill_number, b.status
-                        FROM patient_bills b
-                        JOIN bill_items bi ON bi.bill_id = b.id
-                        WHERE b.visit_id = ? 
-                        AND b.branch_id = ?
-                        AND bi.item_type = 'medication'
-                        LIMIT 1
+                    // Calculate total
+                    $total_amount = 0;
+                    foreach ($items as $item) {
+                        // Get price from inventory
+                        $stmt_price = $db->prepare("
+                            SELECT selling_price FROM medications_inventory 
+                            WHERE medication_name = ? 
+                            AND branch_id = ? 
+                            AND status = 'active'
+                            AND quantity > 0
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        ");
+                        $stmt_price->execute([$item['medication_name'], $user_branch_id]);
+                        $price_result = $stmt_price->fetch(PDO::FETCH_ASSOC);
+                        $unit_price = $price_result['selling_price'] ?? 0;
+                        
+                        $item_total = $unit_price * $item['quantity'];
+                        $total_amount += $item_total;
+                        
+                        // Update item unit price
+                        $stmt_update = $db->prepare("
+                            UPDATE prescription_items 
+                            SET unit_price = ?,
+                                total_price = ?
+                            WHERE id = ? AND prescription_id = ?
+                        ");
+                        $stmt_update->execute([$unit_price, $item_total, $item['id'], $prescription_id]);
+                    }
+                    
+                    // Check if bill already exists
+                    $stmt_check = $db->prepare("
+                        SELECT id, bill_number, status FROM bills 
+                        WHERE visit_id = ? AND patient_id = ?
+                        ORDER BY id DESC LIMIT 1
                     ");
-                    $stmt->execute([$prescription['visit_id'], $user_branch_id]);
-                    $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                    $stmt_check->execute([$prescription['visit_id'], $prescription['patient_id']]);
+                    $existing_bill = $stmt_check->fetch(PDO::FETCH_ASSOC);
                     
                     if (!$existing_bill) {
+                        // Create new bill - NEW DB
+                        $bill_number = 'BILL-PRES-' . date('Ymd') . '-' . str_pad($prescription['patient_id'], 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                        
                         $stmt = $db->prepare("
-                            INSERT INTO patient_bills (
-                                bill_number, patient_id, visit_id, 
-                                total_amount, balance, status, 
-                                created_by, branch_id,
-                                created_at, updated_at,
-                                medication_fees
-                            ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, NOW(), NOW(), ?)
+                            INSERT INTO bills (
+                                bill_number,
+                                patient_id,
+                                visit_id,
+                                branch_id,
+                                created_by,
+                                subtotal,
+                                discount_amount,
+                                discount_percent,
+                                total_amount,
+                                paid_amount,
+                                balance,
+                                status,
+                                payment_method,
+                                notes,
+                                created_at,
+                                updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'cash', ?, NOW(), NOW())
                         ");
+                        
                         $stmt->execute([
                             $bill_number,
                             $prescription['patient_id'],
                             $prescription['visit_id'],
-                            $total_amount,
-                            $total_amount,
-                            $user_id,
                             $user_branch_id,
-                            $total_amount
+                            $user_id,
+                            $total_amount,
+                            0,
+                            0,
+                            $total_amount,
+                            0,
+                            $total_amount,
+                            "Prescription #{$prescription['prescription_number']} - Confirmed"
                         ]);
+                        
                         $bill_id = $db->lastInsertId();
                         
-                        $stmt = $db->prepare("
-                            INSERT INTO bill_items (
-                                bill_id, item_type, item_name, 
-                                quantity, unit_price, total_price,
-                                payment_status, is_paid, status, created_at,
-                                branch_id
-                            ) VALUES (?, 'medication', ?, ?, ?, ?, 'pending', 0, 'pending', NOW(), ?)
-                        ");
-                        $stmt->execute([
-                            $bill_id,
-                            $prescription['medication'],
-                            $quantity,
-                            $unit_price,
-                            $total_amount,
-                            $user_branch_id
-                        ]);
-                        
-                        $stmt = $db->prepare("
-                            UPDATE prescriptions 
-                            SET status = 'confirmed', 
-                                pharmacy_id = ?,
-                                updated_at = NOW()
-                            WHERE id = ? AND branch_id = ?
-                        ");
-                        $stmt->execute([$user_id, $prescription_id, $user_branch_id]);
-                        
-                        $stmt = $db->prepare("
-                            INSERT INTO activity_logs (user_id, action, details, created_at)
-                            VALUES (?, 'prescription_confirmed', ?, NOW())
-                        ");
-                        $stmt->execute([
-                            $user_id,
-                            "Prescription #" . $prescription['prescription_number'] . " confirmed - Bill #" . $bill_number . " - Price: $unit_price, Qty: $quantity"
-                        ]);
-                        
-                        $db->commit();
-                        $_SESSION['flash_message'] = "✅ Prescription confirmed! Status: <strong>Confirmed</strong>. Bill sent to Cashier.";
-                        $_SESSION['flash_type'] = 'success';
-                    } else {
-                        $db->rollBack();
-                        
-                        if ($existing_bill['status'] === 'paid') {
+                        // Create bill items for each prescription item
+                        foreach ($items as $item) {
                             $stmt = $db->prepare("
-                                UPDATE prescriptions 
-                                SET status = 'dispensed', 
-                                    dispensed_at = NOW(),
-                                    updated_at = NOW(),
-                                    pharmacy_id = ?
-                                WHERE id = ? AND branch_id = ?
+                                INSERT INTO bill_items (
+                                    bill_id,
+                                    patient_id,
+                                    branch_id,
+                                    item_type,
+                                    item_name,
+                                    quantity,
+                                    unit_price,
+                                    total_price,
+                                    discount_amount,
+                                    tax_amount,
+                                    final_price,
+                                    reference_id,
+                                    reference_type,
+                                    status,
+                                    created_at,
+                                    updated_at
+                                ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, ?, ?, ?, ?, 'prescription', 'pending', NOW(), NOW())
                             ");
-                            $stmt->execute([$user_id, $prescription_id, $user_branch_id]);
                             
-                            $_SESSION['flash_message'] = "✅ Prescription already paid and auto-dispensed!";
-                            $_SESSION['flash_type'] = 'success';
-                        } else {
-                            $stmt = $db->prepare("
-                                UPDATE prescriptions 
-                                SET status = 'confirmed', 
-                                    pharmacy_id = ?,
-                                    updated_at = NOW()
-                                WHERE id = ? AND branch_id = ?
-                            ");
-                            $stmt->execute([$user_id, $prescription_id, $user_branch_id]);
-                            
-                            $_SESSION['flash_message'] = "⚠️ Medication bill exists for this visit. <br>Bill #: <strong>" . $existing_bill['bill_number'] . "</strong><br>Prescription status: <strong>Confirmed</strong>";
-                            $_SESSION['flash_type'] = 'warning';
+                            $item_total = $item['unit_price'] * $item['quantity'];
+                            $stmt->execute([
+                                $bill_id,
+                                $prescription['patient_id'],
+                                $user_branch_id,
+                                $item['medication_name'],
+                                $item['quantity'],
+                                $item['unit_price'],
+                                $item_total,
+                                0,
+                                0,
+                                $item_total,
+                                $prescription_id
+                            ]);
                         }
                     }
+                    
+                    // Update prescription status to confirmed
+                    $stmt = $db->prepare("
+                        UPDATE prescriptions 
+                        SET status = 'confirmed', 
+                            pharmacy_id = ?,
+                            total_amount = ?,
+                            updated_at = NOW()
+                        WHERE id = ? AND branch_id = ?
+                    ");
+                    $stmt->execute([$user_id, $total_amount, $prescription_id, $user_branch_id]);
+                    
+                    // Log activity
+                    $stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                        VALUES (?, ?, 'prescription_confirmed', ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $user_id,
+                        $user_branch_id,
+                        "Prescription #{$prescription['prescription_number']} confirmed - Total: " . number_format($total_amount, 2)
+                    ]);
+                    
+                    $db->commit();
+                    
+                    $_SESSION['flash_message'] = "✅ Prescription confirmed! Bill sent to Cashier. Total: " . $currency . " " . number_format($total_amount, 2);
+                    $_SESSION['flash_type'] = 'success';
                 } else {
                     $db->rollBack();
                     $_SESSION['flash_message'] = "❌ Prescription not found or already processed.";
@@ -549,19 +890,23 @@ try {
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
     
     // ================================================================
-    // BUILD QUERY
+    // BUILD QUERY - NEW DB (Includes Dispensed)
     // ================================================================
-    $conditions = ["p.branch_id = ?", "p.status IN ('pending', 'confirmed')"];
+    $conditions = ["p.branch_id = ?"];
     $params = [$user_branch_id];
     
-    if ($filter_status !== 'all') {
+    // Handle all statuses including dispensed
+    if ($filter_status === 'all') {
+        $conditions[] = "p.status IN ('pending', 'confirmed', 'dispensed')";
+    } elseif ($filter_status === 'dispensed') {
+        $conditions[] = "p.status = 'dispensed'";
+    } else {
         $conditions[] = "p.status = ?";
         $params[] = $filter_status;
     }
     
     if (!empty($search)) {
-        $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR p.medication LIKE ?)";
-        $params[] = "%$search%";
+        $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ?)";
         $params[] = "%$search%";
         $params[] = "%$search%";
         $params[] = "%$search%";
@@ -572,6 +917,7 @@ try {
     $sql = "
         SELECT 
             p.*,
+            p.dispensed_at,
             pat.full_name as patient_name,
             pat.patient_id as patient_code,
             pat.phone,
@@ -580,46 +926,61 @@ try {
             u.full_name as doctor_name,
             u.specialty,
             v.visit_number,
-            (SELECT b.id FROM patient_bills b 
-             JOIN bill_items bi ON bi.bill_id = b.id
-             WHERE b.visit_id = p.visit_id 
-             AND bi.item_type = 'medication'
-             ORDER BY b.id DESC LIMIT 1) as bill_id,
-            (SELECT b.status FROM patient_bills b 
-             JOIN bill_items bi ON bi.bill_id = b.id
-             WHERE b.visit_id = p.visit_id 
-             AND bi.item_type = 'medication'
-             ORDER BY b.id DESC LIMIT 1) as bill_status,
-            (SELECT b.total_amount FROM patient_bills b 
-             JOIN bill_items bi ON bi.bill_id = b.id
-             WHERE b.visit_id = p.visit_id 
-             AND bi.item_type = 'medication'
-             ORDER BY b.id DESC LIMIT 1) as bill_total,
-            (SELECT b.bill_number FROM patient_bills b 
-             JOIN bill_items bi ON bi.bill_id = b.id
-             WHERE b.visit_id = p.visit_id 
-             AND bi.item_type = 'medication'
-             ORDER BY b.id DESC LIMIT 1) as bill_number
+            ph.full_name as pharmacy_name,
+            b.id as bill_id,
+            b.bill_number,
+            b.total_amount as bill_total,
+            b.discount_amount as bill_discount,
+            b.balance as bill_balance,
+            b.status as bill_status
         FROM prescriptions p
         LEFT JOIN patients pat ON p.patient_id = pat.id
         LEFT JOIN users u ON p.doctor_id = u.id
         LEFT JOIN visits v ON p.visit_id = v.id
+        LEFT JOIN users ph ON p.pharmacy_id = ph.id
+        LEFT JOIN bills b ON b.visit_id = p.visit_id AND b.patient_id = p.patient_id
         WHERE $where_clause
+        GROUP BY p.id
         ORDER BY 
             CASE 
                 WHEN p.status = 'pending' THEN 0 
                 WHEN p.status = 'confirmed' THEN 1 
-                ELSE 2 
+                WHEN p.status = 'dispensed' THEN 2 
+                ELSE 3 
             END,
-            p.created_at ASC
+            p.created_at DESC
     ";
     
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Get items for each prescription
+    foreach ($prescriptions as &$pres) {
+        $stmt_items = $db->prepare("
+            SELECT 
+                pi.*,
+                pi.instructions as doctor_instructions,
+                pi.pharmacy_instructions,
+                pi.pharmacy_instruction_mode,
+                pi.pharmacy_instruction_updated_at,
+                pu.full_name as instruction_updated_by_name
+            FROM prescription_items pi
+            LEFT JOIN users pu ON pi.pharmacy_instruction_updated_by = pu.id
+            WHERE pi.prescription_id = ?
+        ");
+        $stmt_items->execute([$pres['id']]);
+        $pres['items'] = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
+        
+        $total_qty = 0;
+        foreach ($pres['items'] as $item) {
+            $total_qty += $item['quantity'];
+        }
+        $pres['total_items_qty'] = $total_qty;
+    }
+    
     // ================================================================
-    // GET STATUS COUNTS
+    // GET STATUS COUNTS - NEW DB
     // ================================================================
     $status_counts = [];
     foreach (['pending', 'confirmed', 'dispensed'] as $status) {
@@ -628,7 +989,7 @@ try {
         $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     }
     
-    $total_count = $status_counts['pending'] + $status_counts['confirmed'];
+    $total_count = $status_counts['pending'] + $status_counts['confirmed'] + $status_counts['dispensed'];
     
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
@@ -674,6 +1035,15 @@ function calculateAge($dob) {
 }
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE PHARMACY HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/pharmacy_header.php';
@@ -687,7 +1057,11 @@ include_once '../../components/pharmacy_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Prescriptions - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
         /* ================================================================
@@ -742,6 +1116,10 @@ include_once '../../components/pharmacy_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -795,7 +1173,7 @@ include_once '../../components/pharmacy_sidebar.php';
             z-index: 1;
         }
         
-        .role-badge-display {
+        .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 3px 12px;
@@ -806,7 +1184,7 @@ include_once '../../components/pharmacy_sidebar.php';
             letter-spacing: 0.05em;
         }
         
-        .header-badge {
+        .page-header .header-badge {
             background: rgba(255,255,255,0.12);
             color: white;
             padding: 3px 12px;
@@ -820,7 +1198,7 @@ include_once '../../components/pharmacy_sidebar.php';
             border: 1px solid rgba(255,255,255,0.08);
         }
         
-        .btn-outline-light {
+        .page-header .btn-outline-light {
             background: rgba(255,255,255,0.12);
             color: white;
             border: 1px solid rgba(255,255,255,0.12);
@@ -838,25 +1216,10 @@ include_once '../../components/pharmacy_sidebar.php';
             z-index: 1;
         }
         
-        .btn-outline-light:hover {
+        .page-header .btn-outline-light:hover {
             background: rgba(255,255,255,0.2);
             transform: translateY(-1px);
         }
-        
-        .workflow-badge {
-            display: inline-block;
-            padding: 1px 8px;
-            border-radius: 10px;
-            font-size: 0.5rem;
-            font-weight: 600;
-            background: rgba(255,255,255,0.15);
-            color: rgba(255,255,255,0.9);
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .workflow-badge.step1 { background: rgba(251, 191, 36, 0.25); color: #FCD34D; border-color: rgba(251, 191, 36, 0.2); }
-        .workflow-badge.step2 { background: rgba(96, 165, 250, 0.25); color: #93C5FD; border-color: rgba(96, 165, 250, 0.2); }
-        .workflow-badge.step3 { background: rgba(52, 211, 153, 0.25); color: #34D399; border-color: rgba(52, 211, 153, 0.2); }
         
         .live-badge {
             display: inline-flex;
@@ -870,8 +1233,8 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 500;
             border: 1px solid rgba(52, 211, 153, 0.2);
         }
-        .live-badge i { font-size: 0.35rem; }
         
+        .live-badge i { font-size: 0.35rem; }
         .live-update-indicator {
             display: inline-block;
             width: 6px;
@@ -882,13 +1245,25 @@ include_once '../../components/pharmacy_sidebar.php';
             margin-right: 4px;
         }
         
+        .new-db-tag {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.7);
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.08);
+            letter-spacing: 0.03em;
+        }
+        
         @keyframes pulse-dot {
             0%, 100% { opacity: 1; transform: scale(1); }
             50% { opacity: 0.3; transform: scale(0.8); }
         }
         
         /* ================================================================
-           STATS ROW
+           STATS ROW - 4 CARDS
            ================================================================ */
         .stats-row {
             display: grid;
@@ -979,6 +1354,11 @@ include_once '../../components/pharmacy_sidebar.php';
             background: var(--primary);
             color: white;
             border-color: var(--primary);
+        }
+        
+        .filter-btn.dispensed.active {
+            background: var(--success);
+            border-color: var(--success);
         }
         
         .filter-input {
@@ -1207,11 +1587,109 @@ include_once '../../components/pharmacy_sidebar.php';
             gap: 3px;
         }
         
+        .btn-save-instr {
+            background: var(--success);
+            color: white;
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.6rem;
+            transition: var(--transition);
+            border: none;
+            cursor: pointer;
+        }
+        
+        .btn-save-instr:hover {
+            background: var(--success-dark);
+            transform: translateY(-1px);
+        }
+        
+        .btn-clear-instr {
+            background: var(--danger);
+            color: white;
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.6rem;
+            transition: var(--transition);
+            border: none;
+            cursor: pointer;
+        }
+        
+        .btn-clear-instr:hover {
+            background: #991B1B;
+            transform: translateY(-1px);
+        }
+        
         .action-buttons {
             display: flex;
             flex-wrap: wrap;
             gap: 3px;
             align-items: center;
+        }
+        
+        /* ================================================================
+           INSTRUCTION STYLES
+           ================================================================ */
+        .instruction-item {
+            transition: all 0.3s ease;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 6px 8px;
+            margin-bottom: 4px;
+        }
+        
+        .instruction-item:hover {
+            border-color: var(--primary);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        
+        .doctor-instructions {
+            background: var(--primary-bg);
+            border-left: 3px solid var(--primary);
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        
+        [data-theme="dark"] .doctor-instructions {
+            background: #1E3A5F;
+        }
+        
+        .pharmacy-instructions {
+            margin-top: 4px;
+        }
+        
+        .instr-select {
+            padding: 2px 6px;
+            font-size: 0.7rem;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            min-height: 28px;
+        }
+        
+        .instr-select:focus {
+            border-color: var(--primary);
+            outline: none;
+        }
+        
+        .instr-input {
+            padding: 2px 6px;
+            font-size: 0.7rem;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            min-height: 28px;
+            flex: 1;
+            min-width: 100px;
+        }
+        
+        .instr-input:focus {
+            border-color: var(--primary);
+            outline: none;
         }
         
         /* ================================================================
@@ -1242,6 +1720,10 @@ include_once '../../components/pharmacy_sidebar.php';
             border-radius: 16px;
             font-size: 0.6rem;
             font-weight: 600;
+        }
+        
+        .count-badge.dispensed {
+            background: var(--success);
         }
         
         /* ================================================================
@@ -1289,7 +1771,13 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        .font-mono { font-family: monospace; }
+        .footer .new-db-footer {
+            color: var(--success);
+            font-weight: 600;
+            font-size: 0.6rem;
+        }
+        
+        .font-mono { font-family: 'Courier New', monospace; }
         
         /* ================================================================
            ANIMATIONS
@@ -1318,6 +1806,9 @@ include_once '../../components/pharmacy_sidebar.php';
             .data-table thead th, .data-table tbody td { padding: 4px 8px; }
             .action-buttons { flex-direction: column; gap: 2px; }
             .btn-confirm { padding: 2px 8px; font-size: 0.55rem; }
+            .instruction-item { padding: 4px 6px; }
+            .instr-select { min-width: 100px; font-size: 0.6rem; }
+            .instr-input { font-size: 0.6rem; min-width: 80px; }
         }
         
         @media (max-width: 480px) {
@@ -1344,10 +1835,10 @@ include_once '../../components/pharmacy_sidebar.php';
                 Prescriptions
                 <span class="role-badge-display">PHARMACY</span>
                 <span class="header-badge">
-                    <i class="fas fa-list"></i> <span id="totalCount"><?= $total_count ?></span> Pending
+                    <i class="fas fa-list"></i> <span id="totalCount"><?= $total_count ?></span> Total
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);color:#FCD34D;">
-                    <i class="fas fa-pills"></i> Medication Bills Only
+                <span class="new-db-tag">
+                    <i class="fas fa-database"></i> New DB
                 </span>
                 <span class="live-badge">
                     <span class="live-update-indicator"></span>
@@ -1356,11 +1847,11 @@ include_once '../../components/pharmacy_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-arrow-right"></i>
-                <span class="workflow-badge step1">1️⃣ Confirm → Status: Confirmed</span>
-                <span class="workflow-badge step2">2️⃣ Bill to Cashier</span>
-                <span class="workflow-badge step3">3️⃣ Auto-Dispense → Status: Dispensed</span>
+                <span class="header-badge" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.1);font-size:0.5rem;">⏳ Pending</span>
+                <span class="header-badge" style="background:rgba(96,165,250,0.15);border-color:rgba(96,165,250,0.1);font-size:0.5rem;">✅ Confirmed</span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.1);font-size:0.5rem;">💊 Dispensed</span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.1);font-size:0.5rem;">
-                    <i class="fas fa-check-circle"></i> Stock Updated
+                    <i class="fas fa-sticky-note"></i> Edit Instructions
                 </span>
             </p>
         </div>
@@ -1385,11 +1876,11 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- STATS CARDS -->
     <!-- ================================================================ -->
-    <div class="stats-row">
+    <div class="stats-row animate-fade-in-up">
         <a href="?status=all" class="stat-card total <?= $filter_status === 'all' ? 'ring-2 ring-white ring-opacity-50' : '' ?>">
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div class="stat-number" id="statTotal"><?= $total_count ?></div>
-            <div class="stat-label">Total Pending</div>
+            <div class="stat-label">📋 All</div>
         </a>
         <a href="?status=pending" class="stat-card pending <?= $filter_status === 'pending' ? 'ring-2 ring-white ring-opacity-50' : '' ?>">
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
@@ -1401,7 +1892,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <div class="stat-number" id="statConfirmed"><?= $status_counts['confirmed'] ?? 0 ?></div>
             <div class="stat-label">✅ Confirmed</div>
         </a>
-        <a href="prescription_history.php?status=dispensed" class="stat-card dispensed">
+        <a href="?status=dispensed" class="stat-card dispensed <?= $filter_status === 'dispensed' ? 'ring-2 ring-white ring-opacity-50' : '' ?>">
             <div class="stat-icon"><i class="fas fa-prescription-bottle"></i></div>
             <div class="stat-number" id="statDispensed"><?= $status_counts['dispensed'] ?? 0 ?></div>
             <div class="stat-label">💊 Dispensed</div>
@@ -1411,17 +1902,18 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- FILTERS -->
     <!-- ================================================================ -->
-    <div class="filter-section">
+    <div class="filter-section animate-fade-in-up">
         <div class="filter-row">
             <a href="?status=all<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
             <a href="?status=pending<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
             <a href="?status=confirmed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn <?= $filter_status === 'confirmed' ? 'active' : '' ?>">✅ Confirmed</a>
+            <a href="?status=dispensed<?= !empty($search) ? '&search=' . urlencode($search) : '' ?>" class="filter-btn dispensed <?= $filter_status === 'dispensed' ? 'active' : '' ?>">💊 Dispensed</a>
             
             <div style="flex:1;"></div>
             
             <form method="GET" class="filter-row" style="flex:1;gap:6px;" id="filterForm">
                 <input type="hidden" name="status" id="filterStatus" value="<?= htmlspecialchars($filter_status) ?>">
-                <input type="text" name="search" class="filter-input" id="searchInput" placeholder="Search patient, medication..." value="<?= htmlspecialchars($search) ?>">
+                <input type="text" name="search" class="filter-input" id="searchInput" placeholder="Search patient, prescription..." value="<?= htmlspecialchars($search) ?>">
                 <button type="submit" class="btn-search">
                     <i class="fas fa-search"></i>
                 </button>
@@ -1437,9 +1929,9 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- TABLE -->
     <!-- ================================================================ -->
-    <div class="table-container" id="prescriptionsContainer">
+    <div class="table-container animate-fade-in-up" id="prescriptionsContainer">
         <div class="table-scroll">
-            <table class="data-table">
+            <table class="data-table" id="prescriptionsTable">
                 <thead>
                     <tr>
                         <th style="width:30px;"><i class="fas fa-hashtag"></i></th>
@@ -1450,7 +1942,7 @@ include_once '../../components/pharmacy_sidebar.php';
                         <th style="text-align:center;"><i class="fas fa-info-circle"></i> Status</th>
                         <th style="text-align:center;"><i class="fas fa-money-bill"></i> Bill</th>
                         <th style="text-align:center;"><i class="fas fa-calendar"></i> Date</th>
-                        <th style="text-align:center;"><i class="fas fa-cog"></i> Actions</th>
+                        <th style="text-align:center;"><i class="fas fa-cog"></i> Actions &amp; Instructions</th>
                     </tr>
                 </thead>
                 <tbody id="prescriptionsTableBody">
@@ -1460,6 +1952,114 @@ include_once '../../components/pharmacy_sidebar.php';
                             $is_paid = ($pres['bill_status'] ?? '') === 'paid';
                             $bill_exists = !empty($pres['bill_id']);
                             $status = $pres['status'] ?? 'pending';
+                            $total_qty = $pres['total_items_qty'] ?? 0;
+                            $is_dispensed = ($status === 'dispensed');
+                            $dispensed_by = $pres['pharmacy_name'] ?? '';
+                            
+                            // Build medication list
+                            $med_list = '';
+                            foreach ($pres['items'] as $item) {
+                                $med_list .= '<div class="text-xs">' . htmlspecialchars($item['medication_name']) . 
+                                           ' (' . $item['quantity'] . ')</div>';
+                            }
+                            if (empty($med_list)) {
+                                $med_list = '<span class="text-xs text-gray-400">No items</span>';
+                            }
+                            
+                            // Build instructions HTML for each item
+                            $instructions_html = '';
+                            foreach ($pres['items'] as $idx => $item) {
+                                $item_id = $item['id'];
+                                $doctor_instr = $item['doctor_instructions'] ?? '';
+                                $pharmacy_instr = $item['pharmacy_instructions'] ?? '';
+                                $has_pharmacy_instr = !empty($pharmacy_instr);
+                                $updated_by = $item['instruction_updated_by_name'] ?? '';
+                                $updated_at = !empty($item['pharmacy_instruction_updated_at']) ? formatDate($item['pharmacy_instruction_updated_at']) : '';
+                                
+                                $instructions_html .= '
+                                <div class="instruction-item mb-2 p-2 border rounded" style="border-color:var(--border-color);background:var(--bg-body);">
+                                    <div class="flex items-center justify-between flex-wrap gap-1">
+                                        <span class="font-medium text-xs">' . htmlspecialchars($item['medication_name']) . '</span>
+                                        <span class="text-xs text-gray-400">Qty: ' . $item['quantity'] . '</span>
+                                    </div>
+                                    
+                                    <!-- Doctor Instructions (Read-only) -->
+                                    <div class="doctor-instructions mt-1 p-1 bg-blue-50 dark:bg-blue-900/20 rounded" style="border-left:3px solid var(--primary);">
+                                        <span class="text-xs font-semibold" style="color:var(--primary);">
+                                            <i class="fas fa-user-md"></i> Doctor\'s Instructions:
+                                        </span>
+                                        <span class="text-xs" style="color:var(--text-secondary);">
+                                            ' . (!empty($doctor_instr) ? nl2br(htmlspecialchars($doctor_instr)) : '<em>No instructions from doctor</em>') . '
+                                        </span>
+                                    </div>
+                                    
+                                    <!-- Pharmacy Instructions -->
+                                    <div class="pharmacy-instructions mt-2">
+                                        <div class="flex items-center gap-2 flex-wrap">
+                                            <span class="text-xs font-semibold" style="color:var(--success);">
+                                                <i class="fas fa-prescription-bottle"></i> Pharmacy Instructions:
+                                            </span>';
+                                            
+                                if ($is_dispensed) {
+                                    $instructions_html .= '
+                                            <span class="text-xs text-green-600">' . ($has_pharmacy_instr ? '✅ Added' : 'Not added') . '</span>';
+                                } else {
+                                    $instructions_html .= '
+                                            <span class="text-xs text-gray-400" id="instr_status_' . $item_id . '">
+                                                ' . ($has_pharmacy_instr ? '✅ Added' : '⏳ Not added') . '
+                                            </span>';
+                                }
+                                
+                                $instructions_html .= '
+                                            ' . (!empty($updated_by) ? '<span class="text-xs text-gray-400">by ' . htmlspecialchars($updated_by) . '</span>' : '') . '
+                                            ' . (!empty($updated_at) ? '<span class="text-xs text-gray-400">' . $updated_at . '</span>' : '') . '
+                                        </div>
+                                        
+                                        <!-- Current Pharmacy Instructions Display -->
+                                        <div class="mt-1" id="instr_display_' . $item_id . '">
+                                            ' . ($has_pharmacy_instr ? 
+                                                '<div class="text-xs p-1 bg-green-50 dark:bg-green-900/20 rounded" style="border-left:3px solid var(--success);">
+                                                    <span style="color:var(--text-primary);">' . nl2br(htmlspecialchars($pharmacy_instr)) . '</span>
+                                                </div>' : 
+                                                '<div class="text-xs text-gray-400 italic">No pharmacy instructions added yet</div>'
+                                            ) . '
+                                        </div>';
+                                
+                                // Edit Form - Only for non-dispensed
+                                if (!$is_dispensed) {
+                                    $instructions_html .= '
+                                        <div class="mt-1 flex flex-wrap gap-1" id="instr_form_' . $item_id . '">
+                                            <select class="instr-select text-xs p-1 border rounded" 
+                                                    style="border-color:var(--border-color);background:var(--bg-card);color:var(--text-primary);min-width:160px;"
+                                                    onchange="toggleInstructionInput(this, ' . $item_id . ')" id="instr_select_' . $item_id . '">
+                                                <option value="">-- Select Instruction --</option>';
+                                    foreach ($instruction_options as $opt) {
+                                        $instructions_html .= '<option value="' . htmlspecialchars($opt) . '">' . htmlspecialchars($opt) . '</option>';
+                                    }
+                                    $instructions_html .= '
+                                                <option value="__custom__">✏️ Custom...</option>
+                                            </select>
+                                            <input type="text" class="instr-input text-xs p-1 border rounded" 
+                                                   style="border-color:var(--border-color);background:var(--bg-card);color:var(--text-primary);flex:1;min-width:120px;display:none;"
+                                                   placeholder="Enter custom instructions..."
+                                                   id="instr_input_' . $item_id . '">
+                                            <button class="btn-save-instr text-xs px-2 py-1 rounded" 
+                                                    style="background:var(--success);color:white;border:none;cursor:pointer;"
+                                                    onclick="saveInstructions(' . $pres['id'] . ', ' . $item_id . ')">
+                                                <i class="fas fa-save"></i> Save
+                                            </button>
+                                            <button class="btn-clear-instr text-xs px-2 py-1 rounded" 
+                                                    style="background:var(--danger);color:white;border:none;cursor:pointer;"
+                                                    onclick="clearInstructions(' . $pres['id'] . ', ' . $item_id . ')">
+                                                <i class="fas fa-trash"></i> Clear
+                                            </button>
+                                        </div>';
+                                }
+                                
+                                $instructions_html .= '
+                                    </div>
+                                </div>';
+                            }
                         ?>
                             <tr data-prescription-id="<?= $pres['id'] ?>" data-status="<?= $status ?>">
                                 <td style="text-align:center;"><?= $i++ ?></td>
@@ -1467,6 +2067,15 @@ include_once '../../components/pharmacy_sidebar.php';
                                     <span class="font-mono font-semibold" style="color:var(--primary);font-size:0.7rem;">
                                         <?= htmlspecialchars($pres['prescription_number'] ?? 'N/A') ?>
                                     </span>
+                                    <?php if (!empty($pres['visit_number'])): ?>
+                                        <div class="text-xs text-gray-400">Visit: <?= htmlspecialchars($pres['visit_number']) ?></div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($pres['doctor_name'])): ?>
+                                        <div class="text-xs text-gray-400">Dr. <?= htmlspecialchars($pres['doctor_name']) ?></div>
+                                    <?php endif; ?>
+                                    <?php if ($is_dispensed && !empty($dispensed_by)): ?>
+                                        <div class="text-xs text-green-600">Dispensed by: <?= htmlspecialchars($dispensed_by) ?></div>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <div class="font-medium" style="font-size:0.75rem;"><?= htmlspecialchars($pres['patient_name'] ?? 'Unknown') ?></div>
@@ -1479,10 +2088,11 @@ include_once '../../components/pharmacy_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="font-semibold" style="font-size:0.75rem;"><?= htmlspecialchars($pres['medication'] ?? 'N/A') ?></span>
+                                    <?= $med_list ?>
+                                    <div class="text-xs text-gray-400">Total: <?= $total_qty ?> items</div>
                                 </td>
                                 <td style="text-align:center;">
-                                    <span class="font-semibold" style="font-size:0.75rem;"><?= $pres['quantity'] ?? 0 ?></span>
+                                    <span class="font-semibold" style="font-size:0.75rem;"><?= $total_qty ?></span>
                                 </td>
                                 <td style="text-align:center;">
                                     <span class="badge-status <?= getStatusBadgeClass($status) ?>">
@@ -1494,12 +2104,17 @@ include_once '../../components/pharmacy_sidebar.php';
                                     <?php if ($status === 'confirmed' && $is_paid): ?>
                                         <div class="text-xs" style="color:var(--success);">✅ Payment confirmed</div>
                                     <?php endif; ?>
+                                    <?php if ($is_dispensed && !empty($pres['dispensed_at'])): ?>
+                                        <div class="text-xs" style="color:var(--success);">📅 <?= formatDate($pres['dispensed_at']) ?></div>
+                                    <?php endif; ?>
                                 </td>
                                 <td style="text-align:center;">
                                     <?php if ($bill_exists): ?>
                                         <?php if ($is_paid): ?>
                                             <span class="badge-status badge-success">✅ Paid</span>
-                                            <div class="text-xs" style="color:var(--success);">💊 Auto-Dispensed!</div>
+                                            <?php if (!$is_dispensed): ?>
+                                                <div class="text-xs" style="color:var(--success);">💊 Auto-Dispensed!</div>
+                                            <?php endif; ?>
                                         <?php else: ?>
                                             <span class="badge-status badge-warning">⏳ Pending</span>
                                             <div class="text-xs" style="color:var(--warning);"><?= $currency ?> <?= number_format($pres['bill_total'] ?? 0) ?></div>
@@ -1509,33 +2124,38 @@ include_once '../../components/pharmacy_sidebar.php';
                                     <?php endif; ?>
                                 </td>
                                 <td style="text-align:center;">
-                                    <span class="text-xs"><?= formatDate($pres['created_at'] ?? '') ?></span>
-                                    <?php if (!empty($pres['visit_number'])): ?>
-                                        <div class="text-xs" style="color:var(--text-secondary);">Visit: <?= htmlspecialchars($pres['visit_number']) ?></div>
-                                    <?php endif; ?>
+                                    <span class="text-xs"><?= ($is_dispensed && !empty($pres['dispensed_at'])) ? formatDate($pres['dispensed_at']) : formatDate($pres['created_at'] ?? '') ?></span>
                                 </td>
                                 <td style="text-align:center;">
-                                    <div class="action-buttons" style="justify-content:center;">
-                                        <a href="view_prescription.php?id=<?= $pres['id'] ?>" class="btn-view" title="View Prescription Details">
-                                            <i class="fas fa-eye"></i> View
-                                        </a>
+                                    <div class="action-buttons" style="justify-content:center;flex-direction:column;gap:4px;">
+                                        <!-- Instructions Section -->
+                                        <div class="instructions-section w-full" style="max-width:320px;">
+                                            <?= $instructions_html ?>
+                                        </div>
                                         
-                                        <?php if ($status === 'dispensed'): ?>
-                                            <span class="btn-dispensed"><i class="fas fa-check-circle"></i> Dispensed</span>
-                                        <?php elseif ($status === 'confirmed' && $is_paid): ?>
-                                            <span class="btn-auto-dispensed"><i class="fas fa-check-circle"></i> Auto-Dispensed</span>
-                                        <?php elseif ($status === 'confirmed'): ?>
-                                            <span class="btn-auto-dispensed"><i class="fas fa-clock"></i> Awaiting Pay</span>
-                                        <?php elseif ($status === 'pending'): ?>
-                                            <form method="POST" action="" style="display:inline;" 
-                                                  onsubmit="return confirm('Confirm this prescription?\n\n✅ Status will change to: Confirmed\n💳 Bill will be created and sent to Cashier.\n\n💊 Medication: <?= addslashes($pres['medication'] ?? 'N/A') ?>\n📦 Quantity: <?= $pres['quantity'] ?? 0 ?>\n👤 Patient: <?= addslashes($pres['patient_name'] ?? 'Unknown') ?>\n\n⚠️ After payment, status will auto-change to: Dispensed');">
-                                                <input type="hidden" name="action" value="confirm_prescription">
-                                                <input type="hidden" name="prescription_id" value="<?= $pres['id'] ?>">
-                                                <button type="submit" class="btn-confirm" title="Confirm - Send Bill to Cashier">
-                                                    <i class="fas fa-check-circle"></i> Confirm
-                                                </button>
-                                            </form>
-                                        <?php endif; ?>
+                                        <!-- Action Buttons -->
+                                        <div class="flex flex-wrap gap-1 justify-center">
+                                            <a href="view_prescription.php?id=<?= $pres['id'] ?>" class="btn-view" title="View Prescription Details">
+                                                <i class="fas fa-eye"></i> View
+                                            </a>
+                                            
+                                            <?php if ($status === 'dispensed'): ?>
+                                                <span class="btn-dispensed"><i class="fas fa-check-circle"></i> Dispensed</span>
+                                            <?php elseif ($status === 'confirmed' && $is_paid): ?>
+                                                <span class="btn-auto-dispensed"><i class="fas fa-check-circle"></i> Auto-Dispensed</span>
+                                            <?php elseif ($status === 'confirmed'): ?>
+                                                <span class="btn-auto-dispensed"><i class="fas fa-clock"></i> Awaiting Pay</span>
+                                            <?php else: ?>
+                                                <form method="POST" action="" style="display:inline;" 
+                                                      onsubmit="return confirm('Confirm this prescription?\n\n✅ Status will change to: Confirmed\n💳 Bill will be created and sent to Cashier.\n\n👤 Patient: <?= addslashes($pres['patient_name'] ?? 'Unknown') ?>\n📦 Items: <?= $total_qty ?>\n\n⚠️ After payment, status will auto-change to: Dispensed');">
+                                                    <input type="hidden" name="action" value="confirm_prescription">
+                                                    <input type="hidden" name="prescription_id" value="<?= $pres['id'] ?>">
+                                                    <button type="submit" class="btn-confirm" title="Confirm - Send Bill to Cashier">
+                                                        <i class="fas fa-check-circle"></i> Confirm
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
+                                        </div>
                                     </div>
                                 </td>
                             </tr>
@@ -1545,14 +2165,14 @@ include_once '../../components/pharmacy_sidebar.php';
                             <td colspan="9">
                                 <div class="text-center py-6" style="color:var(--text-secondary);">
                                     <i class="fas fa-prescription text-2xl block mb-2" style="color:var(--border-color);"></i>
-                                    <p style="font-size:0.85rem;">No pending prescriptions found</p>
+                                    <p style="font-size:0.85rem;">No prescriptions found</p>
                                     <p class="text-xs mt-1" style="color:var(--text-secondary);">
                                         <?php if (!empty($search)): ?>
                                             No results for "<strong><?= htmlspecialchars($search) ?></strong>"
                                         <?php elseif ($filter_status !== 'all'): ?>
                                             No <?= ucfirst($filter_status) ?> prescriptions
                                         <?php else: ?>
-                                            All prescriptions have been processed ✅
+                                            No prescriptions found
                                         <?php endif; ?>
                                     </p>
                                     <a href="prescription_history.php" class="btn btn-primary mt-3">
@@ -1569,11 +2189,15 @@ include_once '../../components/pharmacy_sidebar.php';
         <div class="table-footer">
             <span>
                 <i class="fas fa-list"></i> Showing <strong id="rowCount"><?= count($prescriptions) ?></strong> prescriptions
-                <span class="text-xs" style="color:var(--text-secondary);">(Pending + Confirmed)</span>
-                <span class="text-xs" style="color:var(--warning);margin-left:6px;">📋 Prescription Bills Only</span>
+                <span class="text-xs" style="color:var(--text-secondary);">
+                    <?= $filter_status === 'all' ? '(All)' : '(' . ucfirst($filter_status) . ')' ?>
+                </span>
+                <span class="text-xs" style="color:var(--text-secondary);margin-left:6px;">
+                    <i class="fas fa-sticky-note"></i> Edit instructions
+                </span>
             </span>
             <span>
-                <span class="count-badge" id="totalCountBadge"><?= $total_count ?></span> Total pending
+                <span class="count-badge <?= $filter_status === 'dispensed' ? 'dispensed' : '' ?>" id="totalCountBadge"><?= $total_count ?></span> Total
                 <span class="text-xs" style="color:var(--text-secondary);" id="updateTimeDisplay">Last update: <?= date('H:i:s') ?></span>
             </span>
         </div>
@@ -1589,6 +2213,8 @@ include_once '../../components/pharmacy_sidebar.php';
             Prescriptions
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="new-db-footer"><i class="fas fa-database"></i> New DB</span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1731,7 +2357,7 @@ include_once '../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // ✅ AUTO-UPDATE - EVERY 3 SECONDS (NO REFRESH NEEDED)
+    // ✅ AUTO-UPDATE - EVERY 3 SECONDS
     // ================================================================
     var updateInterval = null;
     var isUpdating = false;
@@ -1769,13 +2395,11 @@ include_once '../../components/pharmacy_sidebar.php';
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         
-        // Update table rows
         var tbody = document.getElementById('prescriptionsTableBody');
         if (tbody && data.rows_html) {
             tbody.innerHTML = data.rows_html;
         }
         
-        // Update stats
         var statTotal = document.getElementById('statTotal');
         var statPending = document.getElementById('statPending');
         var statConfirmed = document.getElementById('statConfirmed');
@@ -1799,10 +2423,6 @@ include_once '../../components/pharmacy_sidebar.php';
         
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = timeStr;
-        
-        if (data.auto_dispensed_count && data.auto_dispensed_count > 0) {
-            showToast('💊 Auto-Dispensed', data.auto_dispensed_count + ' prescription(s) dispensed automatically!', 'success');
-        }
     }
 
     function startAutoUpdate() {
@@ -1829,6 +2449,134 @@ include_once '../../components/pharmacy_sidebar.php';
             startAutoUpdate();
         }
     });
+
+    // ================================================================
+    // ✅ INSTRUCTION FUNCTIONS
+    // ================================================================
+    function toggleInstructionInput(select, itemId) {
+        var input = document.getElementById('instr_input_' + itemId);
+        if (!input) return;
+        
+        if (select.value === '__custom__') {
+            input.style.display = 'block';
+            input.focus();
+        } else {
+            input.style.display = 'none';
+            input.value = '';
+        }
+    }
+
+    function saveInstructions(prescriptionId, itemId) {
+        var select = document.getElementById('instr_select_' + itemId);
+        var input = document.getElementById('instr_input_' + itemId);
+        var instructions = '';
+        var mode = 'manual';
+        
+        if (select.value === '__custom__') {
+            instructions = input.value.trim();
+            mode = 'manual';
+        } else if (select.value && select.value !== '__custom__') {
+            instructions = select.value;
+            mode = 'dropdown';
+        } else {
+            if (input && input.value.trim()) {
+                instructions = input.value.trim();
+                mode = 'manual';
+            }
+        }
+        
+        if (!instructions) {
+            showToast('⚠️ Warning', 'Please select or enter instructions', 'warning');
+            return;
+        }
+        
+        var formData = new FormData();
+        formData.append('action', 'update_instructions');
+        formData.append('prescription_id', prescriptionId);
+        formData.append('item_id', itemId);
+        formData.append('instructions', instructions);
+        formData.append('mode', mode);
+        
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.success) {
+                showToast('✅ Success', 'Instructions updated successfully', 'success');
+                var displayDiv = document.getElementById('instr_display_' + itemId);
+                if (displayDiv) {
+                    displayDiv.innerHTML = '<div class="text-xs p-1 bg-green-50 dark:bg-green-900/20 rounded" style="border-left:3px solid var(--success);">' +
+                        '<span style="color:var(--text-primary);">' + escapeHtml(instructions) + '</span>' +
+                        '</div>';
+                }
+                var statusSpan = document.getElementById('instr_status_' + itemId);
+                if (statusSpan) {
+                    statusSpan.textContent = '✅ Added';
+                }
+                select.value = '';
+                if (input) {
+                    input.style.display = 'none';
+                    input.value = '';
+                }
+            } else {
+                showToast('❌ Error', data.message || 'Failed to save instructions', 'error');
+            }
+        })
+        .catch(function(error) {
+            showToast('❌ Error', 'Network error: ' + error.message, 'error');
+        });
+    }
+
+    function clearInstructions(prescriptionId, itemId) {
+        if (!confirm('Clear pharmacy instructions for this medication?')) return;
+        
+        var formData = new FormData();
+        formData.append('action', 'update_instructions');
+        formData.append('prescription_id', prescriptionId);
+        formData.append('item_id', itemId);
+        formData.append('instructions', '');
+        formData.append('mode', 'manual');
+        
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.success) {
+                showToast('✅ Success', 'Instructions cleared', 'success');
+                var displayDiv = document.getElementById('instr_display_' + itemId);
+                if (displayDiv) {
+                    displayDiv.innerHTML = '<div class="text-xs text-gray-400 italic">No pharmacy instructions added yet</div>';
+                }
+                var statusSpan = document.getElementById('instr_status_' + itemId);
+                if (statusSpan) {
+                    statusSpan.textContent = '⏳ Not added';
+                }
+                var select = document.getElementById('instr_select_' + itemId);
+                if (select) select.value = '';
+                var input = document.getElementById('instr_input_' + itemId);
+                if (input) {
+                    input.style.display = 'none';
+                    input.value = '';
+                }
+            } else {
+                showToast('❌ Error', data.message || 'Failed to clear instructions', 'error');
+            }
+        })
+        .catch(function(error) {
+            showToast('❌ Error', 'Network error: ' + error.message, 'error');
+        });
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML.replace(/\n/g, '<br>');
+    }
 
     // ================================================================
     // KEYBOARD SHORTCUTS
@@ -1865,17 +2613,15 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 500);
     <?php endif; ?>
 
-    console.log('%c💊 Braick - Prescriptions (Auto-Update Active)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c💊 Braick - Prescriptions (All Statuses + Instructions)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📋 Total Pending: <?= $total_count ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📋 Total: <?= $total_count ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c⏳ Pending: <?= $status_counts['pending'] ?? 0 ?>', 'font-size:12px; color:#D97706;');
     console.log('%c✅ Confirmed: <?= $status_counts['confirmed'] ?? 0 ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c💊 Dispensed: <?= $status_counts['dispensed'] ?? 0 ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🔄 Auto-update every 3 seconds - NO REFRESH NEEDED!', 'font-size:12px; color:#34D399;');
-    console.log('%c💰 Price Fix: Now uses latest stock with quantity > 0', 'font-size:12px; color:#059669;');
-    console.log('%c📦 Stock Update: Deducts from oldest stock first (FIFO)', 'font-size:12px; color:#059669;');
-    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Tables: prescriptions, prescription_items, bills, bill_items, medications_inventory, stock_movements', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

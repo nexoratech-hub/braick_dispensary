@@ -4,36 +4,96 @@
 // PHARMACY - DISPENSED PRESCRIPTIONS (BLUE THEME)
 // Shows all prescriptions that have been dispensed
 // NO AMOUNT CARDS - Only Total Dispensed
-// FIXED: Login session - no default user bypass
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
-// CHECK SESSION - REDIRECT TO LOGIN IF NOT PHARMACY
+// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'pharmacy') {
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS PHARMACY ACCESS
+// ================================================================
+$allowed_roles = ['pharmacy', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
+        case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        default: header('Location: ../login.php'); break;
+    }
     exit;
 }
 
 // ================================================================
 // GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'];
+$user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Pharmacy Staff';
+$user_role = $_SESSION['role'] ?? 'pharmacy';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
-$user_branch_name = $_SESSION['branch_name'] ?? 'Branch';
-$user_username = $_SESSION['username'] ?? 'pharmacy';
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'pharmacy';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI
+// IF SESSION IS INCOMPLETE, TRY TO GET FROM DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
+if ($user_id <= 0) {
+    if (isset($username) && !empty($username)) {
+        require_once __DIR__ . '/../../../backend/config/database.php';
+        try {
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+            }
+        } catch (Exception $e) {
+            // Fallback
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+// ================================================================
+// DATABASE CONNECTION - NEW DATABASE
+// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
+
 $message = '';
 $message_type = '';
 $currency = 'TSh';
@@ -46,15 +106,13 @@ $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
-// BUILD QUERY FOR DISPENSED PRESCRIPTIONS
+// BUILD QUERY FOR DISPENSED PRESCRIPTIONS - NEW DB
 // ================================================================
 $conditions = ["p.branch_id = ?", "p.status = 'dispensed'"];
 $params = [$user_branch_id];
 
 if (!empty($search)) {
-    $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR p.medication LIKE ? OR pi.medication_name LIKE ?)";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
+    $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ?)";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -73,11 +131,12 @@ if (!empty($date_to)) {
 $where_clause = implode(" AND ", $conditions);
 
 // ================================================================
-// GET DISPENSED PRESCRIPTIONS WITH ITEMS
+// GET DISPENSED PRESCRIPTIONS - NEW DB TABLES
 // ================================================================
 $sql = "
     SELECT 
         p.*,
+        pat.id as patient_id,
         pat.full_name as patient_name,
         pat.patient_id as patient_code,
         pat.phone,
@@ -88,31 +147,13 @@ $sql = "
         u.specialty,
         v.visit_number,
         v.visit_type,
-        pi.medication_name as item_medication,
-        pi.dosage as item_dosage,
-        pi.frequency as item_frequency,
-        pi.quantity as item_quantity,
-        pi.duration as item_duration,
-        pi.route as item_route,
-        pi.unit_price as item_unit_price,
-        pi.total_price as item_total_price,
-        (
-            SELECT id FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_id,
-        (
-            SELECT bill_number FROM patient_bills 
-            WHERE visit_id = p.visit_id AND prescription_id = p.id
-            ORDER BY id DESC LIMIT 1
-        ) as bill_number
+        ph.full_name as pharmacy_name
     FROM prescriptions p
     JOIN patients pat ON p.patient_id = pat.id
     LEFT JOIN users u ON p.doctor_id = u.id
     LEFT JOIN visits v ON p.visit_id = v.id
-    LEFT JOIN prescription_items pi ON pi.prescription_id = p.id
+    LEFT JOIN users ph ON p.pharmacy_id = ph.id
     WHERE $where_clause
-    GROUP BY p.id
     ORDER BY p.dispensed_at DESC
 ";
 
@@ -121,7 +162,7 @@ $stmt->execute($params);
 $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET PRESCRIPTION ITEMS FOR EACH
+// GET PRESCRIPTION ITEMS FOR EACH - NEW DB
 // ================================================================
 foreach ($prescriptions as &$pres) {
     $stmt = $db->prepare("
@@ -133,11 +174,11 @@ foreach ($prescriptions as &$pres) {
     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // If no items, create from main prescription
-    if (empty($items) && !empty($pres['medication'])) {
+    if (empty($items)) {
         $items = [[
             'id' => 0,
             'prescription_id' => $pres['id'],
-            'medication_name' => $pres['medication'],
+            'medication_name' => $pres['medication'] ?? 'N/A',
             'dosage' => $pres['dosage'] ?? '',
             'frequency' => $pres['frequency'] ?? '',
             'quantity' => $pres['quantity'] ?? 1,
@@ -154,12 +195,12 @@ foreach ($prescriptions as &$pres) {
 }
 
 // ================================================================
-// GET STATISTICS - ONLY TOTAL DISPENSED
+// GET STATISTICS - NEW DB
 // ================================================================
 $total_dispensed = count($prescriptions);
 
 // ================================================================
-// GET DAILY DISPENSED COUNT
+// GET DAILY DISPENSED COUNT - NEW DB
 // ================================================================
 $stmt = $db->prepare("
     SELECT DATE(dispensed_at) as date, COUNT(*) as count
@@ -171,6 +212,23 @@ $stmt = $db->prepare("
 ");
 $stmt->execute([$user_branch_id]);
 $daily_counts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// GET BILL INFORMATION - NEW DB (bills table)
+// ================================================================
+foreach ($prescriptions as &$pres) {
+    // Get bill for this prescription through visit
+    $stmt = $db->prepare("
+        SELECT id, bill_number, total_amount, discount_amount, balance, status
+        FROM bills 
+        WHERE visit_id = ? 
+        ORDER BY id DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$pres['visit_id']]);
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+    $pres['bill'] = $bill;
+}
 
 // ================================================================
 // HELPER FUNCTIONS
@@ -187,6 +245,35 @@ function formatDate($datetime) {
     return date('d/m/Y h:i A', strtotime($datetime));
 }
 
+function getStatusBadgeClass($status) {
+    $map = [
+        'pending' => 'badge-warning',
+        'confirmed' => 'badge-info',
+        'dispensed' => 'badge-success',
+        'cancelled' => 'badge-danger'
+    ];
+    return $map[$status] ?? 'badge-warning';
+}
+
+function getStatusLabel($status) {
+    $map = [
+        'pending' => '⏳ Pending',
+        'confirmed' => '✅ Confirmed',
+        'dispensed' => '💊 Dispensed',
+        'cancelled' => '❌ Cancelled'
+    ];
+    return $map[$status] ?? ucfirst($status);
+}
+
+// ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
 // ================================================================
 // INCLUDE PHARMACY HEADER & SIDEBAR
 // ================================================================
@@ -201,7 +288,8 @@ include_once '../../components/pharmacy_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dispensed Prescriptions - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -241,6 +329,7 @@ include_once '../../components/pharmacy_sidebar.php';
             --border-color: #E2E8F0;
             --shadow: 0 1px 3px rgba(0,0,0,0.06);
             --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
         }
         
         [data-theme="dark"] {
@@ -264,6 +353,9 @@ include_once '../../components/pharmacy_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
+        /* ================================================================
+           TOP NAV
+           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -359,7 +451,6 @@ include_once '../../components/pharmacy_sidebar.php';
             background: transparent;
             border: none;
             cursor: pointer;
-            position: relative;
         }
         
         .top-nav .icon-btn:hover {
@@ -491,6 +582,17 @@ include_once '../../components/pharmacy_sidebar.php';
             font-weight: 600;
             backdrop-filter: blur(4px);
             border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .page-header .branch-tag {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.08);
         }
         
         /* ================================================================
@@ -874,7 +976,7 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
     
     <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
+        <span class="branch-badge-display" style="background:var(--bg-body);border:1px solid var(--border-color);border-radius:10px;padding:4px 12px;font-size:0.7rem;color:var(--text-secondary);">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
@@ -886,8 +988,8 @@ include_once '../../components/pharmacy_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3EA%3C/text%3E%3C/svg%3E'">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='<?= $logo_path ?>'">
         </a>
     </div>
 </nav>
@@ -906,19 +1008,18 @@ include_once '../../components/pharmacy_sidebar.php';
                 <i class="fas fa-prescription-bottle"></i>
                 Dispensed Prescriptions
                 <span class="badge-display"><?= $total_dispensed ?> Total</span>
-                <span class="badge-display" style="background:rgba(255,255,255,0.12);">
+                <span class="branch-tag">
                     <i class="fas fa-store"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-check-circle"></i>
                 All prescriptions that have been dispensed in <strong><?= htmlspecialchars($user_branch_name) ?></strong>
-                <span class="text-xs text-white/60 ml-2">
-                    <i class="fas fa-info-circle"></i> 
-                    Showing all dispensed medications
-                </span>
                 <span class="text-xs text-white/50 ml-2">
                     <i class="fas fa-clock"></i> Updated: <?= date('H:i:s') ?>
+                </span>
+                <span class="text-xs text-white/60 ml-2">
+                    <i class="fas fa-database"></i> New DB
                 </span>
             </p>
         </div>
@@ -963,7 +1064,7 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TABLE - BLUE THEME (NO BILL BUTTON) -->
+    <!-- TABLE - BLUE THEME -->
     <!-- ================================================================ -->
     <div class="table-container">
         <div class="table-scroll">
@@ -982,8 +1083,20 @@ include_once '../../components/pharmacy_sidebar.php';
                 <tbody>
                     <?php if (count($prescriptions) > 0): ?>
                         <?php $i = 1; foreach ($prescriptions as $pres): 
-                            $medication = !empty($pres['item_medication']) ? $pres['item_medication'] : $pres['medication'];
-                            $quantity = !empty($pres['item_quantity']) ? $pres['item_quantity'] : $pres['quantity'];
+                            // Get first medication from items
+                            $medication = 'N/A';
+                            $quantity = 0;
+                            if (!empty($pres['items'])) {
+                                $first_item = $pres['items'][0];
+                                $medication = $first_item['medication_name'] ?? 'N/A';
+                                $quantity = $first_item['quantity'] ?? 0;
+                            }
+                            // If no items, use main prescription
+                            if ($medication === 'N/A' && !empty($pres['medication'])) {
+                                $medication = $pres['medication'];
+                                $quantity = $pres['quantity'] ?? 0;
+                            }
+                            $total_items = count($pres['items']);
                         ?>
                             <tr>
                                 <td><?= $i++ ?></td>
@@ -999,6 +1112,9 @@ include_once '../../components/pharmacy_sidebar.php';
                                             <i class="fas fa-user-md"></i> <?= htmlspecialchars($pres['doctor_name']) ?>
                                         </span>
                                     <?php endif; ?>
+                                    <?php if ($total_items > 1): ?>
+                                        <span class="text-xs text-primary block">+<?= $total_items - 1 ?> more items</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <div class="font-medium text-sm"><?= htmlspecialchars($pres['patient_name'] ?? 'Unknown') ?></div>
@@ -1012,18 +1128,18 @@ include_once '../../components/pharmacy_sidebar.php';
                                 </td>
                                 <td>
                                     <span class="text-sm font-medium"><?= htmlspecialchars($medication) ?></span>
-                                    <?php if (!empty($pres['dosage'])): ?>
-                                        <span class="text-xs text-gray-400 block">💊 <?= htmlspecialchars($pres['dosage']) ?></span>
+                                    <?php if (!empty($pres['items'][0]['dosage'])): ?>
+                                        <span class="text-xs text-gray-400 block">💊 <?= htmlspecialchars($pres['items'][0]['dosage']) ?></span>
                                     <?php endif; ?>
-                                    <?php if (!empty($pres['frequency'])): ?>
-                                        <span class="text-xs text-gray-400 block">🕐 <?= htmlspecialchars($pres['frequency']) ?></span>
-                                    <?php endif; ?>
-                                    <?php if (!empty($pres['duration'])): ?>
-                                        <span class="text-xs text-gray-400 block">📅 <?= $pres['duration'] ?> days</span>
+                                    <?php if (!empty($pres['items'][0]['frequency'])): ?>
+                                        <span class="text-xs text-gray-400 block">🕐 <?= htmlspecialchars($pres['items'][0]['frequency']) ?></span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="text-sm font-semibold"><?= $quantity ?? 0 ?></span>
+                                    <span class="text-sm font-semibold"><?= $quantity ?></span>
+                                    <?php if ($total_items > 1): ?>
+                                        <span class="text-xs text-gray-400 block">in <?= $total_items ?> items</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <span class="text-xs"><?= formatDate($pres['dispensed_at'] ?? '') ?></span>
@@ -1034,6 +1150,8 @@ include_once '../../components/pharmacy_sidebar.php';
                                     <?php endif; ?>
                                     <?php if ($pres['pharmacy_id'] == $user_id): ?>
                                         <span class="text-xs text-primary font-semibold block">✅ By You</span>
+                                    <?php elseif (!empty($pres['pharmacy_name'])): ?>
+                                        <span class="text-xs text-gray-400 block">By: <?= htmlspecialchars($pres['pharmacy_name']) ?></span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -1041,6 +1159,11 @@ include_once '../../components/pharmacy_sidebar.php';
                                         <a href="view_prescription.php?id=<?= $pres['id'] ?>" class="btn-view" title="View Details">
                                             <i class="fas fa-eye"></i> View
                                         </a>
+                                        <?php if (!empty($pres['bill']['id'])): ?>
+                                            <a href="../cashier/view_bill.php?id=<?= $pres['bill']['id'] ?>" class="btn-bill" title="View Bill">
+                                                <i class="fas fa-receipt"></i> Bill
+                                            </a>
+                                        <?php endif; ?>
                                         <span class="badge-status badge-success" style="font-size:0.55rem;">
                                             ✅ Dispensed
                                         </span>
@@ -1128,6 +1251,10 @@ include_once '../../components/pharmacy_sidebar.php';
             Dispensed Prescriptions
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:var(--primary);font-weight:600;font-size:0.65rem;">
+                <i class="fas fa-database"></i> New DB
+            </span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1244,14 +1371,14 @@ include_once '../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c🔵 Braick - Dispensed Prescriptions (Blue Theme - No Amount Cards)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
+    console.log('%c🔵 Braick - Dispensed Prescriptions (Blue Theme)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Total Dispensed: <?= $total_dispensed ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏥 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Tables Used: prescriptions, patients, users, visits, prescription_items, bills', 'font-size:13px; color:#34D399;');
     console.log('%c❌ Removed: Amount, Discount, Balance cards', 'font-size:13px; color:#DC2626;');
     console.log('%c✅ Only Total Dispensed card remains', 'font-size:13px; color:#34D399;');
-    console.log('%c💙 Blue theme applied', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

@@ -1,16 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/dashboard.php
-// PHARMACY DASHBOARD - WITH ALL STATS CARDS
-// ================================================================
-// FIXED:
-// 1. Total Stock - EXCLUDES expired medicines (active only)
-// 2. Expired Card - INCLUDES all medicines (active + inactive) that are expired
-// 3. Branch filter - Only selected branch
-// 4. Panadol (inactive + expired) now shows in Expired card
-// 5. WITH LOGIN PROTECTION
-// 6. USES PHARMACY HEADER (with date & time)
-// 7. NO AMOUNTS ON CARDS - Clean display
+// PHARMACY DASHBOARD - 8 CARDS WITH AUTO-UPDATE (AJAX)
+// USING NEW DATABASE: dispensary_db
+// QUICK ACTIONS: 3 BUTTONS (New Prescription, OTC Sale, Inventory)
 // ================================================================
 
 // ================================================================
@@ -21,7 +14,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -29,7 +22,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER HAS ACCESS (Pharmacy or Admin)
+// CHECK USER ACCESS (Pharmacy or Admin)
 // ================================================================
 $allowed_roles = ['pharmacy', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
@@ -56,7 +49,7 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI
+// DATABASE CONNECTION
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -71,30 +64,48 @@ try {
     // ================================================================
     // GET UNREAD NOTIFICATIONS
     // ================================================================
-    if (isset($_SESSION['user_id'])) {
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
-    }
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch()['total'] ?? 0;
     
     // ================================================================
-    // 1. TOTAL STOCK ITEMS - EXCLUDES EXPIRED (active only)
+    // CARD 1: TOTAL STOCK ITEMS (Medicine + Equipment)
     // ================================================================
+    
+    // Medicines (active, not expired)
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, SUM(quantity) as total_quantity
+        SELECT COUNT(DISTINCT medication_name) as count, SUM(quantity) as total_quantity
         FROM medications_inventory 
         WHERE branch_id = ? 
         AND status = 'active'
         AND (expiry_date IS NULL OR expiry_date >= CURDATE())
     ");
     $stmt->execute([$user_branch_id]);
-    $stock_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_stock_items = $stock_data['count'] ?? 0;
-    $total_quantity = $stock_data['total_quantity'] ?? 0;
+    $med_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_medicines = $med_data['count'] ?? 0;
+    $total_med_quantity = $med_data['total_quantity'] ?? 0;
+    
+    // Equipment (active, not expired)
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT equipment_name) as count, SUM(quantity) as total_quantity
+        FROM medical_equipment 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    ");
+    $stmt->execute([$user_branch_id]);
+    $equip_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_equipment = $equip_data['count'] ?? 0;
+    $total_equip_quantity = $equip_data['total_quantity'] ?? 0;
+    
+    $total_stock_items = $total_medicines + $total_equipment;
+    $total_stock_quantity = $total_med_quantity + $total_equip_quantity;
     
     // ================================================================
-    // 2. EXPIRED MEDICINES - INCLUDES ALL (active + inactive)
+    // CARD 2: EXPIRED (Medicine + Equipment)
     // ================================================================
+    
+    // Expired Medicines (all - active + inactive)
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, SUM(quantity) as total_quantity
         FROM medications_inventory 
@@ -103,26 +114,31 @@ try {
         AND expiry_date < CURDATE()
     ");
     $stmt->execute([$user_branch_id]);
-    $expired_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $expired_count = $expired_data['count'] ?? 0;
-    $expired_quantity = $expired_data['total_quantity'] ?? 0;
+    $expired_med = $stmt->fetch(PDO::FETCH_ASSOC);
+    $expired_med_count = $expired_med['count'] ?? 0;
+    $expired_med_quantity = $expired_med['total_quantity'] ?? 0;
     
-    // Expired list - includes all (active + inactive)
+    // Expired Equipment (all - active + inactive)
     $stmt = $db->prepare("
-        SELECT id, medication_name, quantity, expiry_date, batch_number, status
-        FROM medications_inventory 
+        SELECT COUNT(*) as count, SUM(quantity) as total_quantity
+        FROM medical_equipment 
         WHERE branch_id = ? 
         AND expiry_date IS NOT NULL 
         AND expiry_date < CURDATE()
-        ORDER BY expiry_date ASC
-        LIMIT 10
     ");
     $stmt->execute([$user_branch_id]);
-    $expired_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $expired_equip = $stmt->fetch(PDO::FETCH_ASSOC);
+    $expired_equip_count = $expired_equip['count'] ?? 0;
+    $expired_equip_quantity = $expired_equip['total_quantity'] ?? 0;
+    
+    $expired_count = $expired_med_count + $expired_equip_count;
+    $expired_quantity = $expired_med_quantity + $expired_equip_quantity;
     
     // ================================================================
-    // 3. EXPIRE SOON (expiry_date between today and 30 days from now)
+    // CARD 3: EXPIRE SOON (Medicine + Equipment)
     // ================================================================
+    
+    // Medicines expiring soon
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
         FROM medications_inventory 
@@ -132,78 +148,80 @@ try {
         AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     ");
     $stmt->execute([$user_branch_id]);
-    $expire_soon_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $expire_soon_med = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // Expire soon list
+    // Equipment expiring soon
     $stmt = $db->prepare("
-        SELECT id, medication_name, quantity, expiry_date, batch_number
-        FROM medications_inventory 
+        SELECT COUNT(*) as count 
+        FROM medical_equipment 
         WHERE branch_id = ? 
         AND status = 'active'
         AND expiry_date IS NOT NULL 
         AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
-        ORDER BY expiry_date ASC
-        LIMIT 10
     ");
     $stmt->execute([$user_branch_id]);
-    $expire_soon_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $expire_soon_equip = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    
+    $expire_soon_count = $expire_soon_med + $expire_soon_equip;
     
     // ================================================================
-    // 4. TOTAL PRESCRIPTIONS
+    // CARD 4: TOTAL PRESCRIPTIONS (Total + Pending + Completed)
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM prescriptions 
-        WHERE branch_id = ?
-    ");
+    
+    // Total prescriptions
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ?");
     $stmt->execute([$user_branch_id]);
     $total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // ================================================================
-    // 5. OTC SALES
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count
-        FROM otc_sales 
-        WHERE branch_id = ?
-    ");
+    // Pending prescriptions
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
     $stmt->execute([$user_branch_id]);
-    $otc_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $otc_sales_count = $otc_data['count'] ?? 0;
+    $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    
+    // Completed/Dispensed prescriptions
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'dispensed'");
+    $stmt->execute([$user_branch_id]);
+    $completed_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    
+    // ================================================================
+    // CARD 5: OTC SALES (Total + Today)
+    // ================================================================
+    
+    // Total OTC Sales
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ?");
+    $stmt->execute([$user_branch_id]);
+    $otc_sales_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
     // Today's OTC Sales
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count
+        SELECT COUNT(*) as count 
         FROM otc_sales 
         WHERE branch_id = ? AND DATE(created_at) = CURDATE()
     ");
     $stmt->execute([$user_branch_id]);
-    $otc_today_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $otc_today_count = $otc_today_data['count'] ?? 0;
+    $otc_today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
     // ================================================================
-    // 6. DISPENSED PRESCRIPTIONS
+    // CARD 6: DISPENSED MEDICINES (OTC + Prescription Dispensed)
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM prescriptions 
-        WHERE branch_id = ? AND status = 'dispensed'
-    ");
+    
+    // Total OTC (paid)
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND payment_status = 'paid'");
     $stmt->execute([$user_branch_id]);
-    $dispensed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $otc_dispensed = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // Today's Dispensed
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM prescriptions 
-        WHERE branch_id = ? AND status = 'dispensed' AND DATE(dispensed_at) = CURDATE()
-    ");
+    // Total Prescription Dispensed
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'dispensed'");
     $stmt->execute([$user_branch_id]);
-    $dispensed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $prescription_dispensed = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    
+    $total_dispensed = $otc_dispensed + $prescription_dispensed;
     
     // ================================================================
-    // 7. LOW STOCK
+    // CARD 7: LOW STOCK (Medicine + Equipment)
     // ================================================================
+    
+    // Low Stock Medicines
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
         FROM medications_inventory 
@@ -214,11 +232,128 @@ try {
         AND (expiry_date IS NULL OR expiry_date >= CURDATE())
     ");
     $stmt->execute([$user_branch_id]);
-    $low_stock_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $low_stock_med = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // Low stock list
+    // Low Stock Equipment
     $stmt = $db->prepare("
-        SELECT id, medication_name, quantity, reorder_level, unit
+        SELECT COUNT(*) as count 
+        FROM medical_equipment 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND quantity > 0 
+        AND quantity <= reorder_level
+        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    ");
+    $stmt->execute([$user_branch_id]);
+    $low_stock_equip = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    
+    $low_stock_count = $low_stock_med + $low_stock_equip;
+    
+    // ================================================================
+    // CARD 8: OUT OF STOCK (Medicine + Equipment)
+    // ================================================================
+    
+    // Out of Stock Medicines
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM medications_inventory 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND quantity = 0
+        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    ");
+    $stmt->execute([$user_branch_id]);
+    $out_of_stock_med = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    
+    // Out of Stock Equipment
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM medical_equipment 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND quantity = 0
+        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    ");
+    $stmt->execute([$user_branch_id]);
+    $out_of_stock_equip = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    
+    $out_of_stock_count = $out_of_stock_med + $out_of_stock_equip;
+    
+    // ================================================================
+    // LISTS FOR DISPLAY (Expired, Expire Soon, Low Stock, Out of Stock)
+    // ================================================================
+    
+    // Expired Medicines List
+    $stmt = $db->prepare("
+        SELECT id, medication_name as name, quantity, expiry_date, batch_number, status, 'medicine' as type
+        FROM medications_inventory 
+        WHERE branch_id = ? 
+        AND expiry_date IS NOT NULL 
+        AND expiry_date < CURDATE()
+        ORDER BY expiry_date ASC
+        LIMIT 10
+    ");
+    $stmt->execute([$user_branch_id]);
+    $expired_med_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Expired Equipment List
+    $stmt = $db->prepare("
+        SELECT id, equipment_name as name, quantity, expiry_date, batch_number, status, 'equipment' as type
+        FROM medical_equipment 
+        WHERE branch_id = ? 
+        AND expiry_date IS NOT NULL 
+        AND expiry_date < CURDATE()
+        ORDER BY expiry_date ASC
+        LIMIT 10
+    ");
+    $stmt->execute([$user_branch_id]);
+    $expired_equip_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Merge and sort expired
+    $expired_all = array_merge($expired_med_list, $expired_equip_list);
+    usort($expired_all, function($a, $b) {
+        return strtotime($a['expiry_date']) - strtotime($b['expiry_date']);
+    });
+    $expired_all = array_slice($expired_all, 0, 10);
+    
+    // Expire Soon Medicines List
+    $stmt = $db->prepare("
+        SELECT id, medication_name as name, quantity, expiry_date, batch_number, 'medicine' as type
+        FROM medications_inventory 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND expiry_date IS NOT NULL 
+        AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+        ORDER BY expiry_date ASC
+        LIMIT 10
+    ");
+    $stmt->execute([$user_branch_id]);
+    $expire_soon_med_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Expire Soon Equipment List
+    $stmt = $db->prepare("
+        SELECT id, equipment_name as name, quantity, expiry_date, batch_number, 'equipment' as type
+        FROM medical_equipment 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND expiry_date IS NOT NULL 
+        AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+        ORDER BY expiry_date ASC
+        LIMIT 10
+    ");
+    $stmt->execute([$user_branch_id]);
+    $expire_soon_equip_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Merge and sort expire soon
+    $expire_soon_all = array_merge($expire_soon_med_list, $expire_soon_equip_list);
+    usort($expire_soon_all, function($a, $b) {
+        return strtotime($a['expiry_date']) - strtotime($b['expiry_date']);
+    });
+    $expire_soon_all = array_slice($expire_soon_all, 0, 10);
+    
+    // Low Stock Medicines List
+    $stmt = $db->prepare("
+        SELECT id, medication_name as name, quantity, reorder_level, unit, 'medicine' as type
         FROM medications_inventory 
         WHERE branch_id = ? 
         AND status = 'active'
@@ -229,20 +364,63 @@ try {
         LIMIT 10
     ");
     $stmt->execute([$user_branch_id]);
-    $low_stock_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $low_stock_med_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ================================================================
-    // 8. PENDING PRESCRIPTIONS
-    // ================================================================
+    // Low Stock Equipment List
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM prescriptions 
-        WHERE branch_id = ? AND status = 'pending'
+        SELECT id, equipment_name as name, quantity, reorder_level, unit, 'equipment' as type
+        FROM medical_equipment 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND quantity > 0 
+        AND quantity <= reorder_level
+        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        ORDER BY quantity ASC
+        LIMIT 10
     ");
     $stmt->execute([$user_branch_id]);
-    $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $low_stock_equip_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Pending prescriptions list
+    // Merge and sort low stock
+    $low_stock_all = array_merge($low_stock_med_list, $low_stock_equip_list);
+    usort($low_stock_all, function($a, $b) {
+        return $a['quantity'] - $b['quantity'];
+    });
+    $low_stock_all = array_slice($low_stock_all, 0, 10);
+    
+    // Out of Stock Medicines List
+    $stmt = $db->prepare("
+        SELECT id, medication_name as name, quantity, reorder_level, unit, 'medicine' as type
+        FROM medications_inventory 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND quantity = 0
+        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        ORDER BY medication_name ASC
+        LIMIT 10
+    ");
+    $stmt->execute([$user_branch_id]);
+    $out_of_stock_med_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Out of Stock Equipment List
+    $stmt = $db->prepare("
+        SELECT id, equipment_name as name, quantity, reorder_level, unit, 'equipment' as type
+        FROM medical_equipment 
+        WHERE branch_id = ? 
+        AND status = 'active'
+        AND quantity = 0
+        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+        ORDER BY equipment_name ASC
+        LIMIT 10
+    ");
+    $stmt->execute([$user_branch_id]);
+    $out_of_stock_equip_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Merge out of stock
+    $out_of_stock_all = array_merge($out_of_stock_med_list, $out_of_stock_equip_list);
+    $out_of_stock_all = array_slice($out_of_stock_all, 0, 10);
+    
+    // Pending Prescriptions List
     $stmt = $db->prepare("
         SELECT p.*, pat.full_name as patient_name, pat.patient_id as patient_code
         FROM prescriptions p
@@ -254,84 +432,61 @@ try {
     $stmt->execute([$user_branch_id]);
     $pending_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ================================================================
-    // 9. OUT OF STOCK
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM medications_inventory 
-        WHERE branch_id = ? 
-        AND status = 'active'
-        AND quantity = 0
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-    ");
-    $stmt->execute([$user_branch_id]);
-    $out_of_stock_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    // Out of stock list
-    $stmt = $db->prepare("
-        SELECT id, medication_name, quantity, reorder_level, unit
-        FROM medications_inventory 
-        WHERE branch_id = ? 
-        AND status = 'active'
-        AND quantity = 0
-        AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-        ORDER BY medication_name ASC
-        LIMIT 10
-    ");
-    $stmt->execute([$user_branch_id]);
-    $out_of_stock_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ================================================================
-    // 10. RECENT PRESCRIPTIONS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT p.*, pat.full_name as patient_name, pat.patient_id as patient_code,
-               u.full_name as doctor_name
-        FROM prescriptions p
-        JOIN patients pat ON p.patient_id = pat.id
-        LEFT JOIN users u ON p.doctor_id = u.id
-        WHERE p.branch_id = ?
-        ORDER BY p.created_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$user_branch_id]);
-    $recent_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ================================================================
-    // 11. RECENT OTC SALES
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT * FROM otc_sales 
-        WHERE branch_id = ?
-        ORDER BY created_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$user_branch_id]);
-    $recent_otc_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
 } catch (Exception $e) {
     // Set default values on error
     $total_stock_items = 0;
-    $total_quantity = 0;
+    $total_stock_quantity = 0;
+    $total_medicines = 0;
+    $total_equipment = 0;
     $expired_count = 0;
     $expired_quantity = 0;
-    $expired_list = [];
+    $expired_med_count = 0;
+    $expired_equip_count = 0;
     $expire_soon_count = 0;
-    $expire_soon_list = [];
+    $expire_soon_med = 0;
+    $expire_soon_equip = 0;
     $total_prescriptions = 0;
+    $pending_count = 0;
+    $completed_prescriptions = 0;
     $otc_sales_count = 0;
     $otc_today_count = 0;
-    $dispensed_count = 0;
-    $dispensed_today = 0;
+    $total_dispensed = 0;
+    $otc_dispensed = 0;
+    $prescription_dispensed = 0;
     $low_stock_count = 0;
-    $low_stock_list = [];
-    $pending_count = 0;
-    $pending_list = [];
+    $low_stock_med = 0;
+    $low_stock_equip = 0;
     $out_of_stock_count = 0;
-    $out_of_stock_list = [];
-    $recent_prescriptions = [];
-    $recent_otc_sales = [];
+    $out_of_stock_med = 0;
+    $out_of_stock_equip = 0;
+    $expired_all = [];
+    $expire_soon_all = [];
+    $low_stock_all = [];
+    $out_of_stock_all = [];
+    $pending_list = [];
+}
+
+// ================================================================
+// GET INITIAL HASH FOR AUTO-UPDATE
+// ================================================================
+$initial_hash = '';
+try {
+    $api_url = '/dispensary_system/frontend/api/get_pharmacy_stats.php';
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $api_url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+    $response = curl_exec($ch);
+    curl_close($ch);
+    
+    if ($response) {
+        $data = json_decode($response, true);
+        if ($data && isset($data['hash'])) {
+            $initial_hash = $data['hash'];
+        }
+    }
+} catch (Exception $e) {
+    // Silent fail
 }
 
 // ================================================================
@@ -361,7 +516,6 @@ include_once '../../components/pharmacy_sidebar.php';
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     
     <style>
         /* ================================================================
@@ -445,7 +599,7 @@ include_once '../../components/pharmacy_sidebar.php';
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           MAIN CONTENT OFFSET FOR HEADER
+           MAIN CONTENT
            ================================================================ */
         .main-content {
             margin-left: 270px;
@@ -581,18 +735,18 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS - 9 CARDS - NO AMOUNTS
+           STATS CARDS - 8 CARDS (4 TOP, 4 BOTTOM) - BIGGER FONTS
            ================================================================ */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             margin-bottom: 24px;
         }
         
         .stat-card {
             border-radius: 14px;
-            padding: 18px 20px;
+            padding: 20px 24px;
             transition: all 0.3s ease;
             cursor: pointer;
             position: relative;
@@ -613,35 +767,35 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .stat-card .stat-icon {
-            font-size: 1.4rem;
+            font-size: 1.5rem;
             opacity: 0.9;
-            margin-bottom: 2px;
+            margin-bottom: 4px;
             display: block;
         }
         
         .stat-card .stat-number {
-            font-size: 1.8rem;
+            font-size: 2rem;
             font-weight: 700;
             color: white;
             line-height: 1.2;
         }
         
         .stat-card .stat-label {
-            font-size: 0.7rem;
-            color: rgba(255,255,255,0.8);
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.9);
             font-weight: 500;
-            margin-top: 2px;
+            margin-top: 4px;
         }
         
         .stat-card .stat-sub {
-            font-size: 0.55rem;
-            color: rgba(255,255,255,0.5);
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.6);
             margin-top: 2px;
         }
         
         .stat-card .stat-update {
-            font-size: 0.55rem;
-            color: rgba(255,255,255,0.5);
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.4);
             margin-top: 4px;
             display: flex;
             align-items: center;
@@ -657,18 +811,48 @@ include_once '../../components/pharmacy_sidebar.php';
             animation: pulse-dot 1.5s infinite;
         }
         
+        .stat-card .stat-grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        
+        .stat-card .stat-grid-2 .stat-number {
+            font-size: 1.3rem;
+        }
+        
+        .stat-card .stat-grid-2 .stat-sub {
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.55);
+        }
+        
+        .stat-card .stat-sub-grid {
+            display: flex;
+            gap: 12px;
+            margin-top: 4px;
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.65);
+        }
+        
+        .stat-card .stat-sub-grid span {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
         .stat-card .stat-arrow {
             position: absolute;
             bottom: 12px;
             right: 16px;
             font-size: 0.7rem;
-            color: rgba(255,255,255,0.4);
+            color: rgba(255,255,255,0.3);
             transition: all 0.3s ease;
         }
         
         .stat-card:hover .stat-arrow {
             transform: translateX(4px);
-            color: rgba(255,255,255,0.8);
+            color: rgba(255,255,255,0.7);
         }
         
         /* Card Colors */
@@ -688,7 +872,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .card {
             background: var(--bg-card);
             border-radius: 14px;
-            padding: 18px 20px;
+            padding: 16px 18px;
             border: 1px solid var(--border-color);
             transition: all 0.3s;
             box-shadow: var(--shadow-sm);
@@ -703,9 +887,9 @@ include_once '../../components/pharmacy_sidebar.php';
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 6px;
         }
         
         .card-title {
@@ -719,46 +903,13 @@ include_once '../../components/pharmacy_sidebar.php';
         .card-title .title-purple { color: var(--purple); }
         .card-title .title-orange { color: #D97706; }
         .card-title .title-red { color: var(--danger); }
-        
-        /* ================================================================
-           BADGES
-           ================================================================ */
-        .role-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
+        .card-title .title-teal { color: var(--teal); }
         
         /* ================================================================
            SCROLL CONTAINER
            ================================================================ */
         .scroll-container {
-            max-height: 300px;
+            max-height: 250px;
             overflow-y: auto;
         }
         
@@ -777,18 +928,58 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         /* ================================================================
-           STATUS BADGE
+           STATUS BADGES
            ================================================================ */
         .status-badge {
             display: inline-block;
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-size: 0.6rem;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.55rem;
             font-weight: 600;
         }
         .status-badge.pending { background: #FEF3C7; color: #D97706; }
         .status-badge.dispensed { background: #D1FAE5; color: #059669; }
         .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
+        .status-badge.completed { background: #D1FAE5; color: #059669; }
+        
+        /* ================================================================
+           LIST ITEMS
+           ================================================================ */
+        .list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px 8px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.75rem;
+        }
+        .list-item:last-child { border-bottom: none; }
+        .list-item .name { font-weight: 500; }
+        .list-item .qty { font-weight: 600; }
+        .list-item .qty.low { color: #D97706; }
+        .list-item .qty.out { color: #DC2626; }
+        .list-item .expired-badge {
+            background: #FEE2E2;
+            color: #DC2626;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-size: 0.5rem;
+            font-weight: 600;
+        }
+        .list-item .expire-date.warning { color: #D97706; font-size: 0.65rem; }
+        .list-item .expire-date.danger { color: #DC2626; font-size: 0.65rem; }
+        .list-item .expire-date.expired { color: #DC2626; font-weight: 600; font-size: 0.65rem; }
+        .list-item .batch { font-size: 0.55rem; color: var(--text-secondary); font-family: monospace; }
+        
+        .expired-row {
+            background: var(--danger-bg) !important;
+            border-radius: 4px;
+            margin-bottom: 2px;
+        }
+        
+        [data-theme="dark"] .expired-row {
+            background: #3A1A1A !important;
+        }
         
         /* ================================================================
            TOAST
@@ -797,18 +988,19 @@ include_once '../../components/pharmacy_sidebar.php';
             position: fixed;
             bottom: 24px;
             right: 24px;
-            padding: 14px 20px;
+            padding: 12px 18px;
             border-radius: 12px;
             z-index: 999;
-            max-width: 400px;
+            max-width: 380px;
             transform: translateY(100px);
             opacity: 0;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             color: white;
             box-shadow: var(--shadow-lg);
+            font-size: 0.85rem;
         }
         
         .toast-custom.show {
@@ -825,11 +1017,11 @@ include_once '../../components/pharmacy_sidebar.php';
            FOOTER
            ================================================================ */
         .footer {
-            padding: 14px 0;
+            padding: 12px 0;
             border-top: 1px solid var(--border-color);
-            margin-top: 24px;
+            margin-top: 20px;
             text-align: center;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: var(--text-secondary);
         }
         
@@ -839,17 +1031,25 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         /* ================================================================
-           QUICK ACTIONS
+           QUICK ACTIONS - 3 BUTTONS
            ================================================================ */
+        .quick-actions-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
         .quick-action {
-            padding: 16px;
+            padding: 18px;
             border-radius: 12px;
             text-align: center;
             transition: all 0.3s ease;
             cursor: pointer;
             text-decoration: none;
             display: block;
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--border-color);
             background: var(--bg-card);
         }
         
@@ -860,79 +1060,15 @@ include_once '../../components/pharmacy_sidebar.php';
         }
         
         .quick-action .icon {
-            font-size: 1.6rem;
+            font-size: 1.8rem;
             display: block;
             margin-bottom: 6px;
         }
         
         .quick-action .label {
-            font-size: 0.7rem;
+            font-size: 0.8rem;
             font-weight: 600;
             color: var(--text-primary);
-        }
-        
-        /* ================================================================
-           EXPIRE ITEMS
-           ================================================================ */
-        .expire-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 6px 10px;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 0.8rem;
-        }
-        .expire-item:last-child { border-bottom: none; }
-        .expire-item .med-name { font-weight: 500; }
-        .expire-item .expire-date { font-size: 0.7rem; }
-        .expire-item .expire-date.warning { color: #D97706; }
-        .expire-item .expire-date.danger { color: #DC2626; }
-        .expire-item .expire-date.success { color: #059669; }
-        .expire-item .expire-date.expired { color: #DC2626; font-weight: 600; }
-        
-        .stock-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 6px 10px;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 0.8rem;
-        }
-        .stock-item:last-child { border-bottom: none; }
-        .stock-item .qty { font-weight: 600; }
-        .stock-item .qty.low { color: #D97706; }
-        .stock-item .qty.out { color: #DC2626; }
-        
-        .prescription-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 6px 10px;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 0.8rem;
-        }
-        .prescription-item:last-child { border-bottom: none; }
-        .prescription-item .patient-name { font-weight: 500; }
-        .prescription-item .medication { font-size: 0.7rem; color: var(--text-secondary); }
-        
-        .expired-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            background: #FEE2E2;
-            color: #DC2626;
-        }
-        
-        .expired-row {
-            background: var(--danger-bg) !important;
-            border-radius: 4px;
-            margin-bottom: 2px;
-        }
-        
-        [data-theme="dark"] .expired-row {
-            background: #3A1A1A !important;
         }
         
         /* ================================================================
@@ -952,10 +1088,6 @@ include_once '../../components/pharmacy_sidebar.php';
         .text-center { text-align: center; }
         .text-sm { font-size: 0.875rem; }
         .text-xs { font-size: 0.75rem; }
-        .font-normal { font-weight: 400; }
-        .font-medium { font-weight: 500; }
-        .font-semibold { font-weight: 600; }
-        .font-bold { font-weight: 700; }
         .text-gray-400 { color: var(--gray-400); }
         .text-primary { color: var(--primary); }
         .text-green-500 { color: var(--success); }
@@ -964,32 +1096,45 @@ include_once '../../components/pharmacy_sidebar.php';
         .block { display: block; }
         .inline-block { display: inline-block; }
         .py-4 { padding-top: 16px; padding-bottom: 16px; }
-        .py-6 { padding-top: 24px; padding-bottom: 24px; }
-        .text-2xl { font-size: 1.5rem; }
-        .text-3xl { font-size: 1.875rem; }
-        .hover\:underline:hover { text-decoration: underline; }
         .ml-1 { margin-left: 4px; }
         .ml-2 { margin-left: 8px; }
         .mr-1 { margin-right: 4px; }
         .mr-2 { margin-right: 8px; }
         
+        .btn-sm {
+            padding: 2px 8px;
+            font-size: 0.6rem;
+            border-radius: 4px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
         /* ================================================================
            RESPONSIVE
            ================================================================ */
+        @media (max-width: 1200px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
-            .stats-grid { grid-template-columns: repeat(3, 1fr); }
             .grid-cols-4 { grid-template-columns: 1fr 1fr; }
+            .quick-actions-grid { max-width: 100%; }
         }
         
         @media (max-width: 768px) {
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stat-card .stat-number { font-size: 1.4rem; }
+            .stat-card .stat-number { font-size: 1.5rem; }
             .stat-card { padding: 14px 16px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
             .grid-cols-2 { grid-template-columns: 1fr; }
             .grid-cols-3 { grid-template-columns: 1fr 1fr; }
+            .grid-cols-4 { grid-template-columns: 1fr 1fr; }
+            .quick-actions-grid { grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+            .quick-action { padding: 12px; }
+            .quick-action .icon { font-size: 1.4rem; }
+            .quick-action .label { font-size: 0.7rem; }
         }
         
         @media (max-width: 480px) {
@@ -997,8 +1142,11 @@ include_once '../../components/pharmacy_sidebar.php';
             .stat-card .stat-number { font-size: 1.2rem; }
             .stat-card { padding: 10px 12px; }
             .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
-            .grid-cols-4 { grid-template-columns: 1fr 1fr; }
-            .grid-cols-3 { grid-template-columns: 1fr 1fr; }
+            .stat-card .stat-grid-2 .stat-number { font-size: 1rem; }
+            .quick-actions-grid { grid-template-columns: 1fr 1fr; }
+            .quick-action { padding: 10px; }
+            .quick-action .icon { font-size: 1.2rem; }
+            .quick-action .label { font-size: 0.65rem; }
         }
         
         /* ================================================================
@@ -1019,12 +1167,23 @@ include_once '../../components/pharmacy_sidebar.php';
             opacity: 0;
         }
         
-        .btn-sm {
-            padding: 2px 10px;
-            font-size: 0.65rem;
-            border-radius: 4px;
-            text-decoration: none;
-            display: inline-block;
+        .animate-fade-in-up:nth-child(1) { animation-delay: 0.05s; }
+        .animate-fade-in-up:nth-child(2) { animation-delay: 0.1s; }
+        .animate-fade-in-up:nth-child(3) { animation-delay: 0.15s; }
+        .animate-fade-in-up:nth-child(4) { animation-delay: 0.2s; }
+        .animate-fade-in-up:nth-child(5) { animation-delay: 0.25s; }
+        .animate-fade-in-up:nth-child(6) { animation-delay: 0.3s; }
+        .animate-fade-in-up:nth-child(7) { animation-delay: 0.35s; }
+        .animate-fade-in-up:nth-child(8) { animation-delay: 0.4s; }
+        
+        /* Update pulse */
+        .update-pulse {
+            animation: pulse-badge 2s infinite;
+        }
+        
+        @keyframes pulse-badge {
+            0%, 100% { opacity: 0.7; }
+            50% { opacity: 1; }
         }
     </style>
 </head>
@@ -1044,7 +1203,7 @@ include_once '../../components/pharmacy_sidebar.php';
                 <i class="fas fa-prescription"></i>
                 Pharmacy Dashboard
                 <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">PHARMACY</span>
-                <span class="update-badge-light" id="updateBadge">
+                <span class="update-badge-light update-pulse" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
             </h1>
@@ -1059,110 +1218,168 @@ include_once '../../components/pharmacy_sidebar.php';
                 <span class="header-badge">
                     <i class="fas fa-calendar-day"></i> <?= date('F d, Y') ?>
                 </span>
+                
+                <span class="header-badge" id="liveTime">
+                    <i class="fas fa-clock"></i> <?= date('H:i:s') ?>
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="pending_prescriptions.php" class="btn-outline-light">
                 <i class="fas fa-clock"></i> Pending (<?= $pending_count ?>)
             </a>
-            <button onclick="window.location.reload()" class="btn-outline-light">
+            <button onclick="manualUpdate()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - 9 CARDS - NO AMOUNTS -->
+    <!-- STATS CARDS - 8 CARDS (4 TOP, 4 BOTTOM) - BIGGER FONTS -->
     <!-- ================================================================ -->
-    <div class="stats-grid">
+    
+    <!-- ROW 1: Cards 1-4 -->
+    <div class="stats-grid" id="statsGrid">
         
-        <!-- 1. Total Stock Items - Blue (EXCLUDES EXPIRED) -->
-        <a href="inventory.php" class="stat-card blue">
+        <!-- CARD 1: Total Stock Items (Medicine + Equipment) -->
+        <a href="inventory.php" class="stat-card blue animate-fade-in-up" id="card1">
             <span class="stat-icon">📦</span>
-            <div class="stat-number" id="totalStock"><?= $total_stock_items ?></div>
+            <div class="stat-number" id="statTotalStock"><?= $total_stock_items ?></div>
             <div class="stat-label">Total Stock Items</div>
-            <div class="stat-sub"><?= $total_quantity ?> units total</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <div class="stat-grid-2">
+                <div>
+                    <div class="stat-number" id="statMedicines">💊 <?= $total_medicines ?></div>
+                    <div class="stat-sub">Medicine</div>
+                </div>
+                <div>
+                    <div class="stat-number" id="statEquipment">🔧 <?= $total_equipment ?></div>
+                    <div class="stat-sub">Equipment</div>
+                </div>
+            </div>
+            <div class="stat-update"><span class="live-dot"></span> <span id="statTotalUnits"><?= $total_stock_quantity ?></span> units</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 2. Expired - Red (INCLUDES ALL - active + inactive) -->
-        <a href="expired.php" class="stat-card red">
+        <!-- CARD 2: Expired (Medicine + Equipment) -->
+        <a href="expired.php" class="stat-card red animate-fade-in-up" id="card2">
             <span class="stat-icon">🚫</span>
-            <div class="stat-number" id="expiredCount"><?= $expired_count ?></div>
+            <div class="stat-number" id="statExpired"><?= $expired_count ?></div>
             <div class="stat-label">Expired</div>
-            <div class="stat-sub"><?= $expired_quantity ?> units expired</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <div class="stat-grid-2">
+                <div>
+                    <div class="stat-number" id="statExpiredMed">💊 <?= $expired_med_count ?></div>
+                    <div class="stat-sub">Medicine</div>
+                </div>
+                <div>
+                    <div class="stat-number" id="statExpiredEquip">🔧 <?= $expired_equip_count ?></div>
+                    <div class="stat-sub">Equipment</div>
+                </div>
+            </div>
+            <div class="stat-update"><span class="live-dot"></span> <span id="statExpiredUnits"><?= $expired_quantity ?></span> units</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 3. Expire Soon - Orange -->
-        <a href="expiring_soon.php" class="stat-card orange">
+        <!-- CARD 3: Expire Soon (Medicine + Equipment) -->
+        <a href="expiring_soon.php" class="stat-card orange animate-fade-in-up" id="card3">
             <span class="stat-icon">⏰</span>
-            <div class="stat-number" id="expireSoon"><?= $expire_soon_count ?></div>
+            <div class="stat-number" id="statExpireSoon"><?= $expire_soon_count ?></div>
             <div class="stat-label">Expire Soon</div>
-            <div class="stat-sub">Within 30 days</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <div class="stat-grid-2">
+                <div>
+                    <div class="stat-number" id="statExpireSoonMed">💊 <?= $expire_soon_med ?></div>
+                    <div class="stat-sub">Medicine</div>
+                </div>
+                <div>
+                    <div class="stat-number" id="statExpireSoonEquip">🔧 <?= $expire_soon_equip ?></div>
+                    <div class="stat-sub">Equipment</div>
+                </div>
+            </div>
+            <div class="stat-update"><span class="live-dot"></span> Within 30 days</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 4. Total Prescriptions - Purple -->
-        <a href="prescription_history.php" class="stat-card purple">
+        <!-- CARD 4: Total Prescriptions (Total + Pending + Completed) -->
+        <a href="prescription_history.php" class="stat-card purple animate-fade-in-up" id="card4">
             <span class="stat-icon">📋</span>
-            <div class="stat-number" id="totalPrescriptions"><?= $total_prescriptions ?></div>
+            <div class="stat-number" id="statPrescriptions"><?= $total_prescriptions ?></div>
             <div class="stat-label">Total Prescriptions</div>
-            <div class="stat-sub">All time</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <div class="stat-sub-grid" id="statPrescriptionSub">
+                <span>⏳ <?= $pending_count ?> Pending</span>
+                <span>✅ <?= $completed_prescriptions ?> Completed</span>
+            </div>
+            <div class="stat-update"><span class="live-dot"></span> All time</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 5. OTC Sales - Teal -->
-        <a href="otc_history.php" class="stat-card teal">
+    </div>
+    
+    <!-- ROW 2: Cards 5-8 -->
+    <div class="stats-grid" id="statsGrid2">
+        
+        <!-- CARD 5: OTC Sales -->
+        <a href="otc_history.php" class="stat-card teal animate-fade-in-up" id="card5">
             <span class="stat-icon">🛒</span>
-            <div class="stat-number" id="otcSales"><?= $otc_sales_count ?></div>
+            <div class="stat-number" id="statOTC"><?= $otc_sales_count ?></div>
             <div class="stat-label">OTC Sales</div>
-            <div class="stat-sub"><?= $otc_today_count ?> today</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <div class="stat-sub" id="statOTCToday"><?= $otc_today_count ?> today</div>
+            <div class="stat-update"><span class="live-dot"></span> Total sales</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 6. Dispensed - Green -->
-        <a href="dispensed_prescriptions.php" class="stat-card green">
+        <!-- CARD 6: Dispensed Medicines (OTC + Prescription) -->
+        <a href="dispensed.php" class="stat-card green animate-fade-in-up" id="card6">
             <span class="stat-icon">✅</span>
-            <div class="stat-number" id="dispensed"><?= $dispensed_count ?></div>
-            <div class="stat-label">Dispensed</div>
-            <div class="stat-sub"><?= $dispensed_today ?> today</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <div class="stat-number" id="statDispensed"><?= $total_dispensed ?></div>
+            <div class="stat-label">Dispensed Medicines</div>
+            <div class="stat-grid-2">
+                <div>
+                    <div class="stat-number" id="statOTCDispensed">🛒 <?= $otc_dispensed ?></div>
+                    <div class="stat-sub">OTC</div>
+                </div>
+                <div>
+                    <div class="stat-number" id="statPrescriptionDispensed">📋 <?= $prescription_dispensed ?></div>
+                    <div class="stat-sub">Prescription</div>
+                </div>
+            </div>
+            <div class="stat-update"><span class="live-dot"></span> Total dispensed</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 7. Low Stock - Yellow -->
-        <a href="low_stock.php" class="stat-card yellow">
+        <!-- CARD 7: Low Stock (Medicine + Equipment) -->
+        <a href="low_stock.php" class="stat-card yellow animate-fade-in-up" id="card7">
             <span class="stat-icon">⚠️</span>
-            <div class="stat-number" id="lowStock"><?= $low_stock_count ?></div>
+            <div class="stat-number" id="statLowStock"><?= $low_stock_count ?></div>
             <div class="stat-label">Low Stock</div>
-            <div class="stat-sub">Below reorder level</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <div class="stat-grid-2">
+                <div>
+                    <div class="stat-number" id="statLowStockMed">💊 <?= $low_stock_med ?></div>
+                    <div class="stat-sub">Medicine</div>
+                </div>
+                <div>
+                    <div class="stat-number" id="statLowStockEquip">🔧 <?= $low_stock_equip ?></div>
+                    <div class="stat-sub">Equipment</div>
+                </div>
+            </div>
+            <div class="stat-update"><span class="live-dot"></span> Below reorder level</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 8. Pending - Pink -->
-        <a href="pending_prescriptions.php" class="stat-card pink">
-            <span class="stat-icon">⏳</span>
-            <div class="stat-number" id="pending"><?= $pending_count ?></div>
-            <div class="stat-label">Pending</div>
-            <div class="stat-sub">Awaiting dispensing</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
-            <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 9. Out of Stock - Gray -->
-        <a href="out_of_stock.php" class="stat-card gray">
+        <!-- CARD 8: Out of Stock (Medicine + Equipment) -->
+        <a href="out_of_stock.php" class="stat-card gray animate-fade-in-up" id="card8">
             <span class="stat-icon">🚫</span>
-            <div class="stat-number" id="outOfStock"><?= $out_of_stock_count ?></div>
+            <div class="stat-number" id="statOutOfStock"><?= $out_of_stock_count ?></div>
             <div class="stat-label">Out of Stock</div>
-            <div class="stat-sub">Quantity = 0</div>
-            <div class="stat-update"><span class="live-dot"></span> Live</div>
+            <div class="stat-grid-2">
+                <div>
+                    <div class="stat-number" id="statOutOfStockMed">💊 <?= $out_of_stock_med ?></div>
+                    <div class="stat-sub">Medicine</div>
+                </div>
+                <div>
+                    <div class="stat-number" id="statOutOfStockEquip">🔧 <?= $out_of_stock_equip ?></div>
+                    <div class="stat-sub">Equipment</div>
+                </div>
+            </div>
+            <div class="stat-update"><span class="live-dot"></span> Quantity = 0</div>
             <span class="stat-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1171,31 +1388,32 @@ include_once '../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <!-- LISTS: Expired, Expire Soon, Low Stock, Out of Stock, Pending -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="listsContainer">
         
-        <!-- Expired List - INCLUDES INACTIVE TOO -->
-        <div class="card">
+        <!-- Expired List -->
+        <div class="card animate-fade-in-up">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-skull title-red mr-2"></i> Expired
-                    <span class="text-sm font-normal text-red-500">(<?= $expired_count ?> items)</span>
-                    <?php if ($expired_count > 0): ?>
-                        <span class="text-xs text-red-500 font-normal">⚠️ Includes inactive medicines</span>
-                    <?php endif; ?>
+                    <span class="text-sm font-normal text-red-500">(<span id="expiredCount"><?= count($expired_all) ?></span> items)</span>
                 </h3>
                 <a href="expired.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             <div class="scroll-container" id="expiredList">
-                <?php if (count($expired_list) > 0): ?>
-                    <?php foreach ($expired_list as $item): ?>
-                        <div class="expire-item expired-row">
-                            <span class="med-name"><?= htmlspecialchars($item['medication_name']) ?></span>
+                <?php if (count($expired_all) > 0): ?>
+                    <?php foreach ($expired_all as $item): ?>
+                        <div class="list-item expired-row">
+                            <span class="name">
+                                <?= $item['type'] === 'medicine' ? '💊' : '🔧' ?>
+                                <?= htmlspecialchars($item['name'] ?? 'Unknown') ?>
+                                <span class="batch"><?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?></span>
+                            </span>
                             <span class="qty"><?= $item['quantity'] ?> units</span>
                             <span class="expire-date expired">
                                 <i class="fas fa-calendar-times mr-1"></i>
                                 <?= date('d/m/Y', strtotime($item['expiry_date'])) ?>
                                 <span class="expired-badge ml-1">EXPIRED</span>
-                                <?php if ($item['status'] === 'inactive'): ?>
+                                <?php if (isset($item['status']) && $item['status'] === 'inactive'): ?>
                                     <span class="text-xs text-gray-400 ml-1">(inactive)</span>
                                 <?php endif; ?>
                             </span>
@@ -1204,26 +1422,30 @@ include_once '../../components/pharmacy_sidebar.php';
                 <?php else: ?>
                     <div class="text-center py-4 text-gray-400">
                         <i class="fas fa-check-circle text-2xl block mb-2 text-green-500"></i>
-                        <p>No expired medicines</p>
+                        <p>No expired items</p>
                     </div>
                 <?php endif; ?>
             </div>
         </div>
         
         <!-- Expire Soon List -->
-        <div class="card">
+        <div class="card animate-fade-in-up">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-clock title-orange mr-2"></i> Expire Soon
-                    <span class="text-sm font-normal text-gray-400">(<?= $expire_soon_count ?> items)</span>
+                    <span class="text-sm font-normal text-gray-400">(<span id="expireSoonCount"><?= count($expire_soon_all) ?></span> items)</span>
                 </h3>
                 <a href="expiring_soon.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             <div class="scroll-container" id="expireSoonList">
-                <?php if (count($expire_soon_list) > 0): ?>
-                    <?php foreach ($expire_soon_list as $item): ?>
-                        <div class="expire-item">
-                            <span class="med-name"><?= htmlspecialchars($item['medication_name']) ?></span>
+                <?php if (count($expire_soon_all) > 0): ?>
+                    <?php foreach ($expire_soon_all as $item): ?>
+                        <div class="list-item">
+                            <span class="name">
+                                <?= $item['type'] === 'medicine' ? '💊' : '🔧' ?>
+                                <?= htmlspecialchars($item['name'] ?? 'Unknown') ?>
+                                <span class="batch"><?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?></span>
+                            </span>
                             <span class="qty"><?= $item['quantity'] ?> units</span>
                             <span class="expire-date warning">
                                 <i class="fas fa-calendar-alt mr-1"></i>
@@ -1241,21 +1463,24 @@ include_once '../../components/pharmacy_sidebar.php';
         </div>
         
         <!-- Low Stock List -->
-        <div class="card">
+        <div class="card animate-fade-in-up">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-exclamation-triangle title-orange mr-2"></i> Low Stock
-                    <span class="text-sm font-normal text-gray-400">(<?= $low_stock_count ?> items)</span>
+                    <span class="text-sm font-normal text-gray-400">(<span id="lowStockCount"><?= count($low_stock_all) ?></span> items)</span>
                 </h3>
                 <a href="low_stock.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             <div class="scroll-container" id="lowStockList">
-                <?php if (count($low_stock_list) > 0): ?>
-                    <?php foreach ($low_stock_list as $item): ?>
-                        <div class="stock-item">
-                            <span class="med-name"><?= htmlspecialchars($item['medication_name']) ?></span>
+                <?php if (count($low_stock_all) > 0): ?>
+                    <?php foreach ($low_stock_all as $item): ?>
+                        <div class="list-item">
+                            <span class="name">
+                                <?= $item['type'] === 'medicine' ? '💊' : '🔧' ?>
+                                <?= htmlspecialchars($item['name'] ?? 'Unknown') ?>
+                                <span class="batch">(Reorder: <?= $item['reorder_level'] ?>)</span>
+                            </span>
                             <span class="qty low"><?= $item['quantity'] ?> / <?= $item['reorder_level'] ?></span>
-                            <span class="text-xs text-gray-400">Reorder at <?= $item['reorder_level'] ?></span>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
@@ -1268,21 +1493,25 @@ include_once '../../components/pharmacy_sidebar.php';
         </div>
         
         <!-- Out of Stock List -->
-        <div class="card">
+        <div class="card animate-fade-in-up">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-times-circle title-red mr-2"></i> Out of Stock
-                    <span class="text-sm font-normal text-gray-400">(<?= $out_of_stock_count ?> items)</span>
+                    <span class="text-sm font-normal text-gray-400">(<span id="outOfStockCount"><?= count($out_of_stock_all) ?></span> items)</span>
                 </h3>
                 <a href="out_of_stock.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             <div class="scroll-container" id="outOfStockList">
-                <?php if (count($out_of_stock_list) > 0): ?>
-                    <?php foreach ($out_of_stock_list as $item): ?>
-                        <div class="stock-item">
-                            <span class="med-name"><?= htmlspecialchars($item['medication_name']) ?></span>
+                <?php if (count($out_of_stock_all) > 0): ?>
+                    <?php foreach ($out_of_stock_all as $item): ?>
+                        <div class="list-item">
+                            <span class="name">
+                                <?= $item['type'] === 'medicine' ? '💊' : '🔧' ?>
+                                <?= htmlspecialchars($item['name'] ?? 'Unknown') ?>
+                            </span>
                             <span class="qty out">0 units</span>
-                            <a href="reorder.php?id=<?= $item['id'] ?>" class="btn-sm" style="background:var(--primary);color:white;">
+                            <a href="reorder.php?id=<?= $item['id'] ?>&type=<?= $item['type'] ?>" 
+                               class="btn-sm" style="background:var(--primary);color:white;">
                                 <i class="fas fa-shopping-cart"></i> Reorder
                             </a>
                         </div>
@@ -1297,21 +1526,21 @@ include_once '../../components/pharmacy_sidebar.php';
         </div>
         
         <!-- Pending Prescriptions List -->
-        <div class="card">
+        <div class="card animate-fade-in-up" style="grid-column: 1 / -1;">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-clock title-red mr-2"></i> Pending Prescriptions
-                    <span class="text-sm font-normal text-gray-400">(<?= $pending_count ?> items)</span>
+                    <span class="text-sm font-normal text-gray-400">(<span id="pendingCount"><?= count($pending_list) ?></span> items)</span>
                 </h3>
                 <a href="pending_prescriptions.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             <div class="scroll-container" id="pendingList">
                 <?php if (count($pending_list) > 0): ?>
                     <?php foreach ($pending_list as $pres): ?>
-                        <div class="prescription-item">
+                        <div class="list-item">
                             <div>
-                                <span class="patient-name"><?= htmlspecialchars($pres['patient_name'] ?? 'Unknown') ?></span>
-                                <span class="medication block"><?= htmlspecialchars($pres['medication'] ?? 'N/A') ?></span>
+                                <span class="name"><?= htmlspecialchars($pres['patient_name'] ?? 'Unknown') ?></span>
+                                <span class="batch block">#<?= htmlspecialchars($pres['prescription_number']) ?></span>
                             </div>
                             <span class="status-badge pending">Pending</span>
                             <a href="dispense.php?id=<?= $pres['id'] ?>" class="btn-sm" style="background:var(--success);color:white;">
@@ -1331,27 +1560,22 @@ include_once '../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- QUICK ACTIONS -->
+    <!-- QUICK ACTIONS - 3 BUTTONS (No Reports) -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
-        <a href="new_prescription.php" class="quick-action">
+    <div class="quick-actions-grid mt-5">
+        <a href="new_prescription.php" class="quick-action animate-fade-in-up">
             <span class="icon" style="color:#0B5ED7;">📝</span>
             <span class="label">New Prescription</span>
         </a>
         
-        <a href="new_otc_sale.php" class="quick-action">
+        <a href="new_otc_sale.php" class="quick-action animate-fade-in-up">
             <span class="icon" style="color:#059669;">🛒</span>
             <span class="label">OTC Sale</span>
         </a>
         
-        <a href="inventory.php" class="quick-action">
+        <a href="inventory.php" class="quick-action animate-fade-in-up">
             <span class="icon" style="color:#7C3AED;">📦</span>
             <span class="label">Inventory</span>
-        </a>
-        
-        <a href="reports.php" class="quick-action">
-            <span class="icon" style="color:#D97706;">📊</span>
-            <span class="label">Reports</span>
         </a>
     </div>
 
@@ -1364,7 +1588,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <span class="text-gray-400 mx-2">|</span>
             Pharmacy Dashboard
             <span class="text-gray-400 mx-2">|</span>
-            <span id="footerTimestamp">● Live</span>
+            <span id="footerTimestamp">● Live • <?= date('H:i:s') ?></span>
             <span class="text-gray-400 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1376,22 +1600,289 @@ include_once '../../components/pharmacy_sidebar.php';
 <!-- TOAST -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <i class="fas fa-info-circle" style="font-size:1rem;"></i>
     <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
 <!-- ================================================================ -->
-<!-- PHARMACY GLOBAL STATS AUTO-UPDATE -->
-<!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/pharmacy_global_stats.js"></script>
-
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // INITIAL DATA HASH
+    // ================================================================
+    var currentHash = '<?= $initial_hash ?>';
+    var updateInterval = 3000; // 3 seconds
+    var isUpdating = false;
+    var updateCounter = 0;
+    
+    // ================================================================
+    // UPDATE FUNCTION
+    // ================================================================
+    function updateDashboard() {
+        if (isUpdating) return;
+        isUpdating = true;
+        
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/dispensary_system/frontend/api/get_pharmacy_stats.php', true);
+        xhr.timeout = 5000;
+        
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                isUpdating = false;
+                
+                if (xhr.status === 200) {
+                    try {
+                        var response = JSON.parse(xhr.responseText);
+                        if (response.success) {
+                            // Check if data has changed
+                            if (response.hash !== currentHash) {
+                                currentHash = response.hash;
+                                updateUI(response);
+                                updateCounter = 0;
+                                
+                                // Show toast on update
+                                var now = new Date();
+                                var timeStr = now.toLocaleTimeString();
+                                showToast('🔄 Updated', 'Dashboard auto-updated at ' + timeStr, 'info');
+                            }
+                            
+                            // Update timestamp
+                            var timestamp = document.getElementById('footerTimestamp');
+                            if (timestamp) {
+                                var now = new Date();
+                                timestamp.textContent = '● Live • ' + now.toLocaleTimeString();
+                            }
+                            
+                            var updateBadge = document.getElementById('updateBadge');
+                            if (updateBadge) {
+                                var now = new Date();
+                                updateBadge.innerHTML = '<i class="fas fa-check-circle"></i> Live • ' + 
+                                    now.toLocaleTimeString();
+                            }
+                            
+                            var liveTime = document.getElementById('liveTime');
+                            if (liveTime) {
+                                var now = new Date();
+                                liveTime.innerHTML = '<i class="fas fa-clock"></i> ' + now.toLocaleTimeString();
+                            }
+                            
+                            updateCounter++;
+                        }
+                    } catch (e) {
+                        console.log('Update error:', e);
+                    }
+                }
+            }
+        };
+        
+        xhr.onerror = function() {
+            isUpdating = false;
+        };
+        
+        xhr.ontimeout = function() {
+            isUpdating = false;
+        };
+        
+        xhr.send();
+    }
+    
+    // ================================================================
+    // MANUAL UPDATE
+    // ================================================================
+    function manualUpdate() {
+        var btn = document.getElementById('refreshBtn');
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
+        btn.disabled = true;
+        
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/dispensary_system/frontend/api/get_pharmacy_stats.php?manual=1', true);
+        xhr.timeout = 5000;
+        
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+                btn.disabled = false;
+                
+                if (xhr.status === 200) {
+                    try {
+                        var response = JSON.parse(xhr.responseText);
+                        if (response.success) {
+                            currentHash = response.hash;
+                            updateUI(response);
+                            showToast('✅ Updated', 'Dashboard refreshed successfully', 'success');
+                        }
+                    } catch (e) {
+                        showToast('❌ Error', 'Failed to update dashboard', 'error');
+                    }
+                }
+            }
+        };
+        
+        xhr.send();
+    }
+    
+    // ================================================================
+    // UPDATE UI WITH NEW DATA
+    // ================================================================
+    function updateUI(data) {
+        var stats = data.stats;
+        var lists = data.lists;
+        
+        // ================================================================
+        // UPDATE STATS CARDS
+        // ================================================================
+        
+        // CARD 1: Total Stock Items
+        document.getElementById('statTotalStock').textContent = stats.total_stock_items;
+        document.getElementById('statMedicines').textContent = '💊 ' + stats.total_medicines;
+        document.getElementById('statEquipment').textContent = '🔧 ' + stats.total_equipment;
+        document.getElementById('statTotalUnits').textContent = stats.total_stock_quantity;
+        
+        // CARD 2: Expired
+        document.getElementById('statExpired').textContent = stats.expired_count;
+        document.getElementById('statExpiredMed').textContent = '💊 ' + stats.expired_med_count;
+        document.getElementById('statExpiredEquip').textContent = '🔧 ' + stats.expired_equip_count;
+        document.getElementById('statExpiredUnits').textContent = stats.expired_quantity;
+        
+        // CARD 3: Expire Soon
+        document.getElementById('statExpireSoon').textContent = stats.expire_soon_count;
+        document.getElementById('statExpireSoonMed').textContent = '💊 ' + stats.expire_soon_med;
+        document.getElementById('statExpireSoonEquip').textContent = '🔧 ' + stats.expire_soon_equip;
+        
+        // CARD 4: Prescriptions
+        document.getElementById('statPrescriptions').textContent = stats.total_prescriptions;
+        document.getElementById('statPrescriptionSub').innerHTML = 
+            '<span>⏳ ' + stats.pending_count + ' Pending</span>' +
+            '<span>✅ ' + stats.completed_prescriptions + ' Completed</span>';
+        
+        // CARD 5: OTC Sales
+        document.getElementById('statOTC').textContent = stats.otc_sales_count;
+        document.getElementById('statOTCToday').textContent = stats.otc_today_count + ' today';
+        
+        // CARD 6: Dispensed
+        document.getElementById('statDispensed').textContent = stats.total_dispensed;
+        document.getElementById('statOTCDispensed').textContent = '🛒 ' + stats.otc_dispensed;
+        document.getElementById('statPrescriptionDispensed').textContent = '📋 ' + stats.prescription_dispensed;
+        
+        // CARD 7: Low Stock
+        document.getElementById('statLowStock').textContent = stats.low_stock_count;
+        document.getElementById('statLowStockMed').textContent = '💊 ' + stats.low_stock_med;
+        document.getElementById('statLowStockEquip').textContent = '🔧 ' + stats.low_stock_equip;
+        
+        // CARD 8: Out of Stock
+        document.getElementById('statOutOfStock').textContent = stats.out_of_stock_count;
+        document.getElementById('statOutOfStockMed').textContent = '💊 ' + stats.out_of_stock_med;
+        document.getElementById('statOutOfStockEquip').textContent = '🔧 ' + stats.out_of_stock_equip;
+        
+        // ================================================================
+        // UPDATE LISTS
+        // ================================================================
+        
+        // Expired List
+        updateList('expiredList', 'expiredCount', lists.expired, function(item) {
+            var type = item.type === 'medicine' ? '💊' : '🔧';
+            var expiredText = '<span class="expired-badge ml-1">EXPIRED</span>';
+            if (item.status === 'inactive') {
+                expiredText += ' <span class="text-xs text-gray-400">(inactive)</span>';
+            }
+            return '<div class="list-item expired-row">' +
+                '<span class="name">' + type + ' ' + escapeHtml(item.name) + 
+                ' <span class="batch">' + escapeHtml(item.batch_number || 'N/A') + '</span></span>' +
+                '<span class="qty">' + item.quantity + ' units</span>' +
+                '<span class="expire-date expired">' +
+                '<i class="fas fa-calendar-times mr-1"></i> ' + formatDate(item.expiry_date) + 
+                ' ' + expiredText +
+                '</span></div>';
+        });
+        
+        // Expire Soon List
+        updateList('expireSoonList', 'expireSoonCount', lists.expire_soon, function(item) {
+            var type = item.type === 'medicine' ? '💊' : '🔧';
+            return '<div class="list-item">' +
+                '<span class="name">' + type + ' ' + escapeHtml(item.name) + 
+                ' <span class="batch">' + escapeHtml(item.batch_number || 'N/A') + '</span></span>' +
+                '<span class="qty">' + item.quantity + ' units</span>' +
+                '<span class="expire-date warning">' +
+                '<i class="fas fa-calendar-alt mr-1"></i> ' + formatDate(item.expiry_date) +
+                '</span></div>';
+        });
+        
+        // Low Stock List
+        updateList('lowStockList', 'lowStockCount', lists.low_stock, function(item) {
+            var type = item.type === 'medicine' ? '💊' : '🔧';
+            return '<div class="list-item">' +
+                '<span class="name">' + type + ' ' + escapeHtml(item.name) + 
+                ' <span class="batch">(Reorder: ' + item.reorder_level + ')</span></span>' +
+                '<span class="qty low">' + item.quantity + ' / ' + item.reorder_level + '</span></div>';
+        });
+        
+        // Out of Stock List
+        updateList('outOfStockList', 'outOfStockCount', lists.out_of_stock, function(item) {
+            var type = item.type === 'medicine' ? '💊' : '🔧';
+            var id = item.id;
+            var itemType = item.type;
+            return '<div class="list-item">' +
+                '<span class="name">' + type + ' ' + escapeHtml(item.name) + '</span>' +
+                '<span class="qty out">0 units</span>' +
+                '<a href="reorder.php?id=' + id + '&type=' + itemType + '" class="btn-sm" style="background:var(--primary);color:white;">' +
+                '<i class="fas fa-shopping-cart"></i> Reorder</a></div>';
+        });
+        
+        // Pending Prescriptions List
+        updateList('pendingList', 'pendingCount', lists.pending, function(item) {
+            return '<div class="list-item">' +
+                '<div><span class="name">' + escapeHtml(item.patient_name || 'Unknown') + '</span>' +
+                '<span class="batch block">#' + escapeHtml(item.prescription_number) + '</span></div>' +
+                '<span class="status-badge pending">Pending</span>' +
+                '<a href="dispense.php?id=' + item.id + '" class="btn-sm" style="background:var(--success);color:white;">' +
+                '<i class="fas fa-prescription"></i> Dispense</a></div>';
+        });
+    }
+    
+    // ================================================================
+    // HELPER FUNCTIONS
+    // ================================================================
+    
+    function updateList(elementId, countId, items, renderFn) {
+        var container = document.getElementById(elementId);
+        var countEl = document.getElementById(countId);
+        
+        if (!container) return;
+        
+        if (items && items.length > 0) {
+            var html = '';
+            for (var i = 0; i < items.length; i++) {
+                html += renderFn(items[i]);
+            }
+            container.innerHTML = html;
+            if (countEl) countEl.textContent = items.length;
+        } else {
+            container.innerHTML = '<div class="text-center py-4 text-gray-400">' +
+                '<i class="fas fa-check-circle text-2xl block mb-2 text-green-500"></i>' +
+                '<p>No items to display</p></div>';
+            if (countEl) countEl.textContent = '0';
+        }
+    }
+    
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function formatDate(dateStr) {
+        if (!dateStr) return 'N/A';
+        var d = new Date(dateStr);
+        return ('0' + d.getDate()).slice(-2) + '/' + 
+               ('0' + (d.getMonth() + 1)).slice(-2) + '/' + 
+               d.getFullYear();
+    }
+    
     // ================================================================
     // TOAST
     // ================================================================
@@ -1412,13 +1903,12 @@ include_once '../../components/pharmacy_sidebar.php';
             setTimeout(function() {
                 toast.style.display = 'none';
             }, 400);
-        }, 3500);
+        }, 3000);
     }
-
+    
     // ================================================================
     // DARK MODE - SYNC WITH HEADER
     // ================================================================
-    // Listen for dark mode changes from header
     document.addEventListener('darkModeChanged', function(e) {
         var isDark = e.detail && e.detail.isDark;
         var html = document.documentElement;
@@ -1428,23 +1918,45 @@ include_once '../../components/pharmacy_sidebar.php';
         } else {
             html.removeAttribute('data-theme');
         }
-        
-        console.log('🌙 Dashboard dark mode synced: ' + (isDark ? 'ON ✅' : 'OFF'));
     });
-
-    console.log('%c💊 Braick - Pharmacy Dashboard (NO AMOUNTS)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📦 Total Stock (excl. expired): <?= $total_stock_items ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🚫 Expired (all): <?= $expired_count ?> (units: <?= $expired_quantity ?>)', 'font-size:13px; color:#DC2626;');
-    console.log('%c⏰ Expire Soon: <?= $expire_soon_count ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c📋 Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🛒 OTC Sales: <?= $otc_sales_count ?> (<?= $otc_today_count ?> today)', 'font-size:13px; color:#0D9488;');
-    console.log('%c✅ Dispensed: <?= $dispensed_count ?> (<?= $dispensed_today ?> today)', 'font-size:13px; color:#059669;');
-    console.log('%c⚠️ Low Stock: <?= $low_stock_count ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c⏳ Pending: <?= $pending_count ?>', 'font-size:13px; color:#DB2777;');
-    console.log('%c🚫 Out of Stock: <?= $out_of_stock_count ?>', 'font-size:13px; color:#6B7280;');
-    console.log('%c✅ NO amounts displayed on cards - Clean view', 'font-size:13px; color:#34D399;');
+    
+    // ================================================================
+    // START AUTO-UPDATE
+    // ================================================================
+    // First update after 1 second
+    setTimeout(function() {
+        updateDashboard();
+    }, 1000);
+    
+    // Then every 3 seconds
+    setInterval(updateDashboard, updateInterval);
+    
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        // Ctrl+R or F5 - Manual refresh
+        if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
+            e.preventDefault();
+            manualUpdate();
+        }
+    });
+    
+    console.log('%c💊 Braick - Pharmacy Dashboard (Auto-Update Every 3s)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🔄 Auto-update interval: ' + updateInterval + 'ms', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 8 CARDS + 5 LISTS', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ QUICK ACTIONS: 3 buttons (No Reports)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Card fonts: BIGGER size', 'font-size:13px; color:#34D399;');
+    console.log('%c📦 1. Total Stock: 💊<?= $total_medicines ?> + 🔧<?= $total_equipment ?> = <?= $total_stock_items ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c🚫 2. Expired: 💊<?= $expired_med_count ?> + 🔧<?= $expired_equip_count ?> = <?= $expired_count ?>', 'font-size:12px; color:#DC2626;');
+    console.log('%c⏰ 3. Expire Soon: 💊<?= $expire_soon_med ?> + 🔧<?= $expire_soon_equip ?> = <?= $expire_soon_count ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c📋 4. Prescriptions: <?= $total_prescriptions ?> (⏳<?= $pending_count ?> Pending, ✅<?= $completed_prescriptions ?> Completed)', 'font-size:12px; color:#7C3AED;');
+    console.log('%c🛒 5. OTC Sales: <?= $otc_sales_count ?> (<?= $otc_today_count ?> today)', 'font-size:12px; color:#0D9488;');
+    console.log('%c✅ 6. Dispensed: 🛒<?= $otc_dispensed ?> + 📋<?= $prescription_dispensed ?> = <?= $total_dispensed ?>', 'font-size:12px; color:#059669;');
+    console.log('%c⚠️ 7. Low Stock: 💊<?= $low_stock_med ?> + 🔧<?= $low_stock_equip ?> = <?= $low_stock_count ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c🚫 8. Out of Stock: 💊<?= $out_of_stock_med ?> + 🔧<?= $out_of_stock_equip ?> = <?= $out_of_stock_count ?>', 'font-size:12px; color:#6B7280;');
+    console.log('%c✅ Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Press Ctrl+R or F5 for manual refresh', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

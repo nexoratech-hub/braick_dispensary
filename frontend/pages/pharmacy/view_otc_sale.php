@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/view_otc_sale.php
 // PHARMACY - VIEW OTC SALE DETAILS (NO FINANCIAL DATA)
+// UPDATED FOR NEW DATABASE: dispensary_db
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
@@ -26,7 +27,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // ================================================================
 $allowed_roles = ['pharmacy', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
-    // Redirect to their own dashboard
     $role = $_SESSION['role'];
     switch ($role) {
         case 'reception': header('Location: ../reception/dashboard.php'); break;
@@ -56,7 +56,7 @@ if ($user_id <= 0) {
     if (isset($user_username) && !empty($user_username)) {
         require_once __DIR__ . '/../../../backend/config/database.php';
         try {
-            $db = getDB();
+            $db = Database::getInstance()->getConnection();
             $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
             $stmt->execute([$user_username]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -94,12 +94,15 @@ if ($user_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE CONFIG
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET SALE ID
@@ -112,7 +115,7 @@ if ($sale_id <= 0) {
 }
 
 // ================================================================
-// GET OTC SALE DETAILS
+// GET OTC SALE DETAILS - NEW DATABASE
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -133,10 +136,16 @@ if (!$sale) {
 }
 
 // ================================================================
-// GET SALE ITEMS
+// GET SALE ITEMS - NEW DATABASE
 // ================================================================
 $stmt = $db->prepare("
-    SELECT * FROM otc_sale_items WHERE sale_id = ?
+    SELECT 
+        osi.*,
+        mi.medication_name as inventory_medication_name
+    FROM otc_sale_items osi
+    LEFT JOIN medications_inventory mi ON osi.inventory_id = mi.id
+    WHERE osi.sale_id = ?
+    ORDER BY osi.id ASC
 ");
 $stmt->execute([$sale_id]);
 $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -191,7 +200,7 @@ try {
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
@@ -287,176 +296,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .branch-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge {
-            background: #1A3A2A;
-            color: #34D399;
-        }
         
         /* ================================================================
            MAIN CONTENT
@@ -631,11 +470,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             background: #B91C1C;
         }
         
-        .btn-sm {
-            padding: 6px 14px;
-            font-size: 0.75rem;
-        }
-        
         /* ================================================================
            DETAIL CARD
            ================================================================ */
@@ -728,7 +562,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             gap: 4px;
         }
         
-        .status-badge.dispensed {
+        .status-badge.paid {
             background: var(--success-bg);
             color: var(--success);
         }
@@ -743,12 +577,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             color: var(--danger);
         }
         
-        .status-badge.completed {
-            background: var(--success-bg);
-            color: var(--success);
+        .status-badge.partial {
+            background: var(--primary-bg);
+            color: var(--primary);
         }
         
-        [data-theme="dark"] .status-badge.dispensed {
+        [data-theme="dark"] .status-badge.paid {
             background: #1A3A2A;
             color: #34D399;
         }
@@ -761,6 +595,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         [data-theme="dark"] .status-badge.cancelled {
             background: #3A1A1A;
             color: #F87171;
+        }
+        
+        [data-theme="dark"] .status-badge.partial {
+            background: #1E3A5F;
+            color: #6EA8FE;
         }
         
         .medicines-list {
@@ -893,14 +732,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
         
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .detail-card .detail-grid {
@@ -936,48 +771,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </style>
 </head>
 <body>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1019,8 +812,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         <div class="detail-header">
             <div class="sale-number">
                 <?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?>
-                <span class="status-badge <?= $sale['status'] ?? 'dispensed' ?>">
-                    <?= ucfirst($sale['status'] ?? 'Dispensed') ?>
+                <span class="status-badge <?= $sale['payment_status'] ?? 'pending' ?>">
+                    <?php 
+                        $status = $sale['payment_status'] ?? 'pending';
+                        if ($status === 'paid') {
+                            echo '<i class="fas fa-check-circle"></i> Paid';
+                        } elseif ($status === 'pending') {
+                            echo '<i class="fas fa-clock"></i> Pending';
+                        } elseif ($status === 'cancelled') {
+                            echo '<i class="fas fa-times-circle"></i> Cancelled';
+                        } elseif ($status === 'partial') {
+                            echo '<i class="fas fa-money-bill-wave"></i> Partial';
+                        } else {
+                            echo ucfirst($status);
+                        }
+                    ?>
                 </span>
             </div>
             <div class="text-sm text-gray-400">
@@ -1048,7 +854,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <div class="info-item">
                 <div class="label">Payment Method</div>
                 <div class="value">
-                    <span class="status-badge dispensed">
+                    <span class="status-badge paid">
                         <?= ucfirst(str_replace('_', ' ', $sale['payment_method'] ?? 'cash')) ?>
                     </span>
                 </div>
@@ -1068,7 +874,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <?php foreach ($items as $item): ?>
                     <div class="medicine-item">
                         <span class="med-name">
-                            <?= htmlspecialchars($item['medicine_name'] ?? 'N/A') ?>
+                            <?= htmlspecialchars($item['item_name'] ?? $item['medicine_name'] ?? 'N/A') ?>
                         </span>
                         <span class="med-details">
                             Quantity: <strong><?= $item['quantity'] ?? 0 ?></strong>
@@ -1105,7 +911,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <a href="otc_history.php" class="btn-action btn-outline">
                 <i class="fas fa-arrow-left"></i> Back to History
             </a>
-            <?php if (($sale['status'] ?? '') === 'pending'): ?>
+            <?php if (($sale['payment_status'] ?? '') === 'pending'): ?>
                 <button onclick="confirmCancel(<?= $sale['id'] ?>)" class="btn-action btn-danger">
                     <i class="fas fa-times"></i> Cancel Sale
                 </button>
@@ -1122,7 +928,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             OTC Sale Details
             <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span id="footerTime"><?= date('h:i:s A') ?></span>
             <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1179,7 +985,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
+    var sidebarToggle = document.getElementById('sidebarToggleBtn');
     
     if (sidebarToggle) {
         sidebarToggle.addEventListener('click', function() {
@@ -1198,42 +1004,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     });
 
     // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
-        }
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
-
-    // ================================================================
     // DATE & TIME
     // ================================================================
     function updateDateTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
         var ftEl = document.getElementById('footerTime');
         if (ftEl) {
             ftEl.textContent = timeStr;
@@ -1277,14 +1054,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c💊 Braick - View OTC Sale (NO FINANCIAL DATA)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c💊 Braick - View OTC Sale (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📋 Sale #: <?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Customer: <?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in Customer') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Items: <?= count($items) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🚫 No financial data shown', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Login protection added', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Uses shared header with date & time', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
