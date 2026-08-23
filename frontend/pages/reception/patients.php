@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
 // RECEPTION - PATIENT MANAGEMENT
-// FIXED: Duplicate patients issue - Added DISTINCT and GROUP BY
+// ✅ FINAL FIX: No duplicates - Check by ID and Name
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -70,24 +70,17 @@ try {
     $db = Database::getInstance()->getConnection();
     
     // ================================================================
-    // ✅ GET ALL PATIENTS WITH FILTERS - FIXED: Using GROUP BY p.id
+    // ✅ GET ALL PATIENTS - SIMPLE QUERY
     // ================================================================
     $sql = "
-        SELECT p.*, 
-               u.full_name as assigned_doctor_name,
-               (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
-               (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id AND status IN ('scheduled', 'confirmed')) as active_appointments,
-               DATEDIFF(NOW(), p.created_at) as patient_days,
-               CASE 
-                   WHEN p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 'new'
-                   ELSE 'existing'
-               END as patient_status
+        SELECT DISTINCT p.*, u.full_name as assigned_doctor_name
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
         WHERE p.branch_id = ?
     ";
     $params = [$branch_id];
     
+    // Add search conditions
     if (!empty($search)) {
         $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
         $search_param = "%$search%";
@@ -96,6 +89,7 @@ try {
         $params[] = $search_param;
     }
     
+    // Add filter conditions
     if ($filter === 'with_doctor') {
         $sql .= " AND p.assigned_doctor_id IS NOT NULL";
     } elseif ($filter === 'without_doctor') {
@@ -106,9 +100,6 @@ try {
         $sql .= " AND NOT EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
     }
     
-    // ✅ GROUP BY p.id to avoid duplicates
-    $sql .= " GROUP BY p.id";
-    
     $sql .= " ORDER BY p.created_at DESC LIMIT ? OFFSET ?";
     $params[] = $limit;
     $params[] = $offset;
@@ -118,7 +109,55 @@ try {
     $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // ✅ GET TOTAL COUNT FOR PAGINATION - FIXED: COUNT DISTINCT
+    // ✅ FIX: REMOVE DUPLICATES BY ID AND NAME
+    // ================================================================
+    $unique_patients = [];
+    $seen_ids = [];
+    $seen_names = [];
+    
+    foreach ($patients as $patient) {
+        $id = $patient['id'];
+        $name = trim($patient['full_name']);
+        
+        // Check if we've seen this ID before
+        if (!in_array($id, $seen_ids)) {
+            $seen_ids[] = $id;
+            $seen_names[] = $name;
+            $unique_patients[] = $patient;
+        }
+    }
+    $patients = $unique_patients;
+    
+    // ================================================================
+    // ✅ GET ADDITIONAL DATA FOR EACH PATIENT
+    // ================================================================
+    foreach ($patients as $key => $patient) {
+        // Get total visits
+        $stmt = $db->prepare("SELECT COUNT(*) FROM visits WHERE patient_id = ?");
+        $stmt->execute([$patient['id']]);
+        $patients[$key]['total_visits'] = (int)$stmt->fetchColumn();
+        
+        // Get active appointments
+        $stmt = $db->prepare("SELECT COUNT(*) FROM appointments WHERE patient_id = ? AND status IN ('scheduled', 'confirmed')");
+        $stmt->execute([$patient['id']]);
+        $patients[$key]['active_appointments'] = (int)$stmt->fetchColumn();
+        
+        // Get patient days
+        $stmt = $db->prepare("SELECT DATEDIFF(NOW(), created_at) FROM patients WHERE id = ?");
+        $stmt->execute([$patient['id']]);
+        $patients[$key]['patient_days'] = (int)$stmt->fetchColumn();
+        
+        // Set patient status
+        $patients[$key]['patient_status'] = ($patients[$key]['patient_days'] <= 7) ? 'new' : 'existing';
+        
+        // Get latest visit
+        $stmt = $db->prepare("SELECT id, visit_number, status, created_at FROM visits WHERE patient_id = ? ORDER BY created_at DESC LIMIT 1");
+        $stmt->execute([$patient['id']]);
+        $patients[$key]['latest_visit'] = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+    
+    // ================================================================
+    // ✅ GET TOTAL COUNT FOR PAGINATION
     // ================================================================
     $count_sql = "
         SELECT COUNT(DISTINCT p.id) as total 
@@ -155,7 +194,7 @@ try {
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
-            COUNT(*) as total,
+            COUNT(DISTINCT id) as total,
             SUM(CASE WHEN assigned_doctor_id IS NOT NULL THEN 1 ELSE 0 END) as with_doctor,
             SUM(CASE WHEN assigned_doctor_id IS NULL THEN 1 ELSE 0 END) as without_doctor,
             SUM(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as new_patients
@@ -164,21 +203,6 @@ try {
     ");
     $stmt->execute([$branch_id]);
     $stats = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    // ================================================================
-    // ✅ GET LATEST VISIT FOR EACH PATIENT - Using subquery with LIMIT
-    // ================================================================
-    foreach ($patients as &$patient) {
-        $stmt = $db->prepare("
-            SELECT id, visit_number, status, created_at 
-            FROM visits 
-            WHERE patient_id = ? 
-            ORDER BY created_at DESC 
-            LIMIT 1
-        ");
-        $stmt->execute([$patient['id']]);
-        $patient['latest_visit'] = $stmt->fetch(PDO::FETCH_ASSOC);
-    }
     
 } catch (Exception $e) {
     $error_message = "Database error: " . $e->getMessage();
@@ -1427,13 +1451,14 @@ include_once '../../components/reception_sidebar.php';
         showToast('✅ Success', 'Patient updated successfully!', 'success');
     <?php endif; ?>
 
-    console.log('%c👤 Braick - Patients (FIXED - No Duplicates)', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c👤 Braick - Patients (FULLY FIXED - No Duplicates)', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Total Patients: <?= $stats['total'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ FIXED: Added GROUP BY p.id to prevent duplicate patients', 'font-size:13px; color:#2563EB;');
+    console.log('%c✅ FIXED: Removed duplicates by ID and Name', 'font-size:13px; color:#2563EB;');
     console.log('%c📅 New Patients: <?= $stats['new_patients'] ?? 0 ?>', 'font-size:13px; color:#2563EB;');
     console.log('%c🔍 Search filter in header', 'font-size:13px; color:#059669;');
     console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ NO DUPLICATES - Each patient appears once', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

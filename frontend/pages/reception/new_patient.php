@@ -5,11 +5,13 @@
 // USING dispensary_db (new database structure)
 // 
 // FIXES:
-// 1. Patient Type inachukuliwa kutoka services table (category_id = 2)
-// 2. Default ni New Patient
-// 3. Kama assign doctor → fee inaenda Cashier (bill created)
-// 4. Kama hataassign doctor → No fee (hakuna bill) mpaka doctor aassign
-// 5. consultation_fee saved in visits table (column ipo)
+// 1. ✅ Patient ID generation - UNIQUE per branch, per year
+// 2. ✅ No duplicate patient_id even after deletions
+// 3. ✅ Patient Type inachukuliwa kutoka services table (category_id = 2)
+// 4. ✅ Default ni New Patient
+// 5. ✅ Kama assign doctor → fee inaenda Cashier (bill created)
+// 6. ✅ Kama hataassign doctor → No fee (hakuna bill) mpaka doctor aassign
+// 7. ✅ consultation_fee saved in visits table (column ipo)
 // ================================================================
 
 session_start();
@@ -195,7 +197,6 @@ try {
         $stmt->execute([$selected_branch_id]);
         $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
-        // Table might not exist, use defaults
         $consultation_services = [];
     }
     
@@ -291,15 +292,59 @@ try {
     }
     
     // ================================================================
-    // Generate patient ID - WITH BRANCH CODE
+    // ✅ FIXED: Generate UNIQUE patient ID per branch, per year
     // ================================================================
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE branch_id = ?");
-    $stmt->execute([$selected_branch_id]);
-    $count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    $next_id = str_pad($count + 1, 4, '0', STR_PAD_LEFT);
-    
-    $branch_code = str_pad($selected_branch_id, 2, '0', STR_PAD_LEFT);
-    $patient_id_number = 'P-' . date('Y') . '-' . $branch_code . '-' . $next_id;
+    function generateUniquePatientId($db, $branch_id) {
+        $year = date('Y');
+        $branch_code = str_pad($branch_id, 2, '0', STR_PAD_LEFT);
+        $pattern = "P-$year-$branch_code-%";
+        
+        // Get the last patient ID for this branch and year
+        $stmt = $db->prepare("
+            SELECT patient_id FROM patients 
+            WHERE branch_id = ? 
+            AND patient_id LIKE ? 
+            ORDER BY patient_id DESC 
+            LIMIT 1
+        ");
+        $stmt->execute([$branch_id, $pattern]);
+        $last = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($last) {
+            // Extract the number and increment
+            $parts = explode('-', $last['patient_id']);
+            $last_number = intval(end($parts));
+            $next_number = $last_number + 1;
+            $new_number = str_pad($next_number, 4, '0', STR_PAD_LEFT);
+        } else {
+            $new_number = '0001';
+        }
+        
+        $patient_id_number = "P-$year-$branch_code-$new_number";
+        
+        // ✅ EXTRA SAFETY: Check if ID already exists (double-check)
+        $stmt = $db->prepare("SELECT COUNT(*) FROM patients WHERE patient_id = ?");
+        $stmt->execute([$patient_id_number]);
+        $exists = $stmt->fetchColumn();
+        
+        if ($exists > 0) {
+            // If exists, keep incrementing until we find a free one
+            $counter = 1;
+            while ($exists > 0) {
+                $new_number = str_pad($next_number + $counter, 4, '0', STR_PAD_LEFT);
+                $patient_id_number = "P-$year-$branch_code-$new_number";
+                $stmt = $db->prepare("SELECT COUNT(*) FROM patients WHERE patient_id = ?");
+                $stmt->execute([$patient_id_number]);
+                $exists = $stmt->fetchColumn();
+                $counter++;
+            }
+        }
+        
+        return $patient_id_number;
+    }
+
+    // Generate patient ID
+    $patient_id_number = generateUniquePatientId($db, $selected_branch_id);
     
     // ================================================================
     // COMMON SYMPTOMS LIST
@@ -440,7 +485,12 @@ try {
                 $db->beginTransaction();
                 
                 // ================================================================
-                // 1. INSERT PATIENT
+                // ✅ 1. GENERATE FINAL UNIQUE PATIENT ID (inside transaction)
+                // ================================================================
+                $final_patient_id = generateUniquePatientId($db, $branch_id);
+                
+                // ================================================================
+                // 2. INSERT PATIENT
                 // ================================================================
                 $stmt = $db->prepare("
                     INSERT INTO patients (
@@ -451,7 +501,7 @@ try {
                 ");
                 
                 $stmt->execute([
-                    $patient_id_number, $full_name, $date_of_birth, $gender, $phone, $email,
+                    $final_patient_id, $full_name, $date_of_birth, $gender, $phone, $email,
                     $address, $emergency_contact, $blood_group, $allergies, $branch_id,
                     $user_id, $marital_status
                 ]);
@@ -459,7 +509,7 @@ try {
                 $latest_patient_id = $patient_db_id;
                 
                 // ================================================================
-                // 2. CREATE VISIT
+                // 3. CREATE VISIT
                 // ================================================================
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT);
                 
@@ -503,7 +553,7 @@ try {
                 $latest_visit_id = $visit_id;
                 
                 // ================================================================
-                // 3. ✅ IF DOCTOR ASSIGNED → CREATE BILL WITH FEE
+                // 4. ✅ IF DOCTOR ASSIGNED → CREATE BILL WITH FEE
                 //    ✅ IF NO DOCTOR → NO BILL (fee = 0)
                 // ================================================================
                 $bill_created = false;
@@ -618,7 +668,7 @@ try {
                 
                 // ✅ Build success message
                 $message = "✅ Patient registered successfully!";
-                $message .= "<br>📋 Patient ID: <strong>$patient_id_number</strong>";
+                $message .= "<br>📋 Patient ID: <strong>$final_patient_id</strong>";
                 $message .= "<br>📋 Visit #: <strong>$visit_number</strong>";
                 $message .= "<br>📋 Visit Type: <strong>" . htmlspecialchars($visit_type_name) . "</strong>";
                 $message .= "<br>📋 Consultation Fee: <strong>TSh " . number_format($consultation_fee, 0) . "</strong>";
@@ -2646,14 +2696,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         // Listen to visit type change
         document.getElementById('visitTypeSelect').addEventListener('change', updateFeeDisplay);
         
-        console.log('%c👤 Braick - New Patient Registration', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+        console.log('%c👤 Braick - New Patient Registration (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+        console.log('%c✅ Patient ID: UNIQUE per branch, per year', 'font-size:13px; color:#34D399;');
+        console.log('%c✅ Format: P-YEAR-BRANCH-XXXX (e.g. P-2026-01-0001)', 'font-size:13px; color:#34D399;');
+        console.log('%c✅ No duplicates even after deletions', 'font-size:13px; color:#34D399;');
         console.log('%c✅ Patient Type from services table (category_id = 2)', 'font-size:13px; color:#34D399;');
-        console.log('%c✅ Default: New Patient', 'font-size:13px; color:#34D399;');
         console.log('%c💰 Fee: TSh <?= number_format($default_price, 0) ?> (from services)', 'font-size:13px; color:#FBBF24;');
         console.log('%c👨‍⚕️ Assign doctor = Bill created & sent to Cashier', 'font-size:13px; color:#34D399;');
         console.log('%c⏳ No doctor assigned = No bill (fee=0)', 'font-size:13px; color:#FBBF24;');
-        console.log('%c🔄 Visit type in database: ALWAYS "new"', 'font-size:13px; color:#059669;');
-        console.log('%c✅ consultation_fee column exists in visits table', 'font-size:13px; color:#34D399;');
     });
 </script>
 
