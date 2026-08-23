@@ -1,16 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/new_patient.php
-// RECEPTION - REGISTER NEW PATIENT - WITH ASSIGN DOCTOR OPTION
-// FIXED: Can save WITHOUT assigning doctor (optional)
-// FIXED: Uses 'New Patient' service (category_id=2, price=10000)
-// FIXED: All visits are created as 'new' visit_type
-// FIXED: Session-based login
-// FIXED: Common symptoms selector
-// FIXED: Blue theme for assign doctor section
-// FIXED: Duplicate check PER BRANCH only
-// FIXED: Patient ID with BRANCH CODE (P-2026-01-0001)
-// BRAICK DISPENSARY
+// RECEPTION - REGISTER NEW PATIENT
+// USING dispensary_db (new database structure)
+// 
+// FIXES:
+// 1. Patient Type inachukuliwa kutoka services table (category_id = 2)
+// 2. Default ni New Patient
+// 3. Kama assign doctor → fee inaenda Cashier (bill created)
+// 4. Kama hataassign doctor → No fee (hakuna bill) mpaka doctor aassign
+// 5. consultation_fee saved in visits table (column ipo)
 // ================================================================
 
 session_start();
@@ -32,7 +31,6 @@ $branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? 'reception';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-$is_admin = $_SESSION['is_admin'] ?? false;
 
 $user_branch_id = $branch_id;
 $selected_branch_id = $branch_id;
@@ -50,7 +48,7 @@ $latest_patient_id = null;
 $latest_visit_id = null;
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -70,7 +68,7 @@ try {
     }
 
     // ================================================================
-    // ✅ AJAX HANDLER - GET DOCTOR STATUS
+    // AJAX HANDLER - GET DOCTOR STATUS
     // ================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'get_doctor_status') {
         header('Content-Type: application/json');
@@ -145,7 +143,7 @@ try {
     }
 
     // ================================================================
-    // GET DOCTORS - FOR ASSIGN DOCTOR SECTION
+    // GET DOCTORS
     // ================================================================
     $stmt = $db->prepare("
         SELECT id, full_name, specialty, is_online 
@@ -173,72 +171,78 @@ try {
     $total_doctors = count($doctors);
     
     // ================================================================
-    // GET CONSULTATION SERVICES - Use 'New Patient' as default
+    // ✅ GET CONSULTATION SERVICES FROM services TABLE
+    // category_id = 2 (Consultation)
     // ================================================================
-    $stmt = $db->prepare("
-        SELECT id, service_name, description, price, unit, is_active
-        FROM services 
-        WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
-        ORDER BY 
-            CASE 
-                WHEN service_name LIKE '%New Patient%' THEN 0
-                WHEN service_name LIKE '%General%' THEN 1
-                WHEN service_name LIKE '%Emergency%' THEN 2
-                WHEN service_name LIKE '%Specialist%' THEN 3
-                WHEN service_name LIKE '%Follow%' THEN 4
-                ELSE 5
-            END,
-            service_name
-    ");
-    $stmt->execute([$selected_branch_id]);
-    $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $consultation_services = [];
+    try {
+        $stmt = $db->prepare("
+            SELECT id, service_name, description, price, unit, is_active
+            FROM services 
+            WHERE category_id = 2 AND is_active = 1 
+            AND (branch_id = ? OR branch_id IS NULL)
+            ORDER BY 
+                CASE 
+                    WHEN service_name LIKE '%New Patient%' THEN 0
+                    WHEN service_name LIKE '%General%' THEN 1
+                    WHEN service_name LIKE '%Emergency%' THEN 2
+                    WHEN service_name LIKE '%Specialist%' THEN 3
+                    WHEN service_name LIKE '%Follow%' THEN 4
+                    ELSE 5
+                END,
+                service_name
+        ");
+        $stmt->execute([$selected_branch_id]);
+        $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        // Table might not exist, use defaults
+        $consultation_services = [];
+    }
     
-    // Build visit type options
+    // ================================================================
+    // ✅ BUILD VISIT TYPE OPTIONS FROM SERVICES
+    // ================================================================
     $visit_type_options = [];
     $default_key = 'new_patient';
+    $default_price = 0;
     
-    foreach ($consultation_services as $service) {
-        $service_name = $service['service_name'];
-        $key = strtolower(str_replace(' ', '_', $service_name));
-        $key = str_replace('-', '_', $key);
-        $key = preg_replace('/[^a-z_]/', '', $key);
-        if (empty($key)) {
-            $key = 'consultation_' . $service['id'];
-        }
-        
-        $display_name = $service_name;
-        
-        $icon = '🏥';
-        if (strpos(strtolower($service_name), 'new patient') !== false) {
-            $icon = '🆕';
-        } elseif (strpos(strtolower($service_name), 'follow') !== false) {
-            $icon = '🔄';
-        } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
-            $icon = '🚨';
-        } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
-            $icon = '👨‍⚕️';
-        } elseif (strpos(strtolower($service_name), 'general') !== false) {
+    if (!empty($consultation_services)) {
+        foreach ($consultation_services as $service) {
+            $service_name = $service['service_name'];
+            $key = strtolower(str_replace(' ', '_', $service_name));
+            $key = str_replace('-', '_', $key);
+            $key = preg_replace('/[^a-z_]/', '', $key);
+            if (empty($key)) {
+                $key = 'consultation_' . $service['id'];
+            }
+            
             $icon = '🏥';
-        }
-        
-        $visit_type_options[$key] = [
-            'id' => $service['id'],
-            'name' => $service_name,
-            'display_name' => $display_name,
-            'price' => (float)$service['price'],
-            'unit' => $service['unit'] ?? 'each',
-            'description' => $service['description'] ?? '',
-            'is_active' => $service['is_active'],
-            'icon' => $icon
-        ];
-        
-        // Set default to 'New Patient'
-        if (strpos(strtolower($service_name), 'new patient') !== false) {
-            $default_key = $key;
+            if (strpos(strtolower($service_name), 'new patient') !== false) {
+                $icon = '🆕';
+                $default_key = $key;
+                $default_price = (float)($service['price'] ?? 10000);
+            } elseif (strpos(strtolower($service_name), 'follow') !== false) {
+                $icon = '🔄';
+            } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
+                $icon = '🚨';
+            } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
+                $icon = '👨‍⚕️';
+            }
+            
+            $visit_type_options[$key] = [
+                'id' => $service['id'],
+                'name' => $service_name,
+                'display_name' => $service_name,
+                'price' => (float)($service['price'] ?? 0),
+                'unit' => $service['unit'] ?? 'each',
+                'description' => $service['description'] ?? '',
+                'is_active' => $service['is_active'] ?? 1,
+                'icon' => $icon
+            ];
         }
     }
     
-    // Fallback if no consultation services found
+    // ✅ FALLBACK if no services found in database
     if (empty($visit_type_options)) {
         $visit_type_options = [
             'new_patient' => [
@@ -282,22 +286,19 @@ try {
                 'icon' => '🚨'
             ]
         ];
+        $default_key = 'new_patient';
+        $default_price = 10000;
     }
     
     // ================================================================
-    // Generate patient ID - UNIQUE PER BRANCH WITH BRANCH CODE
+    // Generate patient ID - WITH BRANCH CODE
     // ================================================================
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE branch_id = ?");
     $stmt->execute([$selected_branch_id]);
     $count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     $next_id = str_pad($count + 1, 4, '0', STR_PAD_LEFT);
     
-    // Get branch code (2 digits with leading zero)
     $branch_code = str_pad($selected_branch_id, 2, '0', STR_PAD_LEFT);
-    
-    // Generate patient ID with branch code
-    // Example: P-2026-01-0001 for Dodoma (branch_id=1)
-    // Example: P-2026-02-0001 for Arusha (branch_id=2)
     $patient_id_number = 'P-' . date('Y') . '-' . $branch_code . '-' . $next_id;
     
     // ================================================================
@@ -322,7 +323,39 @@ try {
     ];
     
     // ================================================================
-    // HANDLE FORM SUBMISSION - REGISTER & ASSIGN DOCTOR (OPTIONAL)
+    // COMMON ALLERGIES
+    // ================================================================
+    $common_allergies = [
+        'Penicillin' => 'Penicillin',
+        'Sulfa Drugs' => 'Sulfa Drugs',
+        'Aspirin' => 'Aspirin',
+        'Ibuprofen' => 'Ibuprofen',
+        'Codeine' => 'Codeine',
+        'Latex' => 'Latex',
+        'Peanuts' => 'Peanuts',
+        'Shellfish' => 'Shellfish',
+        'Eggs' => 'Eggs',
+        'Milk' => 'Milk',
+        'Wheat' => 'Wheat',
+        'Soy' => 'Soy',
+        'Dust' => 'Dust',
+        'Pollen' => 'Pollen',
+        'Animal Dander' => 'Animal Dander'
+    ];
+    
+    // ================================================================
+    // MARITAL STATUS
+    // ================================================================
+    $marital_statuses = [
+        'Single' => 'Single',
+        'Married' => 'Married',
+        'Divorced' => 'Divorced',
+        'Widowed' => 'Widowed',
+        'Separated' => 'Separated'
+    ];
+    
+    // ================================================================
+    // HANDLE FORM SUBMISSION
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_patient'])) {
         $full_name = trim($_POST['full_name'] ?? '');
@@ -345,8 +378,10 @@ try {
         $complaint = trim($_POST['complaint'] ?? '');
         $notes = trim($_POST['notes'] ?? '');
         
-        // Get consultation fee from selected visit type
-        $consultation_fee = $visit_type_options[$visit_type_key]['price'] ?? 10000;
+        // ✅ Get consultation fee from selected visit type
+        $consultation_fee = $visit_type_options[$visit_type_key]['price'] ?? 0;
+        $visit_type_name = $visit_type_options[$visit_type_key]['name'] ?? 'New Patient';
+        $service_id = $visit_type_options[$visit_type_key]['id'] ?? null;
         
         // Validation
         $errors = [];
@@ -355,12 +390,12 @@ try {
         if (empty($phone)) $errors[] = 'Phone number is required';
         
         // ================================================================
-        // CHECK FOR DUPLICATE PATIENT - PER BRANCH ONLY
+        // CHECK FOR DUPLICATE PATIENT - PER BRANCH
         // ================================================================
         $duplicate_error = '';
         
         if (empty($errors)) {
-            // 1. PRIMARY CHECK: Phone number - PER BRANCH
+            // 1. Check by phone
             if (!empty($phone)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE phone = ? AND branch_id = ?");
                 $stmt->execute([$phone, $branch_id]);
@@ -372,7 +407,7 @@ try {
                 }
             }
             
-            // 2. SECONDARY CHECK: Email - PER BRANCH
+            // 2. Check by email
             if (empty($duplicate_error) && !empty($email)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, email FROM patients WHERE email = ? AND branch_id = ?");
                 $stmt->execute([$email, $branch_id]);
@@ -384,7 +419,7 @@ try {
                 }
             }
             
-            // 3. TERTIARY CHECK: Full Name + Phone - PER BRANCH
+            // 3. Check by name + phone
             if (empty($duplicate_error) && !empty($full_name) && !empty($phone)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE full_name = ? AND phone = ? AND branch_id = ?");
                 $stmt->execute([$full_name, $phone, $branch_id]);
@@ -394,20 +429,9 @@ try {
                                        🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
                 }
             }
-            
-            // 4. EXTRA CHECK: Full Name + Date of Birth - PER BRANCH
-            if (empty($duplicate_error) && !empty($full_name) && !empty($date_of_birth)) {
-                $stmt = $db->prepare("SELECT id, full_name, patient_id, date_of_birth FROM patients WHERE full_name = ? AND date_of_birth = ? AND branch_id = ?");
-                $stmt->execute([$full_name, $date_of_birth, $branch_id]);
-                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($existing) {
-                    $duplicate_error = "❌ A patient with name <strong>" . htmlspecialchars($full_name) . "</strong> and date of birth <strong>" . date('d/m/Y', strtotime($date_of_birth)) . "</strong> already exists in <strong>" . htmlspecialchars($branch_name) . "</strong> branch.<br>
-                                       🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
-                }
-            }
         }
         
-        // If duplicate found, show error and stop
+        // If duplicate found, show error
         if (!empty($duplicate_error)) {
             $message = $duplicate_error;
             $message_type = 'error';
@@ -435,75 +459,156 @@ try {
                 $latest_patient_id = $patient_db_id;
                 
                 // ================================================================
-                // 2. CREATE VISIT - ALWAYS 'new' visit_type
+                // 2. CREATE VISIT
                 // ================================================================
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT);
                 
-                // Default status is 'pending' (no doctor assigned)
+                // ✅ Status depends on doctor assignment
                 $visit_status = 'pending';
-                
-                // If doctor assigned, status becomes 'assigned'
                 if ($assign_doctor && $doctor_id > 0) {
                     $visit_status = 'assigned';
                 }
                 
-                // ✅ visit_type is ALWAYS 'new' for new patients
+                // visit_type is 'new' for new patients
                 $visit_type_db = 'new';
                 
+                // ✅ consultation_fee: 0 if no doctor assigned, otherwise service price
+                $consultation_fee_to_store = ($assign_doctor && $doctor_id > 0) ? $consultation_fee : 0;
+                
+                // ✅ INSERT VISIT - using existing columns
                 $stmt = $db->prepare("
                     INSERT INTO visits (
                         visit_number, patient_id, receptionist_id, 
-                        branch_id, visit_type, status, created_at, updated_at,
-                        registration_fee, consultation_fee, doctor_id,
-                        symptoms, complaint, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 0, ?, ?, ?, ?, ?)
+                        branch_id, visit_type, status, 
+                        doctor_id,
+                        symptoms, complaint, notes,
+                        consultation_fee,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
                 ");
                 $stmt->execute([
                     $visit_number, 
                     $patient_db_id, 
                     $user_id, 
                     $branch_id,
-                    $visit_type_db,  // Always 'new' for new patients
+                    $visit_type_db,
                     $visit_status,
-                    $consultation_fee,
                     $assign_doctor && $doctor_id > 0 ? $doctor_id : null,
                     $symptoms,
                     $complaint,
-                    $notes
+                    $notes,
+                    $consultation_fee_to_store
                 ]);
                 $visit_id = $db->lastInsertId();
                 $latest_visit_id = $visit_id;
                 
                 // ================================================================
-                // 3. IF DOCTOR ASSIGNED - CREATE BILL
+                // 3. ✅ IF DOCTOR ASSIGNED → CREATE BILL WITH FEE
+                //    ✅ IF NO DOCTOR → NO BILL (fee = 0)
                 // ================================================================
-                $bill_result = null;
                 $bill_created = false;
+                $bill_number = null;
                 
                 if ($assign_doctor && $doctor_id > 0) {
                     // Update patient's assigned doctor
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
                     $stmt->execute([$doctor_id, $patient_db_id]);
                     
-                    // Create bill if consultation fee > 0
+                    // Update visit: set assigned_at timestamp
+                    $stmt = $db->prepare("UPDATE visits SET assigned_at = NOW() WHERE id = ?");
+                    $stmt->execute([$visit_id]);
+                    
+                    // ✅ Create bill ONLY if consultation_fee > 0
                     if ($consultation_fee > 0) {
-                        $bill_result = createVisitBill($db, $patient_db_id, $visit_id, $visit_type_key, $consultation_fee, $user_id, $branch_id);
-                        if ($bill_result && $bill_result['status'] === 'created') {
+                        // Check if bill exists
+                        $stmt = $db->prepare("
+                            SELECT id FROM bills 
+                            WHERE visit_id = ? AND status IN ('pending', 'partial')
+                            LIMIT 1
+                        ");
+                        $stmt->execute([$visit_id]);
+                        $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                        
+                        if (!$existing_bill) {
+                            $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
+                            
+                            // Insert bill
+                            $stmt = $db->prepare("
+                                INSERT INTO bills (
+                                    bill_number, patient_id, visit_id, 
+                                    subtotal, discount_amount, total_amount, 
+                                    paid_amount, balance, status, 
+                                    created_by, branch_id, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+                            ");
+                            $stmt->execute([
+                                $bill_number,
+                                $patient_db_id,
+                                $visit_id,
+                                $consultation_fee,
+                                0,
+                                $consultation_fee,
+                                0,
+                                $consultation_fee,
+                                $user_id,
+                                $branch_id
+                            ]);
+                            $bill_id = $db->lastInsertId();
+                            
+                            // Insert bill item
+                            $stmt = $db->prepare("
+                                INSERT INTO bill_items (
+                                    bill_id, patient_id, branch_id,
+                                    item_type, item_name, 
+                                    quantity, unit_price, total_price, 
+                                    status, created_at
+                                ) VALUES (?, ?, ?, 'consultation', ?, 1, ?, ?, 'pending', NOW())
+                            ");
+                            $stmt->execute([
+                                $bill_id,
+                                $patient_db_id,
+                                $branch_id,
+                                $visit_type_name,
+                                $consultation_fee,
+                                $consultation_fee
+                            ]);
+                            
+                            // ✅ Update visit_total in visits table
+                            $stmt = $db->prepare("
+                                UPDATE visits SET 
+                                    visit_total = visit_total + ?,
+                                    consultation_fee = ?
+                                WHERE id = ?
+                            ");
+                            $stmt->execute([$consultation_fee, $consultation_fee, $visit_id]);
+                            
                             $bill_created = true;
+                            
+                            // ✅ Notify cashiers
+                            try {
+                                $stmt = $db->prepare("
+                                    SELECT id FROM users 
+                                    WHERE role = 'cashier' AND status = 'active' AND branch_id = ?
+                                ");
+                                $stmt->execute([$branch_id]);
+                                $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                                
+                                foreach ($cashiers as $cashier) {
+                                    $stmt = $db->prepare("
+                                        INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at)
+                                        VALUES (?, ?, '💰 New Bill Created', ?, 'bill', 'cashier_dashboard.php', 0, NOW())
+                                    ");
+                                    $stmt->execute([
+                                        $cashier['id'],
+                                        $branch_id,
+                                        "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient " . htmlspecialchars($full_name)
+                                    ]);
+                                }
+                            } catch (Exception $e) {
+                                // Silent fail
+                            }
                         }
                     }
-                    
-                    // Log activity
-                    try {
-                        $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'patient_registered_with_doctor', ?, NOW())");
-                        $stmt->execute([$user_id, $branch_id, "New patient registered and assigned to doctor ID #$doctor_id: $full_name (ID: $patient_id_number) - Visit: $visit_number"]);
-                    } catch (Exception $e) {}
-                } else {
-                    // Log activity - NO doctor assigned
-                    try {
-                        $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'patient_registered', ?, NOW())");
-                        $stmt->execute([$user_id, $branch_id, "New patient registered: $full_name (ID: $patient_id_number) in $branch_name - Visit: $visit_number (No doctor assigned)"]);
-                    } catch (Exception $e) {}
                 }
                 
                 $db->commit();
@@ -511,12 +616,12 @@ try {
                 $_SESSION['current_patient_id'] = $patient_db_id;
                 $_SESSION['current_visit_id'] = $visit_id;
                 
-                // Build success message
+                // ✅ Build success message
                 $message = "✅ Patient registered successfully!";
                 $message .= "<br>📋 Patient ID: <strong>$patient_id_number</strong>";
                 $message .= "<br>📋 Visit #: <strong>$visit_number</strong>";
-                $message .= "<br>📋 Visit Type: <strong>New Patient</strong>";
-                $message .= "<br>💰 Consultation Fee: <strong>TSh " . number_format($consultation_fee, 0) . "</strong>";
+                $message .= "<br>📋 Visit Type: <strong>" . htmlspecialchars($visit_type_name) . "</strong>";
+                $message .= "<br>📋 Consultation Fee: <strong>TSh " . number_format($consultation_fee, 0) . "</strong>";
                 
                 if ($assign_doctor && $doctor_id > 0) {
                     $doctor_name = '';
@@ -528,14 +633,17 @@ try {
                     }
                     $message .= "<br>👨‍⚕️ Doctor: <strong>Dr. " . htmlspecialchars($doctor_name) . "</strong> (Assigned)";
                     
-                    if ($bill_created && $bill_result) {
-                        $message .= "<br>💰 Bill: <strong>#" . $bill_result['bill_number'] . "</strong> sent to Cashier!";
+                    if ($bill_created && $bill_number) {
+                        $message .= "<br>💰 Bill: <strong>#$bill_number</strong> (TSh " . number_format($consultation_fee) . ") sent to Cashier!";
+                    } elseif ($consultation_fee > 0) {
+                        $message .= "<br>💰 Bill created with fee: <strong>TSh " . number_format($consultation_fee) . "</strong>";
                     } else {
-                        $message .= "<br>💰 Bill: <strong>No bill created</strong> (Fee waived or zero)";
+                        $message .= "<br>💰 <strong>No bill created</strong> (Fee is zero)";
                     }
                 } else {
                     $message .= "<br>⏳ Doctor: <strong>Not assigned</strong> - Patient is in Pending list";
                     $message .= "<br>💰 <strong>No bill created</strong> - Bill will be created when doctor is assigned";
+                    $message .= "<br>💡 <em>Tip: Go to Assign Doctor to create bill</em>";
                 }
                 
                 $message_type = 'success';
@@ -543,7 +651,7 @@ try {
                 echo '<script>
                     setTimeout(function(){ 
                         window.location.href = "patients.php?registered=1"; 
-                    }, 3000);
+                    }, 4000);
                 </script>';
                 
             } catch (Exception $e) {
@@ -562,175 +670,6 @@ try {
     $message_type = 'error';
     $unread_notifications = 0;
 }
-
-// ================================================================
-// FUNCTION: CREATE VISIT BILL
-// ================================================================
-function createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consultation_fee, $user_id, $branch_id) {
-    // Check if patient has valid paid visit within 7 days
-    $stmt = $db->prepare("
-        SELECT pb.id, pb.visit_id, pb.bill_number, pb.created_at
-        FROM patient_bills pb
-        WHERE pb.patient_id = ? 
-        AND pb.branch_id = ? 
-        AND pb.status = 'paid'
-        AND pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        ORDER BY pb.created_at DESC
-        LIMIT 1
-    ");
-    $stmt->execute([$patient_id, $branch_id]);
-    $paid_visit = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($paid_visit) {
-        return [
-            'status' => 'waived',
-            'message' => 'Fee WAIVED - Valid paid visit within 7 days',
-            'bill_id' => $paid_visit['id'],
-            'bill_number' => $paid_visit['bill_number']
-        ];
-    }
-    
-    // Check if there's an existing pending bill for this visit
-    $stmt = $db->prepare("
-        SELECT id, bill_number, status 
-        FROM patient_bills 
-        WHERE visit_id = ? AND status IN ('pending', 'partial')
-        LIMIT 1
-    ");
-    $stmt->execute([$visit_id]);
-    $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($existing_bill) {
-        $stmt = $db->prepare("
-            UPDATE patient_bills 
-            SET consultation_fee = ?, 
-                subtotal = ?, 
-                total_amount = ?, 
-                balance = ?,
-                updated_at = NOW()
-            WHERE id = ?
-        ");
-        $stmt->execute([
-            $consultation_fee,
-            $consultation_fee,
-            $consultation_fee,
-            $consultation_fee,
-            $existing_bill['id']
-        ]);
-        
-        $stmt = $db->prepare("
-            UPDATE bill_items 
-            SET unit_price = ?, total_price = ?, item_name = ?
-            WHERE bill_id = ? AND item_type = 'consultation'
-        ");
-        $item_name = 'Consultation (' . ucfirst(str_replace('_', ' ', $visit_type_key)) . ')';
-        $stmt->execute([$consultation_fee, $consultation_fee, $item_name, $existing_bill['id']]);
-        
-        return [
-            'status' => 'updated',
-            'message' => 'Bill updated',
-            'bill_id' => $existing_bill['id'],
-            'bill_number' => $existing_bill['bill_number']
-        ];
-    }
-    
-    // ✅ CREATE NEW BILL
-    $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
-    
-    $stmt = $db->prepare("
-        INSERT INTO patient_bills (
-            bill_number, patient_id, visit_id, 
-            consultation_fee, subtotal, total_amount, balance, 
-            status, created_by, branch_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
-    ");
-    $subtotal = $consultation_fee;
-    $stmt->execute([
-        $bill_number,
-        $patient_id,
-        $visit_id,
-        $consultation_fee,
-        $subtotal,
-        $subtotal,
-        $subtotal,
-        $user_id,
-        $branch_id
-    ]);
-    $bill_id = $db->lastInsertId();
-    
-    // ✅ ADD BILL ITEM
-    $item_name = 'Consultation (' . ucfirst(str_replace('_', ' ', $visit_type_key)) . ')';
-    
-    $stmt = $db->prepare("
-        INSERT INTO bill_items (
-            bill_id, item_type, item_name, 
-            quantity, unit_price, total_price, 
-            payment_status, is_paid, status, created_at
-        ) VALUES (?, 'consultation', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
-    ");
-    $stmt->execute([$bill_id, $item_name, $consultation_fee, $consultation_fee]);
-    
-    // ✅ NOTIFY CASHIER - Bill created
-    try {
-        $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
-        $stmt->execute([$branch_id]);
-        $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-        foreach ($cashiers as $cashier) {
-            $stmt = $db->prepare("
-                INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at)
-                VALUES (?, ?, '💰 New Bill Created', ?, 'bill', ?, 0, NOW())
-            ");
-            $stmt->execute([
-                $cashier['id'],
-                $branch_id,
-                "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient ID #$patient_id",
-                "cashier_dashboard.php"
-            ]);
-        }
-    } catch (Exception $e) {
-        error_log("Cashier notification error: " . $e->getMessage());
-    }
-    
-    return [
-        'status' => 'created',
-        'message' => 'New bill created and sent to Cashier!',
-        'bill_id' => $bill_id,
-        'bill_number' => $bill_number
-    ];
-}
-
-// ================================================================
-// COMMON ALLERGIES LIST
-// ================================================================
-$common_allergies = [
-    'Penicillin' => 'Penicillin',
-    'Sulfa Drugs' => 'Sulfa Drugs',
-    'Aspirin' => 'Aspirin',
-    'Ibuprofen' => 'Ibuprofen',
-    'Codeine' => 'Codeine',
-    'Latex' => 'Latex',
-    'Peanuts' => 'Peanuts',
-    'Shellfish' => 'Shellfish',
-    'Eggs' => 'Eggs',
-    'Milk' => 'Milk',
-    'Wheat' => 'Wheat',
-    'Soy' => 'Soy',
-    'Dust' => 'Dust',
-    'Pollen' => 'Pollen',
-    'Animal Dander' => 'Animal Dander'
-];
-
-// ================================================================
-// MARITAL STATUS LIST
-// ================================================================
-$marital_statuses = [
-    'Single' => 'Single',
-    'Married' => 'Married',
-    'Divorced' => 'Divorced',
-    'Widowed' => 'Widowed',
-    'Separated' => 'Separated'
-];
 
 // ================================================================
 // LOGO PATH
@@ -1069,6 +1008,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
+        .page-header .header-badge.fee-badge {
+            background: rgba(251,191,36,0.2);
+            border-color: rgba(251,191,36,0.3);
+            color: #FBBF24;
+        }
+        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -1199,11 +1144,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             opacity: 0.5;
         }
         
-        .form-control:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        
         .form-row {
             margin-bottom: 18px;
         }
@@ -1271,10 +1211,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             background: var(--danger-bg);
             color: var(--danger-dark);
             box-shadow: 0 2px 8px rgba(220, 38, 38, 0.15);
-        }
-        
-        .allergy-checkbox-group .allergy-chip .allergy-icon {
-            font-size: 0.6rem;
         }
         
         /* ================================================================
@@ -1352,6 +1288,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--text-secondary);
         }
         
+        .assign-doctor-toggle .fee-info {
+            margin-left: auto;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--primary);
+            background: var(--primary-bg);
+            padding: 2px 12px;
+            border-radius: 12px;
+        }
+        
         .assign-doctor-fields {
             display: none;
             margin-top: 10px;
@@ -1363,7 +1309,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         
         /* ================================================================
-           DOCTOR STATUS - LIVE AUTO-UPDATE
+           DOCTOR STATUS
            ================================================================ */
         .doctor-status-badge {
             display: inline-block;
@@ -1398,27 +1344,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             border-color: #F87171;
         }
         
-        .doctor-select-option {
-            padding: 4px 8px;
-        }
-        
-        .doctor-select-option .status-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 6px;
-        }
-        
-        .doctor-select-option .status-dot.online {
-            background: #059669;
-        }
-        
-        .doctor-select-option .status-dot.offline {
-            background: #DC2626;
-        }
-        
-        /* Auto-update indicator */
         .live-update-indicator {
             display: inline-block;
             width: 8px;
@@ -1468,17 +1393,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             transform: none;
         }
         
-        .btn-success {
-            background: var(--success);
-            color: white;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
-        }
-        
-        .btn-success:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
-        }
-        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
@@ -1489,12 +1403,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
-        }
-        
-        .btn-sm { 
-            padding: 5px 14px; 
-            font-size: 0.75rem; 
-            border-radius: 8px; 
         }
         
         /* ================================================================
@@ -1672,6 +1580,43 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         
         /* ================================================================
+           SYMPTOM SELECTOR
+           ================================================================ */
+        .symptom-selector {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        
+        .symptom-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 12px 3px 8px;
+            border-radius: 16px;
+            border: 2px solid var(--border-color);
+            background: var(--bg-body);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+        
+        .symptom-chip:hover {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+            transform: translateY(-1px);
+        }
+        
+        .symptom-chip.active {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+            color: var(--primary);
+        }
+        
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
@@ -1719,45 +1664,33 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             50% { opacity: 0.5; transform: scale(0.8); }
         }
         
-        /* ================================================================
-           COMMON SYMPTOMS SELECTOR
-           ================================================================ */
-        .symptom-selector {
+        /* Fee Info Box */
+        .fee-info-box {
+            background: var(--warning-bg);
+            border: 2px solid var(--warning);
+            border-radius: 10px;
+            padding: 10px 14px;
+            margin-top: 10px;
             display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-top: 6px;
-        }
-        
-        .symptom-chip {
-            display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 3px 12px 3px 8px;
-            border-radius: 16px;
-            border: 2px solid var(--border-color);
-            background: var(--bg-body);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            user-select: none;
+            gap: 10px;
+            font-size: 0.8rem;
+            color: var(--warning);
         }
         
-        .symptom-chip:hover {
-            border-color: var(--primary);
-            background: var(--primary-bg);
-            transform: translateY(-1px);
+        [data-theme="dark"] .fee-info-box {
+            background: #3D2E0A;
+            border-color: #FBBF24;
+            color: #FBBF24;
         }
         
-        .symptom-chip.active {
-            border-color: var(--primary);
-            background: var(--primary-bg);
-            color: var(--primary);
+        .fee-info-box i {
+            font-size: 1.1rem;
         }
         
-        .symptom-chip .symptom-icon {
-            font-size: 0.55rem;
+        .fee-info-box .fee-amount {
+            font-weight: 700;
+            font-size: 1rem;
         }
     </style>
 </head>
@@ -1829,24 +1762,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     Next ID: <strong><?= $patient_id_number ?></strong>
                 </span>
                 
-                <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.2);">
-                    <i class="fas fa-user-md"></i>
-                    <span style="color:#34D399;">Optional</span>
-                </span>
-                
-                <span class="header-badge" style="background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.15);">
-                    <span class="live-update-indicator"></span>
-                    <span id="liveUpdateStatus">Live</span>
+                <span class="header-badge fee-badge">
+                    <i class="fas fa-money-bill-wave"></i>
+                    Fee: <strong id="headerFeeDisplay">TSh <?= number_format($default_price, 0) ?></strong>
                 </span>
                 
                 <span class="header-badge" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.2);color:#FBBF24;">
-                    <i class="fas fa-shield-alt"></i>
-                    Duplicate check: <strong>Per Branch</strong>
-                </span>
-                
-                <span class="header-badge" style="background:rgba(96,165,250,0.15);border-color:rgba(96,165,250,0.2);color:#60A5FA;">
-                    <i class="fas fa-hashtag"></i>
-                    Branch Code: <strong><?= str_pad($selected_branch_id, 2, '0', STR_PAD_LEFT) ?></strong>
+                    <i class="fas fa-info-circle"></i>
+                    Bill only if Doctor Assigned
                 </span>
                 
                 <span class="update-badge-light" id="updateBadge">
@@ -1896,17 +1819,20 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 2: Patient Type + Gender -->
+            <!-- ROW 2: Visit Type (from services) + Gender -->
             <!-- ============================================================ -->
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-tag label-icon"></i> Patient Type <span class="required">*</span>
                     </label>
-                    <select name="patient_type" class="form-control" required>
-                        <option value="new" <?= ($_POST['patient_type'] ?? 'new') === 'new' ? 'selected' : '' ?>>🆕 New Patient</option>
-                        <option value="follow-up" <?= ($_POST['patient_type'] ?? '') === 'follow-up' ? 'selected' : '' ?>>🔄 Follow-up</option>
-                        <option value="emergency" <?= ($_POST['patient_type'] ?? '') === 'emergency' ? 'selected' : '' ?>>🚨 Emergency</option>
+                    <select name="visit_type" class="form-control" id="visitTypeSelect" required onchange="updateFeeDisplay()">
+                        <?php foreach ($visit_type_options as $key => $option): ?>
+                            <?php $selected = ($key === $default_key) ? 'selected' : ''; ?>
+                            <option value="<?= htmlspecialchars($key) ?>" data-price="<?= $option['price'] ?>" <?= $selected ?>>
+                                <?= $option['icon'] ?? '🏥' ?> <?= htmlspecialchars($option['display_name']) ?> - TSh <?= number_format($option['price'], 0) ?>
+                            </option>
+                        <?php endforeach; ?>
                     </select>
                 </div>
                 
@@ -2027,29 +1953,44 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 8: ASSIGN DOCTOR SECTION - OPTIONAL - BLUE THEME -->
+            <!-- ROW 8: ASSIGN DOCTOR SECTION - OPTIONAL -->
             <!-- ============================================================ -->
             <div class="form-row grid-full">
                 <div class="assign-doctor-section">
                     <div class="section-title">
                         <i class="fas fa-user-md"></i>
                         Assign Doctor <span style="font-weight:400;font-size:0.8rem;color:var(--text-secondary);">(Optional)</span>
-                        <span class="text-xs font-normal text-gray-400">- Patient will be assigned immediately</span>
+                        <span class="text-xs font-normal text-gray-400">- Bill created only if assigned</span>
                         <span class="live-update-text" style="margin-left:auto;">
                             <span class="live-update-indicator"></span>
                             <span id="doctorUpdateStatus">Updating...</span>
-                            <span id="doctorUpdateTime" class="text-xs text-gray-400"></span>
                         </span>
                     </div>
                     
                     <!-- Toggle -->
                     <div class="assign-doctor-toggle" onclick="toggleAssignDoctor(event)">
                         <input type="checkbox" name="assign_doctor" id="assignDoctorCheckbox" value="1" 
-                               <?= isset($_POST['assign_doctor']) && $_POST['assign_doctor'] == 1 ? 'checked' : '' ?>>
+                               <?= isset($_POST['assign_doctor']) && $_POST['assign_doctor'] == 1 ? 'checked' : '' ?>
+                               onchange="toggleAssignDoctor()">
                         <span class="toggle-label">
                             <i class="fas fa-check-circle"></i> Assign doctor after registration
                         </span>
-                        <span class="toggle-sub">(Patient will appear in Assigned list)</span>
+                        <span class="toggle-sub">(Bill will be created with fee)</span>
+                        <span class="fee-info" id="toggleFeeInfo">
+                            💰 TSh <span id="toggleFeeAmount"><?= number_format($default_price, 0) ?></span>
+                        </span>
+                    </div>
+                    
+                    <!-- Fee Info Box -->
+                    <div class="fee-info-box" id="feeInfoBox">
+                        <i class="fas fa-info-circle"></i>
+                        <span>
+                            <strong>Fee: TSh <span id="feeAmountDisplay"><?= number_format($default_price, 0) ?></span></strong>
+                            — This fee will be sent to Cashier when doctor is assigned.
+                            <span style="font-size:0.7rem;display:block;margin-top:2px;color:var(--text-secondary);">
+                                <i class="fas fa-shield-alt"></i> If doctor is not assigned, NO bill will be created.
+                            </span>
+                        </span>
                     </div>
                     
                     <!-- Doctor Fields -->
@@ -2066,7 +2007,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                     <?php if (!empty($online_doctors) && count($online_doctors) > 0): ?>
                                         <optgroup label="🟢 Online Doctors (<?= $online_doctors_count ?>)" style="font-weight:600;color:#059669;">
                                             <?php foreach ($online_doctors as $doctor): ?>
-                                                <option value="<?= $doctor['id'] ?>" data-online="1" style="font-weight:500;color:#059669;padding:4px;" data-doctor="<?= htmlspecialchars($doctor['full_name']) ?>">
+                                                <option value="<?= $doctor['id'] ?>" data-online="1" style="font-weight:500;color:#059669;padding:4px;">
                                                     🟢 Dr. <?= htmlspecialchars($doctor['full_name']) ?>
                                                     <?php if (!empty($doctor['specialty'])): ?>
                                                         (<?= htmlspecialchars($doctor['specialty']) ?>)
@@ -2079,7 +2020,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                     <?php if (!empty($offline_doctors) && count($offline_doctors) > 0): ?>
                                         <optgroup label="⚪ Offline Doctors (<?= $offline_doctors_count ?>)" style="font-weight:600;color:var(--text-secondary);">
                                             <?php foreach ($offline_doctors as $doctor): ?>
-                                                <option value="<?= $doctor['id'] ?>" data-online="0" style="color:var(--text-secondary);padding:4px;" data-doctor="<?= htmlspecialchars($doctor['full_name']) ?>">
+                                                <option value="<?= $doctor['id'] ?>" data-online="0" style="color:var(--text-secondary);padding:4px;">
                                                     ⚪ Dr. <?= htmlspecialchars($doctor['full_name']) ?>
                                                     <?php if (!empty($doctor['specialty'])): ?>
                                                         (<?= htmlspecialchars($doctor['specialty']) ?>)
@@ -2105,31 +2046,25 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             
                             <div class="form-row" style="margin-bottom:0;">
                                 <label class="form-label">
-                                    <i class="fas fa-tag label-icon"></i> Visit Type 
-                                    <span class="text-xs font-normal text-gray-400" id="visitTypePrice">Fee: TSh 10,000</span>
+                                    <i class="fas fa-money-bill-wave label-icon"></i> Consultation Fee
                                 </label>
-                                <select name="visit_type" class="form-control" id="visitTypeSelect" onchange="updateVisitTypePrice()">
-                                    <?php foreach ($visit_type_options as $key => $option):
-                                        $is_default = (strpos(strtolower($option['name']), 'new patient') !== false);
-                                        $selected = $is_default ? 'selected' : '';
-                                    ?>
-                                        <option value="<?= htmlspecialchars($key) ?>" data-price="<?= $option['price'] ?>" <?= $selected ?>>
-                                            <?= $option['icon'] ?? '🏥' ?> <?= htmlspecialchars($option['display_name']) ?> - TSh <?= number_format($option['price'], 0) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <div style="padding:10px 14px;background:var(--bg-body);border-radius:10px;border:2px solid var(--border-color);">
+                                    <span style="font-size:1.1rem;font-weight:700;color:var(--primary);">
+                                        TSh <span id="feeDisplay"><?= number_format($default_price, 0) ?></span>
+                                    </span>
+                                    <span class="text-xs text-gray-400 ml-2">(from selected service)</span>
+                                </div>
                             </div>
                         </div>
                         
                         <!-- ============================================================ -->
-                        <!-- SYMPTOMS - WITH COMMON SYMPTOMS SELECTOR -->
+                        <!-- SYMPTOMS -->
                         <!-- ============================================================ -->
                         <div class="grid-2" style="margin-top:14px;">
                             <div class="form-row" style="margin-bottom:0;">
                                 <label class="form-label">
                                     <i class="fas fa-notes-medical label-icon"></i> Symptoms
                                 </label>
-                                <!-- Common Symptoms Selector -->
                                 <div class="symptom-selector" id="symptomSelector">
                                     <?php foreach ($common_symptoms as $symptom): ?>
                                         <span class="symptom-chip" data-symptom="<?= htmlspecialchars($symptom) ?>" onclick="toggleSymptom(this)">
@@ -2161,14 +2096,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             <?php if (!empty($doctors) && count($doctors) > 0): ?>
                                 <span>Patient will be assigned to selected doctor immediately</span>
                                 <span class="mx-1">|</span>
-                                <span>Bill will be created and sent to Cashier</span>
+                                <span class="text-green-500">✅ Bill will be created and sent to Cashier</span>
                             <?php else: ?>
                                 <span class="text-yellow-500">⚠️ No doctors available in this branch</span>
                             <?php endif; ?>
                             <span class="mx-1">|</span>
                             <span>Patient will appear in <strong>Assigned</strong> list</span>
-                            <span class="mx-1">|</span>
-                            <span class="text-green-500" id="doctorLiveStatus">🔄 Auto-update: 3s</span>
                             <span class="mx-1">|</span>
                             <span class="text-blue-500">
                                 <i class="fas fa-shield-alt"></i> Duplicate check: Per Branch
@@ -2212,9 +2145,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <i class="fas fa-user-md mr-1"></i>
                 <span style="color:var(--text-secondary);">Assign doctor is <strong>optional</strong></span>
                 <span class="mx-2">|</span>
-                <i class="fas fa-clock mr-1"></i>
-                <span id="formTimestamp"><?= date('h:i:s A') ?></span>
-                <span class="mx-2">|</span>
                 <span class="text-green-500">
                     <span class="live-update-indicator"></span> Live
                 </span>
@@ -2223,8 +2153,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     <i class="fas fa-shield-alt"></i> Duplicate check: Per Branch
                 </span>
                 <span class="mx-2">|</span>
-                <span class="text-blue-500">
-                    <i class="fas fa-user-md"></i> <?= $online_doctors_count ?> online
+                <span class="text-yellow-500">
+                    <i class="fas fa-money-bill-wave"></i> Fee: <span id="footerFeeDisplay">TSh <?= number_format($default_price, 0) ?></span>
                 </span>
             </div>
         </form>
@@ -2245,9 +2175,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <p class="stat-label">Doctors Online</p>
         </div>
         <div class="stat-card">
-            <div class="stat-icon">📊</div>
-            <p class="stat-number text-blue-500" id="statTotalDoctors"><?= count($doctors) ?></p>
-            <p class="stat-label">Total Doctors</p>
+            <div class="stat-icon">💰</div>
+            <p class="stat-number text-yellow-500" id="statDefaultFee"><?= number_format($default_price, 0) ?></p>
+            <p class="stat-label">Default Consultation Fee</p>
         </div>
     </div>
 
@@ -2348,7 +2278,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         });
         document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
         document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
-        document.getElementById('formTimestamp').textContent = timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -2446,8 +2375,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     allergiesTextarea.addEventListener('input', function() {
         syncAllergyChips();
     });
-    
-    // Initial sync
     syncAllergyChips();
 
     // ================================================================
@@ -2475,76 +2402,51 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     }
 
     // ================================================================
+    // ✅ UPDATE FEE DISPLAY
+    // ================================================================
+    function updateFeeDisplay() {
+        var select = document.getElementById('visitTypeSelect');
+        var selectedOption = select.options[select.selectedIndex];
+        var price = selectedOption.dataset.price || 0;
+        var formattedPrice = parseInt(price).toLocaleString();
+        
+        // Update all fee displays
+        document.getElementById('headerFeeDisplay').textContent = 'TSh ' + formattedPrice;
+        document.getElementById('feeDisplay').textContent = formattedPrice;
+        document.getElementById('toggleFeeAmount').textContent = formattedPrice;
+        document.getElementById('feeAmountDisplay').textContent = formattedPrice;
+        document.getElementById('footerFeeDisplay').textContent = 'TSh ' + formattedPrice;
+        document.getElementById('statDefaultFee').textContent = formattedPrice;
+    }
+
+    // ================================================================
     // TOGGLE ASSIGN DOCTOR
     // ================================================================
     function toggleAssignDoctor(event) {
         var checkbox = document.getElementById('assignDoctorCheckbox');
         var fields = document.getElementById('assignDoctorFields');
+        var feeInfoBox = document.getElementById('feeInfoBox');
         
-        if (event && event.target.tagName !== 'INPUT') {
+        if (event && event.target && event.target.tagName !== 'INPUT') {
             checkbox.checked = !checkbox.checked;
         }
         
         if (checkbox.checked) {
             fields.classList.add('show');
+            feeInfoBox.style.display = 'flex';
         } else {
             fields.classList.remove('show');
+            feeInfoBox.style.display = 'none';
         }
     }
     
-    document.getElementById('assignDoctorCheckbox').addEventListener('change', function() {
-        toggleAssignDoctor();
-    });
-
-    // ================================================================
-    // UPDATE VISIT TYPE PRICE
-    // ================================================================
-    function updateVisitTypePrice() {
-        var select = document.getElementById('visitTypeSelect');
-        var priceDisplay = document.getElementById('visitTypePrice');
-        if (!select || !priceDisplay) return;
-        
-        var selectedOption = select.options[select.selectedIndex];
-        var price = selectedOption.dataset.price || 10000;
-        priceDisplay.textContent = 'Fee: TSh ' + parseInt(price).toLocaleString();
-    }
-
-    // ================================================================
-    // RESET FORM BUTTON
-    // ================================================================
-    document.getElementById('resetFormBtn').addEventListener('click', function(e) {
-        e.preventDefault();
-        
-        var form = document.getElementById('registrationForm');
-        form.reset();
-        
-        allergiesTextarea.value = '';
-        allergyChips.forEach(function(chip) {
-            chip.classList.remove('active');
-            var checkbox = chip.querySelector('.allergy-checkbox');
-            if (checkbox) checkbox.checked = false;
-        });
-        
-        var symptomChips = document.querySelectorAll('.symptom-chip');
-        symptomChips.forEach(function(chip) {
-            chip.classList.remove('active');
-        });
-        document.getElementById('symptomsTextarea').value = '';
-        
-        var selects = form.querySelectorAll('select');
-        selects.forEach(function(select) {
-            select.selectedIndex = 0;
-        });
-        
-        var dateInput = form.querySelector('input[type="date"]');
-        if (dateInput) dateInput.value = '';
-        
-        var assignCheckbox = document.getElementById('assignDoctorCheckbox');
-        var assignFields = document.getElementById('assignDoctorFields');
-        if (assignCheckbox) assignCheckbox.checked = false;
-        if (assignFields) assignFields.classList.remove('show');
-        
-        showToast('🔄 Reset', 'Form has been reset successfully', 'info');
+    // Initial state
+    document.addEventListener('DOMContentLoaded', function() {
+        var checkbox = document.getElementById('assignDoctorCheckbox');
+        var feeInfoBox = document.getElementById('feeInfoBox');
+        if (!checkbox.checked) {
+            feeInfoBox.style.display = 'none';
+        }
     });
 
     // ================================================================
@@ -2588,26 +2490,20 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         var onlineCount = document.getElementById('onlineCountDisplay');
         var offlineCount = document.getElementById('offlineCountDisplay');
         var statOnline = document.getElementById('statOnlineDoctors');
-        var statTotal = document.getElementById('statTotalDoctors');
         var doctorCountBadge = document.getElementById('doctorCountBadge');
         var lastUpdate = document.getElementById('lastDoctorUpdate');
-        var liveStatus = document.getElementById('liveUpdateStatus');
-        var doctorLiveStatus = document.getElementById('doctorLiveStatus');
-        var updateBadge = document.getElementById('updateBadge');
         var doctorUpdateStatus = document.getElementById('doctorUpdateStatus');
+        var updateBadge = document.getElementById('updateBadge');
         
         if (onlineCount) onlineCount.textContent = '🟢 ' + data.online_count + ' online';
         if (offlineCount) offlineCount.textContent = '⚪ ' + data.offline_count + ' offline';
         if (statOnline) statOnline.textContent = data.online_count;
-        if (statTotal) statTotal.textContent = data.total_doctors;
         if (doctorCountBadge) doctorCountBadge.textContent = '(' + data.online_count + ' online, ' + data.offline_count + ' offline)';
         if (lastUpdate) lastUpdate.textContent = 'Updated: ' + timeStr;
-        if (liveStatus) liveStatus.textContent = 'Live ' + timeStr;
-        if (doctorLiveStatus) doctorLiveStatus.textContent = '🔄 Auto-update: 3s';
-        if (updateBadge) updateBadge.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> ' + timeStr;
         if (doctorUpdateStatus) doctorUpdateStatus.textContent = 'Live ' + timeStr;
+        if (updateBadge) updateBadge.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> ' + timeStr;
         
-        // Update doctor select options WITHOUT losing selection
+        // Update doctor select options
         var doctorSelect = document.getElementById('doctorSelect');
         if (doctorSelect && data.doctor_options !== undefined) {
             var currentValue = doctorSelect.value;
@@ -2624,18 +2520,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             }
         }
         
-        // Update doctor status display
-        var doctorStatusDisplay = document.getElementById('doctorStatusDisplay');
-        if (doctorStatusDisplay) {
-            doctorStatusDisplay.innerHTML = 
-                '<span class="text-green-500" id="onlineCountDisplay">🟢 ' + data.online_count + ' online</span>' +
-                '<span class="mx-1">|</span>' +
-                '<span class="text-gray-500" id="offlineCountDisplay">⚪ ' + data.offline_count + ' offline</span>' +
-                '<span class="mx-1">|</span>' +
-                '<span id="lastDoctorUpdate" class="text-gray-400">Updated: ' + timeStr + '</span>';
-        }
-        
-        // Show toast notification when doctor status changes
         if (lastOnlineCount !== null && lastOnlineCount !== data.online_count) {
             if (data.online_count > lastOnlineCount) {
                 showToast('🟢 Doctor Online', data.online_count + ' doctor(s) are now online', 'success');
@@ -2652,27 +2536,21 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             fetchDoctorStatus();
         }, 1000);
         doctorUpdateInterval = setInterval(fetchDoctorStatus, 3000);
-        console.log('%c🔄 Doctor status auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
-    }
-    
-    function stopDoctorAutoUpdate() {
-        if (doctorUpdateInterval) {
-            clearInterval(doctorUpdateInterval);
-            doctorUpdateInterval = null;
-            console.log('%c⏹️ Doctor status auto-update stopped', 'font-size:12px; color:#DC2626;');
-        }
     }
 
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
-            stopDoctorAutoUpdate();
+            if (doctorUpdateInterval) {
+                clearInterval(doctorUpdateInterval);
+                doctorUpdateInterval = null;
+            }
         } else {
             startDoctorAutoUpdate();
         }
     });
 
     // ================================================================
-    // FORM VALIDATION - FIXED: Save without doctor
+    // FORM VALIDATION
     // ================================================================
     document.getElementById('registrationForm').addEventListener('submit', function(e) {
         var name = document.querySelector('input[name="full_name"]').value.trim();
@@ -2696,7 +2574,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             return false;
         }
         
-        // Only validate doctor if checkbox is checked
         if (assignDoctor) {
             var doctorSelect = document.getElementById('doctorSelect');
             if (!doctorSelect.value) {
@@ -2713,27 +2590,70 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     });
 
     // ================================================================
+    // RESET FORM
+    // ================================================================
+    document.getElementById('resetFormBtn').addEventListener('click', function(e) {
+        e.preventDefault();
+        
+        var form = document.getElementById('registrationForm');
+        form.reset();
+        
+        allergiesTextarea.value = '';
+        allergyChips.forEach(function(chip) {
+            chip.classList.remove('active');
+            var checkbox = chip.querySelector('.allergy-checkbox');
+            if (checkbox) checkbox.checked = false;
+        });
+        
+        var symptomChips = document.querySelectorAll('.symptom-chip');
+        symptomChips.forEach(function(chip) {
+            chip.classList.remove('active');
+        });
+        document.getElementById('symptomsTextarea').value = '';
+        
+        var selects = form.querySelectorAll('select');
+        selects.forEach(function(select) {
+            select.selectedIndex = 0;
+        });
+        
+        // Reset to default visit type
+        var visitTypeSelect = document.getElementById('visitTypeSelect');
+        var defaultOption = visitTypeSelect.querySelector('option[selected]');
+        if (defaultOption) {
+            visitTypeSelect.value = defaultOption.value;
+        }
+        updateFeeDisplay();
+        
+        var assignCheckbox = document.getElementById('assignDoctorCheckbox');
+        var assignFields = document.getElementById('assignDoctorFields');
+        var feeInfoBox = document.getElementById('feeInfoBox');
+        if (assignCheckbox) assignCheckbox.checked = false;
+        if (assignFields) assignFields.classList.remove('show');
+        if (feeInfoBox) feeInfoBox.style.display = 'none';
+        
+        showToast('🔄 Reset', 'Form has been reset successfully', 'info');
+    });
+
+    // ================================================================
     // INIT
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        updateVisitTypePrice();
+        updateFeeDisplay();
         setTimeout(function() {
             startDoctorAutoUpdate();
         }, 2000);
         
+        // Listen to visit type change
+        document.getElementById('visitTypeSelect').addEventListener('change', updateFeeDisplay);
+        
         console.log('%c👤 Braick - New Patient Registration', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-        console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
-        console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?> (Code: <?= str_pad($selected_branch_id, 2, '0', STR_PAD_LEFT) ?>)', 'font-size:13px; color:#6EA8FE;');
-        console.log('%c📋 Patient ID Format: P-YYYY-BRANCH-XXXX', 'font-size:13px; color:#FBBF24;');
-        console.log('%c📋 Next ID: <?= $patient_id_number ?>', 'font-size:13px; color:#FBBF24;');
-        console.log('%c✅ Doctor assignment is OPTIONAL', 'font-size:13px; color:#34D399;');
-        console.log('%c✅ Patient can be saved WITHOUT assigning doctor', 'font-size:13px; color:#34D399;');
-        console.log('%c💰 Default fee: TSh 10,000 (New Patient)', 'font-size:13px; color:#059669;');
-        console.log('%c🟢 Online: <?= $online_doctors_count ?> | ⚪ Offline: <?= $offline_doctors_count ?>', 'font-size:13px; color:#64748B;');
-        console.log('%c🩺 Common symptoms selector available', 'font-size:13px; color:#7C3AED;');
-        console.log('%c🔵 Assign doctor section - BLUE theme', 'font-size:13px; color:#0B5ED7;');
+        console.log('%c✅ Patient Type from services table (category_id = 2)', 'font-size:13px; color:#34D399;');
+        console.log('%c✅ Default: New Patient', 'font-size:13px; color:#34D399;');
+        console.log('%c💰 Fee: TSh <?= number_format($default_price, 0) ?> (from services)', 'font-size:13px; color:#FBBF24;');
+        console.log('%c👨‍⚕️ Assign doctor = Bill created & sent to Cashier', 'font-size:13px; color:#34D399;');
+        console.log('%c⏳ No doctor assigned = No bill (fee=0)', 'font-size:13px; color:#FBBF24;');
         console.log('%c🔄 Visit type in database: ALWAYS "new"', 'font-size:13px; color:#059669;');
-        console.log('%c🛡️ Duplicate check: PER BRANCH only', 'font-size:13px; color:#FBBF24;');
+        console.log('%c✅ consultation_fee column exists in visits table', 'font-size:13px; color:#34D399;');
     });
 </script>
 

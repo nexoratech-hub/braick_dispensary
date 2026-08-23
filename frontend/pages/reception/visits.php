@@ -3,8 +3,7 @@
 // FILE: frontend/pages/reception/visits.php
 // RECEPTION - VISITS LIST (BRANCH FILTERED)
 // WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
-// FIXED: Black text + Small Visit # column
-// REMOVED: View Patient button, kept View and Complete
+// FIXED: Using NEW DATABASE (dispensary_db)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -42,7 +41,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 // ================================================================
 // GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'];
+$user_id = $_SESSION['user_id'] ?? 0;
 $full_name = $_SESSION['full_name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'reception';
 $branch_id = $_SESSION['branch_id'] ?? 1;
@@ -58,7 +57,7 @@ $period_filter = $_GET['period'] ?? '';
 $search = $_GET['search'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE - USING NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -93,27 +92,37 @@ if (!empty($period_filter)) {
     }
 }
 
+$visits = [];
+$status_counts = [];
+$online_doctors = 0;
+$total_doctors = 0;
+$unread_notifications = 0;
+
 try {
     $db = Database::getInstance()->getConnection();
     
     // ================================================================
     // GET UNREAD NOTIFICATIONS COUNT
     // ================================================================
-    $unread_notifications = 0;
     try {
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
         $stmt->execute([$user_id]);
-        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $unread_notifications = $result['count'] ?? 0;
     } catch (Exception $e) {
         $unread_notifications = 0;
     }
     
     // ================================================================
-    // BUILD QUERY WITH DATE RANGE
+    // BUILD QUERY WITH DATE RANGE - FIXED: Using correct column names
     // ================================================================
     $query = "
-        SELECT v.*, p.full_name as patient_name, p.patient_id, p.phone,
-               u.full_name as doctor_name, u.specialty
+        SELECT v.*, 
+               p.full_name as patient_name, 
+               p.patient_id, 
+               p.phone,
+               u.full_name as doctor_name, 
+               u.specialty
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
@@ -134,9 +143,10 @@ try {
     
     if (!empty($search)) {
         $query .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
-        $params[] = "%$search%";
+        $search_param = "%$search%";
+        $params[] = $search_param;
+        $params[] = $search_param;
+        $params[] = $search_param;
     }
     
     $query .= " ORDER BY v.created_at DESC";
@@ -148,7 +158,6 @@ try {
     // ================================================================
     // STATUS COUNTS
     // ================================================================
-    $status_counts = [];
     $statuses = ['pending', 'assigned', 'with_doctor', 'completed', 'cancelled'];
     foreach ($statuses as $status) {
         $sql = "SELECT COUNT(*) as count FROM visits WHERE status = ? AND branch_id = ?";
@@ -161,18 +170,25 @@ try {
         
         $stmt = $db->prepare($sql);
         $stmt->execute($params_status);
-        $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $status_counts[$status] = $result['count'] ?? 0;
     }
     
-    // Get online doctors count
+    // ================================================================
+    // GET ONLINE DOCTORS COUNT
+    // ================================================================
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND is_online = 1 AND status = 'active' AND branch_id = ?");
     $stmt->execute([$selected_branch_id]);
-    $online_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $online_doctors = $result['total'] ?? 0;
     
-    // Get total doctors
+    // ================================================================
+    // GET TOTAL DOCTORS
+    // ================================================================
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ?");
     $stmt->execute([$selected_branch_id]);
-    $total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_doctors = $result['total'] ?? 0;
     
 } catch (Exception $e) {
     $visits = [];
@@ -1470,8 +1486,10 @@ include_once '../../components/reception_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        var dtEl = document.getElementById('currentDateTime');
+        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+        var ftEl = document.getElementById('footerTimestamp');
+        if (ftEl) ftEl.textContent = 'Last updated: ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -1501,6 +1519,8 @@ include_once '../../components/reception_sidebar.php';
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
+        
+        if (!toast) return;
         
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
@@ -1535,14 +1555,21 @@ include_once '../../components/reception_sidebar.php';
                     var onlineCount = stats.online_doctors || 0;
                     
                     // Update online doctors count
-                    document.getElementById('onlineDoctorCount').textContent = onlineCount;
+                    var onlineEl = document.getElementById('onlineDoctorCount');
+                    if (onlineEl) onlineEl.textContent = onlineCount;
                     
                     // Update update badge
                     var now = new Date();
-                    document.getElementById('updateBadge').innerHTML = 
-                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
-                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    document.getElementById('footerTimestamp').textContent = 'Last updated: ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    var updateBadge = document.getElementById('updateBadge');
+                    if (updateBadge) {
+                        updateBadge.innerHTML = 
+                            '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
+                            now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    }
+                    var ftEl = document.getElementById('footerTimestamp');
+                    if (ftEl) {
+                        ftEl.textContent = 'Last updated: ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    }
                 }
                 isUpdating = false;
             })
@@ -1575,6 +1602,7 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     function manualRefresh() {
         var btn = document.getElementById('refreshBtn');
+        if (!btn) return;
         btn.innerHTML = '<span class="spinner"></span> Loading...';
         btn.disabled = true;
         
@@ -1636,6 +1664,7 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c📊 Total Visits: <?= count($visits) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📆 Period: <?= $period_filter ?: 'All' ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Black text in table', 'font-size:13px; color:#1A202C;');
     console.log('%c✅ Small Visit # badge with gray background', 'font-size:13px; color:#4A5568;');
     console.log('%c✅ Removed View Patient button, kept View and Complete', 'font-size:13px; color:#059669;');

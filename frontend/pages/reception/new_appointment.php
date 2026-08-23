@@ -3,7 +3,7 @@
 // FILE: frontend/pages/reception/new_appointment.php
 // RECEPTION - NEW APPOINTMENT WITH 6 VITAL SIGNS
 // WITH AJAX AUTO-UPDATE FOR DOCTOR STATUS (EVERY 3 SECONDS)
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING NEW DATABASE: dispensary_db
 // ================================================================
 
 // ================================================================
@@ -40,7 +40,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 // ================================================================
 // GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'];
+$user_id = $_SESSION['user_id'] ?? 0;
 $full_name = $_SESSION['full_name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'reception';
 $branch_id = $_SESSION['branch_id'] ?? 1;
@@ -49,33 +49,49 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI
+// PATH SAHIHI - USING NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 $patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 $message = '';
 $message_type = '';
+$patients = [];
+$doctors = [];
+$online_doctors = 0;
+$total_doctors = 0;
+$latest_vital_signs = null;
+$unread_notifications = 0;
 
 try {
     $db = Database::getInstance()->getConnection();
     
-    // Get patients in this branch
+    // ================================================================
+    // GET PATIENTS IN THIS BRANCH - USING NEW DATABASE
+    // ================================================================
     $stmt = $db->prepare("SELECT id, full_name, patient_id FROM patients WHERE branch_id = ? ORDER BY full_name");
     $stmt->execute([$branch_id]);
-    $patients = $stmt->fetchAll();
+    $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get doctors in this branch with status
-    $stmt = $db->prepare("SELECT id, full_name, specialty, is_online, profile_pic FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ? ORDER BY is_online DESC, full_name");
+    // ================================================================
+    // GET DOCTORS IN THIS BRANCH WITH STATUS - USING NEW DATABASE
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT id, full_name, specialty, is_online, profile_pic 
+        FROM users 
+        WHERE role = 'doctor' AND status = 'active' AND branch_id = ? 
+        ORDER BY is_online DESC, full_name
+    ");
     $stmt->execute([$branch_id]);
-    $doctors = $stmt->fetchAll();
+    $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get online doctors count
-    $online_doctors = 0;
+    // ================================================================
+    // CALCULATE ONLINE DOCTORS
+    // ================================================================
     $total_doctors = count($doctors);
-    
+    $online_doctors = 0;
     foreach ($doctors as $doc) {
-        if ($doc['is_online'] == 1) {
+        if ((int)$doc['is_online'] === 1) {
             $online_doctors++;
         }
     }
@@ -83,7 +99,6 @@ try {
     // ================================================================
     // GET LATEST VITAL SIGNS FOR SELECTED PATIENT (6 signs only)
     // ================================================================
-    $latest_vital_signs = null;
     if ($patient_id > 0) {
         $stmt = $db->prepare("
             SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
@@ -98,18 +113,28 @@ try {
     }
     
     // ================================================================
+    // GET UNREAD NOTIFICATIONS
+    // ================================================================
+    if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$_SESSION['user_id']]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $unread_notifications = $result['total'] ?? 0;
+    }
+    
+    // ================================================================
     // HANDLE FORM SUBMISSION
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $patient_id = (int)($_POST['patient_id'] ?? 0);
         $doctor_id = (int)($_POST['doctor_id'] ?? 0);
-        $appointment_date = $_POST['appointment_date'] ?? '';
-        $appointment_hour = $_POST['appointment_hour'] ?? '09';
-        $appointment_minute = $_POST['appointment_minute'] ?? '00';
-        $appointment_ampm = $_POST['appointment_ampm'] ?? 'AM';
+        $appointment_date = trim($_POST['appointment_date'] ?? '');
+        $appointment_hour = trim($_POST['appointment_hour'] ?? '09');
+        $appointment_minute = trim($_POST['appointment_minute'] ?? '00');
+        $appointment_ampm = trim($_POST['appointment_ampm'] ?? 'AM');
         $purpose = trim($_POST['purpose'] ?? '');
-        $status = $_POST['status'] ?? 'scheduled';
-        $visit_type = $_POST['visit_type'] ?? 'new';
+        $status = trim($_POST['status'] ?? 'scheduled');
+        $visit_type = trim($_POST['visit_type'] ?? 'new');
         
         // 6 Vital Signs
         $temperature = $_POST['temperature'] ?? null;
@@ -122,7 +147,7 @@ try {
         
         // Calculate BMI
         $bmi = null;
-        if ($weight && $height && $height > 0) {
+        if (!empty($weight) && !empty($height) && $height > 0) {
             $height_m = $height / 100;
             $bmi = round($weight / ($height_m * $height_m), 1);
         }
@@ -138,36 +163,51 @@ try {
             try {
                 $db->beginTransaction();
                 
-                // Build time string from hour, minute, ampm
+                // Build time string
                 $hour_12 = (int)$appointment_hour;
-                if ($appointment_ampm == 'PM' && $hour_12 != 12) {
+                if ($appointment_ampm === 'PM' && $hour_12 != 12) {
                     $hour_24 = $hour_12 + 12;
-                } elseif ($appointment_ampm == 'AM' && $hour_12 == 12) {
+                } elseif ($appointment_ampm === 'AM' && $hour_12 == 12) {
                     $hour_24 = 0;
                 } else {
                     $hour_24 = $hour_12;
                 }
                 
-                $time_str = str_pad($hour_24, 2, '0', STR_PAD_LEFT) . ':' . $appointment_minute . ':00';
+                $time_str = str_pad($hour_24, 2, '0', STR_PAD_LEFT) . ':' . str_pad($appointment_minute, 2, '0', STR_PAD_LEFT) . ':00';
                 $datetime = $appointment_date . ' ' . $time_str;
                 
-                // Insert appointment
+                // ================================================================
+                // INSERT APPOINTMENT
+                // ================================================================
                 $stmt = $db->prepare("
-                    INSERT INTO appointments (patient_id, doctor_id, appointment_date, purpose, status, branch_id, created_by, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                    INSERT INTO appointments (
+                        patient_id, doctor_id, appointment_date, purpose, status, 
+                        visit_type, branch_id, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
-                $stmt->execute([$patient_id, $doctor_id, $datetime, $purpose, $status, $branch_id, $_SESSION['user_id']]);
+                $stmt->execute([
+                    $patient_id, 
+                    $doctor_id, 
+                    $datetime, 
+                    $purpose, 
+                    $status,
+                    $visit_type,
+                    $branch_id, 
+                    $_SESSION['user_id']
+                ]);
                 $appointment_id = $db->lastInsertId();
                 
                 // ================================================================
                 // INSERT VITAL SIGNS (6 signs only)
                 // ================================================================
-                $has_vital = $temperature !== null && $temperature !== '' || 
-                             $bp_systolic !== null && $bp_systolic !== '' || 
-                             $bp_diastolic !== null && $bp_diastolic !== '' || 
-                             $pulse_rate !== null && $pulse_rate !== '' || 
-                             $weight !== null && $weight !== '' || 
-                             $height !== null && $height !== '';
+                $has_vital = (
+                    (!empty($temperature) || $temperature === '0') || 
+                    (!empty($bp_systolic) || $bp_systolic === '0') || 
+                    (!empty($bp_diastolic) || $bp_diastolic === '0') || 
+                    (!empty($pulse_rate) || $pulse_rate === '0') || 
+                    (!empty($weight) || $weight === '0') || 
+                    (!empty($height) || $height === '0')
+                );
                 
                 if ($has_vital) {
                     $stmt = $db->prepare("
@@ -182,28 +222,40 @@ try {
                         $appointment_id,
                         $_SESSION['user_id'],
                         $branch_id,
-                        $temperature ?: null,
-                        $bp_systolic ?: null,
-                        $bp_diastolic ?: null,
-                        $pulse_rate ?: null,
-                        $weight ?: null,
-                        $height ?: null,
+                        !empty($temperature) || $temperature === '0' ? (float)$temperature : null,
+                        !empty($bp_systolic) || $bp_systolic === '0' ? (int)$bp_systolic : null,
+                        !empty($bp_diastolic) || $bp_diastolic === '0' ? (int)$bp_diastolic : null,
+                        !empty($pulse_rate) || $pulse_rate === '0' ? (int)$pulse_rate : null,
+                        !empty($weight) || $weight === '0' ? (float)$weight : null,
+                        !empty($height) || $height === '0' ? (float)$height : null,
                         $bmi,
-                        $vital_notes ?: null
+                        !empty($vital_notes) ? $vital_notes : null
                     ]);
                 }
                 
-                // Log activity
+                // ================================================================
+                // LOG ACTIVITY
+                // ================================================================
                 try {
-                    $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'appointment_created', ?, NOW())");
-                    $stmt->execute([$_SESSION['user_id'], $branch_id, "New appointment created for patient ID: $patient_id with doctor ID: $doctor_id"]);
-                } catch (Exception $e) {}
+                    $stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                        VALUES (?, ?, 'appointment_created', ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $_SESSION['user_id'], 
+                        $branch_id, 
+                        "New appointment created for patient ID: $patient_id with doctor ID: $doctor_id"
+                    ]);
+                } catch (Exception $e) {
+                    // Silent fail for activity log
+                }
                 
                 $db->commit();
                 
                 $message = "✅ Appointment scheduled successfully!";
                 $message_type = 'success';
                 
+                // Redirect after 2 seconds
                 echo '<script>
                     showToast("✅ Success", "Appointment scheduled successfully!", "success");
                     setTimeout(function(){ 
@@ -231,19 +283,6 @@ try {
     $online_doctors = 0;
     $total_doctors = 0;
     $latest_vital_signs = null;
-}
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    if (isset($_SESSION['user_id'])) {
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
-    }
-} catch (Exception $e) {
     $unread_notifications = 0;
 }
 
@@ -262,6 +301,7 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -1274,8 +1314,8 @@ include_once '../../components/reception_sidebar.php';
                     <select name="patient_id" class="form-control" required id="patientSelect">
                         <option value="">-- Select Patient --</option>
                         <?php foreach ($patients as $patient): ?>
-                            <option value="<?= $patient['id'] ?>" <?= $patient_id == $patient['id'] ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($patient['full_name']) ?> (<?= htmlspecialchars($patient['patient_id']) ?>)
+                            <option value="<?= (int)$patient['id'] ?>" <?= $patient_id == $patient['id'] ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?> (<?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>)
                             </option>
                         <?php endforeach; ?>
                     </select>
@@ -1298,12 +1338,12 @@ include_once '../../components/reception_sidebar.php';
                     </label>
                     <select name="doctor_id" class="form-control" required id="doctorSelect">
                         <?php foreach ($doctors as $doctor): ?>
-                            <option value="<?= $doctor['id'] ?>" data-online="<?= $doctor['is_online'] ?>" data-name="<?= htmlspecialchars($doctor['full_name']) ?>" data-specialty="<?= htmlspecialchars($doctor['specialty'] ?? '') ?>">
-                                Dr. <?= htmlspecialchars($doctor['full_name']) ?>
+                            <option value="<?= (int)$doctor['id'] ?>" data-online="<?= (int)$doctor['is_online'] ?>" data-name="<?= htmlspecialchars($doctor['full_name'] ?? 'Doctor') ?>" data-specialty="<?= htmlspecialchars($doctor['specialty'] ?? '') ?>">
+                                Dr. <?= htmlspecialchars($doctor['full_name'] ?? 'Unknown') ?>
                                 <?php if (!empty($doctor['specialty'])): ?>
                                     (<?= htmlspecialchars($doctor['specialty']) ?>)
                                 <?php endif; ?>
-                                <?php if ($doctor['is_online'] == 1): ?>
+                                <?php if ((int)$doctor['is_online'] === 1): ?>
                                     🟢 Online
                                 <?php else: ?>
                                     ⚪ Offline
@@ -1330,7 +1370,7 @@ include_once '../../components/reception_sidebar.php';
                             </span>
                             <span class="offline-doctors">
                                 <i class="fas fa-circle status-icon" style="color:#94A3B8;font-size:0.5rem;"></i>
-                                Offline: <span class="status-count" id="offlineCountDisplay"><?= $total_doctors - $online_doctors ?></span>
+                                Offline: <span class="status-count" id="offlineCountDisplay"><?= max(0, $total_doctors - $online_doctors) ?></span>
                             </span>
                             <span class="text-gray-400" style="font-weight:400;">
                                 Total: <?= $total_doctors ?>
@@ -1422,7 +1462,7 @@ include_once '../../components/reception_sidebar.php';
                     <span class="text-sm font-normal text-gray-400">(Record patient vital signs)</span>
                     <?php if ($patient_id > 0 && $latest_vital_signs): ?>
                         <span class="text-xs text-green-500 ml-auto">
-                            <i class="fas fa-check-circle"></i> Last recorded: <?= date('d/m/Y H:i', strtotime($latest_vital_signs['recorded_at'])) ?>
+                            <i class="fas fa-check-circle"></i> Last recorded: <?= date('d/m/Y H:i', strtotime($latest_vital_signs['recorded_at'] ?? 'now')) ?>
                         </span>
                     <?php endif; ?>
                 </div>
@@ -1434,7 +1474,7 @@ include_once '../../components/reception_sidebar.php';
                         <label class="vital-label">🌡️ Temperature</label>
                         <input type="number" name="temperature" class="vital-input" 
                                step="0.1" placeholder="e.g. 36.5" 
-                               value="<?= $latest_vital_signs['temperature'] ?? '' ?>">
+                               value="<?= htmlspecialchars($latest_vital_signs['temperature'] ?? '') ?>">
                         <span class="vital-unit">°C</span>
                     </div>
                     
@@ -1444,11 +1484,11 @@ include_once '../../components/reception_sidebar.php';
                         <div style="display:flex;gap:6px;align-items:center;">
                             <input type="number" name="bp_systolic" class="vital-input" 
                                    style="width:50%;" placeholder="120"
-                                   value="<?= $latest_vital_signs['blood_pressure_systolic'] ?? '' ?>">
+                                   value="<?= htmlspecialchars($latest_vital_signs['blood_pressure_systolic'] ?? '') ?>">
                             <span style="color:var(--text-secondary);font-weight:700;">/</span>
                             <input type="number" name="bp_diastolic" class="vital-input" 
                                    style="width:50%;" placeholder="80"
-                                   value="<?= $latest_vital_signs['blood_pressure_diastolic'] ?? '' ?>">
+                                   value="<?= htmlspecialchars($latest_vital_signs['blood_pressure_diastolic'] ?? '') ?>">
                         </div>
                         <span class="vital-unit">mmHg</span>
                     </div>
@@ -1458,7 +1498,7 @@ include_once '../../components/reception_sidebar.php';
                         <label class="vital-label">💓 Pulse Rate</label>
                         <input type="number" name="pulse_rate" class="vital-input" 
                                placeholder="72"
-                               value="<?= $latest_vital_signs['pulse_rate'] ?? '' ?>">
+                               value="<?= htmlspecialchars($latest_vital_signs['pulse_rate'] ?? '') ?>">
                         <span class="vital-unit">bpm</span>
                     </div>
                     
@@ -1468,7 +1508,7 @@ include_once '../../components/reception_sidebar.php';
                         <input type="number" name="weight" class="vital-input" 
                                step="0.1" placeholder="65"
                                id="weightInput"
-                               value="<?= $latest_vital_signs['weight'] ?? '' ?>"
+                               value="<?= htmlspecialchars($latest_vital_signs['weight'] ?? '') ?>"
                                oninput="calculateBMI()">
                         <span class="vital-unit">kg</span>
                     </div>
@@ -1479,7 +1519,7 @@ include_once '../../components/reception_sidebar.php';
                         <input type="number" name="height" class="vital-input" 
                                step="0.1" placeholder="170"
                                id="heightInput"
-                               value="<?= $latest_vital_signs['height'] ?? '' ?>"
+                               value="<?= htmlspecialchars($latest_vital_signs['height'] ?? '') ?>"
                                oninput="calculateBMI()">
                         <span class="vital-unit">cm</span>
                     </div>
@@ -1490,7 +1530,7 @@ include_once '../../components/reception_sidebar.php';
                         <input type="number" name="bmi" class="vital-input" 
                                id="bmiOutput" readonly
                                step="0.1" placeholder="Auto-calculated"
-                               value="<?= $latest_vital_signs['bmi'] ?? '' ?>">
+                               value="<?= htmlspecialchars($latest_vital_signs['bmi'] ?? '') ?>">
                         <span class="vital-unit">kg/m²</span>
                         <span class="vital-bmi-category" id="bmiCategory" style="font-size:0.6rem;font-weight:600;display:block;margin-top:2px;">
                             Normal: 18.5 - 24.9
@@ -1505,7 +1545,7 @@ include_once '../../components/reception_sidebar.php';
                         <i class="fas fa-comment label-icon"></i> Vital Signs Notes
                     </label>
                     <textarea name="vital_notes" class="form-control" rows="2" 
-                              placeholder="Any notes about the vital signs measurements"><?= $latest_vital_signs['notes'] ?? '' ?></textarea>
+                              placeholder="Any notes about the vital signs measurements"><?= htmlspecialchars($latest_vital_signs['notes'] ?? '') ?></textarea>
                 </div>
             </div>
             
@@ -1826,6 +1866,7 @@ include_once '../../components/reception_sidebar.php';
         var onlineCount = 0;
         var offlineCount = 0;
         
+        // Clear existing options (keep placeholder)
         while (doctorSelect.options.length > 0) {
             doctorSelect.remove(0);
         }
@@ -1839,15 +1880,16 @@ include_once '../../components/reception_sidebar.php';
             var option = document.createElement('option');
             option.value = doctor.id;
             option.dataset.online = doctor.is_online;
-            option.dataset.name = doctor.full_name;
+            option.dataset.name = doctor.full_name || 'Doctor';
             option.dataset.specialty = doctor.specialty || '';
             
-            var label = 'Dr. ' + doctor.full_name;
+            var label = 'Dr. ' + (doctor.full_name || 'Unknown');
             if (doctor.specialty) {
                 label += ' (' + doctor.specialty + ')';
             }
             
-            if (doctor.is_online == 1) {
+            var isOnline = parseInt(doctor.is_online) === 1;
+            if (isOnline) {
                 label += ' 🟢 Online';
                 option.style.color = '#059669';
                 option.style.fontWeight = '600';
@@ -1863,6 +1905,7 @@ include_once '../../components/reception_sidebar.php';
             doctorSelect.appendChild(option);
         });
         
+        // Try to restore selected value
         var found = false;
         for (var i = 0; i < doctorSelect.options.length; i++) {
             if (doctorSelect.options[i].value == currentValue) {
@@ -1873,6 +1916,7 @@ include_once '../../components/reception_sidebar.php';
         }
         
         if (!found || !currentValue) {
+            // Select first online doctor if available
             for (var i = 0; i < doctorSelect.options.length; i++) {
                 var opt = doctorSelect.options[i];
                 if (opt.value && opt.dataset.online == '1') {
@@ -1894,7 +1938,7 @@ include_once '../../components/reception_sidebar.php';
         var selectedOption = doctorSelect.options[doctorSelect.selectedIndex];
         var doctorStatusText = document.getElementById('doctorStatusText');
         if (selectedOption && selectedOption.dataset && doctorStatusText) {
-            var isOnline = selectedOption.dataset.online == '1';
+            var isOnline = parseInt(selectedOption.dataset.online) === 1;
             var doctorName = selectedOption.dataset.name || 'Doctor';
             if (isOnline) {
                 doctorStatusText.innerHTML = '<i class="fas fa-check-circle" style="color:#059669;"></i> Dr. ' + doctorName + ' is <strong style="color:#059669;">Online</strong> and available';
@@ -2056,6 +2100,7 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c🔄 Auto-update: Every 3 seconds (Doctor status via AJAX)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Dropdown updates WITHOUT page refresh', 'font-size:13px; color:#059669;');
     console.log('%c🕐 Time format: 12-hour (Manual input or select)', 'font-size:13px; color:#64748B;');
+    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

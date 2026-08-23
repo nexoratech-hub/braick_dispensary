@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/view_appointment.php
 // RECEPTION - VIEW APPOINTMENT DETAILS
+// USING dispensary_db (new database structure)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -39,7 +40,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 // ================================================================
 // GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'];
+$user_id = $_SESSION['user_id'] ?? 0;
 $full_name = $_SESSION['full_name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'reception';
 $branch_id = $_SESSION['branch_id'] ?? 1;
@@ -62,30 +63,44 @@ if ($appointment_id <= 0) {
 try {
     $db = Database::getInstance()->getConnection();
     
-    // ✅ Get appointment details with patient and doctor info
+    // ================================================================
+    // ✅ GET APPOINTMENT DETAILS WITH PATIENT AND DOCTOR INFO
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT a.*, 
-               p.id as patient_id,
-               p.full_name as patient_name, 
-               p.patient_id as patient_code, 
-               p.phone, 
-               p.email, 
-               p.address,
-               p.date_of_birth,
-               p.gender,
-               p.blood_group,
-               p.allergies,
-               p.created_at as patient_created_at,
-               u.id as doctor_id,
-               u.full_name as doctor_name, 
-               u.specialty, 
-               u.phone as doctor_phone,
-               u.is_online as doctor_online,
-               b.name as branch_name
+        SELECT 
+            a.*,
+            a.visit_type,
+            a.visit_id,
+            a.assigned_at,
+            a.confirmed_at,
+            a.completed_at,
+            a.cancelled_at,
+            a.created_by,
+            p.id as patient_id,
+            p.full_name as patient_name, 
+            p.patient_id as patient_code, 
+            p.phone, 
+            p.email, 
+            p.address,
+            p.date_of_birth,
+            p.gender,
+            p.blood_group,
+            p.allergies,
+            p.created_at as patient_created_at,
+            p.marital_status,
+            p.emergency_contact,
+            u.id as doctor_id,
+            u.full_name as doctor_name, 
+            u.specialty, 
+            u.phone as doctor_phone,
+            u.is_online as doctor_online,
+            b.name as branch_name,
+            creator.full_name as created_by_name
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
         JOIN users u ON a.doctor_id = u.id
         LEFT JOIN branches b ON a.branch_id = b.id
+        LEFT JOIN users creator ON a.created_by = creator.id
         WHERE a.id = ? AND a.branch_id = ?
     ");
     $stmt->execute([$appointment_id, $branch_id]);
@@ -96,7 +111,9 @@ try {
         exit;
     }
     
-    // ✅ Get latest vital signs for patient
+    // ================================================================
+    // ✅ GET LATEST VITAL SIGNS FOR PATIENT
+    // ================================================================
     $vital_signs = null;
     $stmt = $db->prepare("
         SELECT * FROM vital_signs 
@@ -107,7 +124,9 @@ try {
     $stmt->execute([$appointment['patient_id']]);
     $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    // ✅ Get visit count for patient
+    // ================================================================
+    // ✅ GET VISIT COUNT FOR PATIENT
+    // ================================================================
     $stmt = $db->prepare("
         SELECT COUNT(*) as total_visits 
         FROM visits 
@@ -116,7 +135,9 @@ try {
     $stmt->execute([$appointment['patient_id']]);
     $visit_count = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    // ✅ Get patient days
+    // ================================================================
+    // ✅ GET PATIENT DAYS
+    // ================================================================
     $stmt = $db->prepare("
         SELECT DATEDIFF(NOW(), created_at) as patient_days 
         FROM patients 
@@ -126,9 +147,11 @@ try {
     $patient_days_data = $stmt->fetch(PDO::FETCH_ASSOC);
     $patient_days = $patient_days_data['patient_days'] ?? 0;
     
-    // ✅ Get appointment history for this patient
+    // ================================================================
+    // ✅ GET APPOINTMENT HISTORY FOR THIS PATIENT
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT id, appointment_date, status, purpose 
+        SELECT id, appointment_date, status, purpose, visit_type
         FROM appointments 
         WHERE patient_id = ? AND id != ?
         ORDER BY appointment_date DESC 
@@ -136,6 +159,21 @@ try {
     ");
     $stmt->execute([$appointment['patient_id'], $appointment_id]);
     $appointment_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // ================================================================
+    // ✅ GET BILLS FOR THIS VISIT (if visit_id exists)
+    // ================================================================
+    $bills = [];
+    if (!empty($appointment['visit_id'])) {
+        $stmt = $db->prepare("
+            SELECT id, bill_number, total_amount, paid_amount, balance, status, created_at
+            FROM bills 
+            WHERE visit_id = ?
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$appointment['visit_id']]);
+        $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
     
 } catch (Exception $e) {
     header('Location: appointments.php?error=db_error');
@@ -147,10 +185,11 @@ try {
 // ================================================================
 $unread_notifications = 0;
 try {
-    if (isset($_SESSION['user_id'])) {
+    if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
         $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
         $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $unread_notifications = $result['total'] ?? 0;
     }
 } catch (Exception $e) {
     $unread_notifications = 0;
@@ -164,6 +203,25 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// HELPER FUNCTIONS
+// ================================================================
+function getStatusBadgeClass($status) {
+    $map = [
+        'scheduled' => 'scheduled',
+        'confirmed' => 'confirmed',
+        'in-progress' => 'in-progress',
+        'completed' => 'completed',
+        'cancelled' => 'cancelled'
+    ];
+    return $map[$status] ?? 'scheduled';
+}
+
+function formatDate($datetime) {
+    if (empty($datetime)) return 'N/A';
+    return date('F d, Y h:i A', strtotime($datetime));
+}
 
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
@@ -424,6 +482,21 @@ include_once '../../components/reception_sidebar.php';
         }
         
         .dark-toggle-btn i { font-size: 0.9rem; }
+        
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        [data-theme="dark"] .branch-badge-display {
+            background: #1A3A2A;
+            color: #34D399;
+        }
         
         /* ================================================================
            MAIN CONTENT
@@ -936,7 +1009,7 @@ include_once '../../components/reception_sidebar.php';
                 <span class="ml-2">🕐 <?= date('h:i A', strtotime($appointment['appointment_date'])) ?></span>
                 <span class="ml-2">|</span>
                 <span class="header-badge">
-                    <span class="status-badge-display <?= $appointment['status'] ?>">
+                    <span class="status-badge-display <?= getStatusBadgeClass($appointment['status']) ?>">
                         <?= ucfirst($appointment['status']) ?>
                     </span>
                 </span>
@@ -973,8 +1046,8 @@ include_once '../../components/reception_sidebar.php';
         
         <!-- Appointment Info -->
         <div class="detail-card lg:col-span-2 animate-fade-in-up" style="animation-delay:0.05s;">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4" style="color:var(--text-primary);">
-                <i class="fas fa-info-circle text-primary mr-2"></i> Appointment Information
+            <h3 class="text-lg font-semibold mb-4" style="color:var(--text-primary);">
+                <i class="fas fa-info-circle" style="color:var(--primary);"></i> Appointment Information
             </h3>
             <div class="grid grid-cols-2 gap-4">
                 <div>
@@ -984,7 +1057,7 @@ include_once '../../components/reception_sidebar.php';
                 <div>
                     <p class="detail-label">Status</p>
                     <p class="detail-value">
-                        <span class="status-badge-display <?= $appointment['status'] ?>">
+                        <span class="status-badge-display <?= getStatusBadgeClass($appointment['status']) ?>">
                             <?= ucfirst($appointment['status']) ?>
                         </span>
                     </p>
@@ -1002,20 +1075,46 @@ include_once '../../components/reception_sidebar.php';
                     <p class="detail-value"><?= htmlspecialchars($appointment['purpose'] ?? 'N/A') ?></p>
                 </div>
                 <div>
+                    <p class="detail-label">Visit Type</p>
+                    <p class="detail-value"><?= ucfirst($appointment['visit_type'] ?? 'N/A') ?></p>
+                </div>
+                <div>
                     <p class="detail-label">Branch</p>
                     <p class="detail-value"><?= htmlspecialchars($appointment['branch_name'] ?? 'N/A') ?></p>
+                </div>
+                <div>
+                    <p class="detail-label">Created By</p>
+                    <p class="detail-value"><?= htmlspecialchars($appointment['created_by_name'] ?? 'N/A') ?></p>
                 </div>
                 <div class="col-span-2">
                     <p class="detail-label">Created At</p>
                     <p class="detail-value"><?= date('F d, Y h:i A', strtotime($appointment['created_at'])) ?></p>
                 </div>
+                <?php if (!empty($appointment['confirmed_at'])): ?>
+                <div class="col-span-2">
+                    <p class="detail-label">Confirmed At</p>
+                    <p class="detail-value"><?= date('F d, Y h:i A', strtotime($appointment['confirmed_at'])) ?></p>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($appointment['completed_at'])): ?>
+                <div class="col-span-2">
+                    <p class="detail-label">Completed At</p>
+                    <p class="detail-value"><?= date('F d, Y h:i A', strtotime($appointment['completed_at'])) ?></p>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($appointment['cancelled_at'])): ?>
+                <div class="col-span-2">
+                    <p class="detail-label">Cancelled At</p>
+                    <p class="detail-value"><?= date('F d, Y h:i A', strtotime($appointment['cancelled_at'])) ?></p>
+                </div>
+                <?php endif; ?>
             </div>
         </div>
         
         <!-- Patient Info -->
         <div class="detail-card animate-fade-in-up" style="animation-delay:0.1s;">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4" style="color:var(--text-primary);">
-                <i class="fas fa-user text-primary mr-2"></i> Patient
+            <h3 class="text-lg font-semibold mb-4" style="color:var(--text-primary);">
+                <i class="fas fa-user" style="color:var(--primary);"></i> Patient
                 <span class="days-badge-blue <?= $patient_days == 0 ? 'new' : '' ?>">
                     📅 <?= $patient_days > 0 ? $patient_days . ' days' : 'New' ?>
                 </span>
@@ -1050,6 +1149,10 @@ include_once '../../components/reception_sidebar.php';
                     <p class="detail-value"><?= !empty($appointment['date_of_birth']) ? date('F d, Y', strtotime($appointment['date_of_birth'])) : 'N/A' ?></p>
                 </div>
                 <div>
+                    <p class="detail-label">Marital Status</p>
+                    <p class="detail-value"><?= htmlspecialchars($appointment['marital_status'] ?? 'N/A') ?></p>
+                </div>
+                <div>
                     <p class="detail-label">Blood Group</p>
                     <p class="detail-value"><?= htmlspecialchars($appointment['blood_group'] ?? 'N/A') ?></p>
                 </div>
@@ -1070,8 +1173,8 @@ include_once '../../components/reception_sidebar.php';
         
         <!-- Doctor Info -->
         <div class="detail-card animate-fade-in-up" style="animation-delay:0.15s;">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4" style="color:var(--text-primary);">
-                <i class="fas fa-user-md text-primary mr-2"></i> Doctor
+            <h3 class="text-lg font-semibold mb-4" style="color:var(--text-primary);">
+                <i class="fas fa-user-md" style="color:var(--primary);"></i> Doctor
                 <?php if ($appointment['doctor_online'] == 1): ?>
                     <span class="text-xs text-green-500 font-normal">🟢 Online</span>
                 <?php else: ?>
@@ -1107,11 +1210,55 @@ include_once '../../components/reception_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
+    <!-- BILLS INFORMATION (if visit exists) -->
+    <!-- ================================================================ -->
+    <?php if (!empty($bills)): ?>
+    <div class="detail-card mt-5 animate-fade-in-up" style="animation-delay:0.2s;">
+        <h3 class="text-lg font-semibold mb-4" style="color:var(--text-primary);">
+            <i class="fas fa-file-invoice" style="color:var(--warning);"></i> Bills
+            <span class="text-xs text-gray-400 font-normal ml-2">(<?= count($bills) ?> bill(s))</span>
+        </h3>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-gray-200 dark:border-gray-700">
+                        <th class="text-left py-2 font-semibold text-gray-600">Bill #</th>
+                        <th class="text-left py-2 font-semibold text-gray-600">Amount</th>
+                        <th class="text-left py-2 font-semibold text-gray-600">Paid</th>
+                        <th class="text-left py-2 font-semibold text-gray-600">Balance</th>
+                        <th class="text-left py-2 font-semibold text-gray-600">Status</th>
+                        <th class="text-left py-2 font-semibold text-gray-600">Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($bills as $bill): ?>
+                    <tr class="border-b border-gray-100 dark:border-gray-800">
+                        <td class="py-2 font-medium"><?= htmlspecialchars($bill['bill_number']) ?></td>
+                        <td class="py-2">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
+                        <td class="py-2 text-green-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                        <td class="py-2 <?= ($bill['balance'] ?? 0) > 0 ? 'text-red-600' : 'text-green-600' ?>">
+                            TSh <?= number_format($bill['balance'] ?? 0, 0) ?>
+                        </td>
+                        <td class="py-2">
+                            <span class="status-badge-display <?= $bill['status'] === 'paid' ? 'confirmed' : ($bill['status'] === 'pending' ? 'scheduled' : 'cancelled') ?>">
+                                <?= ucfirst($bill['status']) ?>
+                            </span>
+                        </td>
+                        <td class="py-2 text-xs text-gray-500"><?= date('d M Y', strtotime($bill['created_at'])) ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
     <!-- VITAL SIGNS (If available) -->
     <!-- ================================================================ -->
     <?php if ($vital_signs): ?>
-    <div class="detail-card mt-5 animate-fade-in-up" style="animation-delay:0.2s;">
-        <h3 class="text-lg font-semibold text-gray-800 mb-4" style="color:var(--text-primary);">
+    <div class="detail-card mt-5 animate-fade-in-up" style="animation-delay:0.25s;">
+        <h3 class="text-lg font-semibold mb-4" style="color:var(--text-primary);">
             <i class="fas fa-heartbeat text-red-500 mr-2"></i> Latest Vital Signs
             <span class="text-xs text-gray-400 font-normal ml-2">
                 Recorded: <?= date('F d, Y h:i A', strtotime($vital_signs['recorded_at'])) ?>
@@ -1119,13 +1266,13 @@ include_once '../../components/reception_sidebar.php';
         </h3>
         <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
             <?php if ($vital_signs['temperature']): ?>
-            <div class="text-center p-3 bg-blue-50 rounded-lg border border-blue-200">
+            <div class="text-center p-3 bg-blue-50 rounded-lg border border-blue-200 dark:bg-blue-900/20 dark:border-blue-800">
                 <p class="text-xs text-gray-500">🌡️ Temperature</p>
                 <p class="text-lg font-bold text-blue-600"><?= $vital_signs['temperature'] ?>°C</p>
             </div>
             <?php endif; ?>
             <?php if ($vital_signs['blood_pressure_systolic'] || $vital_signs['blood_pressure_diastolic']): ?>
-            <div class="text-center p-3 bg-green-50 rounded-lg border border-green-200">
+            <div class="text-center p-3 bg-green-50 rounded-lg border border-green-200 dark:bg-green-900/20 dark:border-green-800">
                 <p class="text-xs text-gray-500">❤️ Blood Pressure</p>
                 <p class="text-lg font-bold text-green-600">
                     <?php 
@@ -1144,25 +1291,25 @@ include_once '../../components/reception_sidebar.php';
             </div>
             <?php endif; ?>
             <?php if ($vital_signs['pulse_rate']): ?>
-            <div class="text-center p-3 bg-purple-50 rounded-lg border border-purple-200">
+            <div class="text-center p-3 bg-purple-50 rounded-lg border border-purple-200 dark:bg-purple-900/20 dark:border-purple-800">
                 <p class="text-xs text-gray-500">💓 Pulse Rate</p>
                 <p class="text-lg font-bold text-purple-600"><?= $vital_signs['pulse_rate'] ?> bpm</p>
             </div>
             <?php endif; ?>
             <?php if ($vital_signs['weight']): ?>
-            <div class="text-center p-3 bg-orange-50 rounded-lg border border-orange-200">
+            <div class="text-center p-3 bg-orange-50 rounded-lg border border-orange-200 dark:bg-orange-900/20 dark:border-orange-800">
                 <p class="text-xs text-gray-500">⚖️ Weight</p>
                 <p class="text-lg font-bold text-orange-600"><?= $vital_signs['weight'] ?> kg</p>
             </div>
             <?php endif; ?>
             <?php if ($vital_signs['height']): ?>
-            <div class="text-center p-3 bg-teal-50 rounded-lg border border-teal-200">
+            <div class="text-center p-3 bg-teal-50 rounded-lg border border-teal-200 dark:bg-teal-900/20 dark:border-teal-800">
                 <p class="text-xs text-gray-500">📏 Height</p>
                 <p class="text-lg font-bold text-teal-600"><?= $vital_signs['height'] ?> cm</p>
             </div>
             <?php endif; ?>
             <?php if ($vital_signs['bmi']): ?>
-            <div class="text-center p-3 bg-red-50 rounded-lg border border-red-200">
+            <div class="text-center p-3 bg-red-50 rounded-lg border border-red-200 dark:bg-red-900/20 dark:border-red-800">
                 <p class="text-xs text-gray-500">📊 BMI</p>
                 <p class="text-lg font-bold text-red-600"><?= $vital_signs['bmi'] ?> kg/m²</p>
             </div>
@@ -1180,8 +1327,8 @@ include_once '../../components/reception_sidebar.php';
     <!-- APPOINTMENT HISTORY -->
     <!-- ================================================================ -->
     <?php if (!empty($appointment_history)): ?>
-    <div class="detail-card mt-5 animate-fade-in-up" style="animation-delay:0.25s;">
-        <h3 class="text-lg font-semibold text-gray-800 mb-4" style="color:var(--text-primary);">
+    <div class="detail-card mt-5 animate-fade-in-up" style="animation-delay:0.3s;">
+        <h3 class="text-lg font-semibold mb-4" style="color:var(--text-primary);">
             <i class="fas fa-history text-purple-500 mr-2"></i> Appointment History
             <span class="text-xs text-gray-400 font-normal ml-2">(Last 5 appointments)</span>
         </h3>
@@ -1193,8 +1340,11 @@ include_once '../../components/reception_sidebar.php';
                         <?php if (!empty($history['purpose'])): ?>
                             <span class="text-xs text-gray-400 ml-2">- <?= htmlspecialchars($history['purpose']) ?></span>
                         <?php endif; ?>
+                        <?php if (!empty($history['visit_type'])): ?>
+                            <span class="text-xs text-gray-400 ml-1">(<?= ucfirst($history['visit_type']) ?>)</span>
+                        <?php endif; ?>
                     </div>
-                    <span class="history-status status-badge-display <?= $history['status'] ?>">
+                    <span class="history-status status-badge-display <?= getStatusBadgeClass($history['status']) ?>">
                         <?= ucfirst($history['status']) ?>
                     </span>
                 </div>
@@ -1207,15 +1357,15 @@ include_once '../../components/reception_sidebar.php';
     <!-- QUICK ACTIONS -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5">
-        <a href="view_patient.php?id=<?= $appointment['patient_id'] ?>" class="quick-action-card animate-fade-in-up" style="animation-delay:0.3s;">
+        <a href="view_patient.php?id=<?= $appointment['patient_id'] ?>" class="quick-action-card animate-fade-in-up" style="animation-delay:0.35s;">
             <span class="icon"><i class="fas fa-user" style="color:var(--primary);"></i></span>
             <span class="label">View Patient Profile</span>
         </a>
-        <a href="new_appointment.php?patient_id=<?= $appointment['patient_id'] ?>" class="quick-action-card animate-fade-in-up" style="animation-delay:0.35s;">
+        <a href="new_appointment.php?patient_id=<?= $appointment['patient_id'] ?>" class="quick-action-card animate-fade-in-up" style="animation-delay:0.4s;">
             <span class="icon"><i class="fas fa-calendar-plus" style="color:var(--success);"></i></span>
             <span class="label">New Appointment</span>
         </a>
-        <a href="assign_doctor.php?patient_id=<?= $appointment['patient_id'] ?>" class="quick-action-card animate-fade-in-up" style="animation-delay:0.4s;">
+        <a href="assign_doctor.php?patient_id=<?= $appointment['patient_id'] ?>" class="quick-action-card animate-fade-in-up" style="animation-delay:0.45s;">
             <span class="icon"><i class="fas fa-user-md" style="color:var(--purple);"></i></span>
             <span class="label">Assign Doctor</span>
         </a>
@@ -1377,7 +1527,7 @@ include_once '../../components/reception_sidebar.php';
         showToast('❌ Cancelled', 'Appointment has been cancelled.', 'warning');
     <?php endif; ?>
 
-    console.log('%c📅 Braick - View Appointment', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c📅 Braick - View Appointment (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c📋 Appointment ID: <?= $appointment['id'] ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($appointment['patient_name']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📅 Patient Days: <?= $patient_days ?> days', 'font-size:13px; color:#2563EB;');
@@ -1385,6 +1535,7 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c📊 Total Visits: <?= $visit_count['total_visits'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🎨 Blue theme applied to all cards', 'font-size:13px; color:#2563EB;');
     console.log('%c📋 Appointment History shown', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 

@@ -3,6 +3,7 @@
 // FILE: frontend/pages/reception/view_bill.php
 // RECEPTION - VIEW BILL DETAILS
 // View complete bill information with items and payment status
+// USING NEW DATABASE: dispensary_db (bills, bill_items tables)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -59,7 +60,7 @@ if ($bill_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - NEW DATABASE (dispensary_db)
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -76,12 +77,28 @@ $bill_items = [];
 $payment_history = [];
 
 // ================================================================
-// GET BILL INFORMATION
+// GET BILL INFORMATION - USING bills TABLE (NEW DB)
 // ================================================================
 try {
     $stmt = $db->prepare("
         SELECT 
-            pb.*,
+            b.id,
+            b.bill_number,
+            b.patient_id,
+            b.visit_id,
+            b.branch_id,
+            b.created_by,
+            b.subtotal,
+            b.discount_percent,
+            b.discount_amount,
+            b.total_amount,
+            b.paid_amount,
+            b.balance,
+            b.status,
+            b.payment_method,
+            b.notes,
+            b.created_at,
+            b.updated_at,
             p.full_name as patient_name,
             p.patient_id as patient_code,
             p.phone,
@@ -95,11 +112,11 @@ try {
             v.created_at as visit_date,
             v.diagnosis,
             v.symptoms
-        FROM patient_bills pb
-        LEFT JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        WHERE pb.id = ? AND pb.branch_id = ?
+        FROM bills b
+        LEFT JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        LEFT JOIN visits v ON b.visit_id = v.id
+        WHERE b.id = ? AND b.branch_id = ?
     ");
     $stmt->execute([$bill_id, $user_branch_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -115,7 +132,7 @@ try {
 }
 
 // ================================================================
-// GET BILL ITEMS
+// GET BILL ITEMS - USING bill_items TABLE (NEW DB)
 // ================================================================
 try {
     $stmt = $db->prepare("
@@ -126,15 +143,17 @@ try {
                 WHEN bi.item_type = 'lab_test' THEN '🧪 Lab Test'
                 WHEN bi.item_type = 'medication' THEN '💊 Medication'
                 WHEN bi.item_type = 'procedure' THEN '💉 Procedure'
+                WHEN bi.item_type = 'equipment' THEN '🔧 Equipment'
                 WHEN bi.item_type = 'tool' THEN '🔧 Tool'
                 WHEN bi.item_type = 'registration' THEN '📝 Registration'
                 ELSE bi.item_type
             END as item_type_label,
             CASE 
-                WHEN bi.payment_status = 'paid' THEN '✅ Paid'
-                WHEN bi.payment_status = 'pending' THEN '⏳ Pending'
-                WHEN bi.payment_status = 'partial' THEN '🔄 Partial'
-                ELSE bi.payment_status
+                WHEN bi.status = 'paid' THEN '✅ Paid'
+                WHEN bi.status = 'pending' THEN '⏳ Pending'
+                WHEN bi.status = 'cancelled' THEN '❌ Cancelled'
+                WHEN bi.status = 'refunded' THEN '🔄 Refunded'
+                ELSE bi.status
             END as payment_status_label
         FROM bill_items bi
         WHERE bi.bill_id = ? AND bi.status != 'cancelled'
@@ -148,13 +167,17 @@ try {
 }
 
 // ================================================================
-// GET PAYMENT HISTORY (if any)
+// GET PAYMENT HISTORY - USING payments TABLE (NEW DB)
 // ================================================================
 try {
     $stmt = $db->prepare("
-        SELECT * FROM payments 
-        WHERE bill_id = ?
-        ORDER BY received_at DESC
+        SELECT 
+            p.*,
+            u.full_name as received_by_name
+        FROM payments p
+        LEFT JOIN users u ON p.received_by = u.id
+        WHERE p.bill_id = ?
+        ORDER BY p.received_at DESC
     ");
     $stmt->execute([$bill_id]);
     $payment_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -166,20 +189,10 @@ try {
 // CALCULATE TOTALS
 // ================================================================
 $total_items = count($bill_items);
-$total_amount = 0;
-$paid_amount = 0;
-$pending_amount = 0;
-
-foreach ($bill_items as $item) {
-    $total_amount += $item['total_price'];
-    if ($item['payment_status'] === 'paid') {
-        $paid_amount += $item['total_price'];
-    } else {
-        $pending_amount += $item['total_price'];
-    }
-}
-
-$balance = $total_amount - $paid_amount;
+$total_amount = $bill['total_amount'] ?? 0;
+$paid_amount = $bill['paid_amount'] ?? 0;
+$balance = $bill['balance'] ?? 0;
+$pending_amount = $total_amount - $paid_amount;
 
 // ================================================================
 // HELPER FUNCTIONS
@@ -215,7 +228,8 @@ function getPaymentStatusBadge($status) {
     $map = [
         'paid' => 'badge-success',
         'pending' => 'badge-warning',
-        'partial' => 'badge-info'
+        'cancelled' => 'badge-danger',
+        'refunded' => 'badge-info'
     ];
     return $map[$status] ?? 'badge-warning';
 }
@@ -224,7 +238,8 @@ function getPaymentStatusLabel($status) {
     $map = [
         'paid' => '✅ Paid',
         'pending' => '⏳ Pending',
-        'partial' => '🔄 Partial'
+        'cancelled' => '❌ Cancelled',
+        'refunded' => '🔄 Refunded'
     ];
     return $map[$status] ?? ucfirst($status);
 }
@@ -678,6 +693,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             font-weight: 600;
         }
         
+        .footer .new-db-badge {
+            color: var(--success);
+            font-weight: 600;
+            font-size: 0.6rem;
+            background: var(--success-bg);
+            padding: 2px 10px;
+            border-radius: 12px;
+            border: 1px solid var(--success);
+        }
+        
         .toast-custom {
             position: fixed;
             bottom: 30px;
@@ -702,8 +727,114 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: var(--primary);
+        }
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .dark-toggle-btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-card);
+        }
+        
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
+            .top-nav { left: 0; }
         }
         
         @media (max-width: 768px) {
@@ -771,14 +902,17 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <i class="fas fa-receipt"></i>
                 Bill Details
                 <span class="role-badge-display">RECEPTION</span>
+                <span class="badge badge-success" style="background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.2);color:white;font-size:0.55rem;">
+                    <i class="fas fa-database"></i> New DB
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hashtag"></i>
                 Bill #<strong><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></strong>
-                <span class="separator">|</span>
+                <span style="margin:0 8px;">|</span>
                 <i class="fas fa-user"></i>
                 Patient: <strong><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></strong>
-                <span class="separator">|</span>
+                <span style="margin:0 8px;">|</span>
                 <i class="fas fa-calendar"></i>
                 Created: <?= date('d/m/Y h:i A', strtotime($bill['created_at'] ?? 'now')) ?>
             </p>
@@ -849,6 +983,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     <span class="detail-value"><?= htmlspecialchars($bill['diagnosis']) ?></span>
                 </div>
             <?php endif; ?>
+            <?php if (!empty($bill['notes'])): ?>
+                <div class="detail-row" style="grid-column: span 2;">
+                    <span class="detail-label">Notes</span>
+                    <span class="detail-value"><?= htmlspecialchars($bill['notes']) ?></span>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -907,8 +1047,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                 <td style="text-align:right;">TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
                                 <td style="text-align:right;font-weight:600;">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
                                 <td style="text-align:center;">
-                                    <span class="badge <?= getPaymentStatusBadge($item['payment_status'] ?? 'pending') ?>">
-                                        <?= getPaymentStatusLabel($item['payment_status'] ?? 'pending') ?>
+                                    <span class="badge <?= getPaymentStatusBadge($item['status'] ?? 'pending') ?>">
+                                        <?= getPaymentStatusLabel($item['status'] ?? 'pending') ?>
                                     </span>
                                 </td>
                             </tr>
@@ -962,7 +1102,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                 <td style="font-weight:600;color:var(--success);">TSh <?= number_format($payment['amount'] ?? 0, 0) ?></td>
                                 <td><?= ucfirst($payment['payment_method'] ?? 'Cash') ?></td>
                                 <td><?= date('d/m/Y h:i A', strtotime($payment['received_at'] ?? 'now')) ?></td>
-                                <td><?= htmlspecialchars($payment['received_by'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($payment['received_by_name'] ?? $payment['received_by'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($payment['reference_number'] ?? '—') ?></td>
                             </tr>
                         <?php endforeach; ?>
@@ -985,9 +1125,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <a href="process_payment.php?bill_id=<?= $bill_id ?>" class="btn btn-success">
                     <i class="fas fa-credit-card"></i> Process Payment
                 </a>
-                <a href="edit_bill.php?id=<?= $bill_id ?>" class="btn btn-primary">
-                    <i class="fas fa-edit"></i> Edit Bill
-                </a>
                 <a href="bills.php" class="btn btn-outline">
                     <i class="fas fa-arrow-left"></i> Back to Bills
                 </a>
@@ -1001,6 +1138,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Bill Details
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="new-db-badge"><i class="fas fa-database"></i> New DB</span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1092,11 +1231,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c🧾 View Bill - Reception', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🧾 View Bill - Reception (NEW DB)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Bill #<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total: TSh <?= number_format($total_amount, 0) ?> | Paid: TSh <?= number_format($paid_amount, 0) ?> | Balance: TSh <?= number_format($balance, 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Items: <?= $total_items ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🗄️ Using NEW DATABASE: dispensary_db (bills, bill_items, payments)', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>
 

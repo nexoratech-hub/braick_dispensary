@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/view_doctor.php
 // RECEPTION - VIEW DOCTOR DETAILS (BRANCH FILTERED)
+// USING dispensary_db (new database structure)
 // WITH AUTO-UPDATE (3 SECONDS) - NO REFRESH NEEDED
 // BRAICK DISPENSARY
 // ================================================================
@@ -40,7 +41,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 // ================================================================
 // GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'];
+$user_id = $_SESSION['user_id'] ?? 0;
 $full_name = $_SESSION['full_name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'reception';
 $branch_id = $_SESSION['branch_id'] ?? 1;
@@ -58,7 +59,7 @@ function getUserColor($name) {
 }
 
 // ================================================================
-// TIME AGO FUNCTION - FIXED
+// TIME AGO FUNCTION
 // ================================================================
 function time_ago($timestamp) {
     if (empty($timestamp)) return 'N/A';
@@ -132,7 +133,7 @@ try {
     $stmt->execute([$doctor_id, $today]);
     $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
-    // 3. Pending Visits
+    // 3. Pending Visits (pending, assigned)
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned')");
     $stmt->execute([$doctor_id]);
     $pending_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -1069,17 +1070,6 @@ include_once '../../components/reception_sidebar.php';
         }
         
         @keyframes spin { to { transform: rotate(360deg); } }
-        
-        .status-updated {
-            animation: flashUpdate 0.6s ease;
-        }
-        
-        @keyframes flashUpdate {
-            0% { background-color: rgba(11, 94, 215, 0.05); }
-            30% { background-color: rgba(11, 94, 215, 0.15); }
-            70% { background-color: rgba(11, 94, 215, 0.08); }
-            100% { background-color: transparent; }
-        }
     </style>
 </head>
 <body>
@@ -1411,12 +1401,7 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- GLOBAL STATS AUTO-UPDATE -->
-<!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/global_stats.js"></script>
-
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1549,7 +1534,6 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     var updateInterval = null;
     var isUpdating = false;
-    var lastDoctorData = '';
 
     function updateDoctorData() {
         if (isUpdating) return;
@@ -1580,9 +1564,7 @@ include_once '../../components/reception_sidebar.php';
                     if (currentDoctor) {
                         var isOnline = currentDoctor.is_online == 1;
                         
-                        // ================================================================
                         // UPDATE DOCTOR STATUS - INSTANT
-                        // ================================================================
                         var statusBadge = document.getElementById('doctorStatusBadge');
                         var statusDisplay = document.getElementById('onlineStatusDisplay');
                         
@@ -1596,9 +1578,7 @@ include_once '../../components/reception_sidebar.php';
                             statusDisplay.textContent = isOnline ? '🟢 Online' : '⚪ Offline';
                         }
                         
-                        // ================================================================
                         // UPDATE UPDATE BADGE
-                        // ================================================================
                         var now = new Date();
                         var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                         document.getElementById('updateBadge').innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
@@ -1653,7 +1633,7 @@ include_once '../../components/reception_sidebar.php';
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - View Doctor (Auto-Update Every 3s)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - View Doctor (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($doctor['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
@@ -1661,8 +1641,8 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c📅 Today Appointments: <?= number_format($today_appointments) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Auto-update every 3 seconds - No refresh needed', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Doctor status updates instantly', 'font-size:13px; color:#059669;');
-    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ time_ago() function added and fixed', 'font-size:13px; color:#059669;');
+    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

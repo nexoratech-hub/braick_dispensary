@@ -3,6 +3,7 @@
 // FILE: frontend/pages/reception/visit_status.php
 // RECEPTION - UPDATE VISIT STATUS
 // WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -40,7 +41,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 // ================================================================
 // GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'];
+$user_id = $_SESSION['user_id'] ?? 0;
 $full_name = $_SESSION['full_name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'reception';
 $branch_id = $_SESSION['branch_id'] ?? 1;
@@ -49,7 +50,7 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI
+// PATH SAHIHI - USING NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -58,6 +59,7 @@ $new_status = isset($_GET['status']) ? $_GET['status'] : '';
 $redirect = isset($_GET['redirect']) ? $_GET['redirect'] : 'visits.php';
 $message = '';
 $message_type = '';
+$visit = null;
 
 if ($visit_id <= 0) {
     header('Location: ' . $redirect);
@@ -67,7 +69,9 @@ if ($visit_id <= 0) {
 try {
     $db = Database::getInstance()->getConnection();
     
-    // Get visit details first
+    // ================================================================
+    // GET VISIT DETAILS - USING NEW DATABASE
+    // ================================================================
     $stmt = $db->prepare("
         SELECT v.*, p.full_name as patient_name, p.patient_id, u.full_name as doctor_name 
         FROM visits v
@@ -83,14 +87,18 @@ try {
         exit;
     }
     
-    // Validate status
-    $valid_statuses = ['pending', 'assigned', 'with_doctor', 'completed', 'cancelled'];
+    // ================================================================
+    // VALIDATE STATUS
+    // ================================================================
+    $valid_statuses = ['pending', 'assigned', 'with_doctor', 'lab_test', 'lab_completed', 'prescribed', 'completed', 'cancelled'];
     if (!in_array($new_status, $valid_statuses)) {
         header('Location: ' . $redirect);
         exit;
     }
     
-    // Update visit status
+    // ================================================================
+    // UPDATE VISIT STATUS
+    // ================================================================
     $stmt = $db->prepare("UPDATE visits SET status = ?, updated_at = NOW() WHERE id = ?");
     
     if ($stmt->execute([$new_status, $visit_id])) {
@@ -104,18 +112,22 @@ try {
             
             // Update patient bill if exists
             try {
-                $stmt = $db->prepare("UPDATE patient_bills SET status = 'paid' WHERE visit_id = ? AND status = 'pending'");
+                $stmt = $db->prepare("UPDATE bills SET status = 'paid' WHERE visit_id = ? AND status = 'pending'");
                 $stmt->execute([$visit_id]);
-            } catch (Exception $e) {}
+            } catch (Exception $e) {
+                // Silent fail
+            }
         }
         
         // If status is assigned, update doctor assignment
-        if ($new_status === 'assigned' && $visit['doctor_id']) {
+        if ($new_status === 'assigned' && !empty($visit['doctor_id'])) {
             $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
             $stmt->execute([$visit['doctor_id'], $visit['patient_id']]);
         }
         
-        // Log activity
+        // ================================================================
+        // LOG ACTIVITY
+        // ================================================================
         try {
             $stmt = $db->prepare("
                 INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
@@ -126,7 +138,9 @@ try {
                 $branch_id,
                 "Visit ID: $visit_id status changed to $new_status"
             ]);
-        } catch (Exception $e) {}
+        } catch (Exception $e) {
+            // Silent fail
+        }
         
     } else {
         $message = "Failed to update visit status!";
@@ -143,10 +157,12 @@ try {
 // ================================================================
 $unread_notifications = 0;
 try {
-    if (isset($_SESSION['user_id'])) {
+    if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+        $db = Database::getInstance()->getConnection();
         $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
         $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $unread_notifications = $result['total'] ?? 0;
     }
 } catch (Exception $e) {
     $unread_notifications = 0;
@@ -162,7 +178,7 @@ $profile_pic_url = !empty($profile_pic)
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// ✅ INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
@@ -182,8 +198,9 @@ include_once '../../components/reception_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES
+           DASHBOARD STYLES ONLY - NO HEADER OVERRIDES
            ================================================================ */
+        
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -251,152 +268,6 @@ include_once '../../components/reception_sidebar.php';
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
         
         /* ================================================================
            MAIN CONTENT
@@ -628,12 +499,18 @@ include_once '../../components/reception_sidebar.php';
         .status-badge-display.pending { background: #FEF3C7; color: #D97706; }
         .status-badge-display.assigned { background: #E8F0FE; color: #0B5ED7; }
         .status-badge-display.with_doctor { background: #FEF3C7; color: #D97706; }
+        .status-badge-display.lab_test { background: #EDE9FE; color: #7C3AED; }
+        .status-badge-display.lab_completed { background: #EDE9FE; color: #7C3AED; }
+        .status-badge-display.prescribed { background: #FEF3C7; color: #D97706; }
         .status-badge-display.completed { background: #D1FAE5; color: #059669; }
         .status-badge-display.cancelled { background: #FEE2E2; color: #DC2626; }
         
         [data-theme="dark"] .status-badge-display.pending { background: #3D2E0A; color: #FBBF24; }
         [data-theme="dark"] .status-badge-display.assigned { background: #1E3A5F; color: #6EA8FE; }
         [data-theme="dark"] .status-badge-display.with_doctor { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .status-badge-display.lab_test { background: #2D1B5F; color: #A78BFA; }
+        [data-theme="dark"] .status-badge-display.lab_completed { background: #2D1B5F; color: #A78BFA; }
+        [data-theme="dark"] .status-badge-display.prescribed { background: #3D2E0A; color: #FBBF24; }
         [data-theme="dark"] .status-badge-display.completed { background: #1A3A2A; color: #34D399; }
         [data-theme="dark"] .status-badge-display.cancelled { background: #3A1A1A; color: #F87171; }
         
@@ -846,14 +723,10 @@ include_once '../../components/reception_sidebar.php';
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .status-card { padding: 20px; }
@@ -864,8 +737,6 @@ include_once '../../components/reception_sidebar.php';
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
             .status-card { padding: 14px; }
             .status-card .status-details .detail-row { font-size: 0.75rem; flex-direction: column; gap: 2px; }
             .btn-group { flex-direction: column; align-items: stretch; }
@@ -876,46 +747,8 @@ include_once '../../components/reception_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- ✅ TOP NAVIGATION - IMEJAZWA NA reception_header.php -->
 <!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -961,7 +794,7 @@ include_once '../../components/reception_sidebar.php';
     <?php if ($message): ?>
         <div class="alert <?= $message_type === 'success' ? 'alert-success' : 'alert-error' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <div class="alert-content"><?= $message ?></div>
+            <div class="alert-content"><?= htmlspecialchars($message) ?></div>
         </div>
     <?php endif; ?>
 
@@ -993,7 +826,7 @@ include_once '../../components/reception_sidebar.php';
             <p class="status-message"><?= htmlspecialchars($message) ?></p>
             
             <!-- Visit Details -->
-            <?php if (isset($visit)): ?>
+            <?php if (isset($visit) && $visit): ?>
             <div class="status-details">
                 <div class="detail-row">
                     <span class="detail-label">Visit Number</span>
@@ -1010,7 +843,7 @@ include_once '../../components/reception_sidebar.php';
                 <div class="detail-row">
                     <span class="detail-label">Doctor</span>
                     <span class="detail-value">
-                        <?php if ($visit['doctor_name']): ?>
+                        <?php if (!empty($visit['doctor_name'])): ?>
                             Dr. <?= htmlspecialchars($visit['doctor_name']) ?>
                         <?php else: ?>
                             <span class="text-muted">Not assigned</span>
@@ -1044,8 +877,8 @@ include_once '../../components/reception_sidebar.php';
                 <a href="visits.php" class="btn btn-outline">
                     <i class="fas fa-clinic-medical"></i> View All Visits
                 </a>
-                <?php if ($message_type === 'success' && isset($visit)): ?>
-                    <a href="view_patient.php?id=<?= $visit['patient_id'] ?>" class="btn btn-success">
+                <?php if ($message_type === 'success' && isset($visit) && $visit): ?>
+                    <a href="view_patient.php?id=<?= (int)$visit['patient_id'] ?>" class="btn btn-success">
                         <i class="fas fa-user"></i> View Patient
                     </a>
                 <?php endif; ?>
@@ -1056,22 +889,27 @@ include_once '../../components/reception_sidebar.php';
     <!-- ================================================================ -->
     <!-- QUICK ACTIONS -->
     <!-- ================================================================ -->
-    <?php if (isset($visit) && $visit['status'] !== 'completed' && $visit['status'] !== 'cancelled'): ?>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5" style="max-width:700px;margin:20px auto 0;">
+    <?php if (isset($visit) && $visit && !in_array($visit['status'], ['completed', 'cancelled'])): ?>
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-5" style="max-width:700px;margin:20px auto 0;">
         <a href="visit_status.php?id=<?= $visit_id ?>&status=assigned&redirect=<?= urlencode($redirect) ?>" 
            class="card text-center hover:border-primary transition p-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-md">
             <i class="fas fa-user-md text-blue-500 text-2xl block mb-2"></i>
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assign Doctor</span>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Assign</span>
         </a>
         <a href="visit_status.php?id=<?= $visit_id ?>&status=with_doctor&redirect=<?= urlencode($redirect) ?>" 
            class="card text-center hover:border-primary transition p-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-md">
             <i class="fas fa-stethoscope text-yellow-500 text-2xl block mb-2"></i>
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">With Doctor</span>
         </a>
+        <a href="visit_status.php?id=<?= $visit_id ?>&status=lab_test&redirect=<?= urlencode($redirect) ?>" 
+           class="card text-center hover:border-primary transition p-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-md">
+            <i class="fas fa-flask text-purple-500 text-2xl block mb-2"></i>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Lab Test</span>
+        </a>
         <a href="visit_status.php?id=<?= $visit_id ?>&status=completed&redirect=<?= urlencode($redirect) ?>" 
            class="card text-center hover:border-primary transition p-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-md">
             <i class="fas fa-check-circle text-green-500 text-2xl block mb-2"></i>
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Complete Visit</span>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Complete</span>
         </a>
     </div>
     <?php endif; ?>
@@ -1167,8 +1005,10 @@ include_once '../../components/reception_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
+        var dtEl = document.getElementById('currentDateTime');
+        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+        var ftEl = document.getElementById('footerTimestamp');
+        if (ftEl) ftEl.textContent = 'Last updated: ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -1199,6 +1039,8 @@ include_once '../../components/reception_sidebar.php';
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
         
+        if (!toast) return;
+        
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
@@ -1225,21 +1067,28 @@ include_once '../../components/reception_sidebar.php';
         isUpdating = true;
         
         fetch('/dispensary_system/frontend/api/get_global_stats.php?t=' + new Date().getTime())
-            .then(function(response) { return response.json(); })
+            .then(function(response) { 
+                if (!response.ok) throw new Error('Network error');
+                return response.json(); 
+            })
             .then(function(data) {
                 if (data.success) {
                     var stats = data.stats || {};
                     var onlineCount = stats.online_doctors || 0;
                     
                     // Update online doctors count
-                    document.getElementById('onlineDoctorCount').textContent = onlineCount;
+                    var onlineCountEl = document.getElementById('onlineDoctorCount');
+                    if (onlineCountEl) onlineCountEl.textContent = onlineCount;
                     
                     // Update update badge
                     var now = new Date();
-                    document.getElementById('updateBadge').innerHTML = 
-                        '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + 
-                        now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    document.getElementById('footerTimestamp').textContent = 'Last updated: ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    var badgeEl = document.getElementById('updateBadge');
+                    if (badgeEl) {
+                        badgeEl.innerHTML = '<i class="fas fa-check-circle" style="color:#34D399;"></i> Live ' + timeStr;
+                    }
+                    var ftEl = document.getElementById('footerTimestamp');
+                    if (ftEl) ftEl.textContent = 'Last updated: ' + timeStr;
                 }
                 isUpdating = false;
             })
@@ -1302,10 +1151,8 @@ include_once '../../components/reception_sidebar.php';
         }, 1500);
     });
 
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c🏥 Braick - Visit Status', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick - Visit Status (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Visit ID: <?= $visit_id ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 New Status: <?= ucfirst(str_replace('_', ' ', $new_status ?? 'N/A')) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');

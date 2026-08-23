@@ -1,15 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/view_patient.php
-// VIEW PATIENT - COMPLETE PATIENT DETAILS
-// INCLUDES: Personal Info, Medical Info, Visit History, Bills, Procedures, Tools
-// FIXED: PDF opens in new window with Braick logo, Close & Download buttons
-// MARITAL STATUS: Now displayed in patient info
-// BILLS: Moved to the last position
-// VITAL SIGNS: Only 6 signs (Respiratory Rate removed)
-// THEME: Blue theme on all cards
-// FIXED: Variables initialized before use (prescriptions, lab_tests, etc.)
-// WITH LOGIN PROTECTION
+// VIEW PATIENT - COMPLETE PATIENT DETAILS WITH PDF
+// USING NEW DATABASE: dispensary_db (bills, bill_items)
+// FIXED: 
+// 1. Removed "New DB" badge
+// 2. Added clock in header
+// 3. Fixed PDF buttons (Download & Print working)
+// 4. Official Stamp included
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -21,7 +19,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -29,7 +27,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER HAS ACCESS (Reception or Admin)
+// CHECK USER ACCESS (Reception or Admin)
 // ================================================================
 $allowed_roles = ['reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
@@ -45,7 +43,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 }
 
 // ================================================================
-// GET USER DATA FROM SESSION
+// GET USER DATA
 // ================================================================
 $user_id = $_SESSION['user_id'];
 $full_name = $_SESSION['full_name'] ?? 'User';
@@ -56,14 +54,14 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI
+// DATABASE CONNECTION
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 $message = '';
 $message_type = '';
 
-// Get patient ID from URL
+// Get patient ID
 $patient_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if ($patient_id <= 0) {
@@ -71,7 +69,7 @@ if ($patient_id <= 0) {
     exit;
 }
 
-// ✅ INITIALIZE ALL VARIABLES BEFORE USE
+// ✅ INITIALIZE ALL VARIABLES
 $patient = null;
 $active_visit = null;
 $visit_history = [];
@@ -90,7 +88,7 @@ try {
     $db = Database::getInstance()->getConnection();
     
     // ================================================================
-    // GET PATIENT DETAILS - INCLUDING marital_status
+    // GET PATIENT DETAILS
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -130,17 +128,17 @@ try {
     $active_visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET VISIT HISTORY - LAST 10 VISITS
+    // GET VISIT HISTORY - LAST 10
     // ================================================================
     $stmt = $db->prepare("
         SELECT v.*, 
                u.full_name as doctor_name,
-               pb.total_amount as bill_amount,
-               pb.status as bill_status,
-               pb.bill_number
+               b.total_amount as bill_amount,
+               b.status as bill_status,
+               b.bill_number
         FROM visits v
         LEFT JOIN users u ON v.doctor_id = u.id
-        LEFT JOIN patient_bills pb ON v.id = pb.visit_id
+        LEFT JOIN bills b ON v.id = b.visit_id
         WHERE v.patient_id = ? 
         ORDER BY v.created_at DESC
         LIMIT 10
@@ -149,17 +147,17 @@ try {
     $visit_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET BILLS - MOVED TO LAST
+    // GET BILLS - FROM bills TABLE
     // ================================================================
     $stmt = $db->prepare("
-        SELECT pb.*, 
+        SELECT b.*, 
                v.visit_number,
                u.full_name as created_by_name
-        FROM patient_bills pb
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        WHERE pb.patient_id = ?
-        ORDER BY pb.created_at DESC
+        FROM bills b
+        LEFT JOIN visits v ON b.visit_id = v.id
+        LEFT JOIN users u ON b.created_by = u.id
+        WHERE b.patient_id = ?
+        ORDER BY b.created_at DESC
         LIMIT 10
     ");
     $stmt->execute([$patient_id]);
@@ -183,16 +181,16 @@ try {
     }
     
     // ================================================================
-    // GET PROCEDURES - Join with patient_bills
+    // GET PROCEDURES
     // ================================================================
     $stmt = $db->prepare("
         SELECT bi.*, 
-               pb.patient_id,
-               pb.bill_number,
-               pb.created_at as bill_date
+               b.patient_id,
+               b.bill_number,
+               b.created_at as bill_date
         FROM bill_items bi
-        JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.patient_id = ? AND bi.item_type = 'procedure'
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE b.patient_id = ? AND bi.item_type = 'procedure'
         ORDER BY bi.created_at DESC
         LIMIT 10
     ");
@@ -200,16 +198,16 @@ try {
     $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET TOOLS - Join with patient_bills
+    // GET TOOLS/EQUIPMENT
     // ================================================================
     $stmt = $db->prepare("
         SELECT bi.*, 
-               pb.patient_id,
-               pb.bill_number,
-               pb.created_at as bill_date
+               b.patient_id,
+               b.bill_number,
+               b.created_at as bill_date
         FROM bill_items bi
-        JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.patient_id = ? AND bi.item_type = 'tool'
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE b.patient_id = ? AND bi.item_type = 'equipment'
         ORDER BY bi.created_at DESC
         LIMIT 10
     ");
@@ -217,7 +215,7 @@ try {
     $tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET VITAL SIGNS - LATEST (ONLY 6 SIGNS)
+    // GET VITAL SIGNS
     // ================================================================
     $stmt = $db->prepare("
         SELECT vs.*, u.full_name as recorded_by_name
@@ -231,7 +229,7 @@ try {
     $latest_vitals = $stmt->fetch(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET PRESCRIPTIONS - ✅ FIXED: Initialize as array
+    // GET PRESCRIPTIONS
     // ================================================================
     $prescriptions = [];
     $stmt = $db->prepare("
@@ -247,7 +245,7 @@ try {
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET LAB TESTS - ✅ FIXED: Initialize as array
+    // GET LAB TESTS
     // ================================================================
     $lab_tests = [];
     $stmt = $db->prepare("
@@ -285,7 +283,6 @@ try {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
     $patient = null;
-    // ✅ Make sure all variables are arrays even on error
     $prescriptions = [];
     $lab_tests = [];
     $visit_history = [];
@@ -309,14 +306,14 @@ try {
 }
 
 // ================================================================
-// PROFILE PICTURE URL
+// PROFILE PICTURE
 // ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/reception_header.php';
 include_once __DIR__ . '/../../components/reception_sidebar.php';
@@ -334,6 +331,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
     <style>
         /* ================================================================
@@ -409,7 +407,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAV
+           TOP NAV - WITH CLOCK
            ================================================================ */
         .top-nav {
             position: fixed;
@@ -477,6 +475,13 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             font-size: 0.78rem;
             color: var(--text-secondary);
             font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .top-nav .datetime i {
+            color: var(--primary-light);
         }
         
         .top-nav .avatar {
@@ -554,6 +559,350 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         .dark-toggle-btn i { font-size: 0.9rem; }
         
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        [data-theme="dark"] .branch-badge-display {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        /* ================================================================
+           PDF MODAL
+           ================================================================ */
+        .pdf-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.6);
+            z-index: 9999;
+            backdrop-filter: blur(4px);
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .pdf-modal-overlay.active {
+            display: flex;
+        }
+        
+        .pdf-modal {
+            background: var(--bg-card);
+            border-radius: 14px;
+            width: 95%;
+            max-width: 1100px;
+            max-height: 95vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-lg);
+            animation: slideUp 0.3s ease;
+        }
+        
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(30px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        .pdf-modal-header {
+            padding: 16px 24px;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+            background: var(--primary-gradient);
+            border-radius: 14px 14px 0 0;
+        }
+        
+        .pdf-modal-header .modal-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .pdf-modal-header .modal-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .pdf-modal-header .modal-actions .btn {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.78rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .pdf-modal-header .modal-actions .btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal {
+            background: rgba(220,38,38,0.3);
+            border-color: rgba(220,38,38,0.2);
+        }
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal:hover {
+            background: rgba(220,38,38,0.5);
+        }
+        
+        .pdf-modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 32px;
+            background: var(--bg-body);
+        }
+        
+        .pdf-modal-body .pdf-content {
+            max-width: 100%;
+            font-size: 0.85rem;
+            background: var(--bg-card);
+            padding: 32px 40px;
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+        }
+        
+        /* ================================================================
+           PDF CONTENT STYLES
+           ================================================================ */
+        .pdf-content .pdf-header {
+            text-align: center;
+            padding-bottom: 20px;
+            border-bottom: 3px solid var(--primary);
+            margin-bottom: 24px;
+        }
+        
+        .pdf-content .pdf-header .pdf-logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 6px;
+        }
+        
+        .pdf-content .pdf-header .pdf-logo img {
+            height: 55px;
+            width: auto;
+            object-fit: contain;
+        }
+        
+        .pdf-content .pdf-header .clinic-name {
+            font-size: 1.6rem;
+            font-weight: 800;
+            color: var(--primary);
+            letter-spacing: -0.5px;
+        }
+        
+        .pdf-content .pdf-header .clinic-sub {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+        
+        .pdf-content .pdf-header .doc-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-top: 6px;
+            background: var(--primary-bg);
+            padding: 4px 16px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+        
+        .pdf-content .section-title {
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--primary);
+            border-bottom: 2px solid var(--primary-light);
+            padding-bottom: 6px;
+            margin: 18px 0 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .pdf-content .pdf-row {
+            display: flex;
+            padding: 4px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .pdf-content .pdf-row .pdf-label {
+            font-weight: 600;
+            color: var(--text-secondary);
+            width: 160px;
+            flex-shrink: 0;
+        }
+        
+        .pdf-content .pdf-row .pdf-value {
+            flex: 1;
+            color: var(--text-primary);
+        }
+        
+        .pdf-content .pdf-grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px 20px;
+        }
+        
+        .pdf-content .pdf-vital-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin: 8px 0;
+        }
+        
+        .pdf-content .pdf-vital-item {
+            background: var(--primary-bg);
+            padding: 8px 12px;
+            border-radius: 6px;
+            border-left: 3px solid var(--primary);
+            text-align: center;
+        }
+        
+        .pdf-content .pdf-vital-item .vital-label {
+            font-size: 0.55rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+        
+        .pdf-content .pdf-vital-item .vital-value {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--primary-dark);
+        }
+        
+        .pdf-content .pdf-vital-item .vital-unit {
+            font-size: 0.55rem;
+            color: var(--text-secondary);
+        }
+        
+        .pdf-content .pdf-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.75rem;
+            margin: 8px 0;
+        }
+        
+        .pdf-content .pdf-table th {
+            background: var(--primary);
+            color: white;
+            padding: 6px 10px;
+            text-align: left;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+        }
+        
+        .pdf-content .pdf-table td {
+            padding: 5px 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .pdf-content .pdf-table tr:nth-child(even) td {
+            background: var(--gray-50);
+        }
+        
+        /* PDF Footer with Official Stamp */
+        .pdf-content .pdf-footer {
+            margin-top: 24px;
+            padding-top: 20px;
+            border-top: 2px solid var(--border-color);
+        }
+        
+        .pdf-content .pdf-footer .footer-stamp {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        
+        .pdf-content .pdf-footer .footer-left {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .pdf-content .pdf-footer .footer-left .signature-line {
+            display: inline-block;
+            width: 120px;
+            border-bottom: 1px solid var(--text-secondary);
+            margin-left: 4px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box {
+            text-align: center;
+            padding: 8px 20px;
+            border: 3px solid var(--primary);
+            border-radius: 10px;
+            background: var(--primary-bg);
+            min-width: 180px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-title {
+            font-size: 0.55rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-name {
+            font-size: 0.9rem;
+            font-weight: 800;
+            color: var(--primary);
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-line {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-date {
+            font-size: 0.55rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        
+        .pdf-content .pdf-footer .footer-bottom {
+            text-align: center;
+            margin-top: 12px;
+            font-size: 0.6rem;
+            color: var(--text-muted);
+        }
+        
+        .pdf-content .pdf-footer .footer-bottom .footer-brand {
+            color: var(--primary);
+            font-weight: 700;
+        }
+        
         /* ================================================================
            MAIN CONTENT
            ================================================================ */
@@ -564,9 +913,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - BLUE THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: 16px;
@@ -580,18 +926,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
             position: relative;
             overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
         }
         
         .page-header .page-title {
@@ -677,9 +1011,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           PROFILE HEADER - BLUE THEME
-           ================================================================ */
         .profile-header {
             background: var(--bg-card);
             border-radius: 18px;
@@ -712,21 +1043,10 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             flex-shrink: 0;
         }
         
-        .profile-avatar.avatar-male {
-            background: #0B5ED7;
-        }
-        
-        .profile-avatar.avatar-female {
-            background: #DC2626;
-        }
-        
-        .profile-avatar.avatar-other {
-            background: #7C3AED;
-        }
-        
-        .profile-avatar.avatar-default {
-            background: #0B5ED7;
-        }
+        .profile-avatar.avatar-male { background: #0B5ED7; }
+        .profile-avatar.avatar-female { background: #DC2626; }
+        .profile-avatar.avatar-other { background: #7C3AED; }
+        .profile-avatar.avatar-default { background: #0B5ED7; }
         
         .profile-info {
             flex: 1;
@@ -775,9 +1095,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             flex-wrap: wrap;
         }
         
-        /* ================================================================
-           DETAIL CARDS - BLUE THEME
-           ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -849,9 +1166,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           VITAL SIGNS - 6 ITEMS (BLUE THEME)
-           ================================================================ */
         .vital-grid-6 {
             display: grid;
             grid-template-columns: repeat(6, 1fr);
@@ -893,23 +1207,17 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--text-secondary);
         }
         
-        /* Color variants for each vital sign */
         .vital-item-blue.green { border-left-color: var(--success); }
         .vital-item-blue.green .vital-value { color: var(--success-dark); }
-        
         .vital-item-blue.purple { border-left-color: var(--purple); }
         .vital-item-blue.purple .vital-value { color: var(--purple); }
-        
         .vital-item-blue.orange { border-left-color: var(--warning); }
         .vital-item-blue.orange .vital-value { color: var(--warning); }
-        
         .vital-item-blue.teal { border-left-color: #0D9488; }
         .vital-item-blue.teal .vital-value { color: #0D9488; }
-        
         .vital-item-blue.red { border-left-color: var(--danger); }
         .vital-item-blue.red .vital-value { color: var(--danger); }
         
-        /* BMI Label */
         .bmi-label {
             display: inline-block;
             font-size: 0.5rem;
@@ -923,21 +1231,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .bmi-label.overweight { background: var(--warning-bg); color: var(--warning); }
         .bmi-label.obese { background: var(--danger-bg); color: var(--danger); }
         
-        [data-theme="dark"] .vital-item-blue {
-            background: #1E3A5F;
-        }
-        [data-theme="dark"] .vital-item-blue .vital-value {
-            color: var(--primary-light);
-        }
-        [data-theme="dark"] .vital-item-blue.green .vital-value { color: #34D399; }
-        [data-theme="dark"] .vital-item-blue.purple .vital-value { color: #A78BFA; }
-        [data-theme="dark"] .vital-item-blue.orange .vital-value { color: #FBBF24; }
-        [data-theme="dark"] .vital-item-blue.teal .vital-value { color: #2DD4BF; }
-        [data-theme="dark"] .vital-item-blue.red .vital-value { color: #F87171; }
-        
-        /* ================================================================
-           STATUS BADGES
-           ================================================================ */
         .badge {
             display: inline-block;
             font-size: 0.6rem;
@@ -957,9 +1250,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .badge-partial { background: var(--primary-bg); color: var(--primary); }
         .badge-cancelled { background: var(--danger-bg); color: var(--danger); }
         
-        /* ================================================================
-           TABLE STYLES
-           ================================================================ */
         .table-wrapper {
             overflow-x: auto;
         }
@@ -990,9 +1280,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             background: var(--bg-body);
         }
         
-        /* ================================================================
-           BUTTONS - BLUE THEME
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1045,15 +1332,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             background: var(--success-dark);
         }
         
-        .btn-warning {
-            background: var(--warning);
-            color: white;
-        }
-        
-        .btn-warning:hover {
-            background: #B45309;
-        }
-        
         .btn-pdf {
             background: #DC2626;
             color: white;
@@ -1066,53 +1344,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 6px 24px rgba(220, 38, 38, 0.35);
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .detail-grid { grid-template-columns: 1fr; }
-            .profile-header { flex-direction: column; text-align: center; }
-            .profile-info .patient-meta { justify-content: center; }
-            .profile-actions { justify-content: center; width: 100%; }
-            .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
-        }
-        
-        @media (max-width: 640px) {
-            .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .detail-card { padding: 16px; }
-            .profile-actions .btn { flex: 1; justify-content: center; }
-            .vital-grid-6 { grid-template-columns: repeat(2, 1fr); }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1127,9 +1358,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             font-weight: 600; 
         }
         
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 30px;
@@ -1143,9 +1371,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             margin-bottom: 8px;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1174,9 +1399,54 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           PRINT / PDF STYLES
-           ================================================================ */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav .search-wrapper { max-width: 300px; }
+            .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
+            .pdf-content .pdf-vital-grid { grid-template-columns: repeat(2, 1fr); }
+            .pdf-content .pdf-grid-2 { grid-template-columns: 1fr; }
+        }
+        
+        @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .detail-grid { grid-template-columns: 1fr; }
+            .profile-header { flex-direction: column; text-align: center; }
+            .profile-info .patient-meta { justify-content: center; }
+            .profile-actions { justify-content: center; width: 100%; }
+            .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
+            .pdf-modal-body .pdf-content { padding: 16px; }
+            .pdf-content .pdf-row { flex-direction: column; }
+            .pdf-content .pdf-row .pdf-label { width: 100%; }
+            .pdf-content .pdf-footer .footer-stamp { flex-direction: column; align-items: center; }
+            .pdf-content .pdf-vital-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        
+        @media (max-width: 640px) {
+            .main-content { padding: 10px; }
+            .top-nav .search-wrapper { max-width: 120px; }
+            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
+            .detail-card { padding: 16px; }
+            .profile-actions .btn { flex: 1; justify-content: center; }
+            .vital-grid-6 { grid-template-columns: repeat(2, 1fr); }
+            .pdf-modal-header { flex-direction: column; gap: 10px; align-items: stretch; }
+            .pdf-modal-header .modal-actions { justify-content: center; }
+            .pdf-modal-body .pdf-content { padding: 12px; }
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
         @media print {
             .no-print { display: none !important; }
             .top-nav { display: none !important; }
@@ -1193,7 +1463,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION - WITH CLOCK -->
 <!-- ================================================================ -->
 <nav class="top-nav no-print">
     <div class="flex items-center gap-4 flex-1">
@@ -1215,7 +1485,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
-        <span class="datetime" id="currentDateTime"></span>
+        <!-- CLOCK IN HEADER -->
+        <span class="datetime" id="currentDateTime">
+            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
+            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
+        </span>
         
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
@@ -1487,7 +1761,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- LATEST VITAL SIGNS - 6 SIGNS ONLY (BLUE THEME) -->
+    <!-- LATEST VITAL SIGNS -->
     <!-- ================================================================ -->
     <?php if ($latest_vitals): ?>
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.2s;">
@@ -1498,13 +1772,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         </div>
         
         <div class="vital-grid-6">
-            <!-- 1. Temperature -->
             <div class="vital-item-blue">
                 <span class="vital-label">🌡️ Temperature</span>
                 <span class="vital-value"><?= $latest_vitals['temperature'] ?? 'N/A' ?> <span class="vital-unit">°C</span></span>
             </div>
             
-            <!-- 2. Blood Pressure -->
             <div class="vital-item-blue green">
                 <span class="vital-label">❤️ Blood Pressure</span>
                 <span class="vital-value">
@@ -1518,25 +1790,21 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 </span>
             </div>
             
-            <!-- 3. Pulse Rate -->
             <div class="vital-item-blue purple">
                 <span class="vital-label">💓 Pulse Rate</span>
                 <span class="vital-value"><?= $latest_vitals['pulse_rate'] ?? 'N/A' ?> <span class="vital-unit">bpm</span></span>
             </div>
             
-            <!-- 4. Weight -->
             <div class="vital-item-blue orange">
                 <span class="vital-label">⚖️ Weight</span>
                 <span class="vital-value"><?= $latest_vitals['weight'] ?? 'N/A' ?> <span class="vital-unit">kg</span></span>
             </div>
             
-            <!-- 5. Height -->
             <div class="vital-item-blue teal">
                 <span class="vital-label">📏 Height</span>
                 <span class="vital-value"><?= $latest_vitals['height'] ?? 'N/A' ?> <span class="vital-unit">cm</span></span>
             </div>
             
-            <!-- 6. BMI -->
             <div class="vital-item-blue red">
                 <span class="vital-label">📊 BMI</span>
                 <span class="vital-value">
@@ -1636,7 +1904,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- PRESCRIPTIONS - ✅ FIXED: Uses $prescriptions variable -->
+    <!-- PRESCRIPTIONS -->
     <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.3s;">
         <div class="card-title">
@@ -1689,7 +1957,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- LAB TESTS - ✅ FIXED: Uses $lab_tests variable -->
+    <!-- LAB TESTS -->
     <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.35s;">
         <div class="card-title">
@@ -1780,8 +2048,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                 <td>TSh <?= number_format($procedure['unit_price'] ?? 0, 0) ?></td>
                                 <td><span class="font-semibold">TSh <?= number_format($procedure['total_price'] ?? 0, 0) ?></span></td>
                                 <td>
-                                    <span class="badge badge-<?= $procedure['payment_status'] ?? 'pending' ?>">
-                                        <?= ucfirst($procedure['payment_status'] ?? 'Pending') ?>
+                                    <span class="badge badge-<?= $procedure['status'] ?? 'pending' ?>">
+                                        <?= ucfirst($procedure['status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
                                 <td><span class="font-mono text-sm"><?= htmlspecialchars($procedure['bill_number'] ?? 'N/A') ?></span></td>
@@ -1831,8 +2099,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                 <td>TSh <?= number_format($tool['unit_price'] ?? 0, 0) ?></td>
                                 <td><span class="font-semibold">TSh <?= number_format($tool['total_price'] ?? 0, 0) ?></span></td>
                                 <td>
-                                    <span class="badge badge-<?= $tool['payment_status'] ?? 'pending' ?>">
-                                        <?= ucfirst($tool['payment_status'] ?? 'Pending') ?>
+                                    <span class="badge badge-<?= $tool['status'] ?? 'pending' ?>">
+                                        <?= ucfirst($tool['status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
                                 <td><span class="font-mono text-sm"><?= htmlspecialchars($tool['bill_number'] ?? 'N/A') ?></span></td>
@@ -1925,12 +2193,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     
     <?php else: ?>
     
-    <!-- Patient not found -->
     <div class="detail-card">
         <div class="empty-state">
             <i class="fas fa-user-slash" style="font-size:3rem;"></i>
             <h3 style="margin-top:12px;">Patient Not Found</h3>
-            <p class="text-gray-400">The patient you are looking for does not exist or you don't have permission to view them.</p>
+            <p class="text-gray-400">The patient you are looking for does not exist.</p>
             <a href="patients.php" class="btn btn-primary mt-3">
                 <i class="fas fa-arrow-left"></i> Back to Patients
             </a>
@@ -1940,6 +2207,36 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <?php endif; ?>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- PDF MODAL -->
+<!-- ================================================================ -->
+<div class="pdf-modal-overlay" id="pdfModal">
+    <div class="pdf-modal">
+        <div class="pdf-modal-header">
+            <div class="modal-title">
+                <i class="fas fa-file-pdf" style="color:rgba(255,255,255,0.8);"></i>
+                Patient PDF Preview - <?= htmlspecialchars($patient['full_name'] ?? 'Patient') ?>
+            </div>
+            <div class="modal-actions">
+                <button onclick="downloadPDF()" class="btn btn-sm" id="downloadPdfBtn">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                <button onclick="window.print()" class="btn btn-sm">
+                    <i class="fas fa-print"></i> Print
+                </button>
+                <button onclick="closePDFModal()" class="btn btn-sm btn-danger-modal">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+        <div class="pdf-modal-body" id="pdfModalBody">
+            <div class="pdf-content" id="pdfContent">
+                <!-- PDF content generated by JavaScript -->
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- TOAST -->
@@ -1956,6 +2253,29 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // CLOCK UPDATE
+    // ================================================================
+    function updateClock() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var el = document.getElementById('clockDisplay');
+        if (el) {
+            el.textContent = dateStr + ' • ' + timeStr;
+        }
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
     // ================================================================
     // DARK MODE
     // ================================================================
@@ -2005,23 +2325,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
-        document.getElementById('footerTimestamp').textContent = 'Last updated: ' + timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
     // SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
@@ -2063,27 +2366,446 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // GENERATE PDF - Opens in new window with Braick logo
+    // GENERATE PDF - WITH OFFICIAL STAMP
     // ================================================================
     function generatePDF() {
-        // ... (PDF generation code remains the same as before)
-        // Note: The JavaScript for PDF generation is long and unchanged
-        // It uses the same logic as the original file
+        var modal = document.getElementById('pdfModal');
+        var content = document.getElementById('pdfContent');
+        
+        // Patient data from PHP
+        var patientData = {
+            id: '<?= $patient['id'] ?? 0 ?>',
+            patient_id: '<?= addslashes($patient['patient_id'] ?? 'N/A') ?>',
+            full_name: '<?= addslashes($patient['full_name'] ?? 'N/A') ?>',
+            gender: '<?= addslashes($patient['gender'] ?? 'N/A') ?>',
+            marital_status: '<?= addslashes($patient['marital_status'] ?? 'N/A') ?>',
+            date_of_birth: '<?= !empty($patient['date_of_birth']) ? date('d/m/Y', strtotime($patient['date_of_birth'])) : 'N/A' ?>',
+            age: '<?= $age ?>',
+            phone: '<?= addslashes($patient['phone'] ?? 'N/A') ?>',
+            email: '<?= addslashes($patient['email'] ?? 'N/A') ?>',
+            address: '<?= addslashes($patient['address'] ?? 'N/A') ?>',
+            blood_group: '<?= addslashes($patient['blood_group'] ?? 'N/A') ?>',
+            allergies: '<?= addslashes($patient['allergies'] ?? 'None') ?>',
+            emergency_contact: '<?= addslashes($patient['emergency_contact'] ?? 'N/A') ?>',
+            branch_name: '<?= addslashes($patient['branch_name'] ?? $branch_name) ?>',
+            assigned_doctor: '<?= addslashes($patient['assigned_doctor_name'] ?? 'Not Assigned') ?>',
+            created_at: '<?= date('d/m/Y h:i A', strtotime($patient['created_at'] ?? 'now')) ?>',
+            created_by: '<?= addslashes($patient['created_by_name'] ?? 'System') ?>'
+        };
+        
+        // Vital signs
+        var vitals = <?= $latest_vitals ? json_encode($latest_vitals) : 'null' ?>;
+        
+        // Visit history
+        var visitHistory = <?= json_encode($visit_history) ?>;
+        
+        // Bills
+        var bills = <?= json_encode($bills) ?>;
+        
+        // Procedures
+        var procedures = <?= json_encode($procedures) ?>;
+        
+        // Tools
+        var tools = <?= json_encode($tools) ?>;
+        
+        // Prescriptions
+        var prescriptions = <?= json_encode($prescriptions) ?>;
+        
+        // Lab tests
+        var labTests = <?= json_encode($lab_tests) ?>;
+        
+        var now = new Date();
+        var reportDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        var reportTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+        
+        // Build vitals HTML
+        var vitalsHtml = '';
+        if (vitals) {
+            vitalsHtml = `
+                <div class="pdf-vital-grid">
+                    <div class="pdf-vital-item">
+                        <div class="vital-label">🌡️ Temperature</div>
+                        <div class="vital-value">${vitals.temperature || 'N/A'} <span class="vital-unit">°C</span></div>
+                    </div>
+                    <div class="pdf-vital-item">
+                        <div class="vital-label">❤️ Blood Pressure</div>
+                        <div class="vital-value">
+                            ${vitals.blood_pressure_systolic && vitals.blood_pressure_diastolic ? 
+                                vitals.blood_pressure_systolic + ' / ' + vitals.blood_pressure_diastolic + ' <span class="vital-unit">mmHg</span>' : 
+                                'N/A'}
+                        </div>
+                    </div>
+                    <div class="pdf-vital-item">
+                        <div class="vital-label">💓 Pulse Rate</div>
+                        <div class="vital-value">${vitals.pulse_rate || 'N/A'} <span class="vital-unit">bpm</span></div>
+                    </div>
+                    <div class="pdf-vital-item">
+                        <div class="vital-label">⚖️ Weight</div>
+                        <div class="vital-value">${vitals.weight || 'N/A'} <span class="vital-unit">kg</span></div>
+                    </div>
+                    <div class="pdf-vital-item">
+                        <div class="vital-label">📏 Height</div>
+                        <div class="vital-value">${vitals.height || 'N/A'} <span class="vital-unit">cm</span></div>
+                    </div>
+                    <div class="pdf-vital-item">
+                        <div class="vital-label">📊 BMI</div>
+                        <div class="vital-value">${vitals.bmi || 'N/A'} <span class="vital-unit">kg/m²</span></div>
+                    </div>
+                </div>
+                ${vitals.notes ? `<div style="margin-top:6px;font-size:0.75rem;color:var(--text-secondary);"><strong>Notes:</strong> ${vitals.notes}</div>` : ''}
+                ${vitals.recorded_by_name ? `<div style="margin-top:4px;font-size:0.65rem;color:var(--text-muted);">Recorded By: ${vitals.recorded_by_name}</div>` : ''}
+            `;
+        } else {
+            vitalsHtml = `<p style="color:var(--text-secondary);">No vital signs recorded</p>`;
+        }
+        
+        // Build visit history HTML
+        var visitHtml = '';
+        if (visitHistory && visitHistory.length > 0) {
+            visitHtml = `
+                <table class="pdf-table">
+                    <thead>
+                        <tr>
+                            <th>Visit #</th>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Doctor</th>
+                            <th>Status</th>
+                            <th>Bill</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${visitHistory.map(function(v) {
+                            return `
+                                <tr>
+                                    <td>${v.visit_number || 'N/A'}</td>
+                                    <td>${new Date(v.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                                    <td>${v.visit_type || 'N/A'}</td>
+                                    <td>${v.doctor_name || 'N/A'}</td>
+                                    <td>${v.status || 'N/A'}</td>
+                                    <td>${v.bill_amount ? 'TSh ' + Number(v.bill_amount).toLocaleString() : 'N/A'}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+        } else {
+            visitHtml = `<p style="color:var(--text-secondary);">No visit history</p>`;
+        }
+        
+        // Build bills HTML
+        var billsHtml = '';
+        if (bills && bills.length > 0) {
+            billsHtml = `
+                <table class="pdf-table">
+                    <thead>
+                        <tr>
+                            <th>Bill #</th>
+                            <th>Date</th>
+                            <th>Total</th>
+                            <th>Paid</th>
+                            <th>Balance</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${bills.map(function(b) {
+                            return `
+                                <tr>
+                                    <td>${b.bill_number || 'N/A'}</td>
+                                    <td>${new Date(b.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                                    <td>TSh ${Number(b.total_amount || 0).toLocaleString()}</td>
+                                    <td>TSh ${Number(b.paid_amount || 0).toLocaleString()}</td>
+                                    <td>TSh ${Number(b.balance || 0).toLocaleString()}</td>
+                                    <td>${b.status || 'N/A'}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+        } else {
+            billsHtml = `<p style="color:var(--text-secondary);">No bills found</p>`;
+        }
+        
+        // Build prescriptions HTML
+        var prescriptionsHtml = '';
+        if (prescriptions && prescriptions.length > 0) {
+            prescriptionsHtml = `
+                <table class="pdf-table">
+                    <thead>
+                        <tr>
+                            <th>Prescription #</th>
+                            <th>Date</th>
+                            <th>Doctor</th>
+                            <th>Medication</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${prescriptions.map(function(p) {
+                            return `
+                                <tr>
+                                    <td>${p.prescription_number || 'N/A'}</td>
+                                    <td>${new Date(p.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                                    <td>${p.doctor_name || 'N/A'}</td>
+                                    <td>${p.medication || 'N/A'}</td>
+                                    <td>${p.status || 'N/A'}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+        } else {
+            prescriptionsHtml = `<p style="color:var(--text-secondary);">No prescriptions found</p>`;
+        }
+        
+        // Build lab tests HTML
+        var labTestsHtml = '';
+        if (labTests && labTests.length > 0) {
+            labTestsHtml = `
+                <table class="pdf-table">
+                    <thead>
+                        <tr>
+                            <th>Test Name</th>
+                            <th>Date</th>
+                            <th>Doctor</th>
+                            <th>Status</th>
+                            <th>Results</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${labTests.map(function(lt) {
+                            return `
+                                <tr>
+                                    <td>${lt.test_name || 'N/A'}</td>
+                                    <td>${new Date(lt.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                                    <td>${lt.doctor_name || 'N/A'}</td>
+                                    <td>${lt.status || 'N/A'}</td>
+                                    <td>${lt.results ? '✅ Available' : '⏳ Pending'}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+        } else {
+            labTestsHtml = `<p style="color:var(--text-secondary);">No lab tests found</p>`;
+        }
+        
+        // Build procedures HTML
+        var proceduresHtml = '';
+        if (procedures && procedures.length > 0) {
+            proceduresHtml = `
+                <table class="pdf-table">
+                    <thead>
+                        <tr>
+                            <th>Procedure</th>
+                            <th>Date</th>
+                            <th>Qty</th>
+                            <th>Total</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${procedures.map(function(p) {
+                            return `
+                                <tr>
+                                    <td>${p.item_name || 'N/A'}</td>
+                                    <td>${new Date(p.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                                    <td>${p.quantity || 1}</td>
+                                    <td>TSh ${Number(p.total_price || 0).toLocaleString()}</td>
+                                    <td>${p.status || 'N/A'}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+        } else {
+            proceduresHtml = `<p style="color:var(--text-secondary);">No procedures found</p>`;
+        }
+        
+        // Build tools HTML
+        var toolsHtml = '';
+        if (tools && tools.length > 0) {
+            toolsHtml = `
+                <table class="pdf-table">
+                    <thead>
+                        <tr>
+                            <th>Tool Name</th>
+                            <th>Date</th>
+                            <th>Qty</th>
+                            <th>Total</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tools.map(function(t) {
+                            return `
+                                <tr>
+                                    <td>${t.item_name || 'N/A'}</td>
+                                    <td>${new Date(t.created_at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                                    <td>${t.quantity || 1}</td>
+                                    <td>TSh ${Number(t.total_price || 0).toLocaleString()}</td>
+                                    <td>${t.status || 'N/A'}</td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+        } else {
+            toolsHtml = `<p style="color:var(--text-secondary);">No tools found</p>`;
+        }
+        
+        var html = `
+            <div class="pdf-header">
+                <div class="pdf-logo">
+                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                    <span class="clinic-name">BRAICK DISPENSARY</span>
+                </div>
+                <div class="clinic-sub">Quality Healthcare Services • ${patientData.branch_name}</div>
+                <div class="doc-title">📋 Patient Medical Record</div>
+                <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px;">
+                    Report Generated: ${reportDate} • ${reportTime}
+                </div>
+            </div>
+            
+            <!-- Patient Information -->
+            <div class="section-title">👤 Patient Information</div>
+            <div class="pdf-grid-2">
+                <div class="pdf-row"><span class="pdf-label">Full Name</span><span class="pdf-value"><strong>${patientData.full_name}</strong></span></div>
+                <div class="pdf-row"><span class="pdf-label">Patient ID</span><span class="pdf-value">${patientData.patient_id}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Gender</span><span class="pdf-value">${patientData.gender}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Marital Status</span><span class="pdf-value">${patientData.marital_status}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Date of Birth</span><span class="pdf-value">${patientData.date_of_birth} (${patientData.age} years)</span></div>
+                <div class="pdf-row"><span class="pdf-label">Phone</span><span class="pdf-value">${patientData.phone}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Email</span><span class="pdf-value">${patientData.email}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Blood Group</span><span class="pdf-value">${patientData.blood_group}</span></div>
+                <div class="pdf-row" style="grid-column: 1 / -1;"><span class="pdf-label">Address</span><span class="pdf-value">${patientData.address}</span></div>
+                <div class="pdf-row" style="grid-column: 1 / -1;"><span class="pdf-label">Allergies</span><span class="pdf-value">${patientData.allergies}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Emergency Contact</span><span class="pdf-value">${patientData.emergency_contact}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Assigned Doctor</span><span class="pdf-value">${patientData.assigned_doctor}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Registered</span><span class="pdf-value">${patientData.created_at} by ${patientData.created_by}</span></div>
+            </div>
+            
+            <!-- Vital Signs -->
+            <div class="section-title">❤️ Vital Signs</div>
+            ${vitalsHtml}
+            
+            <!-- Visit History -->
+            <div class="section-title">📋 Visit History (Last 10)</div>
+            ${visitHtml}
+            
+            <!-- Prescriptions -->
+            <div class="section-title">💊 Prescriptions (Last 10)</div>
+            ${prescriptionsHtml}
+            
+            <!-- Lab Tests -->
+            <div class="section-title">🧪 Lab Tests (Last 10)</div>
+            ${labTestsHtml}
+            
+            <!-- Procedures -->
+            <div class="section-title">💉 Procedures (Last 10)</div>
+            ${proceduresHtml}
+            
+            <!-- Tools -->
+            <div class="section-title">🔧 Tools / Equipment (Last 10)</div>
+            ${toolsHtml}
+            
+            <!-- Bills -->
+            <div class="section-title">💰 Bills (Last 10)</div>
+            ${billsHtml}
+            
+            <!-- Footer with Official Stamp -->
+            <div class="pdf-footer">
+                <div class="footer-stamp">
+                    <div class="footer-left">
+                        <span>Technician: _________________</span>
+                        <span style="margin-left:20px;">Date: ${reportDate}</span>
+                    </div>
+                    <div class="stamp-box">
+                        <div class="stamp-title">Official Stamp</div>
+                        <div class="stamp-name">BRAICK DISPENSARY</div>
+                        <div class="stamp-line">Approved By: _________________</div>
+                        <div class="stamp-date">Date: ${reportDate}</div>
+                    </div>
+                </div>
+                <div class="footer-bottom">
+                    <span class="footer-brand">Braick Dispensary</span> • 
+                    Generated on ${reportDate} at ${reportTime} • 
+                    All rights reserved
+                </div>
+            </div>
+        `;
+        
+        content.innerHTML = html;
+        modal.classList.add('active');
+    }
+    
+    function closePDFModal() {
+        document.getElementById('pdfModal').classList.remove('active');
+    }
+    
+    function downloadPDF() {
+        var element = document.getElementById('pdfContent');
+        var opt = {
+            margin: [10, 10, 10, 10],
+            filename: 'Patient_<?= htmlspecialchars($patient['full_name'] ?? 'patient') ?>_<?= $patient['id'] ?>.pdf',
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                logging: false
+            },
+            jsPDF: { 
+                unit: 'mm', 
+                format: 'a4', 
+                orientation: 'portrait' 
+            },
+            pagebreak: { mode: 'avoid-all' }
+        };
+        
+        html2pdf().set(opt).from(element).save();
     }
 
-    console.log('%c👤 Braick - View Patient Details (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closePDFModal();
+        }
+    });
+
+    // ================================================================
+    // CLICK OUTSIDE TO CLOSE PDF MODAL
+    // ================================================================
+    document.getElementById('pdfModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closePDFModal();
+        }
+    });
+
+    // ================================================================
+    // SHOW TOAST FOR PDF ACTIONS
+    // ================================================================
+    document.getElementById('downloadPdfBtn')?.addEventListener('click', function() {
+        showToast('📄 PDF Download', 'Downloading patient PDF...', 'info');
+    });
+
+    console.log('%c👤 Braick - View Patient (With Official Stamp)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c🆔 ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💍 Marital Status: <?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c❤️ Vital Signs: 6 signs (Respiratory Rate removed)', 'font-size:13px; color:#DC2626;');
-    console.log('%c🎨 All cards have BLUE THEME', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Visit History: <?= count($visit_history) ?> records', 'font-size:13px; color:#34D399;');
-    console.log('%c💰 Bills: <?= count($bills) ?> records (moved to last)', 'font-size:13px; color:#F59E0B;');
-    console.log('%c💉 Procedures: <?= count($procedures) ?> records', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🔧 Tools: <?= count($tools) ?> records', 'font-size:13px; color:#D97706;');
-    console.log('%c📄 PDF opens in new window with Braick logo', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ FIXED: Variables initialized before use (prescriptions, lab_tests, etc.)', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🕐 Clock in header: Active', 'font-size:13px; color:#34D399;');
+    console.log('%c📄 PDF with Official Stamp and all patient information', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ PDF Download button works with html2pdf.js', 'font-size:13px; color:#34D399;');
+    console.log('%c🗄️ Using NEW DATABASE: dispensary_db (bills, bill_items)', 'font-size:13px; color:#34D399;');
+    console.log('%c❌ "New DB" badge removed', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

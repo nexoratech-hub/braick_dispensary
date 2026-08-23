@@ -5,6 +5,8 @@
 // WITH LOGIN SESSION PROTECTION
 // WITH SERVICES SECTION - SHOWS ALL SERVICES FROM services TABLE
 // WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
+// ✅ JINA NA LOGO KUTOKA system_settings TABLE
+// ✅ MENU MPANGILIO MPYA
 // FULLY RESPONSIVE - ALL DEVICES
 // BRAICK DISPENSARY
 // ================================================================
@@ -20,7 +22,6 @@ if (session_status() === PHP_SESSION_NONE) {
 // LOGIN SESSION PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    // User is not logged in - redirect to login page
     header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
@@ -30,7 +31,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // ================================================================
 $allowed_roles = ['reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
-    // User is not allowed - redirect to their dashboard
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': 
@@ -75,6 +75,45 @@ try {
 }
 
 // ================================================================
+// ✅ GET SYSTEM SETTINGS - JINA NA LOGO LA DISPENSARY
+// ================================================================
+$site_name = 'Braick Dispensary';
+$site_logo = '';
+$site_logo_path = '';
+
+if ($db !== null) {
+    try {
+        // Get site name
+        $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'site_name'");
+        $stmt->execute();
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($result && !empty($result['setting_value'])) {
+            $site_name = $result['setting_value'];
+        }
+        
+        // Get site logo
+        $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'site_logo'");
+        $stmt->execute();
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($result && !empty($result['setting_value'])) {
+            $site_logo = $result['setting_value'];
+        }
+        
+    } catch (Exception $e) {
+        error_log("Error fetching system settings: " . $e->getMessage());
+    }
+}
+
+// ================================================================
+// ✅ SITE LOGO PATH
+// ================================================================
+if (!empty($site_logo)) {
+    $site_logo_path = '/dispensary_system/frontend/assets/uploads/settings/' . $site_logo;
+} else {
+    $site_logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+}
+
+// ================================================================
 // GET REAL DATA FOR BADGES
 // ================================================================
 $patient_count = 0;
@@ -106,7 +145,7 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 5. Pending Patients
+        // 5. Pending Patients (needs doctor assignment)
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
         $stmt->execute([$user_branch_id]);
         $pending_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -133,18 +172,16 @@ $current_page = basename($_SERVER['PHP_SELF']);
 $current_uri = $_SERVER['REQUEST_URI'];
 
 // ================================================================
-// FUNCTION TO CHECK ACTIVE STATE - IMPROVED
+// FUNCTION TO CHECK ACTIVE STATE
 // ================================================================
 function isActive($page, $exact = false) {
     global $current_page;
     global $current_uri;
     
     if ($exact) {
-        // Exact match - for specific pages like cashier
         return (strpos($current_uri, $page) !== false) ? 'active' : '';
     }
     
-    // Default - match filename
     if ($page === $current_page) {
         return 'active';
     }
@@ -152,17 +189,11 @@ function isActive($page, $exact = false) {
 }
 
 // ================================================================
-// LOGO PATH
-// ================================================================
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
 // HANDLE AJAX REQUEST FOR SIDEBAR DATA
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_reception_sidebar_data') {
     header('Content-Type: application/json');
     
-    // Check if user is logged in for AJAX requests too
     if (!isset($_SESSION['user_id'])) {
         echo json_encode(['success' => false, 'error' => 'Not logged in']);
         exit;
@@ -256,12 +287,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
-    /* Sidebar Open State - CRITICAL: !important ensures it works */
     .sidebar.open {
         transform: translateX(0) !important;
     }
     
-    /* Scrollbar */
     .sidebar::-webkit-scrollbar { width: 5px; }
     .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
     .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
@@ -289,7 +318,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       SIDEBAR BRAND / HEADER
+       SIDEBAR BRAND / HEADER - KUTOKA system_settings
        ================================================================ */
     .sidebar-brand {
         padding: 18px 16px 14px;
@@ -482,7 +511,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       LOGOUT LINK - USING ABSOLUTE PATH
+       LOGOUT LINK
        ================================================================ */
     .sidebar-link.logout-link {
         border-top: 2px solid rgba(255,255,255,0.08);
@@ -576,7 +605,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
        RESPONSIVE BREAKPOINTS
        ================================================================ */
     
-    /* Desktop: Sidebar always visible */
     @media (min-width: 1025px) {
         .sidebar {
             transform: translateX(0) !important;
@@ -591,7 +619,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
     
-    /* Tablet and below: Sidebar hidden by default */
     @media (max-width: 1024px) {
         .sidebar {
             width: 280px;
@@ -637,7 +664,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
     
-    /* Mobile phones */
     @media (max-width: 768px) {
         .sidebar {
             width: 300px;
@@ -684,7 +710,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
     
-    /* Small phones */
     @media (max-width: 480px) {
         .sidebar {
             width: 100%;
@@ -750,14 +775,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 <aside class="sidebar" id="sidebar">
     
     <!-- ================================================================ -->
-    <!-- BRAND / HEADER -->
+    <!-- ✅ BRAND / HEADER - JINA NA LOGO KUTOKA system_settings -->
     <!-- ================================================================ -->
     <div class="sidebar-brand">
         <div class="flex items-center gap-3">
-            <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
+            <img src="<?= $site_logo_path ?>" 
+                 alt="<?= htmlspecialchars($site_name) ?>" 
+                 class="logo"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div>
-                <p class="brand-text">Braick Dispensary</p>
+                <p class="brand-text" id="sidebarSiteName"><?= htmlspecialchars($site_name) ?></p>
                 <p class="brand-sub">Reception Panel</p>
             </div>
             <!-- Close button for mobile -->
@@ -768,7 +795,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     </div>
     
     <!-- ================================================================ -->
-    <!-- NAVIGATION - ALL MENUS PRESERVED -->
+    <!-- ✅ NAVIGATION - MPANGILIO MPYA (10 MENUS) -->
     <!-- ================================================================ -->
     <nav class="sidebar-nav">
         
@@ -793,33 +820,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <span class="badge" id="receptionPatientCount"><?= $patient_count ?></span>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- APPOINTMENTS -->
-        <!-- ============================================================ -->
-        <div class="nav-label mt-2">Appointments</div>
-        
-        <!-- 4. Appointments -->
-        <a href="/dispensary_system/frontend/pages/reception/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
-            <i class="fas fa-calendar-check"></i> Appointments
-            <?php if ($pending_appointments > 0): ?>
-                <span class="badge danger" id="receptionAppointmentCount"><?= $appointment_count ?></span>
-            <?php else: ?>
-                <span class="badge" id="receptionAppointmentCount"><?= $appointment_count ?></span>
-            <?php endif; ?>
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- VISITS -->
-        <!-- ============================================================ -->
-        <div class="nav-label mt-2">Visits</div>
-        
-        <!-- 5. Visit -->
-        <a href="/dispensary_system/frontend/pages/reception/visits.php?filter=today" class="sidebar-link <?= isActive('visits.php') ?>">
-            <i class="fas fa-clinic-medical"></i> Visit
-            <span class="badge" id="receptionTodayVisits"><?= $today_visits ?></span>
-        </a>
-        
-        <!-- 6. Assign Doctor -->
+        <!-- 4. Assign Doctor -->
         <a href="/dispensary_system/frontend/pages/reception/assign_doctor.php" class="sidebar-link <?= isActive('assign_doctor.php') ?>">
             <i class="fas fa-user-md"></i> Assign Doctor
             <?php if ($pending_patients > 0): ?>
@@ -830,9 +831,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </a>
         
         <!-- ============================================================ -->
-        <!-- SERVICES -->
+        <!-- VISITS & APPOINTMENTS -->
         <!-- ============================================================ -->
-        <div class="nav-label mt-2">Services</div>
+        <div class="nav-label mt-2">Visits & Appointments</div>
+        
+        <!-- 5. Visit -->
+        <a href="/dispensary_system/frontend/pages/reception/visits.php?filter=today" class="sidebar-link <?= isActive('visits.php') ?>">
+            <i class="fas fa-clinic-medical"></i> Visit
+            <span class="badge" id="receptionTodayVisits"><?= $today_visits ?></span>
+        </a>
+        
+        <!-- 6. Appointments -->
+        <a href="/dispensary_system/frontend/pages/reception/appointments.php" class="sidebar-link <?= isActive('appointments.php') ?>">
+            <i class="fas fa-calendar-check"></i> Appointments
+            <?php if ($pending_appointments > 0): ?>
+                <span class="badge danger" id="receptionAppointmentCount"><?= $appointment_count ?></span>
+            <?php else: ?>
+                <span class="badge" id="receptionAppointmentCount"><?= $appointment_count ?></span>
+            <?php endif; ?>
+        </a>
+        
+        <!-- ============================================================ -->
+        <!-- SERVICES & FINANCE -->
+        <!-- ============================================================ -->
+        <div class="nav-label mt-2">Services & Finance</div>
         
         <!-- 7. Services -->
         <a href="/dispensary_system/frontend/pages/reception/services.php" class="sidebar-link <?= isActive('services.php') ?>">
@@ -844,12 +866,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php endif; ?>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- FINANCE -->
-        <!-- ============================================================ -->
-        <div class="nav-label mt-2">Finance</div>
-        
-        <!-- 8. Cashier - FIXED: Using exact URI match -->
+        <!-- 8. Cashier -->
         <a href="/dispensary_system/frontend/pages/cashier/dashboard.php" class="sidebar-link <?= (strpos($current_uri, '/cashier/dashboard.php') !== false) ? 'active' : '' ?>">
             <i class="fas fa-cash-register"></i> Cashier
         </a>
@@ -864,7 +881,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <i class="fas fa-user-circle"></i> Profile
         </a>
         
-        <!-- 10. Logout - USING ABSOLUTE PATH -->
+        <!-- 10. Logout -->
         <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i> Logout
         </a>
@@ -892,7 +909,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
     // ================================================================
     (function() {
-        // Wait for DOM to be ready
         function initSidebar() {
             console.log('🔧 Initializing Reception Sidebar...');
             
@@ -901,7 +917,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             var closeBtn = document.getElementById('sidebarCloseBtn');
             var overlay = document.getElementById('sidebarOverlay');
             
-            // Create overlay if not exists
             if (!overlay) {
                 overlay = document.createElement('div');
                 overlay.id = 'sidebarOverlay';
@@ -915,7 +930,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 return;
             }
             
-            // Toggle function
             function openSidebar() {
                 sidebar.classList.add('open');
                 overlay.style.display = 'block';
@@ -940,11 +954,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
             
-            // ================================================================
-            // EVENT: Toggle button (hamburger icon from header)
-            // ================================================================
+            // Toggle button from header
             if (toggleBtn) {
-                // Remove all existing listeners to avoid duplicates
                 var newToggle = toggleBtn.cloneNode(true);
                 toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
                 var freshToggle = document.getElementById('sidebarToggle');
@@ -957,22 +968,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 });
                 console.log('✅ Toggle button attached');
             } else {
-                console.warn('⚠️ Toggle button not found - trying fallback');
-                // Try to find by class
-                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
-                if (fallbackBtn) {
-                    fallbackBtn.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        toggleSidebar();
-                    });
-                    console.log('✅ Fallback toggle button attached');
-                }
+                console.warn('⚠️ Toggle button not found');
             }
             
-            // ================================================================
-            // EVENT: Close button (X icon in sidebar)
-            // ================================================================
+            // Close button
             if (closeBtn) {
                 closeBtn.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -982,9 +981,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 console.log('✅ Close button attached');
             }
             
-            // ================================================================
-            // EVENT: Close sidebar when clicking overlay
-            // ================================================================
+            // Overlay click
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) {
@@ -994,18 +991,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 console.log('✅ Overlay click handler attached');
             }
             
-            // ================================================================
-            // EVENT: Close sidebar with ESC key
-            // ================================================================
+            // ESC key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            // ================================================================
-            // EVENT: Auto-close on window resize (desktop)
-            // ================================================================
+            // Resize
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                     closeSidebar();
@@ -1013,14 +1006,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             });
             
             console.log('✅ Reception Sidebar fully initialized!');
-            console.log('📱 Sidebar element:', sidebar);
-            console.log('🔘 Toggle button:', document.getElementById('sidebarToggle'));
-            console.log('❌ Close button:', document.getElementById('sidebarCloseBtn'));
-            console.log('📐 Window width:', window.innerWidth);
-            console.log('📱 Is mobile:', window.innerWidth <= 1024);
         }
         
-        // Run on DOM ready
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', initSidebar);
         } else {
@@ -1032,17 +1019,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // UPDATE SIDEBAR BADGES
     // ================================================================
     function updateSidebarBadges(patientCount, appointmentCount, pendingAppointments, todayVisits, pendingPatients, servicesCount) {
-        // Patient Count
         var el = document.getElementById('receptionPatientCount');
         if (el && patientCount !== undefined) {
             el.textContent = patientCount;
-            el.style.opacity = patientCount === 0 ? '0.6' : '1';
             el.classList.remove('badge-update');
             void el.offsetWidth;
             el.classList.add('badge-update');
         }
         
-        // Appointment Count
         el = document.getElementById('receptionAppointmentCount');
         if (el && appointmentCount !== undefined) {
             el.textContent = appointmentCount;
@@ -1052,7 +1036,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             el.classList.add('badge-update');
         }
         
-        // Today Visits
         el = document.getElementById('receptionTodayVisits');
         if (el && todayVisits !== undefined) {
             el.textContent = todayVisits;
@@ -1062,7 +1045,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             el.classList.add('badge-update');
         }
         
-        // Pending Patients
         el = document.getElementById('receptionPendingPatients');
         if (el && pendingPatients !== undefined) {
             el.textContent = pendingPatients;
@@ -1072,7 +1054,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             el.classList.add('badge-update');
         }
         
-        // Services Count
         el = document.getElementById('receptionServicesCount');
         if (el && servicesCount !== undefined) {
             el.textContent = servicesCount;
@@ -1082,22 +1063,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             el.classList.add('badge-update');
         }
         
-        // Update time
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
             var timeStr = now.toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit', 
-                second: '2-digit',
-                hour12: true 
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true 
             });
             timeEl.textContent = timeStr;
         }
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA (Self-contained - uses same file)
+    // FETCH SIDEBAR DATA
     // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
@@ -1112,7 +1089,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         formData.append('action', 'get_reception_sidebar_data');
         formData.append('branch_id', branchId);
         
-        // Send request to the SAME FILE (self-contained)
         fetch(window.location.href, {
             method: 'POST',
             body: formData
@@ -1125,7 +1101,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         })
         .then(function(data) {
             if (data.success) {
-                // Only update if data has changed
                 if (lastDataHash !== data.hash) {
                     lastDataHash = data.hash;
                     updateSidebarBadges(
@@ -1141,23 +1116,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             sidebarIsUpdating = false;
         })
         .catch(function(error) {
-            // Silent fail
             sidebarIsUpdating = false;
         });
     }
 
-    // ================================================================
-    // START / STOP AUTO-UPDATE
-    // ================================================================
     function startSidebarAutoUpdate() {
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        // Initial update after 1 second
         setTimeout(function() {
             fetchSidebarData();
         }, 1000);
-        // Then every 3 seconds
         sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
         console.log('%c🔄 Reception Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
@@ -1166,13 +1135,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
             sidebarUpdateInterval = null;
-            console.log('%c⏹️ Reception Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
-    // ================================================================
-    // VISIBILITY CHANGE
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -1181,29 +1146,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     });
 
-    // ================================================================
-    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
-    // ================================================================
-    window.updateSidebarBadges = updateSidebarBadges;
-    window.fetchSidebarData = fetchSidebarData;
-    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
-    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
-
-    // ================================================================
-    // INITIALIZE
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 2000);
     });
 
-    console.log('%c🏥 Reception Sidebar (FULLY FIXED - Works with Header)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    window.updateSidebarBadges = updateSidebarBadges;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
+
+    console.log('%c🏥 Reception Sidebar (UPDATED - system_settings)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Jina na logo kutoka system_settings table', 'font-size:12px; color:#34D399;');
+    console.log('%c📋 MENU MPYA: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 'font-size:12px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Patients: <?= $patient_count ?> | Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#9EC5FE;');
-    console.log('%c📋 Services: <?= $services_count ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c💰 Cashier menu: FIXED - Uses exact URI match', 'font-size:12px; color:#34D399;');
-    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
-    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:12px; color:#F87171;');
 </script>

@@ -2,11 +2,17 @@
 // ================================================================
 // FILE: frontend/pages/reception/appointment_status.php
 // RECEPTION - UPDATE APPOINTMENT STATUS
+// USING NEW DATABASE: dispensary_db
 // WITH AJAX REAL-TIME UPDATE
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
 // CHECK SESSION - REDIRECT TO LOGIN IF NOT RECEPTION
@@ -27,9 +33,15 @@ $username = $_SESSION['username'] ?? 'reception';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 $appointment_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $new_status = isset($_GET['status']) ? $_GET['status'] : '';
@@ -43,65 +55,108 @@ if ($appointment_id <= 0) {
 }
 
 try {
-    $db = Database::getInstance()->getConnection();
-    
-    // Get appointment details first
-    $stmt = $db->prepare("SELECT * FROM appointments WHERE id = ? AND branch_id = ?");
+    // ================================================================
+    // GET APPOINTMENT DETAILS - NEW DATABASE
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT a.*, 
+               p.full_name as patient_name,
+               u.full_name as doctor_name,
+               u.specialty as doctor_specialty
+        FROM appointments a
+        LEFT JOIN patients p ON a.patient_id = p.id
+        LEFT JOIN users u ON a.doctor_id = u.id
+        WHERE a.id = ? AND a.branch_id = ?
+    ");
     $stmt->execute([$appointment_id, $branch_id]);
     $appointment = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     if (!$appointment) {
         header('Location: ' . $redirect);
         exit;
     }
-    
-    // Get patient and doctor names
-    $stmt = $db->prepare("SELECT full_name FROM patients WHERE id = ?");
-    $stmt->execute([$appointment['patient_id']]);
-    $patient = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    $stmt = $db->prepare("SELECT full_name FROM users WHERE id = ? AND status = 'active'");
-    $stmt->execute([$appointment['doctor_id']]);
-    $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    // Validate status
-    $valid_statuses = ['scheduled', 'confirmed', 'in-progress', 'completed', 'cancelled'];
+
+    // ================================================================
+    // VALIDATE STATUS - NEW DATABASE
+    // ================================================================
+    $valid_statuses = ['scheduled', 'confirmed', 'completed', 'cancelled'];
     if (!in_array($new_status, $valid_statuses)) {
         header('Location: ' . $redirect);
         exit;
     }
-    
-    // Update appointment status
-    $stmt = $db->prepare("UPDATE appointments SET status = ?, updated_at = NOW() WHERE id = ? AND branch_id = ?");
+
+    // ================================================================
+    // UPDATE APPOINTMENT STATUS
+    // ================================================================
+    $stmt = $db->prepare("
+        UPDATE appointments 
+        SET status = ?, 
+            updated_at = NOW() 
+        WHERE id = ? AND branch_id = ?
+    ");
     
     if ($stmt->execute([$new_status, $appointment_id, $branch_id])) {
         $message = "Appointment status updated to: " . ucfirst($new_status);
         $message_type = 'success';
         
-        // If status is completed, also update visit status if exists
-        if ($new_status === 'completed') {
+        // ================================================================
+        // IF STATUS IS COMPLETED, UPDATE VISIT STATUS
+        // ================================================================
+        if ($new_status === 'completed' && !empty($appointment['visit_id'])) {
             $stmt = $db->prepare("
                 UPDATE visits 
-                SET status = 'completed', is_completed = 1, completed_at = NOW(), updated_at = NOW()
-                WHERE patient_id = ? AND doctor_id = ? AND branch_id = ?
-                AND status IN ('pending', 'assigned', 'with_doctor')
-                ORDER BY id DESC LIMIT 1
+                SET status = 'completed', 
+                    is_completed = 1, 
+                    completed_at = NOW(), 
+                    updated_at = NOW()
+                WHERE id = ? AND branch_id = ?
             ");
-            $stmt->execute([$appointment['patient_id'], $appointment['doctor_id'], $branch_id]);
+            $stmt->execute([$appointment['visit_id'], $branch_id]);
         }
         
-        // Log activity
+        // ================================================================
+        // IF STATUS IS CONFIRMED, UPDATE VISIT STATUS TO ASSIGNED
+        // ================================================================
+        if ($new_status === 'confirmed' && !empty($appointment['visit_id'])) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET status = 'assigned', 
+                    assigned_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = ? AND branch_id = ?
+            ");
+            $stmt->execute([$appointment['visit_id'], $branch_id]);
+        }
+        
+        // ================================================================
+        // IF STATUS IS CANCELLED, UPDATE VISIT STATUS
+        // ================================================================
+        if ($new_status === 'cancelled' && !empty($appointment['visit_id'])) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET status = 'cancelled', 
+                    updated_at = NOW()
+                WHERE id = ? AND branch_id = ?
+            ");
+            $stmt->execute([$appointment['visit_id'], $branch_id]);
+        }
+        
+        // ================================================================
+        // LOG ACTIVITY - NEW DATABASE
+        // ================================================================
         try {
             $stmt = $db->prepare("
                 INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
                 VALUES (?, ?, 'appointment_status_updated', ?, NOW())
             ");
             $stmt->execute([
-                $_SESSION['user_id'],
+                $user_id,
                 $branch_id,
                 "Appointment ID: $appointment_id status changed to $new_status"
             ]);
-        } catch (Exception $e) {}
+        } catch (Exception $e) {
+            // Silent fail
+        }
         
     } else {
         $message = "Failed to update appointment status!";
@@ -131,453 +186,503 @@ try {
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
+// PROFILE PICTURE URL
+// ================================================================
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/reception_header.php';
 include_once '../../components/reception_sidebar.php';
 ?>
 
-<style>
-    .status-card {
-        background: var(--bg-card);
-        border-radius: 16px;
-        padding: 32px;
-        border: 2px solid var(--border-color);
-        text-align: center;
-        max-width: 600px;
-        margin: 0 auto;
-    }
-    .status-card .status-icon {
-        font-size: 4rem;
-        margin-bottom: 16px;
-    }
-    .status-card .status-icon.success { color: #059669; }
-    .status-card .status-icon.error { color: #DC2626; }
-    .status-card .status-icon.info { color: #0B5ED7; }
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Appointment Status - Braick Dispensary</title>
     
-    .status-card .status-title {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-    .status-card .status-message {
-        font-size: 0.95rem;
-        color: var(--text-secondary);
-        margin: 8px 0 16px;
-    }
-    .status-card .status-details {
-        background: var(--bg-body);
-        border-radius: 12px;
-        padding: 16px;
-        text-align: left;
-        margin: 16px 0;
-    }
-    .status-card .status-details .detail-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 6px 0;
-        border-bottom: 1px solid var(--border-color);
-        font-size: 0.85rem;
-    }
-    .status-card .status-details .detail-row:last-child {
-        border-bottom: none;
-    }
-    .status-card .status-details .detail-label {
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    .status-card .status-details .detail-value {
-        color: var(--text-primary);
-        font-weight: 600;
-    }
-    .status-badge-display {
-        display: inline-block;
-        font-size: 0.75rem;
-        font-weight: 600;
-        padding: 4px 16px;
-        border-radius: 20px;
-    }
-    .status-badge-display.scheduled { background: #E8F0FE; color: #0B5ED7; }
-    .status-badge-display.confirmed { background: #D1FAE5; color: #059669; }
-    .status-badge-display.in-progress { background: #FEF3C7; color: #D97706; }
-    .status-badge-display.completed { background: #D1FAE5; color: #059669; }
-    .status-badge-display.cancelled { background: #FEE2E2; color: #DC2626; }
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
-    [data-theme="dark"] .status-badge-display.scheduled { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .status-badge-display.confirmed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .status-badge-display.in-progress { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .status-badge-display.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .status-badge-display.cancelled { background: #3A1A1A; color: #F87171; }
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 7px 16px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.78rem;
-        transition: all 0.3s;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-    }
-    .btn-blue {
-        background: #0B5ED7;
-        color: white;
-    }
-    .btn-blue:hover {
-        background: #0A4CA8;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    .btn-green {
-        background: #059669;
-        color: white;
-    }
-    .btn-green:hover {
-        background: #047857;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-    }
-    .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
-    
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .justify-between { justify-content: space-between; }
-    .items-center { align-items: center; }
-    .gap-2 { gap: 8px; }
-    .gap-3 { gap: 12px; }
-    .gap-4 { gap: 16px; }
-    .gap-5 { gap: 20px; }
-    .mt-2 { margin-top: 8px; }
-    .mt-4 { margin-top: 16px; }
-    .mt-5 { margin-top: 20px; }
-    .mb-4 { margin-bottom: 16px; }
-    .mb-5 { margin-bottom: 20px; }
-    .ml-2 { margin-left: 8px; }
-    .mr-1 { margin-right: 4px; }
-    .mr-2 { margin-right: 8px; }
-    .flex-1 { flex: 1; }
-    .text-center { text-align: center; }
-    .justify-center { justify-content: center; }
-    
-    .p-4 { padding: 16px; }
-    .rounded-xl { border-radius: 12px; }
-    .bg-green-100 { background: #D1FAE5; }
-    .bg-red-100 { background: #FEE2E2; }
-    .text-green-700 { color: #059669; }
-    .text-red-700 { color: #DC2626; }
-    .border { border: 1px solid; }
-    .border-green-200 { border-color: #6EE7B7; }
-    .border-red-200 { border-color: #FCA5A5; }
-    
-    .page-header {
-        margin-bottom: 20px;
-        padding-bottom: 16px;
-        border-bottom: 2px solid var(--border-color);
-    }
-    .page-title {
-        font-size: 1.4rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-    .page-subtitle {
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-        margin-top: 2px;
-    }
-    .role-badge-display {
-        display: inline-block;
-        font-size: 0.6rem;
-        font-weight: 600;
-        padding: 2px 10px;
-        border-radius: 20px;
-        background: var(--primary-bg);
-        color: var(--primary);
-        text-transform: uppercase;
-    }
-    .branch-badge-display {
-        display: inline-block;
-        font-size: 0.6rem;
-        font-weight: 600;
-        padding: 2px 10px;
-        border-radius: 20px;
-        background: var(--success-bg);
-        color: var(--success);
-    }
-    
-    /* Top Navigation */
-    .top-nav {
-        background: var(--bg-card);
-        border-bottom: 2px solid var(--border-color);
-        padding: 10px 24px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        position: sticky;
-        top: 0;
-        z-index: 100;
-        height: 60px;
-    }
-    .icon-btn {
-        background: transparent;
-        border: none;
-        color: var(--text-secondary);
-        cursor: pointer;
-        padding: 6px 8px;
-        border-radius: 8px;
-        transition: all 0.3s;
-        position: relative;
-    }
-    .icon-btn:hover {
-        background: var(--bg-body);
-        color: var(--text-primary);
-    }
-    .avatar {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s;
-    }
-    .avatar:hover {
-        border-color: var(--primary);
-    }
-    .datetime {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        white-space: nowrap;
-    }
-    .dark-toggle-btn {
-        background: var(--bg-body);
-        border: 2px solid var(--border-color);
-        color: var(--text-secondary);
-        padding: 5px 12px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .dark-toggle-btn:hover {
-        background: var(--primary);
-        color: white;
-        border-color: var(--primary);
-    }
-    .notif-dot {
-        position: absolute;
-        top: 4px;
-        right: 4px;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        border: 2px solid var(--bg-card);
-    }
-    .notif-dot.has-notif {
-        background: #EF4444;
-        animation: pulse-dot 1.5s infinite;
-    }
-    .notif-dot.no-notif {
-        background: transparent;
-    }
-    @keyframes pulse-dot {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.4; transform: scale(0.8); }
-    }
-    
-    /* Search */
-    .search-wrapper {
-        display: flex;
-        align-items: center;
-        background: var(--bg-body);
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        transition: all 0.3s;
-        flex: 1;
-        max-width: 400px;
-    }
-    .search-wrapper:focus-within {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
-    }
-    .search-wrapper input {
-        border: none;
-        background: transparent;
-        padding: 8px 12px;
-        font-size: 0.85rem;
-        color: var(--text-primary);
-        width: 100%;
-        outline: none;
-        font-family: 'Inter', sans-serif;
-    }
-    .search-wrapper input::placeholder {
-        color: var(--text-secondary);
-    }
-    .search-btn {
-        background: var(--primary);
-        color: white;
-        border: none;
-        padding: 6px 14px;
-        border-radius: 0 8px 8px 0;
-        font-size: 0.75rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s;
-        font-family: 'Inter', sans-serif;
-        white-space: nowrap;
-    }
-    .search-btn:hover {
-        background: var(--primary-dark);
-    }
-    
-    .toast-custom {
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        padding: 12px 18px;
-        border-radius: 12px;
-        z-index: 999;
-        max-width: 360px;
-        transform: translateY(100px);
-        opacity: 0;
-        transition: all 0.4s ease;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        color: white;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.2);
-    }
-    .toast-custom.show {
-        transform: translateY(0);
-        opacity: 1;
-    }
-    .toast-custom.success { background: #059669; }
-    .toast-custom.error { background: #EF4444; }
-    .toast-custom.info { background: #0B5ED7; }
-    .toast-custom.warning { background: #D97706; }
-    
-    .footer {
-        padding: 14px 0;
-        border-top: 2px solid var(--border-color);
-        margin-top: 20px;
-        text-align: center;
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    .footer .footer-brand { color: var(--primary); font-weight: 600; }
-    .text-gray-300 { color: #D1D5DB; }
-    .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
-    .lg\:hidden { display: none; }
-    
-    @media (max-width: 1024px) {
-        .lg\:hidden { display: block; }
-        .top-nav { padding: 8px 16px; }
-        .search-wrapper { max-width: 100%; }
-        .datetime { display: none; }
-        .main-content { margin-left: 0; }
-    }
-    
-    @media (max-width: 768px) {
-        .status-card { padding: 20px; }
-        .status-card .status-icon { font-size: 3rem; }
-        .status-card .status-title { font-size: 1.2rem; }
-        .top-nav { padding: 6px 12px; height: 52px; }
-        .page-title { font-size: 1.1rem; }
-        .search-wrapper { max-width: 100%; }
-        .search-wrapper input { font-size: 0.75rem; padding: 6px 10px; }
-        .search-btn { font-size: 0.65rem; padding: 4px 10px; }
-        .flex-wrap { flex-direction: column; align-items: flex-start; }
-        .status-card .status-details .detail-row { flex-direction: column; gap: 2px; }
-    }
-</style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="icon-btn lg:hidden">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
+    <style>
+        /* ================================================================
+           ROOT VARIABLES
+           ================================================================ */
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --radius: 10px;
+            --radius-lg: 14px;
+            --transition: all 0.3s ease;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --bg-nav: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+        }
         
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --bg-nav: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+        }
         
-        <span class="datetime" id="currentDateTime"></span>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
         
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        <a href="profile.php">
-            <img src="<?= $logo_path ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= substr($full_name, 0, 1) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+        
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 28px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .page-header .page-title {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .page-title i {
+            font-size: 2rem;
+            opacity: 0.9;
+        }
+        
+        .page-header .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            backdrop-filter: blur(4px);
+        }
+        
+        .page-header .branch-tag {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            backdrop-filter: blur(4px);
+        }
+        
+        .page-header .btn-outline-light {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        .page-header .new-db-tag {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.7);
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.08);
+            letter-spacing: 0.03em;
+        }
+        
+        /* ================================================================
+           STATUS CARD
+           ================================================================ */
+        .status-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 32px;
+            border: 2px solid var(--border-color);
+            text-align: center;
+            max-width: 600px;
+            margin: 0 auto;
+            transition: var(--transition);
+        }
+        
+        .status-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .status-card .status-icon {
+            font-size: 4rem;
+            margin-bottom: 16px;
+        }
+        
+        .status-card .status-icon.success { color: var(--success); }
+        .status-card .status-icon.error { color: var(--danger); }
+        .status-card .status-icon.info { color: var(--primary); }
+        .status-card .status-icon.warning { color: var(--warning); }
+        
+        .status-card .status-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        
+        .status-card .status-message {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            margin: 8px 0 16px;
+        }
+        
+        .status-card .status-details {
+            background: var(--bg-body);
+            border-radius: var(--radius);
+            padding: 16px;
+            text-align: left;
+            margin: 16px 0;
+        }
+        
+        .status-card .status-details .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.85rem;
+        }
+        
+        .status-card .status-details .detail-row:last-child {
+            border-bottom: none;
+        }
+        
+        .status-card .status-details .detail-label {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .status-card .status-details .detail-value {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+        
+        /* ================================================================
+           STATUS BADGES
+           ================================================================ */
+        .status-badge-display {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 4px 16px;
+            border-radius: 20px;
+        }
+        
+        .status-badge-display.scheduled { background: #E8F0FE; color: #0B5ED7; }
+        .status-badge-display.confirmed { background: #D1FAE5; color: #059669; }
+        .status-badge-display.completed { background: #D1FAE5; color: #059669; }
+        .status-badge-display.cancelled { background: #FEE2E2; color: #DC2626; }
+        
+        [data-theme="dark"] .status-badge-display.scheduled { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .status-badge-display.confirmed { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .status-badge-display.completed { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .status-badge-display.cancelled { background: #3A1A1A; color: #F87171; }
+        
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 16px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.78rem;
+            transition: var(--transition);
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-sm {
+            padding: 3px 10px;
+            font-size: 0.7rem;
+            border-radius: 6px;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 18px;
+            border-radius: var(--radius);
+            z-index: 999;
+            max-width: 380px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+            font-size: 0.85rem;
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        .footer .new-db-footer {
+            color: var(--success);
+            font-weight: 600;
+            font-size: 0.65rem;
+        }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .main-content { margin-left: 0; padding: 16px; }
+        }
+        
+        @media (max-width: 768px) {
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .status-card { padding: 20px; }
+            .status-card .status-icon { font-size: 3rem; }
+            .status-card .status-title { font-size: 1.2rem; }
+            .status-card .status-details .detail-row { flex-direction: column; gap: 2px; }
+            .btn { width: 100%; justify-content: center; }
+            .flex-wrap { flex-direction: column; align-items: stretch; }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+            .page-header .page-title { font-size: 1.1rem; }
+            .status-card { padding: 14px; }
+            .status-card .status-icon { font-size: 2.5rem; }
+        }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+        }
+    </style>
+</head>
+<body>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3">
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-calendar-check mr-2" style="color: var(--primary);"></i> Appointment Status
-                <span class="role-badge-display ml-2">RECEPTION</span>
+                <i class="fas fa-calendar-check"></i>
+                Appointment Status
+                <span class="role-badge-display">RECEPTION</span>
+                <span class="new-db-tag">
+                    <i class="fas fa-database"></i> New DB
+                </span>
             </h1>
             <p class="page-subtitle">
                 Update appointment status
+                <span class="branch-tag">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
+                </span>
             </p>
         </div>
-        <div>
-            <a href="<?= $redirect ?>" class="btn btn-outline btn-sm">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="<?= $redirect ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
-    <!-- Message -->
+    <!-- ================================================================ -->
+    <!-- MESSAGE -->
+    <!-- ================================================================ -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= htmlspecialchars($message) ?>
         </div>
@@ -586,7 +691,7 @@ include_once '../../components/reception_sidebar.php';
     <!-- ================================================================ -->
     <!-- STATUS CARD -->
     <!-- ================================================================ -->
-    <div class="status-card">
+    <div class="status-card animate-fade-in-up">
         <div class="status-icon <?= $message_type === 'success' ? 'success' : ($message_type === 'error' ? 'error' : 'info') ?>">
             <?php if ($message_type === 'success'): ?>
                 <i class="fas fa-check-circle"></i>
@@ -599,9 +704,9 @@ include_once '../../components/reception_sidebar.php';
         
         <h2 class="status-title">
             <?php if ($message_type === 'success'): ?>
-                Status Updated Successfully!
+                Status Updated Successfully! ✅
             <?php elseif ($message_type === 'error'): ?>
-                Update Failed
+                Update Failed ❌
             <?php else: ?>
                 Appointment Details
             <?php endif; ?>
@@ -609,7 +714,9 @@ include_once '../../components/reception_sidebar.php';
         
         <p class="status-message"><?= htmlspecialchars($message) ?></p>
         
-        <!-- Appointment Details -->
+        <!-- ================================================================ -->
+        <!-- APPOINTMENT DETAILS - NEW DATABASE -->
+        <!-- ================================================================ -->
         <?php if (isset($appointment)): ?>
         <div class="status-details">
             <div class="detail-row">
@@ -618,12 +725,18 @@ include_once '../../components/reception_sidebar.php';
             </div>
             <div class="detail-row">
                 <span class="detail-label">Patient</span>
-                <span class="detail-value"><?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?></span>
+                <span class="detail-value"><?= htmlspecialchars($appointment['patient_name'] ?? 'N/A') ?></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Doctor</span>
-                <span class="detail-value">Dr. <?= htmlspecialchars($doctor['full_name'] ?? 'N/A') ?></span>
+                <span class="detail-value">Dr. <?= htmlspecialchars($appointment['doctor_name'] ?? 'N/A') ?></span>
             </div>
+            <?php if (!empty($appointment['doctor_specialty'])): ?>
+                <div class="detail-row">
+                    <span class="detail-label">Specialty</span>
+                    <span class="detail-value"><?= htmlspecialchars($appointment['doctor_specialty']) ?></span>
+                </div>
+            <?php endif; ?>
             <div class="detail-row">
                 <span class="detail-label">Date & Time</span>
                 <span class="detail-value"><?= date('F d, Y h:i A', strtotime($appointment['appointment_date'])) ?></span>
@@ -631,6 +744,10 @@ include_once '../../components/reception_sidebar.php';
             <div class="detail-row">
                 <span class="detail-label">Purpose</span>
                 <span class="detail-value"><?= htmlspecialchars($appointment['purpose'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Visit Type</span>
+                <span class="detail-value"><?= ucfirst(htmlspecialchars($appointment['visit_type'] ?? 'N/A')) ?></span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Branch</span>
@@ -644,19 +761,27 @@ include_once '../../components/reception_sidebar.php';
                     </span>
                 </span>
             </div>
+            <?php if (!empty($appointment['notes'])): ?>
+                <div class="detail-row">
+                    <span class="detail-label">Notes</span>
+                    <span class="detail-value"><?= htmlspecialchars($appointment['notes']) ?></span>
+                </div>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
         
-        <!-- Action Buttons -->
+        <!-- ================================================================ -->
+        <!-- ACTION BUTTONS -->
+        <!-- ================================================================ -->
         <div class="flex flex-wrap gap-2 justify-center mt-4">
-            <a href="<?= $redirect ?>" class="btn btn-blue">
+            <a href="<?= $redirect ?>" class="btn btn-primary">
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
             <a href="appointments.php" class="btn btn-outline">
                 <i class="fas fa-calendar-check"></i> View All Appointments
             </a>
             <?php if ($message_type === 'success' && isset($appointment['patient_id'])): ?>
-                <a href="view_patient.php?id=<?= $appointment['patient_id'] ?>" class="btn btn-green">
+                <a href="view_patient.php?id=<?= $appointment['patient_id'] ?>" class="btn btn-success">
                     <i class="fas fa-user"></i> View Patient
                 </a>
             <?php endif; ?>
@@ -672,7 +797,9 @@ include_once '../../components/reception_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Appointment Status
             <span class="text-gray-300 mx-2">|</span>
-            <strong><?= htmlspecialchars($full_name) ?></strong>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="new-db-footer"><i class="fas fa-database"></i> New DB</span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -684,13 +811,16 @@ include_once '../../components/reception_sidebar.php';
 <!-- TOAST -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <i class="fas fa-info-circle"></i>
     <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
     // ================================================================
     // DARK MODE
@@ -728,13 +858,15 @@ include_once '../../components/reception_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', function() {
+            if (sidebar) sidebar.classList.toggle('open');
+        });
+    }
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
@@ -751,8 +883,14 @@ include_once '../../components/reception_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) el.textContent = dateStr + ' • ' + timeStr;
+        var currentDateTime = document.getElementById('currentDateTime');
+        if (currentDateTime) {
+            currentDateTime.textContent = dateStr + ' • ' + timeStr;
+        }
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -770,10 +908,14 @@ include_once '../../components/reception_sidebar.php';
         }
     }
     
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
+    if (searchBtn) {
+        searchBtn.addEventListener('click', performSearch);
+    }
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+    }
 
     // ================================================================
     // TOAST
@@ -784,6 +926,7 @@ include_once '../../components/reception_sidebar.php';
         var toastMessage = document.getElementById('toastMessage');
         
         if (!toast) return;
+        
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
@@ -799,11 +942,30 @@ include_once '../../components/reception_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c📅 Braick - Appointment Status', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
-    console.log('%c📋 Appointment ID: <?= $appointment_id ?>', 'font-size:13px; color:#059669;');
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            if (searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
+        }
+        if (e.key === 'Escape') {
+            window.location.href = '<?= $redirect ?>';
+        }
+    });
+
+    console.log('%c📅 Braick - Appointment Status (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Tables: appointments, patients, users, visits, activity_logs', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Appointment ID: <?= $appointment_id ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 New Status: <?= ucfirst($new_status ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🔄 Status: scheduled → confirmed → completed | cancelled', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

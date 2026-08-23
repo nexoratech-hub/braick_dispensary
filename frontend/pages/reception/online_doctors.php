@@ -4,6 +4,7 @@
 // RECEPTION - ONLINE DOCTORS LIST (BRANCH FILTERED)
 // SHOWS BOTH ONLINE AND OFFLINE DOCTORS
 // WITH AUTO-UPDATE (3 SECONDS) - NO REFRESH NEEDED
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -71,7 +72,7 @@ try {
     $db = Database::getInstance()->getConnection();
     
     // ================================================================
-    // GET ALL DOCTORS IN THIS BRANCH
+    // GET ALL DOCTORS IN THIS BRANCH - FROM NEW DB
     // ================================================================
     $query = "
         SELECT u.*, b.name as branch_name 
@@ -1027,6 +1028,11 @@ include_once '../../components/reception_sidebar.php';
                     <i class="fas fa-user-md"></i>
                     <span id="totalCountDisplay"><?= $total_doctors ?></span> Total
                 </span>
+                
+                <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.2);">
+                    <i class="fas fa-database"></i>
+                    <span style="color:#34D399;">DB: dispensary_db</span>
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1524,6 +1530,7 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c👨‍⚕️ Total: <?= $total_doctors ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔄 Auto-update every 3 seconds - No refresh needed', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Shows both Online and Offline doctors', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🗄️ Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

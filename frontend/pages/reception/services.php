@@ -5,7 +5,8 @@
 // AUTO BRANCH ASSIGNMENT - NEWEST FIRST
 // WITH LOGIN PROTECTION
 // WITH MONEY FORMAT (1,000,000,000)
-// BRAICK DISPENSARY
+// FIXED: Only CONSULTATION category for reception
+// BRAICK DISPENSARY - USING NEW DATABASE: dispensary_db
 // ================================================================
 
 // ================================================================
@@ -42,7 +43,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 // ================================================================
 // GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'];
+$user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'User';
 $user_role = $_SESSION['role'] ?? 'reception';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
@@ -58,7 +59,7 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 // ================================================================
-// DATABASE CONNECTION
+// DATABASE CONNECTION - USING NEW DATABASE
 // ================================================================
 try {
     $db = Database::getInstance()->getConnection();
@@ -67,11 +68,12 @@ try {
 }
 
 // ================================================================
-// GET ALL CATEGORIES FOR DROPDOWN
+// ✅ GET CATEGORIES - ONLY CONSULTATION FOR RECEPTION
 // ================================================================
 $categories = [];
 try {
-    $stmt = $db->prepare("SELECT id, category_name FROM service_categories ORDER BY category_name");
+    // Reception ONLY sees Consultation category
+    $stmt = $db->prepare("SELECT id, category_name FROM service_categories WHERE category_name = 'Consultation' ORDER BY category_name");
     $stmt->execute();
     $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
@@ -156,7 +158,7 @@ if (isset($_GET['view']) && is_numeric($_GET['view'])) {
 }
 
 // ================================================================
-// GET ALL SERVICES WITH CATEGORY NAMES (Filtered by user's branch)
+// ✅ GET ALL SERVICES - FILTERED BY BRANCH, ONLY CONSULTATION CATEGORY
 // ORDER BY NEWEST FIRST (created_at DESC)
 // ================================================================
 $services = [];
@@ -170,7 +172,8 @@ try {
         LEFT JOIN service_categories c ON s.category_id = c.id
         LEFT JOIN branches b ON s.branch_id = b.id
         LEFT JOIN users u ON s.created_by = u.id
-        WHERE s.branch_id = ? OR s.branch_id IS NULL
+        WHERE (s.branch_id = ? OR s.branch_id IS NULL)
+        AND c.category_name = 'Consultation'
         ORDER BY s.created_at DESC, s.id DESC
     ");
     $stmt->execute([$user_branch_id]);
@@ -186,8 +189,11 @@ $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
-} catch (Exception $e) {}
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $unread_notifications = $result['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // PROFILE PICTURE URL
@@ -1281,10 +1287,13 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <i class="fas fa-concierge-bell"></i>
                 Services Management
                 <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
+                <span style="background:rgba(255,255,255,0.15);color:white;padding:2px 12px;border-radius:12px;font-size:0.6rem;">
+                    <i class="fas fa-tag"></i> Consultation Only
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-list"></i>
-                Manage services for <strong><?= htmlspecialchars($user_branch_name) ?></strong>
+                Manage <strong>Consultation</strong> services for <strong><?= htmlspecialchars($user_branch_name) ?></strong>
                 <span class="separator">|</span>
                 Total: <strong><?= count($services) ?></strong> services
             </p>
@@ -1337,7 +1346,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-plus title-blue"></i>
-                Add New Service
+                Add New Consultation Service
             </h3>
             <span class="text-sm text-gray-400">Fill in the details below</span>
         </div>
@@ -1346,6 +1355,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <i class="fas fa-store"></i>
             <strong>Branch:</strong> <?= htmlspecialchars($user_branch_name) ?>
             <span class="text-xs text-gray-500">(Auto-assigned to your branch)</span>
+            <span style="margin-left:auto;" class="text-xs text-green-600">
+                <i class="fas fa-check-circle"></i> Category: Consultation
+            </span>
         </div>
         
         <form method="POST" action="" style="margin-top:16px;" id="serviceForm">
@@ -1362,11 +1374,17 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     <select name="category_id" class="form-control" required>
                         <option value="">-- Select Category --</option>
                         <?php foreach ($categories as $cat): ?>
-                            <option value="<?= $cat['id'] ?>">
+                            <option value="<?= $cat['id'] ?>" selected>
                                 <?= htmlspecialchars($cat['category_name']) ?>
                             </option>
                         <?php endforeach; ?>
+                        <?php if (empty($categories)): ?>
+                            <option value="" disabled>No categories available</option>
+                        <?php endif; ?>
                     </select>
+                    <small class="text-xs text-gray-400">
+                        <i class="fas fa-info-circle"></i> Reception can only add Consultation services
+                    </small>
                 </div>
             </div>
             
@@ -1414,7 +1432,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-table title-blue"></i>
-                All Services
+                All Consultation Services
                 <span class="text-sm font-normal text-gray-400" id="serviceCount">(<?= count($services) ?> services)</span>
                 <span class="text-xs text-gray-400">(Newest first)</span>
             </h3>
@@ -1456,7 +1474,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                 </td>
                                 <td>
                                     <span class="badge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:12px;font-size:0.65rem;">
-                                        <?= htmlspecialchars($service['category_name'] ?? 'Uncategorized') ?>
+                                        <i class="fas fa-stethoscope"></i> <?= htmlspecialchars($service['category_name'] ?? 'Consultation') ?>
                                     </span>
                                 </td>
                                 <td>
@@ -1484,8 +1502,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             <td colspan="7">
                                 <div class="empty-state">
                                     <i class="fas fa-concierge-bell"></i>
-                                    <p>No services found</p>
-                                    <p class="text-sm text-gray-400">Click "Add Service" to create one</p>
+                                    <p>No consultation services found</p>
+                                    <p class="text-sm text-gray-400">Click "Add Service" to create a consultation service</p>
                                 </div>
                             </td>
                         </tr>
@@ -1521,7 +1539,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 </div>
                 <div class="detail-row">
                     <span class="detail-label">Category</span>
-                    <span class="detail-value"><?= htmlspecialchars($view_service['category_name'] ?? 'Uncategorized') ?></span>
+                    <span class="detail-value">
+                        <span class="badge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:12px;font-size:0.65rem;">
+                            <i class="fas fa-stethoscope"></i> <?= htmlspecialchars($view_service['category_name'] ?? 'Consultation') ?>
+                        </span>
+                    </span>
                 </div>
                 <div class="detail-row">
                     <span class="detail-label">Description</span>
@@ -1572,7 +1594,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Services Management
+            Consultation Services
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1778,11 +1800,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
-        a.download = 'services_export_' + new Date().toISOString().slice(0,10) + '.csv';
+        a.download = 'consultation_services_export_' + new Date().toISOString().slice(0,10) + '.csv';
         a.click();
         URL.revokeObjectURL(url);
         
-        showToast('Export', 'Services exported successfully!', 'success');
+        showToast('Export', 'Consultation services exported successfully!', 'success');
     }
 
     // ================================================================
@@ -1829,13 +1851,15 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
     });
 
-    console.log('%c🛠️ Services Management (With Login Protection)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🛠️ Consultation Services Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Services: <?= count($services) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Money Format: 1,000,000,000 with commas', 'font-size:13px; color:#7C3AED;');
     console.log('%c💵 Price input auto-formats with commas', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📌 Only CONSULTATION category visible to Reception', 'font-size:13px; color:#D97706;');
+    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

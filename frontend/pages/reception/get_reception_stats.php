@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/get_reception_stats.php
 // RETURNS JSON DATA FOR RECEPTION DASHBOARD AUTO-UPDATE
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -47,7 +48,7 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_role = $_SESSION['role'] ?? 'reception';
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -68,19 +69,23 @@ try {
 $today = date('Y-m-d');
 
 // ================================================================
-// FETCH ALL STATISTICS
+// FETCH ALL STATISTICS - NEW DATABASE
 // ================================================================
 
-// 1. Today's Patients - Pending
+// ================================================================
+// 1. Today's Patients - Pending (from visits table)
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT patient_id) as count 
     FROM visits 
-    WHERE branch_id = ? AND DATE(created_at) = ? AND status IN ('pending', 'assigned')
+    WHERE branch_id = ? AND DATE(created_at) = ? AND status IN ('pending', 'assigned', 'with_doctor')
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_patients_pending = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 2. Today's Patients - Completed
+// ================================================================
+// 2. Today's Patients - Completed (from visits table)
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT patient_id) as count 
     FROM visits 
@@ -88,18 +93,21 @@ $stmt = $db->prepare("
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_patients_completed = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$today_patients_total = $today_patients_pending + $today_patients_completed;
 
+// ================================================================
 // 3. Today's Visits - Pending
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM visits 
-    WHERE branch_id = ? AND DATE(created_at) = ? AND status IN ('pending', 'assigned')
+    WHERE branch_id = ? AND DATE(created_at) = ? AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'lab_completed', 'prescribed')
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_visits_pending = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// ================================================================
 // 4. Today's Visits - Completed
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM visits 
@@ -107,19 +115,22 @@ $stmt = $db->prepare("
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_visits_completed = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$today_visits_total = $today_visits_pending + $today_visits_completed;
 
-// 5. Today's Appointments - Pending
+// ================================================================
+// 5. Today's Appointments - Pending (scheduled, confirmed)
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM appointments 
     WHERE branch_id = ? AND DATE(appointment_date) = ? 
-    AND status IN ('scheduled', 'pending', 'confirmed')
+    AND status IN ('scheduled', 'confirmed', 'pending')
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_appointments_pending = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// ================================================================
 // 6. Today's Appointments - Completed
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM appointments 
@@ -127,33 +138,53 @@ $stmt = $db->prepare("
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_appointments_completed = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-$today_appointments_total = $today_appointments_pending + $today_appointments_completed;
 
-// 7. Total Appointments
+// ================================================================
+// 7. Today's Appointments - Cancelled
+// ================================================================
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM appointments 
+    WHERE branch_id = ? AND DATE(appointment_date) = ? AND status = 'cancelled'
+");
+$stmt->execute([$user_branch_id, $today]);
+$today_appointments_cancelled = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// ================================================================
+// 8. Total Appointments
+// ================================================================
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ?");
 $stmt->execute([$user_branch_id]);
 $total_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 8. Total Patients
+// ================================================================
+// 9. Total Patients
+// ================================================================
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
 $stmt->execute([$user_branch_id]);
 $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 9. Total Visits
+// ================================================================
+// 10. Total Visits
+// ================================================================
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ?");
 $stmt->execute([$user_branch_id]);
 $total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 10. Pending Appointments
+// ================================================================
+// 11. Pending Appointments (all time)
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM appointments 
-    WHERE branch_id = ? AND status IN ('scheduled', 'pending')
+    WHERE branch_id = ? AND status IN ('scheduled', 'confirmed', 'pending')
 ");
 $stmt->execute([$user_branch_id]);
 $pending_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 11. Online Doctors
+// ================================================================
+// 12. Online Doctors
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM users 
@@ -162,7 +193,9 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $online_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 12. Online Doctors List
+// ================================================================
+// 13. Online Doctors List
+// ================================================================
 $stmt = $db->prepare("
     SELECT id, full_name, specialty 
     FROM users 
@@ -172,20 +205,29 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $online_doctors_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 13. Today's Appointments List
+// ================================================================
+// 14. Today's Appointments List
+// ================================================================
 $stmt = $db->prepare("
-    SELECT a.*, p.full_name as patient_name, p.patient_id, u.full_name as doctor_name 
+    SELECT 
+        a.*,
+        p.full_name as patient_name,
+        p.patient_id,
+        u.full_name as doctor_name,
+        u.specialty as doctor_specialty
     FROM appointments a
     JOIN patients p ON a.patient_id = p.id
-    JOIN users u ON a.doctor_id = u.id
+    LEFT JOIN users u ON a.doctor_id = u.id
     WHERE a.branch_id = ? AND DATE(a.appointment_date) = ?
-    ORDER BY a.appointment_date
-    LIMIT 10
+    ORDER BY a.appointment_date ASC
+    LIMIT 15
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_appointments_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 14. Recent Patients
+// ================================================================
+// 15. Recent Patients
+// ================================================================
 $stmt = $db->prepare("
     SELECT id, full_name, patient_id, phone, created_at 
     FROM patients 
@@ -196,7 +238,29 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $recent_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 15. Recent Activities
+// ================================================================
+// 16. Today's Visits List
+// ================================================================
+$stmt = $db->prepare("
+    SELECT 
+        v.*,
+        p.full_name as patient_name,
+        p.patient_id,
+        u.full_name as doctor_name
+    FROM visits v
+    JOIN patients p ON v.patient_id = p.id
+    LEFT JOIN users u ON v.doctor_id = u.id
+    WHERE v.branch_id = ? AND DATE(v.created_at) = ?
+    ORDER BY v.created_at DESC
+    LIMIT 10
+");
+$stmt->execute([$user_branch_id, $today]);
+$today_visits_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// 17. Recent Activities - NEW DATABASE (activity_logs)
+// ================================================================
+$recent_activities = [];
 try {
     $stmt = $db->prepare("
         SELECT action, details, created_at 
@@ -212,16 +276,40 @@ try {
 }
 
 // ================================================================
+// 18. Unread Notifications
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
+// 19. Pending Prescriptions (for pharmacy reference)
+// ================================================================
+$pending_prescriptions = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
+    $stmt->execute([$user_branch_id]);
+    $pending_prescriptions = $stmt->fetch()['count'] ?? 0;
+} catch (Exception $e) {
+    $pending_prescriptions = 0;
+}
+
+// ================================================================
 // CREATE DATA HASH FOR CHANGE DETECTION
 // ================================================================
 $data_array = [
-    'today_patients_total' => $today_patients_total,
+    'today_patients_total' => $today_patients_pending + $today_patients_completed,
     'today_patients_pending' => $today_patients_pending,
     'today_patients_completed' => $today_patients_completed,
-    'today_visits_total' => $today_visits_total,
+    'today_visits_total' => $today_visits_pending + $today_visits_completed,
     'today_visits_pending' => $today_visits_pending,
     'today_visits_completed' => $today_visits_completed,
-    'today_appointments_total' => $today_appointments_total,
+    'today_appointments_total' => $today_appointments_pending + $today_appointments_completed,
     'today_appointments_pending' => $today_appointments_pending,
     'today_appointments_completed' => $today_appointments_completed,
     'total_appointments' => $total_appointments,
@@ -229,7 +317,9 @@ $data_array = [
     'total_visits' => $total_visits,
     'pending_appointments' => $pending_appointments,
     'online_doctors' => $online_doctors,
-    'appointments_count' => count($today_appointments_list)
+    'appointments_count' => count($today_appointments_list),
+    'unread_notifications' => $unread_notifications,
+    'pending_prescriptions' => $pending_prescriptions
 ];
 
 $data_hash = md5(json_encode($data_array));
@@ -243,19 +333,20 @@ echo json_encode([
     'hash' => $data_hash,
     'data' => [
         'today_patients' => [
-            'total' => $today_patients_total,
+            'total' => $today_patients_pending + $today_patients_completed,
             'pending' => $today_patients_pending,
             'completed' => $today_patients_completed
         ],
         'today_visits' => [
-            'total' => $today_visits_total,
+            'total' => $today_visits_pending + $today_visits_completed,
             'pending' => $today_visits_pending,
             'completed' => $today_visits_completed
         ],
         'today_appointments' => [
-            'total' => $today_appointments_total,
+            'total' => $today_appointments_pending + $today_appointments_completed,
             'pending' => $today_appointments_pending,
             'completed' => $today_appointments_completed,
+            'cancelled' => $today_appointments_cancelled,
             'list' => $today_appointments_list
         ],
         'total_appointments' => $total_appointments,
@@ -265,7 +356,10 @@ echo json_encode([
         'online_doctors' => $online_doctors,
         'online_doctors_list' => $online_doctors_list,
         'recent_patients' => $recent_patients,
+        'today_visits_list' => $today_visits_list,
         'recent_activities' => $recent_activities,
+        'unread_notifications' => $unread_notifications,
+        'pending_prescriptions' => $pending_prescriptions,
         'timestamp' => date('Y-m-d H:i:s')
     ]
 ]);

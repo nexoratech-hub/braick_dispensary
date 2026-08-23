@@ -2,39 +2,114 @@
 // ================================================================
 // FILE: frontend/components/reception_header.php
 // SHARED HEADER - RECEPTION & CASHIER
+// ✅ USING NEW DATABASE: dispensary_db
 // WITH SEARCH BAR, CLOCK, DARK MODE, PROFILE
 // BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
-// SESSION - Default to reception.rose (Rose Mwangi)
+// START SESSION (if not already started)
 // ================================================================
-if (!isset($_SESSION['user_id'])) {
-    $_SESSION['user_id'] = 6;  // reception.rose
-    $_SESSION['full_name'] = 'Rose Mwangi';
-    $_SESSION['role'] = 'reception';
-    $_SESSION['branch_id'] = 1;
-    $_SESSION['branch_name'] = 'Dodoma';
-    $_SESSION['username'] = 'reception.rose';
-    $_SESSION['is_admin'] = false;
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// ================================================================
+// ✅ CHECK IF USER IS LOGGED IN - NO DEFAULT USER
+// ================================================================
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
+    // Redirect to login page
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
+}
+
+// ================================================================
+// CHECK IF USER HAS ACCESS (Reception, Cashier or Admin)
+// ================================================================
+$allowed_roles = ['reception', 'cashier', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
+    $role = $_SESSION['role'];
+    switch ($role) {
+        case 'doctor': header('Location: /dispensary_system/frontend/pages/doctor/dashboard.php'); break;
+        case 'pharmacy': header('Location: /dispensary_system/frontend/pages/pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: /dispensary_system/frontend/pages/laboratory/dashboard.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
+    }
+    exit;
+}
+
+// ================================================================
+// GET USER DATA FROM SESSION
+// ================================================================
+$user_id = $_SESSION['user_id'] ?? 0;
+$user_full_name = $_SESSION['full_name'] ?? 'Staff';
+$user_role = $_SESSION['role'] ?? 'reception';
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$user_username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// ================================================================
+if ($user_id <= 0) {
+    if (isset($user_username) && !empty($user_username)) {
+        require_once __DIR__ . '/../../backend/config/database.php';
+        try {
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, email, phone, profile_pic FROM users WHERE username = ? AND status = 'active'");
+            $stmt->execute([$user_username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['full_name'] = $user['full_name'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['branch_id'] = $user['branch_id'];
+                $_SESSION['email'] = $user['email'] ?? '';
+                $_SESSION['phone'] = $user['phone'] ?? '';
+                $_SESSION['profile_pic'] = $user['profile_pic'] ?? '';
+                $user_id = $user['id'];
+                $user_full_name = $user['full_name'];
+                $user_role = $user['role'];
+                $user_branch_id = $user['branch_id'];
+                $profile_pic = $user['profile_pic'] ?? '';
+                
+                // Get branch name
+                $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+                $stmt->execute([$user_branch_id]);
+                $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($branch) {
+                    $_SESSION['branch_name'] = $branch['name'];
+                    $user_branch_name = $branch['name'];
+                }
+            }
+        } catch (Exception $e) {
+            // Fallback to session values
+        }
+    }
+}
+
+// If still no user_id, redirect to login
+if ($user_id <= 0) {
+    header('Location: /dispensary_system/frontend/pages/login.php');
+    exit;
 }
 
 // ================================================================
 // CHECK IF USER IS ADMIN
 // ================================================================
-$is_admin = ($_SESSION['role'] === 'admin');
+$is_admin = ($user_role === 'admin');
 
 // ================================================================
 // GET USER BRANCH
 // ================================================================
-$user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_full_name = $_SESSION['full_name'] ?? 'Rose Mwangi';
+$user_full_name = $_SESSION['full_name'] ?? 'Staff';
 
 // ================================================================
 // BRANCH FILTER - Admin sees all, others see only their branch
 // ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 if (!$is_admin) {
     $selected_branch_id = $user_branch_id;
@@ -64,7 +139,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 // ================================================================
 // GET PROFILE PICTURE FROM SESSION
 // ================================================================
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -83,16 +157,15 @@ if (empty($page_title) || $page_title == '') {
 // GET UNREAD NOTIFICATIONS
 // ================================================================
 $unread_notifications = 0;
-if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0 && isset($db) && $db !== null) {
+if ($user_id > 0) {
     try {
-        // Check if notifications table exists
-        $stmt = $db->prepare("SHOW TABLES LIKE 'notifications'");
-        $stmt->execute();
-        if ($stmt->rowCount() > 0) {
-            $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-            $stmt->execute([$_SESSION['user_id']]);
-            $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-        }
+        require_once __DIR__ . '/../../backend/config/database.php';
+        $db = Database::getInstance()->getConnection();
+        
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $unread_notifications = $result['total'] ?? 0;
     } catch (Exception $e) {
         $unread_notifications = 0;
     }
@@ -229,7 +302,7 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             border: 2px solid var(--border-color);
             transition: all 0.3s;
             flex: 1;
-            max-width: 500px;
+            max-width: 350px; /* ✅ PUNGEXEZA WIDTH */
         }
         
         .top-nav .search-wrapper:focus-within {
@@ -242,23 +315,24 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             background: transparent;
             padding: 8px 14px;
             width: 100%;
-            font-size: 0.85rem;
+            font-size: 0.82rem;
             outline: none;
             color: var(--text-primary);
         }
         
         .top-nav .search-wrapper input::placeholder {
             color: var(--text-secondary);
+            font-size: 0.78rem;
         }
         
         .top-nav .search-wrapper .search-btn {
             background: var(--primary);
             color: white;
             border: none;
-            padding: 8px 16px;
+            padding: 6px 14px;
             border-radius: 0 10px 10px 0;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: 0.78rem;
             transition: all 0.3s;
             white-space: nowrap;
         }
@@ -272,11 +346,11 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             border-radius: 10px;
             padding: 6px 12px;
             background: var(--bg-card);
-            font-size: 0.82rem;
+            font-size: 0.78rem;
             font-weight: 500;
             cursor: pointer;
             outline: none;
-            min-width: 160px;
+            min-width: 140px;
             color: var(--text-primary);
             transition: all 0.3s;
         }
@@ -292,7 +366,7 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         }
         
         .top-nav .datetime {
-            font-size: 0.78rem;
+            font-size: 0.75rem;
             color: var(--text-secondary);
             font-weight: 500;
             display: flex;
@@ -302,12 +376,12 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         
         .top-nav .datetime .clock-icon {
             color: var(--primary-light);
-            font-size: 0.8rem;
+            font-size: 0.75rem;
         }
         
         .top-nav .avatar {
-            width: 40px;
-            height: 40px;
+            width: 38px;
+            height: 38px;
             border-radius: 50%;
             object-fit: cover;
             border: 2px solid var(--border-color);
@@ -321,8 +395,8 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         }
         
         .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
+            width: 36px;
+            height: 36px;
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -342,8 +416,8 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         
         .notif-dot {
             position: absolute;
-            top: 6px;
-            right: 6px;
+            top: 4px;
+            right: 4px;
             width: 8px;
             height: 8px;
             border-radius: 50%;
@@ -369,14 +443,14 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             background: var(--bg-body);
             border: 2px solid var(--border-color);
             border-radius: 10px;
-            padding: 6px 12px;
+            padding: 5px 10px;
             cursor: pointer;
-            font-size: 0.82rem;
+            font-size: 0.78rem;
             color: var(--text-primary);
             transition: all 0.3s;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
         }
         
         .dark-toggle-btn:hover {
@@ -385,13 +459,13 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         }
         
         .dark-toggle-btn i {
-            font-size: 0.9rem;
+            font-size: 0.85rem;
         }
         
         .role-badge {
-            font-size: 0.6rem;
+            font-size: 0.55rem;
             font-weight: 600;
-            padding: 2px 10px;
+            padding: 2px 8px;
             border-radius: 20px;
             background: var(--primary-bg);
             color: var(--primary);
@@ -404,9 +478,9 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         }
         
         .branch-badge {
-            font-size: 0.6rem;
+            font-size: 0.55rem;
             font-weight: 600;
-            padding: 2px 10px;
+            padding: 2px 8px;
             border-radius: 20px;
             background: var(--success-bg);
             color: var(--success);
@@ -418,14 +492,14 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         }
         
         .avatar-default {
-            width: 40px;
-            height: 40px;
+            width: 38px;
+            height: 38px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 700;
-            font-size: 1rem;
+            font-size: 0.9rem;
             color: white;
             background: var(--primary);
             border: 2px solid var(--border-color);
@@ -724,20 +798,23 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
+            .top-nav .search-wrapper { max-width: 280px; }
         }
         
         @media (max-width: 768px) {
             .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .branch-selector { min-width: 120px; font-size: 0.7rem; }
+            .top-nav .branch-selector { min-width: 100px; font-size: 0.7rem; padding: 4px 8px; }
             .top-nav .datetime { display: none; }
+            .top-nav .dark-toggle-btn span { display: none; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .stat-card .stat-number { font-size: 1.4rem; }
             .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
+            .top-nav .search-wrapper .search-btn { padding: 6px 8px; font-size: 0.65rem; }
+            .top-nav .search-wrapper input { font-size: 0.7rem; padding: 6px 8px; }
+            .top-nav .branch-selector { min-width: 80px; font-size: 0.6rem; }
         }
         
         @keyframes fadeInUp {
@@ -799,6 +876,46 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         [data-theme="dark"] .role-badge-display {
             background: #1E3A5F;
             color: #6EA8FE;
+        }
+        
+        /* ================================================================
+           SIDEBAR TOGGLE BUTTON
+           ================================================================ */
+        .sidebar-toggle-btn {
+            display: none;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 4px 8px;
+            transition: all 0.3s;
+        }
+        
+        .sidebar-toggle-btn:hover {
+            color: var(--primary);
+        }
+        
+        @media (max-width: 1024px) {
+            .sidebar-toggle-btn {
+                display: block;
+            }
+        }
+        
+        /* ================================================================
+           HEADER RIGHT - FLEX WRAP
+           ================================================================ */
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        @media (max-width: 768px) {
+            .header-right {
+                gap: 6px;
+            }
         }
     </style>
 </head>

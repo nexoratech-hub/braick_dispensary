@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
 // RECEPTION - PATIENT MANAGEMENT
+// FIXED: Duplicate patients issue - Added DISTINCT and GROUP BY
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -39,7 +40,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 // ================================================================
 // GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'];
+$user_id = $_SESSION['user_id'] ?? 0;
 $full_name = $_SESSION['full_name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'reception';
 $branch_id = $_SESSION['branch_id'] ?? 1;
@@ -68,7 +69,9 @@ $success = isset($_GET['success']) ? $_GET['success'] : '';
 try {
     $db = Database::getInstance()->getConnection();
     
-    // ✅ Get ALL patients with filters (including those without doctor)
+    // ================================================================
+    // ✅ GET ALL PATIENTS WITH FILTERS - FIXED: Using GROUP BY p.id
+    // ================================================================
     $sql = "
         SELECT p.*, 
                u.full_name as assigned_doctor_name,
@@ -81,7 +84,7 @@ try {
                END as patient_status
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
-        WHERE p.branch_id = ? 
+        WHERE p.branch_id = ?
     ";
     $params = [$branch_id];
     
@@ -103,6 +106,9 @@ try {
         $sql .= " AND NOT EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
     }
     
+    // ✅ GROUP BY p.id to avoid duplicates
+    $sql .= " GROUP BY p.id";
+    
     $sql .= " ORDER BY p.created_at DESC LIMIT ? OFFSET ?";
     $params[] = $limit;
     $params[] = $offset;
@@ -111,9 +117,11 @@ try {
     $stmt->execute($params);
     $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ✅ Get total count for pagination
+    // ================================================================
+    // ✅ GET TOTAL COUNT FOR PAGINATION - FIXED: COUNT DISTINCT
+    // ================================================================
     $count_sql = "
-        SELECT COUNT(*) as total 
+        SELECT COUNT(DISTINCT p.id) as total 
         FROM patients p
         WHERE p.branch_id = ?
     ";
@@ -142,7 +150,9 @@ try {
     $total_patients = $total_result['total'] ?? 0;
     $total_pages = ceil($total_patients / $limit);
     
-    // ✅ Get stats - COUNT ALL PATIENTS
+    // ================================================================
+    // ✅ GET STATS - COUNT ALL PATIENTS
+    // ================================================================
     $stmt = $db->prepare("
         SELECT 
             COUNT(*) as total,
@@ -155,7 +165,9 @@ try {
     $stmt->execute([$branch_id]);
     $stats = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    // ✅ Get latest visits for each patient
+    // ================================================================
+    // ✅ GET LATEST VISIT FOR EACH PATIENT - Using subquery with LIMIT
+    // ================================================================
     foreach ($patients as &$patient) {
         $stmt = $db->prepare("
             SELECT id, visit_number, status, created_at 
@@ -663,7 +675,7 @@ include_once '../../components/reception_sidebar.php';
             color: var(--primary);
         }
         
-        /* ✅ TABLE HEADERS - BLUE BACKGROUND */
+        /* TABLE HEADERS - BLUE BACKGROUND */
         .patient-table {
             width: 100%;
             border-collapse: collapse;
@@ -804,6 +816,15 @@ include_once '../../components/reception_sidebar.php';
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
         }
+        .btn-warning {
+            background: var(--warning);
+            color: white;
+        }
+        .btn-warning:hover {
+            background: #B45309;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
+        }
         
         /* Pagination */
         .pagination {
@@ -889,6 +910,9 @@ include_once '../../components/reception_sidebar.php';
             .patient-table { font-size: 0.75rem; }
             .patient-table thead th, 
             .patient-table tbody td { padding: 6px 8px; }
+            .card-header { flex-direction: column; align-items: stretch; }
+            .search-filter-wrapper form { flex-direction: column; width: 100%; }
+            .search-filter-wrapper .filter-input { width: 100%; min-width: unset; }
         }
         
         @media (max-width: 640px) {
@@ -942,6 +966,42 @@ include_once '../../components/reception_sidebar.php';
         .search-filter-wrapper .filter-input::placeholder {
             color: var(--text-secondary);
             opacity: 0.6;
+        }
+        
+        .update-badge-light {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.8);
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            backdrop-filter: blur(4px);
+        }
+        
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        [data-theme="dark"] .branch-badge-display {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        .live-indicator-modern {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #34D399;
+            animation: pulse-dot 1.5s infinite;
+            margin-right: 4px;
         }
     </style>
 </head>
@@ -1007,7 +1067,7 @@ include_once '../../components/reception_sidebar.php';
                 Patients
                 <span class="role-badge-display">RECEPTION</span>
                 <span class="update-badge-light">
-                    <span class="live-indicator-modern" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;margin-right:4px;"></span> Live
+                    <span class="live-indicator-modern"></span> Live
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -1019,11 +1079,11 @@ include_once '../../components/reception_sidebar.php';
                 </span>
                 <span class="header-badge">
                     <i class="fas fa-user-md"></i>
-                    <span class="online-count" style="color:#34D399;"><?= $stats['with_doctor'] ?? 0 ?></span> With Doctor
+                    <span style="color:#34D399;"><?= $stats['with_doctor'] ?? 0 ?></span> With Doctor
                 </span>
                 <span class="header-badge">
                     <i class="fas fa-user"></i>
-                    <span class="offline-count" style="color:#F87171;"><?= $stats['without_doctor'] ?? 0 ?></span> No Doctor
+                    <span style="color:#F87171;"><?= $stats['without_doctor'] ?? 0 ?></span> No Doctor
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
                     <i class="fas fa-bolt"></i>
@@ -1070,10 +1130,10 @@ include_once '../../components/reception_sidebar.php';
         <div class="card-header">
             <div class="card-title">
                 <i class="fas fa-list"></i> Patient List
-                <span class="card-badge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:20px;font-size:0.7rem;font-weight:500;"><?= $total_patients ?> patients</span>
+                <span style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:20px;font-size:0.7rem;font-weight:500;"><?= $total_patients ?> patients</span>
             </div>
             
-            <!-- ✅ SEARCH FILTER IN HEADER -->
+            <!-- SEARCH FILTER IN HEADER -->
             <div class="search-filter-wrapper">
                 <form action="patients.php" method="GET" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                     <input type="text" name="search" class="filter-input" placeholder="Search by name, ID, phone..." value="<?= htmlspecialchars($search) ?>">
@@ -1097,10 +1157,10 @@ include_once '../../components/reception_sidebar.php';
         </div>
 
         <!-- ================================================================ -->
-        <!-- PATIENT TABLE - BLUE HEADERS - SHOWS ALL PATIENTS -->
+        <!-- PATIENT TABLE - BLUE HEADERS -->
         <!-- ================================================================ -->
         <div style="overflow-x:auto;">
-            <?php if (!empty($patients)): ?>
+            <?php if (!empty($patients) && count($patients) > 0): ?>
             <table class="patient-table">
                 <thead>
                     <tr>
@@ -1133,14 +1193,14 @@ include_once '../../components/reception_sidebar.php';
                     ?>
                         <tr>
                             <td>
-                                <a href="view_patient.php?id=<?= $patient['id'] ?>" class="font-medium text-primary hover:underline">
-                                    <?= htmlspecialchars($patient['full_name']) ?>
+                                <a href="view_patient.php?id=<?= (int)$patient['id'] ?>" class="font-medium text-primary hover:underline">
+                                    <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>
                                 </a>
                             </td>
                             <td style="font-family:monospace;font-size:0.8rem;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
                             <td>
                                 <?php if (!empty($patient['phone'])): ?>
-                                    <a href="tel:<?= $patient['phone'] ?>" class="text-gray-600 hover:text-primary"><?= htmlspecialchars($patient['phone']) ?></a>
+                                    <a href="tel:<?= htmlspecialchars($patient['phone']) ?>" class="text-gray-600 hover:text-primary"><?= htmlspecialchars($patient['phone']) ?></a>
                                 <?php else: ?>
                                     <span class="text-gray-400">N/A</span>
                                 <?php endif; ?>
@@ -1161,15 +1221,21 @@ include_once '../../components/reception_sidebar.php';
                             </td>
                             <td>
                                 <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                                    <a href="view_patient.php?id=<?= $patient['id'] ?>" class="btn btn-primary btn-sm" title="View Patient">
+                                    <a href="view_patient.php?id=<?= (int)$patient['id'] ?>" class="btn btn-primary btn-sm" title="View Patient">
                                         <i class="fas fa-eye"></i>
                                     </a>
-                                    <a href="new_appointment.php?patient_id=<?= $patient['id'] ?>" class="btn btn-purple btn-sm" title="New Appointment">
+                                    <a href="new_appointment.php?patient_id=<?= (int)$patient['id'] ?>" class="btn btn-purple btn-sm" title="New Appointment">
                                         <i class="fas fa-calendar-plus"></i>
                                     </a>
-                                    <a href="assign_doctor.php?patient_id=<?= $patient['id'] ?>" class="btn btn-success btn-sm" title="Assign Doctor">
-                                        <i class="fas fa-user-md"></i>
-                                    </a>
+                                    <?php if (empty($patient['assigned_doctor_name'])): ?>
+                                        <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>" class="btn btn-success btn-sm" title="Assign Doctor">
+                                            <i class="fas fa-user-md"></i>
+                                        </a>
+                                    <?php else: ?>
+                                        <a href="assign_doctor.php?patient_id=<?= (int)$patient['id'] ?>" class="btn btn-warning btn-sm" title="Change Doctor">
+                                            <i class="fas fa-exchange-alt"></i>
+                                        </a>
+                                    <?php endif; ?>
                                 </div>
                             </td>
                         </tr>
@@ -1361,13 +1427,13 @@ include_once '../../components/reception_sidebar.php';
         showToast('✅ Success', 'Patient updated successfully!', 'success');
     <?php endif; ?>
 
-    console.log('%c👤 Braick - Patients', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c👤 Braick - Patients (FIXED - No Duplicates)', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Total Patients: <?= $stats['total'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Shows ALL patients (with and without doctor)', 'font-size:13px; color:#2563EB;');
+    console.log('%c✅ FIXED: Added GROUP BY p.id to prevent duplicate patients', 'font-size:13px; color:#2563EB;');
     console.log('%c📅 New Patients: <?= $stats['new_patients'] ?? 0 ?>', 'font-size:13px; color:#2563EB;');
-    console.log('%c📅 New Appointment button added (replaced Edit)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🔍 Search filter in header', 'font-size:13px; color:#059669;');
+    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

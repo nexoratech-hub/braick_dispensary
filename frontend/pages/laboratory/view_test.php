@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/view_test.php
-// VIEW LAB TEST - WITH PDF DOWNLOAD
+// VIEW LAB TEST - WITH PDF DOWNLOAD & ULTRASOUND TEMPLATES
 // USING NEW DATABASE: dispensary_db
 // WITH FULL LOGIN SESSION PROTECTION
 // MODERN DESIGN - PHARMACY STYLE
@@ -72,7 +72,7 @@ if ($test_id <= 0) {
 }
 
 // ================================================================
-// GET TEST DETAILS - NEW DATABASE
+// GET TEST DETAILS - FIXED: Removed result_template_id
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -171,6 +171,11 @@ function getStatusIcon($status) {
 function formatDate($datetime) {
     if (empty($datetime)) return 'N/A';
     return date('d/m/Y h:i A', strtotime($datetime));
+}
+
+function formatDateShort($datetime) {
+    if (empty($datetime)) return 'N/A';
+    return date('d/m/Y', strtotime($datetime));
 }
 
 // ================================================================
@@ -386,18 +391,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        .page-header .new-db-tag {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.7);
-            padding: 2px 10px;
-            border-radius: 20px;
-            font-size: 0.55rem;
-            font-weight: 600;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.08);
-            letter-spacing: 0.03em;
-        }
-        
         .status-badge-lg {
             display: inline-block;
             padding: 4px 16px;
@@ -520,6 +513,198 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         [data-theme="dark"] .result-box .result-value {
             color: var(--primary-light);
+        }
+        
+        /* ================================================================
+           ULTRASOUND RESULT DISPLAY
+           ================================================================ */
+        .ultrasound-result-container {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 2px solid var(--primary-light);
+            padding: 24px 28px;
+            margin-top: 8px;
+            box-shadow: var(--shadow-md);
+        }
+        
+        .ultrasound-result-container .ultrasound-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 2px solid var(--primary);
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .ultrasound-result-container .ultrasound-header .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .ultrasound-result-container .ultrasound-header .header-left img {
+            height: 45px;
+            width: auto;
+            object-fit: contain;
+        }
+        
+        .ultrasound-result-container .ultrasound-header .header-left .clinic-name {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        .ultrasound-result-container .ultrasound-header .header-left .clinic-sub {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+        }
+        
+        .ultrasound-result-container .ultrasound-header .test-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--primary-dark);
+            background: var(--primary-bg);
+            padding: 4px 16px;
+            border-radius: 20px;
+        }
+        
+        .ultrasound-result-container .patient-info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px 20px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 12px;
+        }
+        
+        .ultrasound-result-container .patient-info-grid .info-item {
+            font-size: 0.8rem;
+        }
+        
+        .ultrasound-result-container .patient-info-grid .info-item .info-label {
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        
+        .ultrasound-result-container .patient-info-grid .info-item .info-value {
+            color: var(--text-primary);
+        }
+        
+        .ultrasound-result-container .findings-section {
+            margin-bottom: 12px;
+        }
+        
+        .ultrasound-result-container .findings-section .section-label {
+            font-weight: 700;
+            color: var(--primary);
+            font-size: 0.85rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 4px;
+            margin-bottom: 8px;
+        }
+        
+        .ultrasound-result-container .findings-section .finding-row {
+            display: flex;
+            padding: 3px 0;
+            font-size: 0.8rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .ultrasound-result-container .findings-section .finding-row:last-child {
+            border-bottom: none;
+        }
+        
+        .ultrasound-result-container .findings-section .finding-row .finding-label {
+            font-weight: 600;
+            color: var(--text-secondary);
+            width: 160px;
+            flex-shrink: 0;
+        }
+        
+        .ultrasound-result-container .findings-section .finding-row .finding-value {
+            flex: 1;
+            color: var(--text-primary);
+        }
+        
+        .ultrasound-result-container .conclusion-section {
+            background: var(--primary-bg);
+            padding: 12px 16px;
+            border-radius: var(--radius);
+            border-left: 4px solid var(--primary);
+            margin-top: 8px;
+        }
+        
+        .ultrasound-result-container .conclusion-section .conclusion-label {
+            font-weight: 700;
+            color: var(--primary);
+            font-size: 0.8rem;
+        }
+        
+        .ultrasound-result-container .conclusion-section .conclusion-text {
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            margin-top: 2px;
+        }
+        
+        .ultrasound-result-container .report-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 12px;
+            border-top: 2px solid var(--border-color);
+            margin-top: 16px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .ultrasound-result-container .report-footer .footer-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        
+        .ultrasound-result-container .report-footer .footer-left .signature-line {
+            display: inline-block;
+            width: 120px;
+            border-bottom: 1px solid var(--text-secondary);
+            margin-left: 4px;
+        }
+        
+        .ultrasound-result-container .report-footer .stamp-box {
+            text-align: center;
+            padding: 6px 16px;
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            background: var(--primary-bg);
+            min-width: 150px;
+        }
+        
+        .ultrasound-result-container .report-footer .stamp-box .stamp-title {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .ultrasound-result-container .report-footer .stamp-box .stamp-name {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        .ultrasound-result-container .report-footer .stamp-box .stamp-line {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+        }
+        
+        .ultrasound-result-container .report-footer .stamp-box .stamp-date {
+            font-size: 0.6rem;
+            color: var(--text-muted);
         }
         
         /* ================================================================
@@ -826,17 +1011,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        .footer .new-db-footer {
-            color: var(--success);
-            font-weight: 600;
-            font-size: 0.65rem;
-        }
         
         /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
+            .ultrasound-result-container .patient-info-grid { grid-template-columns: 1fr; }
+            .ultrasound-result-container .findings-section .finding-row { flex-direction: column; }
+            .ultrasound-result-container .findings-section .finding-row .finding-label { width: 100%; }
         }
         
         @media (max-width: 768px) {
@@ -851,6 +1034,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             .btn { padding: 4px 10px; font-size: 0.7rem; }
             .pdf-modal-header { flex-direction: column; gap: 10px; align-items: stretch; }
             .pdf-modal-header .modal-actions { justify-content: center; }
+            .ultrasound-result-container { padding: 12px 14px; }
+            .ultrasound-result-container .report-footer { flex-direction: column; align-items: flex-start; }
+            .ultrasound-result-container .report-footer .stamp-box { width: 100%; }
         }
         
         @media (max-width: 480px) {
@@ -891,9 +1077,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <i class="fas fa-flask"></i>
                 Test Details
                 <span class="role-badge-display">LABORATORY</span>
-                <span class="new-db-tag">
-                    <i class="fas fa-database"></i> New DB
-                </span>
                 <span class="status-badge-lg <?= getStatusBadgeClass($test['status'] ?? 'pending') ?>" style="background:rgba(255,255,255,0.2);color:white;border-color:rgba(255,255,255,0.2);">
                     <i class="fas <?= getStatusIcon($test['status'] ?? 'pending') ?>"></i>
                     <?= getStatusLabel($test['status'] ?? 'pending') ?>
@@ -1003,7 +1186,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TEST RESULTS -->
+    <!-- TEST RESULTS - WITH ULTRASOUND TEMPLATE SUPPORT -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="border-color:<?= $test['status'] === 'completed' ? 'var(--success)' : 'var(--warning)' ?>;border-left:4px solid <?= $test['status'] === 'completed' ? 'var(--success)' : 'var(--warning)' ?>;">
         <h3 class="card-title">
@@ -1029,24 +1212,142 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </h3>
         
         <?php if ($test['status'] === 'completed' && !empty($test['results'])): ?>
-            <div class="result-box">
-                <div>
-                    <span class="result-label">Result</span>
-                    <div class="result-value"><?= nl2br(htmlspecialchars($test['results'] ?? 'N/A')) ?></div>
+            
+            <?php 
+            // Check if this is an ultrasound test (category contains 'ultrasound')
+            $is_ultrasound = stripos($test['test_category'] ?? '', 'ultrasound') !== false;
+            $is_obstetric = stripos($test['test_name'] ?? '', 'obstetric') !== false;
+            $is_abdominal = stripos($test['test_name'] ?? '', 'abdominal') !== false;
+            
+            // Parse formatted_result for ultrasound
+            $ultrasound_data = [];
+            if (!empty($test['formatted_result'])) {
+                $ultrasound_data = json_decode($test['formatted_result'], true);
+            }
+            ?>
+            
+            <?php if ($is_ultrasound && !empty($test['formatted_result'])): ?>
+                
+                <!-- ULTRASOUND RESULT DISPLAY -->
+                <div class="ultrasound-result-container">
+                    <div class="ultrasound-header">
+                        <div class="header-left">
+                            <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                            <div>
+                                <div class="clinic-name">BRAICK DISPENSARY</div>
+                                <div class="clinic-sub">Quality Healthcare Services</div>
+                            </div>
+                        </div>
+                        <div class="test-title"><?= htmlspecialchars($test['test_name'] ?? 'Ultrasound Report') ?></div>
+                    </div>
+                    
+                    <div class="patient-info-grid">
+                        <div class="info-item">
+                            <span class="info-label">Patient Name:</span>
+                            <span class="info-value"><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Patient ID:</span>
+                            <span class="info-value"><?= htmlspecialchars($test['patient_code'] ?? 'N/A') ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Age/Sex:</span>
+                            <span class="info-value"><?= calculateAge($test['date_of_birth'] ?? '') ?> yrs / <?= htmlspecialchars($test['gender'] ?? 'N/A') ?></span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Date of Exam:</span>
+                            <span class="info-value"><?= formatDateShort($test['created_at'] ?? '') ?></span>
+                        </div>
+                    </div>
+                    
+                    <div class="findings-section">
+                        <div class="section-label">📋 FINDINGS</div>
+                        <?php 
+                        $ultrasound_fields = [
+                            'liver' => 'Liver',
+                            'gallbladder' => 'Gallbladder',
+                            'pancreas' => 'Pancreas',
+                            'spleen' => 'Spleen',
+                            'peritoneum' => 'Peritoneum',
+                            'kidneys' => 'Kidneys',
+                            'bladder' => 'Urinary Bladder',
+                            'uterus' => 'Uterus',
+                            'right_ovary' => 'Right Ovary',
+                            'left_ovary' => 'Left Ovary',
+                            'pouch_douglas' => 'Pouch of Douglas',
+                            'presentation' => 'Presentation and Lie',
+                            'placenta' => 'Placenta',
+                            'fetal_activity' => 'Fetal Activity',
+                            'amniotic_fluid' => 'Amniotic Fluid',
+                            'anatomical_structures' => 'Anatomical Structures',
+                            'maternal_kidney' => 'Maternal Kidney',
+                            'embryo' => 'Embryo',
+                            'crl' => 'CRL (Crown Rump Length)',
+                            'ga' => 'Gestational Age (GA)',
+                            'fetal_pole' => 'Fetal Pole',
+                            'yolk_sac' => 'Yolk Sac',
+                            'myometrium' => 'Myometrium',
+                            'cervix' => 'Cervix',
+                            'adnexa' => 'Adnexal Areas',
+                            'maternal_organs' => 'Maternal Organs',
+                            'prostate' => 'Prostate'
+                        ];
+                        ?>
+                        <?php foreach ($ultrasound_fields as $key => $label): ?>
+                            <?php if (isset($ultrasound_data[$key]) && !empty($ultrasound_data[$key])): ?>
+                                <div class="finding-row">
+                                    <span class="finding-label"><?= $label ?>:</span>
+                                    <span class="finding-value"><?= nl2br(htmlspecialchars($ultrasound_data[$key])) ?></span>
+                                </div>
+                            <?php endif; ?>
+                        <?php endforeach; ?>
+                    </div>
+                    
+                    <?php if (isset($ultrasound_data['conclusion']) && !empty($ultrasound_data['conclusion'])): ?>
+                        <div class="conclusion-section">
+                            <div class="conclusion-label">📌 IMPRESSION / CONCLUSION</div>
+                            <div class="conclusion-text"><?= nl2br(htmlspecialchars($ultrasound_data['conclusion'])) ?></div>
+                        </div>
+                    <?php endif; ?>
+                    
+                    <div class="report-footer">
+                        <div class="footer-left">
+                            <span>Technician: <?= htmlspecialchars($test['technician_name'] ?? '_________________') ?></span>
+                            <span style="margin-left:20px;">Date: <?= date('d/m/Y H:i') ?></span>
+                        </div>
+                        <div class="stamp-box">
+                            <div class="stamp-title">Official Stamp</div>
+                            <div class="stamp-name">BRAICK DISPENSARY</div>
+                            <div class="stamp-line">Approved By: _________________</div>
+                            <div class="stamp-date">Date: <?= date('d/m/Y H:i') ?></div>
+                        </div>
+                    </div>
                 </div>
-                <?php if (!empty($test['reference_range'])): ?>
-                    <div class="result-meta">
-                        <span class="result-label">Reference Range:</span>
-                        <span style="font-weight:500;"><?= htmlspecialchars($test['reference_range']) ?></span>
+                
+            <?php else: ?>
+                
+                <!-- NORMAL RESULT DISPLAY -->
+                <div class="result-box">
+                    <div>
+                        <span class="result-label">Result</span>
+                        <div class="result-value"><?= nl2br(htmlspecialchars($test['results'] ?? 'N/A')) ?></div>
                     </div>
-                <?php endif; ?>
-                <?php if (!empty($test['interpretation'])): ?>
-                    <div class="result-meta">
-                        <span class="result-label">Interpretation:</span>
-                        <span style="font-weight:500;"><?= nl2br(htmlspecialchars($test['interpretation'])) ?></span>
-                    </div>
-                <?php endif; ?>
-            </div>
+                    <?php if (!empty($test['reference_range'])): ?>
+                        <div class="result-meta">
+                            <span class="result-label">Reference Range:</span>
+                            <span style="font-weight:500;"><?= htmlspecialchars($test['reference_range']) ?></span>
+                        </div>
+                    <?php endif; ?>
+                    <?php if (!empty($test['interpretation'])): ?>
+                        <div class="result-meta">
+                            <span class="result-label">Interpretation:</span>
+                            <span style="font-weight:500;"><?= nl2br(htmlspecialchars($test['interpretation'])) ?></span>
+                        </div>
+                    <?php endif; ?>
+                </div>
+                
+            <?php endif; ?>
+            
         <?php elseif ($test['status'] === 'in_progress'): ?>
             <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
                 <i class="fas fa-spinner fa-spin text-4xl" style="color:var(--primary);"></i>
@@ -1101,8 +1402,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             View Test
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            <span class="new-db-footer"><i class="fas fa-database"></i> New DB</span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1276,7 +1575,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
 
     // ================================================================
-    // GENERATE PDF - NEW DB DATA
+    // GENERATE PDF - FIXED: No result_template_id
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -1286,118 +1585,213 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         var statusClass = '<?= $test['status'] ?? 'pending' ?>';
         var statusColor = statusClass === 'completed' ? '#059669' : (statusClass === 'in_progress' ? '#0B5ED7' : (statusClass === 'cancelled' ? '#DC2626' : '#D97706'));
         
-        // Data from PHP
-        var testData = {
-            id: '<?= $test['id'] ?>',
-            testName: '<?= addslashes($test['test_name'] ?? 'N/A') ?>',
-            testCategory: '<?= addslashes($test['test_category'] ?? 'N/A') ?>',
-            testType: '<?= addslashes($test['test_type'] ?? 'N/A') ?>',
-            sampleType: '<?= addslashes($test['sample_type'] ?? 'N/A') ?>',
-            referenceRange: '<?= addslashes($test['reference_range'] ?? 'N/A') ?>',
-            testPrice: '<?= number_format($test['test_price'] ?? 0, 0) ?>',
-            patientName: '<?= addslashes($test['patient_name'] ?? 'N/A') ?>',
-            patientCode: '<?= addslashes($test['patient_code'] ?? 'N/A') ?>',
-            gender: '<?= addslashes($test['gender'] ?? 'N/A') ?>',
-            dob: '<?= !empty($test['date_of_birth']) ? date('M d, Y', strtotime($test['date_of_birth'])) : 'N/A' ?>',
-            age: '<?= calculateAge($test['date_of_birth'] ?? '') ?>',
-            phone: '<?= addslashes($test['phone'] ?? 'N/A') ?>',
-            address: '<?= addslashes($test['address'] ?? 'N/A') ?>',
-            bloodGroup: '<?= addslashes($test['blood_group'] ?? 'N/A') ?>',
-            allergies: '<?= addslashes($test['allergies'] ?? 'None') ?>',
-            emergencyContact: '<?= addslashes($test['emergency_contact'] ?? 'N/A') ?>',
-            visitNumber: '<?= addslashes($test['visit_number'] ?? 'N/A') ?>',
-            visitType: '<?= addslashes($test['visit_type'] ?? 'N/A') ?>',
-            doctorName: '<?= addslashes($test['doctor_name'] ?? 'Not Assigned') ?>',
-            doctorSpecialty: '<?= addslashes($test['doctor_specialty'] ?? 'GP') ?>',
-            technicianName: '<?= addslashes($test['technician_name'] ?? 'Not Assigned') ?>',
-            branchName: '<?= addslashes($test['branch_name'] ?? $user_branch_name) ?>',
-            createdDate: '<?= formatDate($test['created_at'] ?? '') ?>',
-            startedDate: '<?= !empty($test['started_at']) ? formatDate($test['started_at']) : '' ?>',
-            completedDate: '<?= !empty($test['completed_at']) ? formatDate($test['completed_at']) : '' ?>',
-            results: '<?= addslashes($test['results'] ?? '') ?>',
-            interpretation: '<?= addslashes($test['interpretation'] ?? '') ?>',
-            notes: '<?= addslashes($test['notes'] ?? '') ?>',
-            status: statusLabel
-        };
+        // Check if ultrasound based on category or test_name
+        var isUltrasound = <?= (stripos($test['test_category'] ?? '', 'ultrasound') !== false || stripos($test['test_name'] ?? '', 'ultrasound') !== false) ? 'true' : 'false' ?>;
+        var ultrasoundData = <?= !empty($test['formatted_result']) ? json_encode(json_decode($test['formatted_result'], true)) : '{}' ?>;
         
-        var html = `
-            <div class="pdf-header">
-                <div class="pdf-logo">
-                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
-                    <span class="clinic-name">Braick Dispensary</span>
-                </div>
-                <div class="clinic-sub">Quality Healthcare Services • ${testData.branchName}</div>
-                <div class="test-info">🧪 ${testData.testName}</div>
-                <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px;">
-                    Status: <span style="color:${statusColor};font-weight:700;">${testData.status}</span> • 
-                    ID: #${testData.id} • 
-                    Date: ${testData.createdDate}
-                </div>
-            </div>
+        var html = '';
+        
+        if (isUltrasound && ultrasoundData && Object.keys(ultrasoundData).length > 0) {
+            // ================================================================
+            // ULTRASOUND PDF TEMPLATE
+            // ================================================================
+            var findingsHtml = '';
+            var ultrasoundFields = {
+                'liver': 'Liver',
+                'gallbladder': 'Gallbladder',
+                'pancreas': 'Pancreas',
+                'spleen': 'Spleen',
+                'peritoneum': 'Peritoneum',
+                'kidneys': 'Kidneys',
+                'bladder': 'Urinary Bladder',
+                'uterus': 'Uterus',
+                'right_ovary': 'Right Ovary',
+                'left_ovary': 'Left Ovary',
+                'pouch_douglas': 'Pouch of Douglas',
+                'presentation': 'Presentation and Lie',
+                'placenta': 'Placenta',
+                'fetal_activity': 'Fetal Activity',
+                'amniotic_fluid': 'Amniotic Fluid',
+                'anatomical_structures': 'Anatomical Structures',
+                'maternal_kidney': 'Maternal Kidney',
+                'embryo': 'Embryo',
+                'crl': 'CRL (Crown Rump Length)',
+                'ga': 'Gestational Age (GA)',
+                'fetal_pole': 'Fetal Pole',
+                'yolk_sac': 'Yolk Sac',
+                'myometrium': 'Myometrium',
+                'cervix': 'Cervix',
+                'adnexa': 'Adnexal Areas',
+                'maternal_organs': 'Maternal Organs',
+                'prostate': 'Prostate'
+            };
             
-            <!-- Patient Information -->
-            <div class="section-title">👤 Patient Information</div>
-            <div class="pdf-row"><span class="pdf-label">Full Name</span><span class="pdf-value">${testData.patientName}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Patient ID</span><span class="pdf-value">${testData.patientCode}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Gender</span><span class="pdf-value">${testData.gender}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Date of Birth</span><span class="pdf-value">${testData.dob} (${testData.age} years)</span></div>
-            <div class="pdf-row"><span class="pdf-label">Phone</span><span class="pdf-value">${testData.phone}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Blood Group</span><span class="pdf-value">${testData.bloodGroup}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Allergies</span><span class="pdf-value">${testData.allergies}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Emergency Contact</span><span class="pdf-value">${testData.emergencyContact}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Address</span><span class="pdf-value">${testData.address}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Visit Number</span><span class="pdf-value">${testData.visitNumber}</span></div>
+            for (var key in ultrasoundFields) {
+                if (ultrasoundData[key] && ultrasoundData[key].trim() !== '') {
+                    findingsHtml += `
+                        <div class="pdf-row">
+                            <span class="pdf-label">${ultrasoundFields[key]}:</span>
+                            <span class="pdf-value">${ultrasoundData[key]}</span>
+                        </div>
+                    `;
+                }
+            }
             
-            <!-- Test Information -->
-            <div class="section-title">🧪 Test Information</div>
-            <div class="pdf-row"><span class="pdf-label">Test Name</span><span class="pdf-value"><strong>${testData.testName}</strong></span></div>
-            <div class="pdf-row"><span class="pdf-label">Category</span><span class="pdf-value">${testData.testCategory}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Test Type</span><span class="pdf-value">${testData.testType}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Sample Type</span><span class="pdf-value">${testData.sampleType}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Reference Range</span><span class="pdf-value">${testData.referenceRange}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Price</span><span class="pdf-value">TSh ${testData.testPrice}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Doctor</span><span class="pdf-value">${testData.doctorName} (${testData.doctorSpecialty})</span></div>
-            <div class="pdf-row"><span class="pdf-label">Technician</span><span class="pdf-value">${testData.technicianName}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Visit Type</span><span class="pdf-value">${testData.visitType}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Created</span><span class="pdf-value">${testData.createdDate}</span></div>
-            ${testData.startedDate ? `<div class="pdf-row"><span class="pdf-label">Started</span><span class="pdf-value">${testData.startedDate}</span></div>` : ''}
-            ${testData.completedDate ? `<div class="pdf-row"><span class="pdf-label">Completed</span><span class="pdf-value">${testData.completedDate}</span></div>` : ''}
-            
-            <!-- Results -->
-            <div class="section-title">📊 Test Results</div>
-            ${testData.results ? `
-                <div style="padding:12px 16px;background:var(--primary-bg);border-radius:8px;border:1px solid var(--primary-light);margin-top:4px;">
-                    <div style="font-weight:700;color:var(--primary-dark);font-size:1rem;">${testData.results}</div>
-                    ${testData.interpretation ? `<div style="margin-top:6px;font-size:0.85rem;color:var(--text-secondary);">${testData.interpretation}</div>` : ''}
+            html = `
+                <div class="pdf-header">
+                    <div class="pdf-logo">
+                        <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                        <span class="clinic-name">BRAICK DISPENSARY</span>
+                    </div>
+                    <div class="clinic-sub">Quality Healthcare Services • <?= htmlspecialchars($test['branch_name'] ?? $user_branch_name) ?></div>
+                    <div class="test-info">🧪 <?= htmlspecialchars($test['test_name'] ?? 'Ultrasound Report') ?></div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px;">
+                        Status: <span style="color:${statusColor};font-weight:700;">${statusLabel}</span> • 
+                        ID: #<?= $test['id'] ?> • 
+                        Date: <?= formatDate($test['created_at'] ?? '') ?>
+                    </div>
                 </div>
-            ` : `
-                <div style="padding:12px 16px;color:var(--text-secondary);font-weight:500;">
-                    ${testData.status === 'In Progress' ? '⏳ Test is In Progress - Results pending' : 
-                      testData.status === 'Cancelled' ? '❌ Test Cancelled' : 
-                      '⏳ Test Pending - Results not yet available'}
+                
+                <!-- Patient Information -->
+                <div class="section-title">👤 Patient Information</div>
+                <div class="pdf-row"><span class="pdf-label">Patient Name</span><span class="pdf-value"><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Patient ID</span><span class="pdf-value"><?= htmlspecialchars($test['patient_code'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Age/Sex</span><span class="pdf-value"><?= calculateAge($test['date_of_birth'] ?? '') ?> yrs / <?= htmlspecialchars($test['gender'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Date of Exam</span><span class="pdf-value"><?= formatDateShort($test['created_at'] ?? '') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Phone</span><span class="pdf-value"><?= htmlspecialchars($test['phone'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Blood Group</span><span class="pdf-value"><?= htmlspecialchars($test['blood_group'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Doctor</span><span class="pdf-value"><?= htmlspecialchars($test['doctor_name'] ?? 'Not Assigned') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Technician</span><span class="pdf-value"><?= htmlspecialchars($test['technician_name'] ?? 'Not Assigned') ?></span></div>
+                
+                <!-- Findings -->
+                <div class="section-title">📋 Findings</div>
+                ${findingsHtml || '<div style="padding:8px 12px;color:var(--text-secondary);">No findings recorded</div>'}
+                
+                <!-- Conclusion -->
+                ${ultrasoundData.conclusion ? `
+                    <div class="section-title">📌 Impression / Conclusion</div>
+                    <div style="padding:12px 16px;background:var(--primary-bg);border-radius:8px;border:1px solid var(--primary-light);">
+                        ${ultrasoundData.conclusion}
+                    </div>
+                ` : ''}
+                
+                <!-- Footer -->
+                <div class="pdf-footer">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;padding:12px 0;border-top:2px solid var(--border-color);margin-top:16px;">
+                        <div style="font-size:0.75rem;color:var(--text-secondary);">
+                            Technician: ${ultrasoundData.technician_name || '<?= htmlspecialchars($test['technician_name'] ?? '_________________') ?>'}
+                            <span style="margin-left:20px;">Date: <?= date('d/m/Y H:i') ?></span>
+                        </div>
+                        <div style="text-align:center;padding:6px 16px;border:2px solid var(--primary);border-radius:8px;background:var(--primary-bg);min-width:150px;">
+                            <div style="font-size:0.6rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;font-weight:700;">Official Stamp</div>
+                            <div style="font-size:0.8rem;font-weight:700;color:var(--primary);">BRAICK DISPENSARY</div>
+                            <div style="font-size:0.65rem;color:var(--text-secondary);">Approved By: _________________</div>
+                            <div style="font-size:0.6rem;color:var(--text-muted);">Date: <?= date('d/m/Y H:i') ?></div>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px;text-align:center;font-size:0.65rem;color:var(--text-muted);">
+                        <span class="footer-brand">Braick Dispensary</span> • Generated on <?= date('M d, Y h:i A') ?> • All rights reserved
+                    </div>
                 </div>
-            `}
+            `;
+        } else {
+            // ================================================================
+            // NORMAL PDF TEMPLATE
+            // ================================================================
+            var resultsContent = '<?= addslashes(nl2br(htmlspecialchars($test['results'] ?? ''))) ?>';
+            var interpretationContent = '<?= addslashes(nl2br(htmlspecialchars($test['interpretation'] ?? ''))) ?>';
             
-            ${testData.notes ? `
-                <div class="section-title">📝 Notes</div>
-                <div style="padding:8px 12px;background:var(--warning-bg);border-radius:6px;border:1px solid var(--warning);">
-                    ${testData.notes}
+            html = `
+                <div class="pdf-header">
+                    <div class="pdf-logo">
+                        <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                        <span class="clinic-name">BRAICK DISPENSARY</span>
+                    </div>
+                    <div class="clinic-sub">Quality Healthcare Services • <?= htmlspecialchars($test['branch_name'] ?? $user_branch_name) ?></div>
+                    <div class="test-info">🧪 <?= htmlspecialchars($test['test_name'] ?? 'Test Report') ?></div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px;">
+                        Status: <span style="color:${statusColor};font-weight:700;">${statusLabel}</span> • 
+                        ID: #<?= $test['id'] ?> • 
+                        Date: <?= formatDate($test['created_at'] ?? '') ?>
+                    </div>
                 </div>
-            ` : ''}
-            
-            <!-- Footer -->
-            <div class="pdf-footer">
-                <p>
-                    <span class="footer-brand">Braick Dispensary</span> Management System
-                    <br>
-                    Generated on <?= date('M d, Y h:i A') ?> • All rights reserved
-                    <br>
-                    <span style="font-size:0.65rem;color:var(--text-muted);">
-                        This is a computer generated document. No signature required.
-                    </span>
-                </p>
-            </div>
-        `;
+                
+                <!-- Patient Information -->
+                <div class="section-title">👤 Patient Information</div>
+                <div class="pdf-row"><span class="pdf-label">Full Name</span><span class="pdf-value"><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Patient ID</span><span class="pdf-value"><?= htmlspecialchars($test['patient_code'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Gender</span><span class="pdf-value"><?= htmlspecialchars($test['gender'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Date of Birth</span><span class="pdf-value"><?= !empty($test['date_of_birth']) ? date('d/m/Y', strtotime($test['date_of_birth'])) : 'N/A' ?> (<?= calculateAge($test['date_of_birth'] ?? '') ?> years)</span></div>
+                <div class="pdf-row"><span class="pdf-label">Phone</span><span class="pdf-value"><?= htmlspecialchars($test['phone'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Blood Group</span><span class="pdf-value"><?= htmlspecialchars($test['blood_group'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Allergies</span><span class="pdf-value"><?= htmlspecialchars($test['allergies'] ?? 'None') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Emergency Contact</span><span class="pdf-value"><?= htmlspecialchars($test['emergency_contact'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Address</span><span class="pdf-value"><?= htmlspecialchars($test['address'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Visit Number</span><span class="pdf-value"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></span></div>
+                
+                <!-- Test Information -->
+                <div class="section-title">🧪 Test Information</div>
+                <div class="pdf-row"><span class="pdf-label">Test Name</span><span class="pdf-value"><strong><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></strong></span></div>
+                <div class="pdf-row"><span class="pdf-label">Category</span><span class="pdf-value"><?= htmlspecialchars($test['test_category'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Test Type</span><span class="pdf-value"><?= htmlspecialchars($test['test_type'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Sample Type</span><span class="pdf-value"><?= htmlspecialchars($test['sample_type'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Reference Range</span><span class="pdf-value"><?= htmlspecialchars($test['reference_range'] ?? 'N/A') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Price</span><span class="pdf-value">TSh <?= number_format($test['test_price'] ?? 0, 0) ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Doctor</span><span class="pdf-value"><?= htmlspecialchars($test['doctor_name'] ?? 'Not Assigned') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Technician</span><span class="pdf-value"><?= htmlspecialchars($test['technician_name'] ?? 'Not Assigned') ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Visit Type</span><span class="pdf-value"><?= ucfirst(htmlspecialchars($test['visit_type'] ?? 'N/A')) ?></span></div>
+                <div class="pdf-row"><span class="pdf-label">Created</span><span class="pdf-value"><?= formatDate($test['created_at'] ?? '') ?></span></div>
+                <?php if (!empty($test['started_at'])): ?>
+                    <div class="pdf-row"><span class="pdf-label">Started</span><span class="pdf-value"><?= formatDate($test['started_at']) ?></span></div>
+                <?php endif; ?>
+                <?php if (!empty($test['completed_at'])): ?>
+                    <div class="pdf-row"><span class="pdf-label">Completed</span><span class="pdf-value"><?= formatDate($test['completed_at']) ?></span></div>
+                <?php endif; ?>
+                
+                <!-- Results -->
+                <div class="section-title">📊 Test Results</div>
+                <?php if (!empty($test['results'])): ?>
+                    <div style="padding:12px 16px;background:var(--primary-bg);border-radius:8px;border:1px solid var(--primary-light);margin-top:4px;">
+                        <div style="font-weight:700;color:var(--primary-dark);font-size:1rem;"><?= nl2br(htmlspecialchars($test['results'])) ?></div>
+                        <?php if (!empty($test['interpretation'])): ?>
+                            <div style="margin-top:6px;font-size:0.85rem;color:var(--text-secondary);"><?= nl2br(htmlspecialchars($test['interpretation'])) ?></div>
+                        <?php endif; ?>
+                    </div>
+                <?php else: ?>
+                    <div style="padding:12px 16px;color:var(--text-secondary);font-weight:500;">
+                        ${statusLabel === 'In Progress' ? '⏳ Test is In Progress - Results pending' : 
+                          statusLabel === 'Cancelled' ? '❌ Test Cancelled' : 
+                          '⏳ Test Pending - Results not yet available'}
+                    </div>
+                <?php endif; ?>
+                
+                <?php if (!empty($test['notes'])): ?>
+                    <div class="section-title">📝 Notes</div>
+                    <div style="padding:8px 12px;background:var(--warning-bg);border-radius:6px;border:1px solid var(--warning);">
+                        <?= nl2br(htmlspecialchars($test['notes'])) ?>
+                    </div>
+                <?php endif; ?>
+                
+                <!-- Footer -->
+                <div class="pdf-footer">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;padding:12px 0;border-top:2px solid var(--border-color);margin-top:16px;">
+                        <div style="font-size:0.75rem;color:var(--text-secondary);">
+                            Technician: <?= htmlspecialchars($test['technician_name'] ?? '_________________') ?>
+                            <span style="margin-left:20px;">Date: <?= date('d/m/Y H:i') ?></span>
+                        </div>
+                        <div style="text-align:center;padding:6px 16px;border:2px solid var(--primary);border-radius:8px;background:var(--primary-bg);min-width:150px;">
+                            <div style="font-size:0.6rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;font-weight:700;">Official Stamp</div>
+                            <div style="font-size:0.8rem;font-weight:700;color:var(--primary);">BRAICK DISPENSARY</div>
+                            <div style="font-size:0.65rem;color:var(--text-secondary);">Approved By: _________________</div>
+                            <div style="font-size:0.6rem;color:var(--text-muted);">Date: <?= date('d/m/Y H:i') ?></div>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px;text-align:center;font-size:0.65rem;color:var(--text-muted);">
+                        <span class="footer-brand">Braick Dispensary</span> • Generated on <?= date('M d, Y h:i A') ?> • All rights reserved
+                    </div>
+                </div>
+            `;
+        }
         
         content.innerHTML = html;
         modal.classList.add('active');
@@ -1448,15 +1842,17 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
-    console.log('%c🧪 Braick - View Test (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Tables: lab_tests, patients, users, visits, lab_tests_catalog', 'font-size:13px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🧪 Braick - View Test', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Ultrasound template support added', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ PDF with Official Stamp and Technician signature', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ "New DB" removed from page', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Fixed: Removed result_template_id from query', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🆔 Test ID: <?= $test['id'] ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Status: <?= getStatusLabel($test['status'] ?? 'pending') ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ PDF Download with beautiful design and logo', 'font-size:13px; color:#34D399;');
+    console.log('%c🖼️ Ultrasound: <?= (stripos($test['test_category'] ?? '', 'ultrasound') !== false) ? 'YES' : 'NO' ?>', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

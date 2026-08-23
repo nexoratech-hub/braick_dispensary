@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/reception/appointments.php
 // RECEPTION - APPOINTMENTS LIST WITH DATE SELECTOR
+// ✅ USING NEW DATABASE: dispensary_db
 // WITH AUTO-UPDATE (3 SECONDS) - FULL TABLE UPDATE
 // BRAICK DISPENSARY
 // ================================================================
@@ -27,11 +28,10 @@ $username = $_SESSION['username'] ?? 'reception';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE - NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-$user_branch_id = $branch_id;
 $selected_branch_id = $branch_id;
 $status_filter = $_GET['status'] ?? '';
 $date_filter = $_GET['date'] ?? '';
@@ -73,7 +73,7 @@ try {
     $db = Database::getInstance()->getConnection();
     
     // ================================================================
-    // GET APPOINTMENTS WITH PATIENT APPOINTMENT COUNT
+    // GET APPOINTMENTS - FROM NEW DATABASE
     // ================================================================
     $query = "
         SELECT a.*, 
@@ -99,7 +99,6 @@ try {
         $params[] = $status_filter;
     }
     
-    // Date range filter
     if (!empty($date_filter) && $period_filter !== 'all') {
         $query .= " AND DATE(a.appointment_date) >= ?";
         $params[] = $date_filter;
@@ -116,11 +115,11 @@ try {
     
     $stmt = $db->prepare($query);
     $stmt->execute($params);
-    $appointments = $stmt->fetchAll();
+    $appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $total_records = count($appointments);
     
     // ================================================================
-    // STATUS COUNTS (WITH DATE FILTER IF APPLIED)
+    // STATUS COUNTS
     // ================================================================
     $status_counts = [];
     $statuses = ['scheduled', 'confirmed', 'in-progress', 'completed', 'cancelled'];
@@ -135,10 +134,10 @@ try {
         
         $stmt = $db->prepare($sql);
         $stmt->execute($params_status);
-        $status_counts[$status] = $stmt->fetch()['total'] ?? 0;
+        $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     }
     
-    // Total appointments in this branch (with date filter if applied)
+    // Total appointments
     $sql_total = "SELECT COUNT(*) as total FROM appointments WHERE branch_id = ?";
     $params_total = [$selected_branch_id];
     
@@ -149,24 +148,25 @@ try {
     
     $stmt = $db->prepare($sql_total);
     $stmt->execute($params_total);
-    $total_appointments_all = $stmt->fetch()['total'] ?? 0;
+    $total_appointments_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // Get online doctors count
+    // Online doctors
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND is_online = 1 AND status = 'active' AND branch_id = ?");
     $stmt->execute([$selected_branch_id]);
-    $online_doctors = $stmt->fetch()['total'] ?? 0;
+    $online_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // Get total doctors
+    // Total doctors
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ?");
     $stmt->execute([$selected_branch_id]);
-    $total_doctors = $stmt->fetch()['total'] ?? 0;
+    $total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // Get unread notifications count
+    // Unread notifications
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['count'] ?? 0;
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     
 } catch (Exception $e) {
+    error_log("Appointments error: " . $e->getMessage());
     $appointments = [];
     $status_counts = [];
     $total_records = 0;
@@ -197,8 +197,8 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/reception_header.php';
-include_once '../../components/reception_sidebar.php';
+include_once __DIR__ . '/../../components/reception_header.php';
+include_once __DIR__ . '/../../components/reception_sidebar.php';
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
@@ -214,8 +214,6 @@ include_once '../../components/reception_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* All existing CSS remains the same */
-        /* ... (keep all existing styles from your file) ... */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -223,15 +221,13 @@ include_once '../../components/reception_sidebar.php';
             --primary-bg: #E8F0FE;
             --success: #059669;
             --success-dark: #047857;
-            --success-light: #34D399;
             --success-bg: #D1FAE5;
             --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            --white: #FFFFFF;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -242,11 +238,10 @@ include_once '../../components/reception_sidebar.php';
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
-            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
+            --radius: 10px;
+            --radius-lg: 14px;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -264,9 +259,8 @@ include_once '../../components/reception_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
         }
@@ -284,155 +278,6 @@ include_once '../../components/reception_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -440,9 +285,6 @@ include_once '../../components/reception_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - IMPROVED
-           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
@@ -458,21 +300,9 @@ include_once '../../components/reception_sidebar.php';
             overflow: hidden;
         }
         
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
-            font-size: 1.8rem;
+            font-size: 1.6rem;
             font-weight: 700;
             display: flex;
             align-items: center;
@@ -482,10 +312,7 @@ include_once '../../components/reception_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -498,24 +325,17 @@ include_once '../../components/reception_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
-        .page-header .role-badge-display {
+        .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 4px 14px;
             border-radius: 20px;
             font-size: 0.65rem;
             font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
             backdrop-filter: blur(4px);
         }
         
-        .page-header .header-badge {
+        .header-badge {
             background: rgba(255,255,255,0.15);
             color: white;
             padding: 4px 14px;
@@ -529,17 +349,10 @@ include_once '../../components/reception_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        .page-header .header-badge .online-count {
-            color: #34D399;
-            font-weight: 700;
-        }
+        .header-badge .online-count { color: #34D399; font-weight: 700; }
+        .header-badge .period-badge { color: #FCD34D; font-weight: 600; }
         
-        .page-header .header-badge .period-badge {
-            color: #FCD34D;
-            font-weight: 600;
-        }
-        
-        .page-header .btn-outline-light {
+        .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
             border: 1px solid rgba(255,255,255,0.2);
@@ -553,14 +366,11 @@ include_once '../../components/reception_sidebar.php';
             align-items: center;
             gap: 8px;
             backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
         }
         
-        .page-header .btn-outline-light:hover {
+        .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
         .update-badge-light {
@@ -575,9 +385,6 @@ include_once '../../components/reception_sidebar.php';
             backdrop-filter: blur(4px);
         }
         
-        /* ================================================================
-           FILTERS
-           ================================================================ */
         .filter-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -607,16 +414,8 @@ include_once '../../components/reception_sidebar.php';
             display: inline-block;
         }
         
-        .filter-btn:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .filter-btn.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
+        .filter-btn:hover { border-color: var(--primary); color: var(--primary); }
+        .filter-btn.active { background: var(--primary); color: white; border-color: var(--primary); }
         
         .filter-group {
             display: flex;
@@ -648,13 +447,6 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
         }
         
-        .form-control select, .form-control input[type="date"] {
-            cursor: pointer;
-        }
-        
-        /* ================================================================
-           TABLE
-           ================================================================ */
         .table-card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -685,30 +477,12 @@ include_once '../../components/reception_sidebar.php';
             color: var(--text-primary);
         }
         
-        .table-card .table-title .title-blue {
-            color: var(--primary);
-        }
+        .table-card .table-title .title-blue { color: var(--primary); }
         
         .table-wrap-scroll {
             overflow-x: auto;
             overflow-y: auto;
             max-height: 550px;
-        }
-        
-        .table-wrap-scroll::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-        .table-wrap-scroll::-webkit-scrollbar-track {
-            background: var(--bg-body);
-            border-radius: 4px;
-        }
-        .table-wrap-scroll::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 4px;
-        }
-        .table-wrap-scroll::-webkit-scrollbar-thumb:hover {
-            background: var(--primary-dark);
         }
         
         .data-table {
@@ -741,17 +515,8 @@ include_once '../../components/reception_sidebar.php';
             vertical-align: middle;
         }
         
-        .data-table tbody tr {
-            transition: all 0.3s ease;
-        }
-        
-        .data-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
-        
-        .data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
+        .data-table tbody tr:hover td { background: var(--table-hover); }
+        .data-table tbody tr:last-child td { border-bottom: none; }
         
         .table-footer {
             display: flex;
@@ -763,9 +528,6 @@ include_once '../../components/reception_sidebar.php';
             gap: 8px;
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge {
             padding: 3px 12px;
             border-radius: 20px;
@@ -797,14 +559,6 @@ include_once '../../components/reception_sidebar.php';
             font-weight: 600;
         }
         
-        [data-theme="dark"] .appointment-count-badge {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -819,42 +573,14 @@ include_once '../../components/reception_sidebar.php';
             text-decoration: none;
         }
         
-        .btn-blue {
-            background: var(--primary);
-            color: white;
-        }
-        .btn-blue:hover {
-            background: var(--primary-dark);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-green {
-            background: var(--success);
-            color: white;
-        }
-        .btn-green:hover {
-            background: var(--success-dark);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
+        .btn-blue { background: var(--primary); color: white; }
+        .btn-blue:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+        .btn-green { background: var(--success); color: white; }
+        .btn-green:hover { background: var(--success-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3); }
+        .btn-outline { background: transparent; color: var(--text-secondary); border: 2px solid var(--border-color); }
+        .btn-outline:hover { background: var(--bg-body); border-color: var(--primary); color: var(--primary); }
         .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
         
-        /* ================================================================
-           STATS CARDS
-           ================================================================ */
         .stat-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -871,59 +597,10 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: var(--shadow-md);
         }
         
-        .stat-card .stat-number {
-            font-size: 1.5rem;
-            font-weight: 700;
-        }
+        .stat-card .stat-number { font-size: 1.5rem; font-weight: 700; }
+        .stat-card .stat-label { font-size: 0.7rem; color: var(--text-secondary); font-weight: 500; }
+        .stat-card .stat-icon { font-size: 1.2rem; margin-bottom: 2px; }
         
-        .stat-card .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .stat-card .stat-icon {
-            font-size: 1.2rem;
-            margin-bottom: 2px;
-        }
-        
-        /* ================================================================
-           BADGES DISPLAY
-           ================================================================ */
-        .role-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .branch-badge-display {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -948,9 +625,6 @@ include_once '../../components/reception_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -962,9 +636,6 @@ include_once '../../components/reception_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -987,18 +658,11 @@ include_once '../../components/reception_sidebar.php';
         
         @keyframes spin { to { transform: rotate(360deg); } }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .data-table { font-size: 0.7rem; min-width: 700px; }
@@ -1010,8 +674,6 @@ include_once '../../components/reception_sidebar.php';
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
             .data-table { font-size: 0.6rem; min-width: 600px; }
             .data-table th, .data-table td { padding: 4px 6px; }
             .btn-sm { padding: 2px 6px; font-size: 0.55rem; }
@@ -1042,24 +704,24 @@ include_once '../../components/reception_sidebar.php';
     </div>
     
     <div class="flex items-center gap-3">
-        <span class="branch-badge-display">
+        <span class="branch-badge-display" style="display:inline-block;font-size:0.6rem;font-weight:600;padding:2px 10px;border-radius:20px;background:var(--success-bg);color:var(--success);">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime"></span>
         
-        <button id="darkModeToggle" class="dark-toggle-btn">
+        <button id="darkModeToggle" class="dark-toggle-btn" style="background:var(--bg-body);border:2px solid var(--border-color);border-radius:10px;padding:6px 12px;cursor:pointer;font-size:0.82rem;color:var(--text-primary);transition:all 0.3s;display:flex;align-items:center;gap:6px;">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
         
-        <button class="icon-btn">
+        <button class="icon-btn" style="width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:all 0.3s;background:transparent;border:none;cursor:pointer;position:relative;">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>" style="position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;border:2px solid var(--bg-nav);animation:<?= ($unread_notifications ?? 0) > 0 ? 'pulse-dot 2s infinite' : 'none' ?>;background:<?= ($unread_notifications ?? 0) > 0 ? 'var(--danger)' : 'var(--gray-400)' ?>;"></span>
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_path ?>" alt="Profile" class="avatar"
+            <img src="<?= $logo_path ?>" alt="Profile" class="avatar" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--border-color);cursor:pointer;transition:all 0.3s;"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= substr($full_name, 0, 1) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
@@ -1070,9 +732,7 @@ include_once '../../components/reception_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER - IMPROVED -->
-    <!-- ================================================================ -->
+    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1107,7 +767,7 @@ include_once '../../components/reception_sidebar.php';
                 <?php endif; ?>
             </p>
         </div>
-        <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="new_appointment.php" class="btn-outline-light">
                 <i class="fas fa-plus-circle"></i> New Appointment
             </a>
@@ -1117,12 +777,9 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FILTERS - WITH PERIOD DROPDOWN + DATE PICKER -->
-    <!-- ================================================================ -->
+    <!-- Filters -->
     <div class="filter-card animate-fade-in-up">
         <div class="filter-group">
-            <!-- Status Filters -->
             <div class="filter-group-item">
                 <span class="text-sm font-medium text-gray-600 dark:text-gray-400 mr-1">Status:</span>
                 <a href="appointments.php?period=<?= $period_filter ?>&search=<?= urlencode($search) ?>" 
@@ -1135,7 +792,6 @@ include_once '../../components/reception_sidebar.php';
                 <?php endforeach; ?>
             </div>
             
-            <!-- Period Filter -->
             <div class="filter-group-item">
                 <span class="text-sm font-medium text-gray-600 dark:text-gray-400 mr-1">📆 Period:</span>
                 <select id="periodFilter" class="form-control" 
@@ -1151,7 +807,6 @@ include_once '../../components/reception_sidebar.php';
                 </select>
             </div>
             
-            <!-- Date Picker -->
             <div class="filter-group-item">
                 <span class="text-sm font-medium text-gray-600 dark:text-gray-400 mr-1">📅 Date:</span>
                 <input type="date" id="datePicker" class="form-control" 
@@ -1162,9 +817,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- APPOINTMENTS TABLE -->
-    <!-- ================================================================ -->
+    <!-- Appointments Table -->
     <div class="table-card animate-fade-in-up">
         <div class="table-header">
             <h3 class="table-title">
@@ -1244,7 +897,6 @@ include_once '../../components/reception_sidebar.php';
             </table>
         </div>
         
-        <!-- Table Footer -->
         <div class="table-footer">
             <span class="text-sm text-gray-500">
                 <i class="fas fa-calendar-alt mr-1"></i> 
@@ -1261,9 +913,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- QUICK STATS -->
-    <!-- ================================================================ -->
+    <!-- Quick Stats -->
     <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mt-5" id="statsContainer">
         <?php foreach ($status_counts as $status => $count): ?>
             <div class="stat-card <?= $status === 'completed' ? 'border-green-500' : ($status === 'cancelled' ? 'border-red-500' : '') ?>" data-status="<?= $status ?>">
@@ -1288,9 +938,7 @@ include_once '../../components/reception_sidebar.php';
         <?php endforeach; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1299,53 +947,47 @@ include_once '../../components/reception_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             Logged in as: <strong><?= htmlspecialchars($full_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
+            Branch: <strong><?= htmlspecialchars($branch_name) ?></strong>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
+<!-- Toast -->
 <div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <i class="fas fa-info-circle"></i>
     <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+        <p id="toastTitle">Notification</p>
+        <p id="toastMessage"></p>
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT - FULL AUTO-UPDATE (3 SECONDS) -->
-<!-- ================================================================ -->
+<!-- JavaScript -->
 <script>
     // ================================================================
     // DARK MODE
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
     var htmlElement = document.documentElement;
-    
     var savedDarkMode = localStorage.getItem('darkMode');
     if (savedDarkMode === 'true') {
         htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
+        document.getElementById('darkIcon').className = 'fas fa-sun';
+        document.getElementById('darkText').textContent = 'Light';
     }
     
-    darkModeToggle?.addEventListener('click', function() {
+    document.getElementById('darkModeToggle')?.addEventListener('click', function() {
         var isDark = htmlElement.getAttribute('data-theme') === 'dark';
         if (isDark) {
             htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
+            document.getElementById('darkIcon').className = 'fas fa-moon';
+            document.getElementById('darkText').textContent = 'Dark';
             localStorage.setItem('darkMode', 'false');
         } else {
             htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
+            document.getElementById('darkIcon').className = 'fas fa-sun';
+            document.getElementById('darkText').textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
         }
     });
@@ -1354,18 +996,8 @@ include_once '../../components/reception_sidebar.php';
     // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    
-    sidebarToggle?.addEventListener('click', function() {
+    document.getElementById('sidebarToggle')?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
     });
 
     // ================================================================
@@ -1373,14 +1005,9 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     function updateDateTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dt = document.getElementById('currentDateTime');
-        if (dt) dt.textContent = dateStr + ' • ' + timeStr;
+        var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+        var el = document.getElementById('currentDateTime');
+        if (el) el.textContent = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' • ' + timeStr;
         var ft = document.getElementById('footerTimestamp');
         if (ft) ft.textContent = 'Last updated: ' + timeStr;
     }
@@ -1411,22 +1038,16 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
         if (!toast) return;
-        
         toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
+        document.getElementById('toastTitle').textContent = title;
+        document.getElementById('toastMessage').textContent = message;
         toast.style.display = 'flex';
-        
         toast.classList.add('show');
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
 
@@ -1435,20 +1056,15 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     function getStatusBadge(status) {
         var colorClass = 'badge-yellow';
-        if (status === 'confirmed' || status === 'completed') {
-            colorClass = 'badge-green';
-        } else if (status === 'cancelled') {
-            colorClass = 'badge-red';
-        } else if (status === 'scheduled') {
-            colorClass = 'badge-blue';
-        } else if (status === 'in-progress') {
-            colorClass = 'badge-purple';
-        }
+        if (status === 'confirmed' || status === 'completed') colorClass = 'badge-green';
+        else if (status === 'cancelled') colorClass = 'badge-red';
+        else if (status === 'scheduled') colorClass = 'badge-blue';
+        else if (status === 'in-progress') colorClass = 'badge-purple';
         return '<span class="badge ' + colorClass + '">' + status.charAt(0).toUpperCase() + status.slice(1) + '</span>';
     }
 
     // ================================================================
-    // FETCH APPOINTMENTS DATA - FULL TABLE UPDATE
+    // FETCH APPOINTMENTS DATA
     // ================================================================
     function fetchAppointmentsData() {
         var statusFilter = '<?= $status_filter ?>';
@@ -1477,14 +1093,10 @@ include_once '../../components/reception_sidebar.php';
                         now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                     document.getElementById('lastUpdateTime').textContent = '⏱ ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                     
-                    if (data.notification) {
-                        showToast('📋 Update', data.notification, 'info');
-                    }
+                    if (data.notification) showToast('📋 Update', data.notification, 'info');
                 }
             })
-            .catch(function(error) {
-                console.error('Fetch appointments error:', error);
-            });
+            .catch(function(error) { console.error('Fetch appointments error:', error); });
     }
 
     // ================================================================
@@ -1556,7 +1168,6 @@ include_once '../../components/reception_sidebar.php';
         });
         
         tbody.innerHTML = html;
-        
         document.getElementById('recordsCount').textContent = totalRecords;
         document.getElementById('footerRecordsCount').textContent = totalRecords;
         document.getElementById('totalRecordsCount').textContent = totalRecords;
@@ -1567,38 +1178,17 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     function updateStatsCounts(statusCounts) {
         var statuses = ['scheduled', 'confirmed', 'in-progress', 'completed', 'cancelled'];
-        
         statuses.forEach(function(status) {
             var count = statusCounts[status] || 0;
-            
-            // Update stat cards
             var statElement = document.querySelector('.stat-count[data-status="' + status + '"]');
-            if (statElement) {
-                statElement.textContent = count;
-            }
-            
-            // Update filter buttons
-            var filterLinks = document.querySelectorAll('.filter-btn');
-            filterLinks.forEach(function(link) {
-                var text = link.textContent.trim();
-                if (text.toLowerCase().startsWith(status) || 
-                    (status === 'scheduled' && text.toLowerCase().startsWith('scheduled'))) {
-                    var matches = text.match(/\((\d+)\)/);
-                    if (matches) {
-                        link.textContent = link.textContent.replace(/\((\d+)\)/, '(' + count + ')');
-                    }
-                }
-            });
+            if (statElement) statElement.textContent = count;
         });
         
-        // Update "All" count
         var total = Object.values(statusCounts).reduce(function(a, b) { return a + b; }, 0);
         var allLink = document.querySelector('.filter-btn:not([href*="status="])');
         if (allLink) {
             var matches = allLink.textContent.match(/\((\d+)\)/);
-            if (matches) {
-                allLink.textContent = allLink.textContent.replace(/\((\d+)\)/, '(' + total + ')');
-            }
+            if (matches) allLink.textContent = allLink.textContent.replace(/\((\d+)\)/, '(' + total + ')');
         }
     }
 
@@ -1624,21 +1214,15 @@ include_once '../../components/reception_sidebar.php';
     // START / STOP AUTO-UPDATE
     // ================================================================
     var updateInterval = null;
-    var isUpdating = false;
 
     function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
+        if (updateInterval) clearInterval(updateInterval);
         fetchAppointmentsData();
         updateInterval = setInterval(fetchAppointmentsData, 3000);
     }
 
     function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-        }
+        if (updateInterval) { clearInterval(updateInterval); updateInterval = null; }
     }
 
     // ================================================================
@@ -1659,14 +1243,11 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
+    // VISIBILITY CHANGE
     // ================================================================
     document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
+        if (document.hidden) stopAutoUpdate();
+        else startAutoUpdate();
     });
 
     // ================================================================
@@ -1682,10 +1263,6 @@ include_once '../../components/reception_sidebar.php';
             e.preventDefault();
             window.location.href = 'new_appointment.php';
         }
-        if (e.key === 'Escape' && document.activeElement === searchInput) {
-            searchInput.value = '';
-            searchInput.blur();
-        }
         if (e.key === 'F5') {
             e.preventDefault();
             manualRefresh();
@@ -1696,22 +1273,15 @@ include_once '../../components/reception_sidebar.php';
     // INITIALIZE
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 1500);
+        setTimeout(startAutoUpdate, 1500);
     });
 
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c📅 Braick - Appointments List (Auto-Update Active)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📅 Braick - Appointments List (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ USING NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Total Appointments: <?= $total_appointments_all ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Showing <?= $total_records ?> appointments', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📆 Period: <?= $period_labels[$period_filter] ?? 'All' ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c🔄 Full auto-update: Every 3 seconds (ALL data)', 'font-size:13px; color:#34D399;');
-    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Full auto-update: Every 3 seconds', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
