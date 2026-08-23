@@ -1,9 +1,14 @@
 <?php
 // ================================================================
-// FILE: frontend/components/laboratory_header.php
-// LABORATORY - SHARED HEADER (WITH TOGGLE BUTTON)
+// FILE: frontend/components/laboratory_sidebar.php
+// LABORATORY - SHARED SIDEBAR
+// USING NEW DATABASE: dispensary_db (lab_tests table)
+// WITH AUTO-UPDATE EVERY 3 SECONDS (SELF-CONTAINED)
+// WITH SIDEBAR TOGGLE - FULLY WORKING WITH HEADER
 // FULLY RESPONSIVE - ALL DEVICES
 // WITH LOGIN PROTECTION
+// REMOVED: Reports menu item
+// FIXED: Pending link points to pending_tests.php
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -61,36 +66,58 @@ try {
 }
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS COUNT
+// GET REAL DATA FOR BADGES - USING NEW DATABASE
 // ================================================================
-$unread_notifications = 0;
-$notifications_list = [];
+$pending_count = 0;
+$in_progress_count = 0;
+$completed_count = 0;
+$today_tests = 0;
 
-if ($db !== null && $user_id > 0) {
+if ($db !== null && isset($_SESSION['user_id'])) {
     try {
+        // ================================================================
+        // 1. PENDING: FROM lab_tests
+        // ================================================================
         $stmt = $db->prepare("
-            SELECT COUNT(*) as total 
-            FROM notifications 
-            WHERE user_id = ? AND is_read = 0
+            SELECT COUNT(*) as count FROM lab_tests 
+            WHERE branch_id = ? AND (status IS NULL OR status = 'pending' OR status = '')
         ");
-        $stmt->execute([$user_id]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        $unread_notifications = (int)($result['total'] ?? 0);
+        $stmt->execute([$user_branch_id]);
+        $pending_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
+        // ================================================================
+        // 2. IN PROGRESS: FROM lab_tests
+        // ================================================================
         $stmt = $db->prepare("
-            SELECT id, title, message, type, link, is_read, created_at 
-            FROM notifications 
-            WHERE user_id = ? 
-            ORDER BY created_at DESC 
-            LIMIT 5
+            SELECT COUNT(*) as count FROM lab_tests 
+            WHERE branch_id = ? AND status = 'in_progress'
         ");
-        $stmt->execute([$user_id]);
-        $notifications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $stmt->execute([$user_branch_id]);
+        $in_progress_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // ================================================================
+        // 3. COMPLETED: FROM lab_tests
+        // ================================================================
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_tests 
+            WHERE branch_id = ? AND status = 'completed'
+        ");
+        $stmt->execute([$user_branch_id]);
+        $completed_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // ================================================================
+        // 4. TODAY'S TESTS: FROM lab_tests
+        // ================================================================
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count FROM lab_tests 
+            WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
+        ");
+        $stmt->execute([$user_branch_id]);
+        $today_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
     } catch (Exception $e) {
-        error_log("Notification error: " . $e->getMessage());
-        $unread_notifications = 0;
-        $notifications_list = [];
+        // Keep counts as 0
+        error_log("Sidebar stats error: " . $e->getMessage());
     }
 }
 
@@ -102,962 +129,749 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// LOGO PATH
-// ================================================================
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
-// GET CURRENT PAGE
+// DETECT CURRENT PAGE
 // ================================================================
 $current_page = basename($_SERVER['PHP_SELF']);
-$page_title = ucfirst(str_replace('.php', '', $current_page));
-if (empty($page_title) || $page_title == '') {
-    $page_title = 'Dashboard';
+
+// ================================================================
+// FUNCTION TO CHECK ACTIVE STATE
+// ================================================================
+function isActive($page) {
+    global $current_page;
+    if ($page === $current_page) {
+        return 'active';
+    }
+    return '';
 }
 
 // ================================================================
-// DARK MODE
+// LOGO PATH
 // ================================================================
-$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
-?>
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= $dark_mode ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Braick Dispensary - Laboratory <?= $page_title ?></title>
-    
-    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    
-    <style>
-        :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --warning-light: #FBBF24;
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
-            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #93C5FD;
-            --primary-bg: #1E3A5F;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAVIGATION
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-        }
-        
-        /* ================================================================
-           SIDEBAR TOGGLE BUTTON IN HEADER (KAMA PHARMACY)
-           ================================================================ */
-        .header-toggle-btn {
-            display: none;
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            padding: 8px 14px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            align-items: center;
-            gap: 8px;
-            box-shadow: 0 2px 12px rgba(11, 94, 215, 0.25);
-            position: relative;
-        }
-        
-        .header-toggle-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.35);
-        }
-        
-        .header-toggle-btn .toggle-label {
-            font-size: 0.65rem;
-            font-weight: 600;
-            letter-spacing: 0.05em;
-        }
-        
-        [data-theme="dark"] .header-toggle-btn {
-            background: #0A4CA8;
-            box-shadow: 0 2px 12px rgba(10, 76, 168, 0.3);
-        }
-        
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .header-toggle-btn { display: flex !important; }
-        }
-        
-        @media (max-width: 768px) {
-            .header-toggle-btn {
-                padding: 6px 10px;
-                font-size: 0.8rem;
-                border-radius: 8px;
-            }
-            .header-toggle-btn .toggle-label {
-                font-size: 0.55rem;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .header-toggle-btn {
-                padding: 5px 8px;
-                font-size: 0.7rem;
-                border-radius: 6px;
-            }
-            .header-toggle-btn .toggle-label {
-                display: none;
-            }
-        }
-        
-        /* ================================================================
-           SEARCH BAR - SMALLER WIDTH (KAMA PHARMACY)
-           ================================================================ */
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 0 1 320px;
-            max-width: 320px;
-            min-width: 160px;
-            position: relative;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 12px;
-            width: 100%;
-            font-size: 0.8rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-            font-size: 0.75rem;
-        }
-        
-        .top-nav .search-wrapper .search-icon {
-            padding: 0 8px 0 12px;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 6px 14px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.75rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-            font-weight: 500;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        @media (max-width: 1024px) {
-            .top-nav .search-wrapper {
-                flex: 0 1 220px;
-                max-width: 220px;
-            }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper {
-                flex: 0 1 160px;
-                max-width: 160px;
-                min-width: 100px;
-            }
-            .top-nav .search-wrapper .search-btn {
-                padding: 4px 10px;
-                font-size: 0.65rem;
-            }
-            .top-nav .search-wrapper input {
-                padding: 6px 8px;
-                font-size: 0.7rem;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .top-nav .search-wrapper {
-                flex: 0 1 120px;
-                max-width: 120px;
-                min-width: 80px;
-            }
-            .top-nav .search-wrapper .search-btn {
-                display: none;
-            }
-            .top-nav .search-wrapper .search-icon {
-                padding: 0 4px 0 8px;
-                font-size: 0.7rem;
-            }
-        }
-        
-        /* ================================================================
-           DATE & TIME CARD (KAMA PHARMACY)
-           ================================================================ */
-        .datetime-card {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            background: var(--primary-bg);
-            padding: 5px 14px 5px 10px;
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            white-space: nowrap;
-        }
-        
-        .datetime-card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 2px 12px rgba(11, 94, 215, 0.1);
-        }
-        
-        .datetime-card .dt-icon {
-            color: var(--primary);
-            font-size: 0.75rem;
-            opacity: 0.7;
-        }
-        
-        .datetime-card .dt-text {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            letter-spacing: 0.01em;
-        }
-        
-        .datetime-card .dt-time {
-            font-size: 0.8rem;
-            color: var(--primary);
-            font-weight: 700;
-            font-family: 'Courier New', monospace;
-            padding: 0 4px;
-        }
-        
-        .datetime-card .dt-divider {
-            width: 1px;
-            height: 18px;
-            background: var(--border-color);
-            margin: 0 4px;
-        }
-        
-        [data-theme="dark"] .datetime-card {
-            background: #1E3A5F;
-            border-color: #334155;
-        }
-        
-        [data-theme="dark"] .datetime-card .dt-time {
-            color: #60A5FA;
-        }
-        
-        @media (max-width: 768px) {
-            .datetime-card {
-                padding: 4px 10px 4px 8px;
-                gap: 4px;
-            }
-            .datetime-card .dt-text {
-                font-size: 0.6rem;
-            }
-            .datetime-card .dt-time {
-                font-size: 0.7rem;
-            }
-            .datetime-card .dt-divider {
-                height: 14px;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .datetime-card {
-                padding: 3px 6px;
-                border-radius: 6px;
-            }
-            .datetime-card .dt-text {
-                display: none;
-            }
-            .datetime-card .dt-time {
-                font-size: 0.65rem;
-            }
-            .datetime-card .dt-divider {
-                display: none;
-            }
-            .datetime-card .dt-icon {
-                font-size: 0.6rem;
-            }
-        }
-        
-        /* ================================================================
-           AVATAR
-           ================================================================ */
-        .top-nav .avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        /* ================================================================
-           ICON BUTTON
-           ================================================================ */
-        .top-nav .icon-btn {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        /* ================================================================
-           NOTIFICATION BELL
-           ================================================================ */
-        .notif-bell-wrapper {
-            position: relative;
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: -2px;
-            right: -2px;
-            min-width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            font-size: 0.5rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 2px solid var(--bg-nav);
-            padding: 0 4px;
-            line-height: 1;
-        }
-        
-        .notif-dot.has-notif {
-            background: var(--danger);
-            color: white;
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.no-notif {
-            background: var(--gray-400);
-            color: white;
-            font-size: 0.45rem;
-            animation: none;
-            min-width: 16px;
-            height: 16px;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-        
-        /* ================================================================
-           NOTIFICATION DROPDOWN
-           ================================================================ */
-        .notif-dropdown {
-            position: absolute;
-            top: 46px;
-            right: 0;
-            width: 360px;
-            max-height: 420px;
-            background: var(--bg-card);
-            border-radius: 12px;
-            border: 2px solid var(--border-color);
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-            z-index: 100;
-            display: none;
-            overflow: hidden;
-        }
-        
-        .notif-dropdown.open {
-            display: block;
-            animation: fadeInDown 0.3s ease;
-        }
-        
-        @keyframes fadeInDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .notif-dropdown .notif-header {
-            padding: 10px 16px;
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background: var(--bg-body);
-        }
-        
-        .notif-dropdown .notif-header .notif-title {
-            font-weight: 600;
-            font-size: 0.8rem;
-            color: var(--text-primary);
-        }
-        
-        .notif-dropdown .notif-header .notif-mark-all {
-            font-size: 0.65rem;
-            color: var(--primary);
-            cursor: pointer;
-            text-decoration: none;
-            font-weight: 500;
-        }
-        
-        .notif-dropdown .notif-header .notif-mark-all:hover {
-            text-decoration: underline;
-        }
-        
-        .notif-dropdown .notif-list {
-            max-height: 300px;
-            overflow-y: auto;
-            padding: 4px 0;
-        }
-        
-        .notif-dropdown .notif-list::-webkit-scrollbar {
-            width: 4px;
-        }
-        
-        .notif-dropdown .notif-list::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 4px;
-        }
-        
-        .notif-dropdown .notif-item {
-            padding: 8px 14px;
-            border-bottom: 1px solid var(--border-color);
-            transition: background 0.2s ease;
-            cursor: pointer;
-            text-decoration: none;
-            display: block;
-        }
-        
-        .notif-dropdown .notif-item:hover {
-            background: var(--primary-bg);
-        }
-        
-        .notif-dropdown .notif-item:last-child {
-            border-bottom: none;
-        }
-        
-        .notif-dropdown .notif-item .notif-item-title {
-            font-weight: 600;
-            font-size: 0.75rem;
-            color: var(--text-primary);
-        }
-        
-        .notif-dropdown .notif-item .notif-item-message {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
-            line-height: 1.4;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-        
-        .notif-dropdown .notif-item .notif-item-time {
-            font-size: 0.55rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-            display: block;
-        }
-        
-        .notif-dropdown .notif-item.unread {
-            border-left: 3px solid var(--primary);
-            background: var(--primary-bg);
-        }
-        
-        .notif-dropdown .notif-item.unread:hover {
-            background: var(--success-bg);
-        }
-        
-        .notif-dropdown .notif-empty {
-            padding: 30px 20px;
-            text-align: center;
-            color: var(--text-secondary);
-        }
-        
-        .notif-dropdown .notif-empty i {
-            font-size: 2rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 8px;
-        }
-        
-        .notif-dropdown .notif-empty p {
-            font-size: 0.8rem;
-        }
-        
-        .notif-dropdown .notif-footer {
-            padding: 8px 16px;
-            border-top: 2px solid var(--border-color);
-            text-align: center;
-            background: var(--bg-body);
-        }
-        
-        .notif-dropdown .notif-footer a {
-            font-size: 0.7rem;
-            color: var(--primary);
-            text-decoration: none;
-            font-weight: 500;
-        }
-        
-        .notif-dropdown .notif-footer a:hover {
-            text-decoration: underline;
-        }
-        
-        [data-theme="dark"] .notif-dropdown .notif-item.unread {
-            background: #1E3A5F;
-        }
-        
-        [data-theme="dark"] .notif-dropdown .notif-item.unread:hover {
-            background: #1A3A2A;
-        }
-        
-        /* ================================================================
-           DARK MODE TOGGLE
-           ================================================================ */
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 4px 10px;
-            cursor: pointer;
-            font-size: 0.75rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            text-decoration: none;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.8rem; }
-        
-        /* ================================================================
-           BRANCH BADGE
-           ================================================================ */
-        .branch-badge {
-            display: inline-block;
-            font-size: 0.55rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-            white-space: nowrap;
-        }
-        
-        [data-theme="dark"] .branch-badge {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        /* ================================================================
-           BADGE
-           ================================================================ */
-        .badge {
-            padding: 2px 8px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            color: white;
-            border: none;
-        }
-        
-        .badge-blue { background: var(--primary); }
-        .badge-green { background: var(--success); }
-        .badge-gray { background: var(--gray-500); }
-        .badge-yellow { background: #D97706; }
-        .badge-red { background: var(--danger); }
-        .badge-purple { background: #7C3AED; }
-        .badge-pink { background: #DB2777; }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .notif-dropdown { right: -20px; width: 320px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .datetime { display: none; }
-            .notif-dropdown { right: -30px; width: 300px; }
-            .branch-badge { font-size: 0.5rem; padding: 1px 8px; }
-        }
-        
-        @media (max-width: 640px) {
-            .notif-dropdown { right: -40px; width: 280px; }
-            .dark-toggle-btn { padding: 3px 6px; font-size: 0.65rem; }
-            .dark-toggle-btn span { display: none; }
-            .top-nav .avatar { width: 30px; height: 30px; }
-            .top-nav .icon-btn { width: 30px; height: 30px; font-size: 0.8rem; }
-        }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-    </style>
-</head>
-<body>
+$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        
-        <!-- ================================================================ -->
-        <!-- SIDEBAR TOGGLE BUTTON IN HEADER (KAMA PHARMACY) -->
-        <!-- ================================================================ -->
-        <button class="header-toggle-btn" id="sidebarToggleBtn" aria-label="Toggle Sidebar">
-            <i class="fas fa-bars"></i>
-            <span class="toggle-label">MENU</span>
-        </button>
-        
-        <!-- ================================================================ -->
-        <!-- SEARCH BAR -->
-        <!-- ================================================================ -->
-        <div class="search-wrapper">
-            <span class="search-icon"><i class="fas fa-search"></i></span>
-            <input type="text" id="searchInput" placeholder="Search tests...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
+// ================================================================
+// HANDLE AJAX REQUEST FOR SIDEBAR DATA (SELF-CONTAINED)
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_lab_sidebar_data') {
+    header('Content-Type: application/json');
     
-    <div class="flex items-center gap-3">
-        
-        <!-- Branch Badge -->
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <!-- ================================================================ -->
-        <!-- DATE & TIME CARD -->
-        <!-- ================================================================ -->
-        <div class="datetime-card" id="datetimeCard">
-            <span class="dt-icon"><i class="fas fa-calendar-alt"></i></span>
-            <span class="dt-text" id="dateText"><?= date('M d, Y') ?></span>
-            <span class="dt-divider"></span>
-            <span class="dt-icon"><i class="fas fa-clock"></i></span>
-            <span class="dt-time" id="timeText"><?= date('h:i:s A') ?></span>
-        </div>
-        
-        <!-- ================================================================ -->
-        <!-- DARK MODE TOGGLE -->
-        <!-- ================================================================ -->
-        <button class="dark-toggle-btn" id="darkModeToggle" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas <?= $dark_mode === 'dark' ? 'fa-sun' : 'fa-moon' ?>"></i>
-            <span id="darkText"><?= $dark_mode === 'dark' ? 'Light' : 'Dark' ?></span>
-        </button>
-        
-        <!-- ================================================================ -->
-        <!-- NOTIFICATION BELL -->
-        <!-- ================================================================ -->
-        <div class="notif-bell-wrapper">
-            <button class="icon-btn" id="notifBellBtn" onclick="toggleNotifications()" title="Notifications">
-                <i class="fas fa-bell text-lg"></i>
-                <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>">
-                    <?php if ($unread_notifications > 0): ?>
-                        <?= $unread_notifications > 9 ? '9+' : $unread_notifications ?>
-                    <?php else: ?>
-                        <i class="fas fa-check" style="font-size:0.35rem;"></i>
-                    <?php endif; ?>
-                </span>
-            </button>
+    // Check if user is logged in for AJAX requests
+    if (!isset($_SESSION['user_id'])) {
+        echo json_encode(['success' => false, 'error' => 'Not logged in']);
+        exit;
+    }
+    
+    $branch_id = (int)($_POST['branch_id'] ?? $_SESSION['branch_id'] ?? 1);
+    
+    $response = [
+        'success' => false,
+        'pending' => 0,
+        'in_progress' => 0,
+        'completed' => 0,
+        'today_tests' => 0
+    ];
+    
+    if ($db !== null) {
+        try {
+            // 1. Pending - FROM lab_tests
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_tests 
+                WHERE branch_id = ? AND (status IS NULL OR status = 'pending' OR status = '')
+            ");
+            $stmt->execute([$branch_id]);
+            $response['pending'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            <!-- Notification Dropdown -->
-            <div class="notif-dropdown" id="notifDropdown">
-                <div class="notif-header">
-                    <span class="notif-title">
-                        <i class="fas fa-bell mr-1"></i> Notifications
-                        <?php if ($unread_notifications > 0): ?>
-                            <span class="badge badge-red" style="font-size:0.55rem; padding:1px 8px;">
-                                <?= $unread_notifications ?> new
-                            </span>
-                        <?php endif; ?>
-                    </span>
-                    <?php if ($unread_notifications > 0): ?>
-                        <a href="#" class="notif-mark-all" onclick="markAllRead(event)">Mark all as read</a>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="notif-list" id="notifList">
-                    <?php if (count($notifications_list) > 0): ?>
-                        <?php foreach ($notifications_list as $notif): ?>
-                            <a href="<?= !empty($notif['link']) ? $notif['link'] : '#' ?>" 
-                               class="notif-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>"
-                               onclick="markNotificationRead(<?= $notif['id'] ?>, event)">
-                                <div class="notif-item-title">
-                                    <?= htmlspecialchars($notif['title']) ?>
-                                    <?php if ($notif['is_read'] == 0): ?>
-                                        <span class="badge badge-blue" style="font-size:0.45rem; padding:0 6px;">New</span>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="notif-item-message"><?= htmlspecialchars($notif['message']) ?></div>
-                                <span class="notif-item-time">
-                                    <i class="far fa-clock mr-1"></i>
-                                    <?php 
-                                        $time = strtotime($notif['created_at']);
-                                        $diff = time() - $time;
-                                        if ($diff < 60) {
-                                            echo 'Just now';
-                                        } elseif ($diff < 3600) {
-                                            echo floor($diff / 60) . ' min ago';
-                                        } elseif ($diff < 86400) {
-                                            echo floor($diff / 3600) . ' hours ago';
-                                        } else {
-                                            echo date('M d, Y', $time);
-                                        }
-                                    ?>
-                                </span>
-                            </a>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <div class="notif-empty">
-                            <i class="fas fa-bell-slash"></i>
-                            <p>No notifications</p>
-                            <p style="font-size:0.65rem; color:var(--text-secondary);">All caught up!</p>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="notif-footer">
-                    <a href="notifications.php">View all notifications</a>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Profile Avatar -->
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2236%22 height=%2236%22%3E%3Crect width=%2236%22 height=%2236%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2218%22 y=%2224%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+            // 2. In Progress - FROM lab_tests
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_tests 
+                WHERE branch_id = ? AND status = 'in_progress'
+            ");
+            $stmt->execute([$branch_id]);
+            $response['in_progress'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 3. Completed - FROM lab_tests
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_tests 
+                WHERE branch_id = ? AND status = 'completed'
+            ");
+            $stmt->execute([$branch_id]);
+            $response['completed'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            // 4. Today's Tests - FROM lab_tests
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count FROM lab_tests 
+                WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
+            ");
+            $stmt->execute([$branch_id]);
+            $response['today_tests'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+            
+            $response['success'] = true;
+            
+        } catch (Exception $e) {
+            $response['success'] = false;
+            $response['error'] = $e->getMessage();
+        }
+    }
+    
+    echo json_encode($response);
+    exit;
+}
+?>
+<style>
+    /* ================================================================
+       SIDEBAR STYLES - FULLY FIXED FOR MOBILE
+       ================================================================ */
+    
+    /* Sidebar Container */
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 280px;
+        background: #0B4EA8;
+        color: white;
+        z-index: 9999;
+        overflow-y: auto;
+        overflow-x: hidden;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        transform: translateX(-100%);
+        box-shadow: 4px 0 30px rgba(0,0,0,0.3);
+        padding-bottom: 20px;
+    }
+    
+    [data-theme="dark"] .sidebar {
+        background: #0A3D7A;
+        box-shadow: 4px 0 30px rgba(0,0,0,0.5);
+    }
+    
+    /* Sidebar Open State - CRITICAL: !important ensures it works */
+    .sidebar.open {
+        transform: translateX(0) !important;
+    }
+    
+    /* Scrollbar */
+    .sidebar::-webkit-scrollbar { width: 5px; }
+    .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
+    .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
+    .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
+    
+    /* ================================================================
+       OVERLAY - For mobile
+       ================================================================ */
+    #sidebarOverlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.6);
+        z-index: 9998;
+        display: none;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        transition: opacity 0.3s ease;
+    }
+    
+    #sidebarOverlay.active {
+        display: block !important;
+    }
+    
+    /* ================================================================
+       SIDEBAR BRAND / HEADER
+       ================================================================ */
+    .sidebar-brand {
+        padding: 18px 16px 14px;
+        border-bottom: 2px solid rgba(255,255,255,0.08);
+        background: #0B4EA8;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+    
+    [data-theme="dark"] .sidebar-brand {
+        background: #0A3D7A;
+    }
+    
+    .sidebar-brand .logo {
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+        object-fit: cover;
+        background: white;
+        padding: 4px;
+        border: 2px solid rgba(255,255,255,0.1);
+    }
+    
+    .sidebar-brand .brand-text {
+        color: white;
+        font-weight: 700;
+        font-size: 0.95rem;
+        line-height: 1.2;
+    }
+    
+    .sidebar-brand .brand-sub {
+        color: #9EC5FE;
+        font-size: 0.65rem;
+        font-weight: 500;
+    }
+    
+    /* ================================================================
+       SIDEBAR CLOSE BUTTON (Mobile)
+       ================================================================ */
+    .sidebar-close-btn {
+        display: none;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        color: white;
+        font-size: 1.2rem;
+        cursor: pointer;
+        padding: 4px 10px;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+        margin-left: auto;
+    }
+    
+    .sidebar-close-btn:hover {
+        background: rgba(255,255,255,0.2);
+        transform: scale(1.05);
+    }
+    
+    @media (max-width: 1024px) {
+        .sidebar-close-btn {
+            display: block;
+        }
+    }
+    
+    /* ================================================================
+       NAVIGATION
+       ================================================================ */
+    .sidebar-nav {
+        padding: 10px 8px 20px;
+    }
+    
+    .sidebar-nav .nav-label {
+        font-size: 0.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #9EC5FE;
+        padding: 0 10px;
+        margin: 12px 0 4px;
+        font-weight: 700;
+    }
+    
+    .sidebar-nav .nav-label:first-of-type {
+        margin-top: 0;
+    }
+    
+    /* ================================================================
+       SIDEBAR LINKS
+       ================================================================ */
+    .sidebar-link {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        color: #D2E3FC;
+        text-decoration: none;
+        transition: all 0.25s ease;
+        font-size: 0.8rem;
+        font-weight: 500;
+        margin: 1px 0;
+        background: transparent;
+        cursor: pointer;
+        border: none;
+        width: 100%;
+        text-align: left;
+        position: relative;
+    }
+    
+    .sidebar-link:hover {
+        background: #0AA84F;
+        color: white;
+        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
+        transform: translateX(4px);
+    }
+    
+    .sidebar-link.active {
+        background: #0AA84F;
+        color: white;
+        box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
+    }
+    
+    .sidebar-link.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 20%;
+        bottom: 20%;
+        width: 4px;
+        background: white;
+        border-radius: 0 4px 4px 0;
+    }
+    
+    .sidebar-link i {
+        width: 20px;
+        text-align: center;
+        font-size: 0.9rem;
+        flex-shrink: 0;
+    }
+    
+    /* ================================================================
+       BADGES ON SIDEBAR
+       ================================================================ */
+    .sidebar-link .badge {
+        margin-left: auto;
+        background: rgba(255,255,255,0.15);
+        padding: 1px 8px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        color: white;
+        transition: all 0.3s ease;
+        flex-shrink: 0;
+        min-width: 20px;
+        text-align: center;
+    }
+    
+    .sidebar-link .badge.danger {
+        background: #EF4444;
+        animation: pulse-badge 2s infinite;
+    }
+    
+    .sidebar-link .badge.green {
+        background: #059669;
+    }
+    
+    .sidebar-link .badge.orange {
+        background: #D97706;
+    }
+    
+    .sidebar-link .badge.blue {
+        background: #0B5ED7;
+    }
+    
+    .sidebar-link .badge.purple {
+        background: #7C3AED;
+    }
+    
+    .sidebar-link:hover .badge {
+        background: rgba(255,255,255,0.25);
+    }
+    
+    .sidebar-link.active .badge {
+        background: rgba(255,255,255,0.25);
+        color: white;
+    }
+    
+    @keyframes pulse-badge {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+    }
+    
+    /* ================================================================
+       LOGOUT LINK - USING ABSOLUTE PATH
+       ================================================================ */
+    .sidebar-link.logout-link {
+        border-top: 2px solid rgba(255,255,255,0.08);
+        padding-top: 10px;
+        margin-top: 6px;
+        color: #FCA5A5;
+    }
+    
+    .sidebar-link.logout-link:hover {
+        background: #DC2626;
+        color: white;
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+    }
+    
+    /* ================================================================
+       BADGE UPDATE ANIMATION
+       ================================================================ */
+    .badge-update {
+        animation: badgePop 0.3s ease;
+    }
+    
+    @keyframes badgePop {
+        0% { transform: scale(0.5); opacity: 0; }
+        70% { transform: scale(1.3); }
+        100% { transform: scale(1); opacity: 1; }
+    }
+    
+    /* ================================================================
+       SIDEBAR STATUS (Footer)
+       ================================================================ */
+    .sidebar-status {
+        padding: 10px 16px;
+        border-top: 2px solid rgba(255,255,255,0.08);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: #0B4EA8;
+        position: sticky;
+        bottom: 0;
+    }
+    
+    [data-theme="dark"] .sidebar-status {
+        background: #0A3D7A;
+    }
+    
+    .sidebar-status .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+    }
+    
+    .sidebar-status .status-dot.online {
+        background: #34D399;
+        animation: pulse-dot 1.5s infinite;
+    }
+    
+    .sidebar-status .status-dot.offline {
+        background: #94A3B8;
+    }
+    
+    .sidebar-status .status-text {
+        font-size: 0.7rem;
+        color: #D2E3FC;
+    }
+    
+    .sidebar-status .status-time {
+        font-size: 0.55rem;
+        color: #9EC5FE;
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .sidebar-status .status-time .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34D399;
+        display: inline-block;
+        animation: pulse-dot 1.5s infinite;
+    }
+    
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.8); }
+    }
+    
+    /* ================================================================
+       RESPONSIVE BREAKPOINTS
+       ================================================================ */
+    
+    /* Desktop: Sidebar always visible */
+    @media (min-width: 1025px) {
+        .sidebar {
+            transform: translateX(0) !important;
+            z-index: 50;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
+        }
+        #sidebarOverlay {
+            display: none !important;
+        }
+        .sidebar-close-btn {
+            display: none !important;
+        }
+    }
+    
+    /* Tablet and below: Sidebar hidden by default */
+    @media (max-width: 1024px) {
+        .sidebar {
+            width: 280px;
+            transform: translateX(-100%);
+            z-index: 9999;
+            border-radius: 0 12px 12px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        #sidebarOverlay {
+            display: none;
+            z-index: 9998;
+        }
+        #sidebarOverlay.active {
+            display: block !important;
+        }
+        .sidebar-brand {
+            padding: 14px 14px 10px;
+        }
+        .sidebar-brand .logo {
+            width: 36px;
+            height: 36px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.85rem;
+        }
+        .sidebar-link {
+            padding: 7px 10px;
+            font-size: 0.75rem;
+            gap: 8px;
+        }
+        .sidebar-link i {
+            width: 18px;
+            font-size: 0.8rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.55rem;
+            padding: 1px 7px;
+        }
+        .sidebar-status {
+            padding: 8px 14px;
+        }
+    }
+    
+    /* Mobile phones */
+    @media (max-width: 768px) {
+        .sidebar {
+            width: 300px;
+            transform: translateX(-100%);
+            border-radius: 0 16px 16px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        .sidebar-brand {
+            padding: 12px 12px 10px;
+        }
+        .sidebar-brand .logo {
+            width: 34px;
+            height: 34px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.8rem;
+        }
+        .sidebar-link {
+            padding: 6px 10px;
+            font-size: 0.7rem;
+            gap: 8px;
+        }
+        .sidebar-link i {
+            width: 16px;
+            font-size: 0.75rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.5rem;
+            padding: 1px 6px;
+        }
+        .sidebar-nav .nav-label {
+            font-size: 0.45rem;
+        }
+        .sidebar-status {
+            padding: 6px 12px;
+        }
+        .sidebar-status .status-text {
+            font-size: 0.6rem;
+        }
+        .sidebar-status .status-time {
+            font-size: 0.5rem;
+        }
+    }
+    
+    /* Small phones */
+    @media (max-width: 480px) {
+        .sidebar {
+            width: 100%;
+            max-width: 320px;
+            transform: translateX(-100%);
+            border-radius: 0 20px 20px 0;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        .sidebar-brand {
+            padding: 10px 10px 8px;
+        }
+        .sidebar-brand .logo {
+            width: 30px;
+            height: 30px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.75rem;
+        }
+        .sidebar-link {
+            padding: 5px 8px;
+            font-size: 0.65rem;
+            gap: 6px;
+        }
+        .sidebar-link i {
+            width: 14px;
+            font-size: 0.7rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.45rem;
+            padding: 1px 5px;
+            min-width: 16px;
+        }
+        .sidebar-nav .nav-label {
+            font-size: 0.4rem;
+            padding: 0 8px;
+        }
+        .sidebar-status {
+            padding: 4px 10px;
+        }
+        .sidebar-status .status-text {
+            font-size: 0.55rem;
+        }
+        .sidebar-status .status-time {
+            font-size: 0.45rem;
+        }
+        .sidebar-status .status-dot {
+            width: 6px;
+            height: 6px;
+        }
+    }
+</style>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- SIDEBAR OVERLAY (Mobile) -->
+<!-- ================================================================ -->
+<div id="sidebarOverlay"></div>
+
+<!-- ================================================================ -->
+<!-- SIDEBAR - LABORATORY -->
+<!-- ================================================================ -->
+<aside class="sidebar" id="sidebar">
+    
+    <!-- ================================================================ -->
+    <!-- BRAND / HEADER -->
+    <!-- ================================================================ -->
+    <div class="sidebar-brand">
+        <div class="flex items-center gap-3">
+            <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+            <div>
+                <p class="brand-text">Braick Dispensary</p>
+                <p class="brand-sub">Laboratory Panel</p>
+            </div>
+            <!-- Close button for mobile -->
+            <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- NAVIGATION -->
+    <!-- ================================================================ -->
+    <nav class="sidebar-nav">
+        
+        <!-- ============================================================ -->
+        <!-- LABORATORY MENU -->
+        <!-- ============================================================ -->
+        <div class="nav-label">Laboratory</div>
+        
+        <!-- 1. Dashboard -->
+        <a href="/dispensary_system/frontend/pages/laboratory/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
+            <i class="fas fa-home"></i> Dashboard
+        </a>
+        
+        <!-- ============================================================ -->
+        <!-- LAB TESTS (was Lab Requests) -->
+        <!-- ============================================================ -->
+        <div class="nav-label mt-2">Lab Tests</div>
+        
+        <!-- Pending - FIXED: Now points to pending_tests.php -->
+        <a href="/dispensary_system/frontend/pages/laboratory/pending_tests.php" class="sidebar-link <?= isActive('pending_tests.php') ?>" id="sidebarPendingLink">
+            <i class="fas fa-clock"></i> Pending
+            <span class="badge <?= $pending_count > 0 ? 'danger' : '' ?>" id="sidebarPendingBadge"><?= $pending_count ?></span>
+        </a>
+        
+        <!-- In Progress -->
+        <a href="/dispensary_system/frontend/pages/laboratory/in_progress_tests.php" class="sidebar-link <?= isActive('in_progress_tests.php') ?>" id="sidebarInProgressLink">
+            <i class="fas fa-spinner"></i> In Progress
+            <span class="badge <?= $in_progress_count > 0 ? 'orange' : '' ?>" id="sidebarInProgressBadge"><?= $in_progress_count ?></span>
+        </a>
+        
+        <!-- Completed -->
+        <a href="/dispensary_system/frontend/pages/laboratory/completed_tests.php" class="sidebar-link <?= isActive('completed_tests.php') ?>" id="sidebarCompletedLink">
+            <i class="fas fa-check-circle"></i> Completed
+            <span class="badge <?= $completed_count > 0 ? 'green' : '' ?>" id="sidebarCompletedBadge"><?= $completed_count ?></span>
+        </a>
+        
+        <!-- ============================================================ -->
+        <!-- RESULTS -->
+        <!-- ============================================================ -->
+        <div class="nav-label mt-2">Results</div>
+        
+        <!-- Results History -->
+        <a href="/dispensary_system/frontend/pages/laboratory/results_history.php" class="sidebar-link <?= isActive('results_history.php') ?>" id="sidebarResultsLink">
+            <i class="fas fa-history"></i> Results History
+            <span class="badge <?= $today_tests > 0 ? 'green' : '' ?>" id="sidebarTodayTests"><?= $today_tests ?></span>
+        </a>
+        
+        <!-- ============================================================ -->
+        <!-- ACCOUNT -->
+        <!-- ============================================================ -->
+        <div class="nav-label mt-2">Account</div>
+        
+        <!-- Profile -->
+        <a href="/dispensary_system/frontend/pages/laboratory/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
+            <i class="fas fa-user-circle"></i> Profile
+        </a>
+        
+        <!-- Logout - USING ABSOLUTE PATH -->
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
+            <i class="fas fa-sign-out-alt"></i> Logout
+        </a>
+        
+    </nav>
+    
+    <!-- ================================================================ -->
+    <!-- SIDEBAR STATUS (Footer) -->
+    <!-- ================================================================ -->
+    <div class="sidebar-status">
+        <span class="status-dot online" id="sidebarStatusDot"></span>
+        <span class="status-text" id="sidebarStatusText">Online</span>
+        <span class="status-time" id="sidebarStatusTime">
+            <span class="live-dot"></span>
+            <span id="sidebarLiveTime"><?= date('H:i:s') ?></span>
+        </span>
+    </div>
+</aside>
+
+<!-- ================================================================ -->
+<!-- JAVASCRIPT - FULL SIDEBAR FUNCTIONALITY -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE TOGGLE
+    // SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
     // ================================================================
     (function() {
-        var darkModeToggle = document.getElementById('darkModeToggle');
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var htmlElement = document.documentElement;
-        
-        var savedDarkMode = localStorage.getItem('darkMode');
-        if (savedDarkMode === 'true') {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
-        } else if (savedDarkMode === 'false') {
-            htmlElement.removeAttribute('data-theme');
-            if (darkIcon) darkIcon.className = 'fas fa-moon';
-            if (darkText) darkText.textContent = 'Dark';
-        } else {
-            var cookieDark = document.cookie.match(/dark_mode=([^;]+)/);
-            if (cookieDark && cookieDark[1] === 'true') {
-                htmlElement.setAttribute('data-theme', 'dark');
-                if (darkIcon) darkIcon.className = 'fas fa-sun';
-                if (darkText) darkText.textContent = 'Light';
-                localStorage.setItem('darkMode', 'true');
-            }
-        }
-        
-        if (darkModeToggle) {
-            darkModeToggle.addEventListener('click', function() {
-                var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-                if (isDark) {
-                    htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) darkIcon.className = 'fas fa-moon';
-                    if (darkText) darkText.textContent = 'Dark';
-                    localStorage.setItem('darkMode', 'false');
-                    document.cookie = "dark_mode=false; path=/; max-age=31536000";
-                } else {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) darkIcon.className = 'fas fa-sun';
-                    if (darkText) darkText.textContent = 'Light';
-                    localStorage.setItem('darkMode', 'true');
-                    document.cookie = "dark_mode=true; path=/; max-age=31536000";
-                }
-                console.log('🌙 Dark mode toggled to:', htmlElement.getAttribute('data-theme'));
-            });
-        }
-    })();
-
-    // ================================================================
-    // SIDEBAR TOGGLE - KAMA PHARMACY
-    // ================================================================
-    (function() {
-        function initToggle() {
-            var toggleBtn = document.getElementById('sidebarToggleBtn');
+        // Wait for DOM to be ready
+        function initSidebar() {
+            console.log('🔧 Initializing Laboratory Sidebar...');
+            
             var sidebar = document.getElementById('sidebar');
+            var toggleBtn = document.getElementById('sidebarToggle');
+            var closeBtn = document.getElementById('sidebarCloseBtn');
             var overlay = document.getElementById('sidebarOverlay');
             
-            if (!toggleBtn) {
-                console.log('⚠️ Sidebar toggle button not found');
-                return;
-            }
-            
-            if (!sidebar) {
-                console.log('⚠️ Sidebar not found');
-                return;
-            }
-            
+            // Create overlay if not exists
             if (!overlay) {
                 overlay = document.createElement('div');
                 overlay.id = 'sidebarOverlay';
                 overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
                 document.body.appendChild(overlay);
+                console.log('✅ Sidebar overlay created');
             }
             
+            if (!sidebar) {
+                console.error('❌ Sidebar element not found!');
+                return;
+            }
+            
+            // Toggle function
             function openSidebar() {
                 sidebar.classList.add('open');
                 overlay.style.display = 'block';
                 overlay.classList.add('active');
                 document.body.style.overflow = 'hidden';
-                if (toggleBtn) {
-                    toggleBtn.innerHTML = '<i class="fas fa-times"></i><span class="toggle-label">CLOSE</span>';
-                }
                 console.log('🔓 Sidebar opened');
             }
             
@@ -1066,9 +880,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
                 overlay.style.display = 'none';
                 overlay.classList.remove('active');
                 document.body.style.overflow = '';
-                if (toggleBtn) {
-                    toggleBtn.innerHTML = '<i class="fas fa-bars"></i><span class="toggle-label">MENU</span>';
-                }
                 console.log('🔒 Sidebar closed');
             }
             
@@ -1080,161 +891,284 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
                 }
             }
             
-            // MAIN TOGGLE - BUTTON CLICK
-            toggleBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                toggleSidebar();
-            });
+            // ================================================================
+            // EVENT: Toggle button (hamburger icon from header)
+            // ================================================================
+            if (toggleBtn) {
+                // Remove all existing listeners to avoid duplicates
+                var newToggle = toggleBtn.cloneNode(true);
+                toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
+                var freshToggle = document.getElementById('sidebarToggle');
+                
+                freshToggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('🔘 Hamburger clicked!');
+                    toggleSidebar();
+                });
+                console.log('✅ Toggle button attached');
+            } else {
+                console.warn('⚠️ Toggle button not found - trying fallback');
+                // Try to find by class
+                var fallbackBtn = document.querySelector('.sidebar-toggle-btn');
+                if (fallbackBtn) {
+                    fallbackBtn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        toggleSidebar();
+                    });
+                    console.log('✅ Fallback toggle button attached');
+                }
+            }
             
-            // Overlay click
+            // ================================================================
+            // EVENT: Close button (X icon in sidebar)
+            // ================================================================
+            if (closeBtn) {
+                closeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeSidebar();
+                });
+                console.log('✅ Close button attached');
+            }
+            
+            // ================================================================
+            // EVENT: Close sidebar when clicking overlay
+            // ================================================================
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) {
                         closeSidebar();
                     }
                 });
+                console.log('✅ Overlay click handler attached');
             }
             
-            // ESC key
+            // ================================================================
+            // EVENT: Close sidebar with ESC key
+            // ================================================================
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            // Resize auto-close
+            // ================================================================
+            // EVENT: Auto-close on window resize (desktop)
+            // ================================================================
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            console.log('✅ Laboratory Sidebar toggle initialized');
+            console.log('✅ Laboratory Sidebar fully initialized!');
+            console.log('📱 Sidebar element:', sidebar);
+            console.log('🔘 Toggle button:', document.getElementById('sidebarToggle'));
+            console.log('❌ Close button:', document.getElementById('sidebarCloseBtn'));
+            console.log('📐 Window width:', window.innerWidth);
+            console.log('📱 Is mobile:', window.innerWidth <= 1024);
         }
         
+        // Run on DOM ready
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initToggle);
+            document.addEventListener('DOMContentLoaded', initSidebar);
         } else {
-            initToggle();
+            initSidebar();
         }
     })();
 
     // ================================================================
-    // TOGGLE NOTIFICATION DROPDOWN
+    // UPDATE SIDEBAR BADGES
     // ================================================================
-    function toggleNotifications() {
-        var dropdown = document.getElementById('notifDropdown');
-        if (dropdown) {
-            dropdown.classList.toggle('open');
+    function updateSidebarBadges(pending, inProgress, completed, todayTests) {
+        // ================================================================
+        // 1. Update Pending Badge
+        // ================================================================
+        var pendingBadge = document.getElementById('sidebarPendingBadge');
+        if (pendingBadge) {
+            pendingBadge.textContent = pending;
+            pendingBadge.className = 'badge';
+            if (pending > 0) {
+                pendingBadge.classList.add('danger');
+            }
+            pendingBadge.classList.remove('badge-update');
+            void pendingBadge.offsetWidth;
+            pendingBadge.classList.add('badge-update');
+        }
+        
+        // ================================================================
+        // 2. Update In Progress Badge
+        // ================================================================
+        var inProgressBadge = document.getElementById('sidebarInProgressBadge');
+        if (inProgressBadge) {
+            inProgressBadge.textContent = inProgress;
+            inProgressBadge.className = 'badge';
+            if (inProgress > 0) {
+                inProgressBadge.classList.add('orange');
+            }
+            inProgressBadge.classList.remove('badge-update');
+            void inProgressBadge.offsetWidth;
+            inProgressBadge.classList.add('badge-update');
+        }
+        
+        // ================================================================
+        // 3. Update Completed Badge
+        // ================================================================
+        var completedBadge = document.getElementById('sidebarCompletedBadge');
+        if (completedBadge) {
+            completedBadge.textContent = completed;
+            completedBadge.className = 'badge';
+            if (completed > 0) {
+                completedBadge.classList.add('green');
+            }
+            completedBadge.classList.remove('badge-update');
+            void completedBadge.offsetWidth;
+            completedBadge.classList.add('badge-update');
+        }
+        
+        // ================================================================
+        // 4. Update Today Tests Badge
+        // ================================================================
+        var todayTestsBadge = document.getElementById('sidebarTodayTests');
+        if (todayTestsBadge) {
+            todayTestsBadge.textContent = todayTests;
+            todayTestsBadge.className = 'badge';
+            if (todayTests > 0) {
+                todayTestsBadge.classList.add('green');
+            }
+            todayTestsBadge.classList.remove('badge-update');
+            void todayTestsBadge.offsetWidth;
+            todayTestsBadge.classList.add('badge-update');
+        }
+        
+        // ================================================================
+        // 5. Update status time
+        // ================================================================
+        var timeEl = document.getElementById('sidebarLiveTime');
+        if (timeEl) {
+            var now = new Date();
+            var timeStr = now.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit',
+                hour12: true 
+            });
+            timeEl.textContent = timeStr;
+        }
+        
+        console.log('📊 Badges updated: Pending=' + pending + ', InProgress=' + inProgress + ', Completed=' + completed + ', Today=' + todayTests);
+    }
+
+    // ================================================================
+    // AJAX AUTO-UPDATE
+    // ================================================================
+    var sidebarUpdateInterval = null;
+    var sidebarIsUpdating = false;
+    var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
+
+    function fetchSidebarData() {
+        if (sidebarIsUpdating) return;
+        sidebarIsUpdating = true;
+        
+        var formData = new FormData();
+        formData.append('action', 'get_lab_sidebar_data');
+        formData.append('branch_id', branchId);
+        
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            if (data.success) {
+                updateSidebarBadges(
+                    data.pending || 0,
+                    data.in_progress || 0,
+                    data.completed || 0,
+                    data.today_tests || 0
+                );
+            } else {
+                console.warn('⚠️ Sidebar data fetch returned success=false:', data);
+            }
+            sidebarIsUpdating = false;
+        })
+        .catch(function(error) {
+            console.warn('⚠️ Sidebar auto-update error:', error.message);
+            sidebarIsUpdating = false;
+        });
+    }
+
+    function startSidebarAutoUpdate() {
+        if (sidebarUpdateInterval) {
+            clearInterval(sidebarUpdateInterval);
+        }
+        setTimeout(function() {
+            fetchSidebarData();
+        }, 500);
+        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
+        console.log('%c🔄 Laboratory Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
+    }
+
+    function stopSidebarAutoUpdate() {
+        if (sidebarUpdateInterval) {
+            clearInterval(sidebarUpdateInterval);
+            sidebarUpdateInterval = null;
+            console.log('%c⏹️ Laboratory Sidebar auto-update stopped', 'font-size:12px; color:#DC2626;');
         }
     }
 
-    document.addEventListener('click', function(e) {
-        var wrapper = document.querySelector('.notif-bell-wrapper');
-        var dropdown = document.getElementById('notifDropdown');
-        if (wrapper && dropdown) {
-            if (!wrapper.contains(e.target)) {
-                dropdown.classList.remove('open');
-            }
+    // ================================================================
+    // HANDLE PAGE VISIBILITY - PAUSE WHEN HIDDEN
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopSidebarAutoUpdate();
+        } else {
+            startSidebarAutoUpdate();
         }
     });
 
     // ================================================================
-    // MARK NOTIFICATION AS READ
+    // INITIALIZE
     // ================================================================
-    function markNotificationRead(id, event) {
-        if (event) event.preventDefault();
-        if (!id) return;
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            startSidebarAutoUpdate();
+        }, 1500);
         
-        fetch('../../backend/api/mark_notification_read.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: 'id=' + id
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                location.reload();
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                fetchSidebarData();
             }
-        })
-        .catch(error => console.error('Error:', error));
-    }
-
-    function markAllRead(event) {
-        if (event) event.preventDefault();
-        
-        fetch('../../backend/api/mark_all_notifications_read.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                location.reload();
-            }
-        })
-        .catch(error => console.error('Error:', error));
-    }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var currentPage = '<?= basename($_SERVER['PHP_SELF']) ?>';
-            window.location.href = currentPage + '?search=' + encodeURIComponent(query);
-        }
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
         });
-    }
+    });
 
     // ================================================================
-    // DATE & TIME - UPDATES EVERY SECOND
+    // EXPOSE FUNCTIONS FOR OTHER SCRIPTS
     // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        
-        var dateStr = now.toLocaleDateString('en-US', {
-            month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var dateEl = document.getElementById('dateText');
-        if (dateEl) dateEl.textContent = dateStr;
-        
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var timeEl = document.getElementById('timeText');
-        if (timeEl) timeEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    window.updateSidebarBadges = updateSidebarBadges;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
-    // ================================================================
-    // CONSOLE LOG
-    // ================================================================
-    console.log('%c🧪 Braick Dispensary - Laboratory Header', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Sidebar toggle button in header (like Pharmacy)', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Search bar width reduced', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Date/Time card with good CSS', 'font-size:12px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🧪 Laboratory Sidebar (NEW DATABASE - Fixed Links)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#DC2626;');
+    console.log('%c📋 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed: <?= $completed_count ?> | Today: <?= $today_tests ?>', 'font-size:12px; color:#9EC5FE;');
+    console.log('%c✅ FIXED: Pending link now points to pending_tests.php', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: In Progress link now points to in_progress_tests.php', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: Completed link now points to completed_tests.php', 'font-size:12px; color:#34D399;');
+    console.log('%c🔄 Data updates every 3 seconds WITHOUT page refresh', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Badges update in real-time', 'font-size:12px; color:#059669;');
+    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 'font-size:12px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
+    console.log('%c🚪 Logout path: /dispensary_system/frontend/pages/logout.php (Absolute Path)', 'font-size:12px; color:#F87171;');
+    console.log('%c❌ Reports menu removed as requested', 'font-size:12px; color:#F87171;');
 </script>
-</body>
-</html>

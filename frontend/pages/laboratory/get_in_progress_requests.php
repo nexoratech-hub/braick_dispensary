@@ -2,10 +2,14 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/get_in_progress_requests.php
 // LABORATORY - GET IN PROGRESS REQUESTS (ALL TESTS)
+// USING NEW DATABASE: dispensary_db
 // FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
 
+// ================================================================
+// START SESSION
+// ================================================================
 session_start();
 
 // ================================================================
@@ -23,10 +27,15 @@ $user_id = $_SESSION['user_id'];
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - NEW DATABASE
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die(json_encode(['success' => false, 'error' => 'Database connection failed']));
+}
 
 // ================================================================
 // GET FILTERS
@@ -36,22 +45,28 @@ $date_filter = isset($_GET['date']) ? $_GET['date'] : '';
 $sort_by = isset($_GET['sort']) ? $_GET['sort'] : 'oldest';
 
 // ================================================================
-// BUILD QUERY - Show ALL accepted/in_progress requests (including those without doctor)
+// BUILD QUERY - Show ALL accepted/in_progress requests
 // ================================================================
 $query = "
-    SELECT lr.*, 
-           p.full_name as patient_name, p.patient_id, p.phone,
-           COALESCE(u.full_name, 'Not Assigned') as doctor_name,
-           u.specialty,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as total_tests,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'completed') as completed_tests,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'in_progress') as in_progress_tests,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'pending') as pending_tests,
-           TIMESTAMPDIFF(MINUTE, lr.accepted_at, NOW()) as processing_time,
-           lr.doctor_id
+    SELECT 
+        lr.*, 
+        p.full_name as patient_name, 
+        p.patient_id as patient_code,
+        p.phone,
+        p.gender,
+        COALESCE(u.full_name, 'Not Assigned') as doctor_name,
+        u.specialty,
+        (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as total_tests,
+        (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'completed') as completed_tests,
+        (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'in_progress') as in_progress_tests,
+        (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'pending') as pending_tests,
+        TIMESTAMPDIFF(MINUTE, lr.accepted_at, NOW()) as processing_time,
+        lr.doctor_id,
+        b.name as branch_name
     FROM lab_requests lr
     JOIN patients p ON lr.patient_id = p.id
     LEFT JOIN users u ON lr.doctor_id = u.id
+    LEFT JOIN branches b ON lr.branch_id = b.id
     WHERE lr.branch_id = ? AND lr.status IN ('accepted', 'in_progress')
 ";
 
@@ -70,6 +85,7 @@ if (!empty($date_filter)) {
     $params[] = $date_filter;
 }
 
+// Sort by
 switch ($sort_by) {
     case 'newest':
         $query .= " ORDER BY lr.requested_at DESC";
@@ -92,23 +108,40 @@ $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // ================================================================
 // GET COUNTS
 // ================================================================
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status IN ('accepted', 'in_progress')");
+
+// In Progress Count
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM lab_requests 
+    WHERE branch_id = ? AND status IN ('accepted', 'in_progress')
+");
 $stmt->execute([$user_branch_id]);
 $in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
+// Pending Count
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM lab_requests 
+    WHERE branch_id = ? AND status = 'pending'
+");
 $stmt->execute([$user_branch_id]);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// Completed Today
 $today = date('Y-m-d');
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM lab_requests 
+    WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?
+");
 $stmt->execute([$user_branch_id, $today]);
 $completed_today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// Average Processing Time
 $stmt = $db->prepare("
-    SELECT AVG(TIMESTAMPDIFF(MINUTE, accepted_at, NOW())) as avg_time 
+    SELECT AVG(TIMESTAMPDIFF(MINUTE, accepted_at, completed_at)) as avg_time 
     FROM lab_requests 
-    WHERE branch_id = ? AND status IN ('accepted', 'in_progress') AND accepted_at IS NOT NULL
+    WHERE branch_id = ? AND status = 'completed' AND accepted_at IS NOT NULL AND completed_at IS NOT NULL
 ");
 $stmt->execute([$user_branch_id]);
 $avg_processing_time = round($stmt->fetch(PDO::FETCH_ASSOC)['avg_time'] ?? 0);
@@ -122,7 +155,7 @@ foreach ($requests as $req) {
 }
 
 // ================================================================
-// CREATE HASH
+// CREATE HASH FOR AUTO-UPDATE
 // ================================================================
 $data_array = [
     'requests' => $requests,
@@ -150,6 +183,7 @@ echo json_encode([
     'total_tests_all' => $total_tests_all,
     'completed_tests_all' => $completed_tests_all,
     'total' => count($requests),
-    'timestamp' => date('Y-m-d H:i:s')
+    'timestamp' => date('Y-m-d H:i:s'),
+    'branch_id' => $user_branch_id
 ]);
 ?>

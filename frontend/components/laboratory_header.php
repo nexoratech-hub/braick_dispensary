@@ -1,11 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/components/laboratory_header.php
-// LABORATORY - SHARED HEADER (FIXED)
-// ✅ SIDEBAR TOGGLE BUTTON INAFANYA KAZI
-// ✅ DATE/TIME CARD - CSS NZURI
-// ✅ SEARCH BAR WIDTH IMEPUNGUZWA
-// ✅ DESIGN INAFANANA NA PHARMACY
+// LABORATORY - SHARED HEADER (FIXED - Database connection)
+// WITH LOGIN PROTECTION
+// FIXED: Date and Time now displayed correctly
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -66,33 +64,13 @@ try {
 // GET UNREAD NOTIFICATIONS
 // ================================================================
 $unread_notifications = 0;
-$notifications_list = [];
-
 if ($db !== null && $user_id > 0) {
     try {
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as total 
-            FROM notifications 
-            WHERE user_id = ? AND is_read = 0
-        ");
+        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
         $stmt->execute([$user_id]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        $unread_notifications = (int)($result['total'] ?? 0);
-        
-        $stmt = $db->prepare("
-            SELECT id, title, message, type, link, is_read, created_at 
-            FROM notifications 
-            WHERE user_id = ? 
-            ORDER BY created_at DESC 
-            LIMIT 5
-        ");
-        $stmt->execute([$user_id]);
-        $notifications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
+        $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     } catch (Exception $e) {
-        error_log("Notification error: " . $e->getMessage());
         $unread_notifications = 0;
-        $notifications_list = [];
     }
 }
 
@@ -118,9 +96,19 @@ if (empty($page_title) || $page_title == '') {
 }
 
 // ================================================================
-// DARK MODE
+// DARK MODE - SESSION BASED
 // ================================================================
-$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
+if (!isset($_SESSION['dark_mode'])) {
+    $_SESSION['dark_mode'] = 'light';
+}
+
+if (isset($_GET['toggle_dark'])) {
+    $_SESSION['dark_mode'] = ($_SESSION['dark_mode'] === 'dark') ? 'light' : 'dark';
+    header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+    exit;
+}
+
+$dark_mode = $_SESSION['dark_mode'];
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode ?>">
@@ -137,22 +125,38 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     
     <style>
+        /* ================================================================
+           ROOT VARIABLES
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
+            
             --success: #059669;
             --success-dark: #047857;
             --success-light: #34D399;
             --success-bg: #D1FAE5;
+            
             --danger: #DC2626;
             --danger-dark: #B91C1C;
             --danger-light: #F87171;
             --danger-bg: #FEE2E2;
+            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
             --warning-light: #FBBF24;
+            
+            --pending: #D97706;
+            --pending-bg: #FEF3C7;
+            --in-progress: #0B5ED7;
+            --in-progress-bg: #E8F0FE;
+            --completed: #059669;
+            --completed-bg: #D1FAE5;
+            --cancelled: #DC2626;
+            --cancelled-bg: #FEE2E2;
+            
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -164,11 +168,13 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
+            
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
             --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
             --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
+            
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -191,10 +197,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #93C5FD;
-            --primary-bg: #1E3A5F;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -210,9 +212,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAVIGATION
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -227,75 +226,8 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
         }
         
-        /* ================================================================
-           SIDEBAR TOGGLE BUTTON IN HEADER (KAMA PHARMACY)
-           ================================================================ */
-        .header-toggle-btn {
-            display: none;
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            padding: 8px 14px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            align-items: center;
-            gap: 8px;
-            box-shadow: 0 2px 12px rgba(11, 94, 215, 0.25);
-            position: relative;
-        }
-        
-        .header-toggle-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.35);
-        }
-        
-        .header-toggle-btn .toggle-label {
-            font-size: 0.65rem;
-            font-weight: 600;
-            letter-spacing: 0.05em;
-        }
-        
-        [data-theme="dark"] .header-toggle-btn {
-            background: #0A4CA8;
-            box-shadow: 0 2px 12px rgba(10, 76, 168, 0.3);
-        }
-        
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .header-toggle-btn { display: flex !important; }
-        }
-        
-        @media (max-width: 768px) {
-            .header-toggle-btn {
-                padding: 6px 10px;
-                font-size: 0.8rem;
-                border-radius: 8px;
-            }
-            .header-toggle-btn .toggle-label {
-                font-size: 0.55rem;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .header-toggle-btn {
-                padding: 5px 8px;
-                font-size: 0.7rem;
-                border-radius: 6px;
-            }
-            .header-toggle-btn .toggle-label {
-                display: none;
-            }
-        }
-        
-        /* ================================================================
-           SEARCH BAR - SMALLER WIDTH (KAMA PHARMACY)
-           ================================================================ */
         .top-nav .search-wrapper {
             display: flex;
             align-items: center;
@@ -303,10 +235,8 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             border-radius: 10px;
             border: 2px solid var(--border-color);
             transition: all 0.3s;
-            flex: 0 1 320px;
-            max-width: 320px;
-            min-width: 160px;
-            position: relative;
+            flex: 1;
+            max-width: 500px;
         }
         
         .top-nav .search-wrapper:focus-within {
@@ -317,183 +247,49 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
         .top-nav .search-wrapper input {
             border: none;
             background: transparent;
-            padding: 8px 12px;
+            padding: 8px 14px;
             width: 100%;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             outline: none;
             color: var(--text-primary);
         }
         
         .top-nav .search-wrapper input::placeholder {
             color: var(--text-secondary);
-            font-size: 0.75rem;
-        }
-        
-        .top-nav .search-wrapper .search-icon {
-            padding: 0 8px 0 12px;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
         }
         
         .top-nav .search-wrapper .search-btn {
             background: var(--primary);
             color: white;
             border: none;
-            padding: 6px 14px;
+            padding: 8px 16px;
             border-radius: 0 10px 10px 0;
             cursor: pointer;
-            font-size: 0.75rem;
+            font-size: 0.85rem;
             transition: all 0.3s;
             white-space: nowrap;
-            font-weight: 500;
         }
         
         .top-nav .search-wrapper .search-btn:hover {
             background: var(--primary-dark);
         }
         
-        @media (max-width: 1024px) {
-            .top-nav .search-wrapper {
-                flex: 0 1 220px;
-                max-width: 220px;
-            }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper {
-                flex: 0 1 160px;
-                max-width: 160px;
-                min-width: 100px;
-            }
-            .top-nav .search-wrapper .search-btn {
-                padding: 4px 10px;
-                font-size: 0.65rem;
-            }
-            .top-nav .search-wrapper input {
-                padding: 6px 8px;
-                font-size: 0.7rem;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .top-nav .search-wrapper {
-                flex: 0 1 120px;
-                max-width: 120px;
-                min-width: 80px;
-            }
-            .top-nav .search-wrapper .search-btn {
-                display: none;
-            }
-            .top-nav .search-wrapper .search-icon {
-                padding: 0 4px 0 8px;
-                font-size: 0.7rem;
-            }
-        }
-        
-        /* ================================================================
-           DATE & TIME CARD - CSS NZURI (KAMA PHARMACY)
-           ================================================================ */
-        .datetime-card {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            background: var(--primary-bg);
-            padding: 5px 14px 5px 10px;
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            background: var(--bg-body);
+            padding: 4px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            display: inline-block;
             white-space: nowrap;
         }
         
-        .datetime-card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 2px 12px rgba(11, 94, 215, 0.1);
-        }
-        
-        .datetime-card .dt-icon {
-            color: var(--primary);
-            font-size: 0.75rem;
-            opacity: 0.7;
-        }
-        
-        .datetime-card .dt-text {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            letter-spacing: 0.01em;
-        }
-        
-        .datetime-card .dt-time {
-            font-size: 0.8rem;
-            color: var(--primary);
-            font-weight: 700;
-            font-family: 'Courier New', monospace;
-            padding: 0 4px;
-        }
-        
-        .datetime-card .dt-divider {
-            width: 1px;
-            height: 18px;
-            background: var(--border-color);
-            margin: 0 4px;
-        }
-        
-        [data-theme="dark"] .datetime-card {
-            background: #1E3A5F;
-            border-color: #334155;
-        }
-        
-        [data-theme="dark"] .datetime-card .dt-time {
-            color: #60A5FA;
-        }
-        
-        .datetime-card .dt-separator {
-            color: var(--border-color);
-            font-size: 0.6rem;
-            margin: 0 2px;
-        }
-        
-        @media (max-width: 768px) {
-            .datetime-card {
-                padding: 4px 10px 4px 8px;
-                gap: 4px;
-            }
-            .datetime-card .dt-text {
-                font-size: 0.6rem;
-            }
-            .datetime-card .dt-time {
-                font-size: 0.7rem;
-            }
-            .datetime-card .dt-divider {
-                height: 14px;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .datetime-card {
-                padding: 3px 6px;
-                border-radius: 6px;
-            }
-            .datetime-card .dt-text {
-                display: none;
-            }
-            .datetime-card .dt-time {
-                font-size: 0.65rem;
-            }
-            .datetime-card .dt-divider {
-                display: none;
-            }
-            .datetime-card .dt-icon {
-                font-size: 0.6rem;
-            }
-        }
-        
-        /* ================================================================
-           AVATAR
-           ================================================================ */
         .top-nav .avatar {
-            width: 36px;
-            height: 36px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             object-fit: cover;
             border: 2px solid var(--border-color);
@@ -506,12 +302,9 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             transform: scale(1.05);
         }
         
-        /* ================================================================
-           ICON BUTTON
-           ================================================================ */
         .top-nav .icon-btn {
-            width: 36px;
-            height: 36px;
+            width: 38px;
+            height: 38px;
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -529,228 +322,43 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             color: var(--primary);
         }
         
-        /* ================================================================
-           NOTIFICATION BELL
-           ================================================================ */
-        .notif-bell-wrapper {
-            position: relative;
-        }
-        
         .notif-dot {
             position: absolute;
-            top: -2px;
-            right: -2px;
-            min-width: 18px;
-            height: 18px;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
-            font-size: 0.5rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             border: 2px solid var(--bg-nav);
-            padding: 0 4px;
-            line-height: 1;
+            animation: pulse-dot 2s infinite;
         }
         
         .notif-dot.has-notif {
             background: var(--danger);
-            color: white;
-            animation: pulse-dot 2s infinite;
         }
         
         .notif-dot.no-notif {
             background: var(--gray-400);
-            color: white;
-            font-size: 0.45rem;
             animation: none;
-            min-width: 16px;
-            height: 16px;
         }
         
         @keyframes pulse-dot {
             0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
+            50% { transform: scale(1.2); }
         }
         
-        /* ================================================================
-           NOTIFICATION DROPDOWN
-           ================================================================ */
-        .notif-dropdown {
-            position: absolute;
-            top: 46px;
-            right: 0;
-            width: 360px;
-            max-height: 420px;
-            background: var(--bg-card);
-            border-radius: 12px;
-            border: 2px solid var(--border-color);
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-            z-index: 100;
-            display: none;
-            overflow: hidden;
-        }
-        
-        .notif-dropdown.open {
-            display: block;
-            animation: fadeInDown 0.3s ease;
-        }
-        
-        @keyframes fadeInDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .notif-dropdown .notif-header {
-            padding: 10px 16px;
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background: var(--bg-body);
-        }
-        
-        .notif-dropdown .notif-header .notif-title {
-            font-weight: 600;
-            font-size: 0.8rem;
-            color: var(--text-primary);
-        }
-        
-        .notif-dropdown .notif-header .notif-mark-all {
-            font-size: 0.65rem;
-            color: var(--primary);
-            cursor: pointer;
-            text-decoration: none;
-            font-weight: 500;
-        }
-        
-        .notif-dropdown .notif-header .notif-mark-all:hover {
-            text-decoration: underline;
-        }
-        
-        .notif-dropdown .notif-list {
-            max-height: 300px;
-            overflow-y: auto;
-            padding: 4px 0;
-        }
-        
-        .notif-dropdown .notif-list::-webkit-scrollbar {
-            width: 4px;
-        }
-        
-        .notif-dropdown .notif-list::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 4px;
-        }
-        
-        .notif-dropdown .notif-item {
-            padding: 8px 14px;
-            border-bottom: 1px solid var(--border-color);
-            transition: background 0.2s ease;
-            cursor: pointer;
-            text-decoration: none;
-            display: block;
-        }
-        
-        .notif-dropdown .notif-item:hover {
-            background: var(--primary-bg);
-        }
-        
-        .notif-dropdown .notif-item:last-child {
-            border-bottom: none;
-        }
-        
-        .notif-dropdown .notif-item .notif-item-title {
-            font-weight: 600;
-            font-size: 0.75rem;
-            color: var(--text-primary);
-        }
-        
-        .notif-dropdown .notif-item .notif-item-message {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
-            line-height: 1.4;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-        
-        .notif-dropdown .notif-item .notif-item-time {
-            font-size: 0.55rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-            display: block;
-        }
-        
-        .notif-dropdown .notif-item.unread {
-            border-left: 3px solid var(--primary);
-            background: var(--primary-bg);
-        }
-        
-        .notif-dropdown .notif-item.unread:hover {
-            background: var(--success-bg);
-        }
-        
-        .notif-dropdown .notif-empty {
-            padding: 30px 20px;
-            text-align: center;
-            color: var(--text-secondary);
-        }
-        
-        .notif-dropdown .notif-empty i {
-            font-size: 2rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 8px;
-        }
-        
-        .notif-dropdown .notif-empty p {
-            font-size: 0.8rem;
-        }
-        
-        .notif-dropdown .notif-footer {
-            padding: 8px 16px;
-            border-top: 2px solid var(--border-color);
-            text-align: center;
-            background: var(--bg-body);
-        }
-        
-        .notif-dropdown .notif-footer a {
-            font-size: 0.7rem;
-            color: var(--primary);
-            text-decoration: none;
-            font-weight: 500;
-        }
-        
-        .notif-dropdown .notif-footer a:hover {
-            text-decoration: underline;
-        }
-        
-        [data-theme="dark"] .notif-dropdown .notif-item.unread {
-            background: #1E3A5F;
-        }
-        
-        [data-theme="dark"] .notif-dropdown .notif-item.unread:hover {
-            background: #1A3A2A;
-        }
-        
-        /* ================================================================
-           DARK MODE TOGGLE
-           ================================================================ */
         .dark-toggle-btn {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
             border-radius: 10px;
-            padding: 4px 10px;
+            padding: 6px 12px;
             cursor: pointer;
-            font-size: 0.75rem;
+            font-size: 0.82rem;
             color: var(--text-primary);
             transition: all 0.3s;
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 6px;
             text-decoration: none;
         }
         
@@ -759,20 +367,28 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             background: var(--bg-card);
         }
         
-        .dark-toggle-btn i { font-size: 0.8rem; }
+        .role-badge {
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: var(--primary-bg);
+            color: var(--primary);
+            text-transform: uppercase;
+        }
         
-        /* ================================================================
-           BRANCH BADGE
-           ================================================================ */
+        [data-theme="dark"] .role-badge {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+        
         .branch-badge {
-            display: inline-block;
-            font-size: 0.55rem;
+            font-size: 0.6rem;
             font-weight: 600;
             padding: 2px 10px;
             border-radius: 20px;
             background: var(--success-bg);
             color: var(--success);
-            white-space: nowrap;
         }
         
         [data-theme="dark"] .branch-badge {
@@ -780,13 +396,167 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             color: #34D399;
         }
         
-        /* ================================================================
-           BADGE
-           ================================================================ */
-        .badge {
-            padding: 2px 8px;
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 24px 28px;
+            min-height: calc(100vh - 68px);
+            transition: background 0.3s ease;
+        }
+        
+        .stat-card {
+            border-radius: 16px;
+            padding: 18px 20px;
+            border: none;
+            transition: all 0.3s;
+            color: white;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        
+        .stat-card.blue { background: var(--primary); }
+        .stat-card.blue-dark { background: var(--primary-dark); }
+        .stat-card.green { background: var(--success); }
+        .stat-card.green-dark { background: var(--success-dark); }
+        .stat-card.purple { background: #7C3AED; }
+        .stat-card.orange { background: #D97706; }
+        .stat-card.red { background: var(--danger); }
+        .stat-card.teal { background: #0D9488; }
+        
+        .stat-card .stat-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            background: rgba(255,255,255,0.15);
+            color: white;
+        }
+        
+        .stat-card .stat-number {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: white;
+        }
+        
+        .stat-card .stat-label {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.8);
+            font-weight: 500;
+        }
+        
+        .stat-card .stat-trend {
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 2px 10px;
             border-radius: 20px;
-            font-size: 0.6rem;
+            background: rgba(255,255,255,0.15);
+            color: white;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 18px 20px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+        }
+        
+        .card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .card-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .card-title .title-blue { color: var(--primary); }
+        .card-title .title-green { color: var(--success); }
+        .card-title .title-purple { color: #7C3AED; }
+        .card-title .title-orange { color: #D97706; }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 16px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.78rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-blue {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-blue:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-green {
+            background: var(--success);
+            color: white;
+        }
+        .btn-green:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-purple {
+            background: #7C3AED;
+            color: white;
+        }
+        .btn-purple:hover {
+            background: #6D28D9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-sm { padding: 3px 10px; font-size: 0.7rem; border-radius: 6px; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: var(--danger-dark); transform: translateY(-2px); }
+        .btn-warning { background: #D97706; color: white; }
+        .btn-warning:hover { background: #B45309; transform: translateY(-2px); }
+        
+        .badge {
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 0.65rem;
             font-weight: 600;
             display: inline-flex;
             align-items: center;
@@ -801,28 +571,155 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
         .badge-yellow { background: #D97706; }
         .badge-red { background: var(--danger); }
         .badge-purple { background: #7C3AED; }
-        .badge-pink { background: #DB2777; }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        .badge-pending { background: #D97706; color: white; }
+        .badge-in-progress { background: #0B5ED7; color: white; }
+        .badge-completed { background: #059669; color: white; }
+        .badge-cancelled { background: #DC2626; color: white; }
+        
+        .page-header {
+            border-bottom: 3px solid var(--primary);
+            padding-bottom: 12px;
+        }
+        
+        .page-header .page-title {
+            color: var(--primary-dark);
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+        
+        [data-theme="dark"] .page-header .page-title {
+            color: var(--primary-light);
+        }
+        
+        .page-header .page-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .page-header .branch-tag {
+            background: var(--success);
+            color: white;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+        
+        .data-table th {
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 700;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #fff;
+            background: var(--primary);
+            border-bottom: 3px solid var(--primary-dark);
+            white-space: nowrap;
+        }
+        
+        .data-table th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+        
+        .data-table th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+        
+        .data-table tbody tr:nth-child(even) {
+            background: var(--primary-bg);
+        }
+        
+        .data-table tbody tr:nth-child(odd) {
+            background: var(--bg-card);
+        }
+        
+        .data-table tbody tr:hover {
+            background: #D1FAE5;
+        }
+        
+        [data-theme="dark"] .data-table tbody tr:hover {
+            background: #1A3A2A;
+        }
+        
+        .data-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 18px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 360px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: #D97706; }
+        
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            transition: all 0.3s ease;
+        }
+        
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
-            .notif-dropdown { right: -20px; width: 320px; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .datetime { display: none; }
-            .notif-dropdown { right: -30px; width: 300px; }
-            .branch-badge { font-size: 0.5rem; padding: 1px 8px; }
+            .top-nav .search-wrapper { max-width: 180px; }
         }
         
         @media (max-width: 640px) {
-            .notif-dropdown { right: -40px; width: 280px; }
-            .dark-toggle-btn { padding: 3px 6px; font-size: 0.65rem; }
-            .dark-toggle-btn span { display: none; }
-            .top-nav .avatar { width: 30px; height: 30px; }
-            .top-nav .icon-btn { width: 30px; height: 30px; font-size: 0.8rem; }
+            .main-content { padding: 10px; }
+            .stat-card .stat-number { font-size: 1.4rem; }
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.4s ease forwards;
+            opacity: 0;
         }
         
         .spinner {
@@ -838,6 +735,50 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        
+        /* ================================================================
+           DATE/TIME STYLES
+           ================================================================ */
+        .datetime-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-body);
+            padding: 4px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .datetime-wrapper .datetime-icon {
+            color: var(--primary);
+            font-size: 0.7rem;
+        }
+        
+        .datetime-wrapper .datetime-separator {
+            color: var(--border-color);
+            margin: 0 2px;
+        }
+        
+        @media (max-width: 768px) {
+            .datetime-wrapper {
+                font-size: 0.65rem;
+                padding: 2px 8px;
+            }
+        }
+        
+        @media (max-width: 640px) {
+            .datetime-wrapper {
+                font-size: 0.55rem;
+                padding: 2px 6px;
+            }
+            .datetime-wrapper .datetime-icon {
+                display: none;
+            }
+        }
     </style>
 </head>
 <body>
@@ -847,21 +788,13 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
-        
-        <!-- ================================================================ -->
-        <!-- SIDEBAR TOGGLE BUTTON IN HEADER -->
-        <!-- ================================================================ -->
-        <button class="header-toggle-btn" id="sidebarToggleBtn" aria-label="Toggle Sidebar">
-            <i class="fas fa-bars"></i>
-            <span class="toggle-label">MENU</span>
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
         </button>
         
-        <!-- ================================================================ -->
-        <!-- SEARCH BAR - SMALLER WIDTH -->
-        <!-- ================================================================ -->
         <div class="search-wrapper">
-            <span class="search-icon"><i class="fas fa-search"></i></span>
-            <input type="text" id="searchInput" placeholder="Search tests...">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search lab requests...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -869,112 +802,37 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
     </div>
     
     <div class="flex items-center gap-3">
-        
-        <!-- Branch Badge -->
         <span class="branch-badge">
             <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
         <!-- ================================================================ -->
-        <!-- DATE & TIME CARD - CSS NZURI -->
+        <!-- DATE & TIME - FIXED: Now showing correctly -->
         <!-- ================================================================ -->
-        <div class="datetime-card" id="datetimeCard">
-            <span class="dt-icon"><i class="fas fa-calendar-alt"></i></span>
-            <span class="dt-text" id="dateText"><?= date('M d, Y') ?></span>
-            <span class="dt-divider"></span>
-            <span class="dt-icon"><i class="fas fa-clock"></i></span>
-            <span class="dt-time" id="timeText"><?= date('h:i:s A') ?></span>
-        </div>
+        <span class="datetime-wrapper" id="datetimeWrapper">
+            <i class="fas fa-calendar-alt datetime-icon"></i>
+            <span id="currentDate"><?= date('M d, Y') ?></span>
+            <span class="datetime-separator">|</span>
+            <i class="fas fa-clock datetime-icon"></i>
+            <span id="currentTime"><?= date('h:i:s A') ?></span>
+        </span>
         
         <!-- ================================================================ -->
         <!-- DARK MODE TOGGLE -->
         <!-- ================================================================ -->
-        <button class="dark-toggle-btn" id="darkModeToggle" title="Toggle Dark Mode">
+        <a href="?toggle_dark=1" class="dark-toggle-btn" id="darkModeLink">
             <i id="darkIcon" class="fas <?= $dark_mode === 'dark' ? 'fa-sun' : 'fa-moon' ?>"></i>
             <span id="darkText"><?= $dark_mode === 'dark' ? 'Light' : 'Dark' ?></span>
+        </a>
+        
+        <button class="icon-btn" id="notifBtn" title="Notifications">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
-        <!-- ================================================================ -->
-        <!-- NOTIFICATION BELL -->
-        <!-- ================================================================ -->
-        <div class="notif-bell-wrapper">
-            <button class="icon-btn" id="notifBellBtn" onclick="toggleNotifications()" title="Notifications">
-                <i class="fas fa-bell text-lg"></i>
-                <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>">
-                    <?php if ($unread_notifications > 0): ?>
-                        <?= $unread_notifications > 9 ? '9+' : $unread_notifications ?>
-                    <?php else: ?>
-                        <i class="fas fa-check" style="font-size:0.35rem;"></i>
-                    <?php endif; ?>
-                </span>
-            </button>
-            
-            <!-- Notification Dropdown -->
-            <div class="notif-dropdown" id="notifDropdown">
-                <div class="notif-header">
-                    <span class="notif-title">
-                        <i class="fas fa-bell mr-1"></i> Notifications
-                        <?php if ($unread_notifications > 0): ?>
-                            <span class="badge badge-red" style="font-size:0.55rem; padding:1px 8px;">
-                                <?= $unread_notifications ?> new
-                            </span>
-                        <?php endif; ?>
-                    </span>
-                    <?php if ($unread_notifications > 0): ?>
-                        <a href="#" class="notif-mark-all" onclick="markAllRead(event)">Mark all as read</a>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="notif-list" id="notifList">
-                    <?php if (count($notifications_list) > 0): ?>
-                        <?php foreach ($notifications_list as $notif): ?>
-                            <a href="<?= !empty($notif['link']) ? $notif['link'] : '#' ?>" 
-                               class="notif-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>"
-                               onclick="markNotificationRead(<?= $notif['id'] ?>, event)">
-                                <div class="notif-item-title">
-                                    <?= htmlspecialchars($notif['title']) ?>
-                                    <?php if ($notif['is_read'] == 0): ?>
-                                        <span class="badge badge-blue" style="font-size:0.45rem; padding:0 6px;">New</span>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="notif-item-message"><?= htmlspecialchars($notif['message']) ?></div>
-                                <span class="notif-item-time">
-                                    <i class="far fa-clock mr-1"></i>
-                                    <?php 
-                                        $time = strtotime($notif['created_at']);
-                                        $diff = time() - $time;
-                                        if ($diff < 60) {
-                                            echo 'Just now';
-                                        } elseif ($diff < 3600) {
-                                            echo floor($diff / 60) . ' min ago';
-                                        } elseif ($diff < 86400) {
-                                            echo floor($diff / 3600) . ' hours ago';
-                                        } else {
-                                            echo date('M d, Y', $time);
-                                        }
-                                    ?>
-                                </span>
-                            </a>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <div class="notif-empty">
-                            <i class="fas fa-bell-slash"></i>
-                            <p>No notifications</p>
-                            <p style="font-size:0.65rem; color:var(--text-secondary);">All caught up!</p>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="notif-footer">
-                    <a href="notifications.php">View all notifications</a>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Profile Avatar -->
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2236%22 height=%2236%22%3E%3Crect width=%2236%22 height=%2236%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2218%22 y=%2224%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -984,213 +842,7 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE TOGGLE
-    // ================================================================
-    (function() {
-        var darkModeToggle = document.getElementById('darkModeToggle');
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var htmlElement = document.documentElement;
-        
-        var savedDarkMode = localStorage.getItem('darkMode');
-        if (savedDarkMode === 'true') {
-            htmlElement.setAttribute('data-theme', 'dark');
-            if (darkIcon) darkIcon.className = 'fas fa-sun';
-            if (darkText) darkText.textContent = 'Light';
-        } else if (savedDarkMode === 'false') {
-            htmlElement.removeAttribute('data-theme');
-            if (darkIcon) darkIcon.className = 'fas fa-moon';
-            if (darkText) darkText.textContent = 'Dark';
-        } else {
-            var cookieDark = document.cookie.match(/dark_mode=([^;]+)/);
-            if (cookieDark && cookieDark[1] === 'true') {
-                htmlElement.setAttribute('data-theme', 'dark');
-                if (darkIcon) darkIcon.className = 'fas fa-sun';
-                if (darkText) darkText.textContent = 'Light';
-                localStorage.setItem('darkMode', 'true');
-            }
-        }
-        
-        if (darkModeToggle) {
-            darkModeToggle.addEventListener('click', function() {
-                var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-                if (isDark) {
-                    htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) darkIcon.className = 'fas fa-moon';
-                    if (darkText) darkText.textContent = 'Dark';
-                    localStorage.setItem('darkMode', 'false');
-                    document.cookie = "dark_mode=false; path=/; max-age=31536000";
-                } else {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) darkIcon.className = 'fas fa-sun';
-                    if (darkText) darkText.textContent = 'Light';
-                    localStorage.setItem('darkMode', 'true');
-                    document.cookie = "dark_mode=true; path=/; max-age=31536000";
-                }
-                console.log('🌙 Dark mode toggled to:', htmlElement.getAttribute('data-theme'));
-            });
-        }
-    })();
-
-    // ================================================================
-    // SIDEBAR TOGGLE - INAFANYA KAZI KAMA PHARMACY
-    // ================================================================
-    (function() {
-        function initToggle() {
-            var toggleBtn = document.getElementById('sidebarToggleBtn');
-            var sidebar = document.getElementById('sidebar');
-            var overlay = document.getElementById('sidebarOverlay');
-            
-            if (!toggleBtn) {
-                console.log('⚠️ Sidebar toggle button not found');
-                return;
-            }
-            
-            if (!sidebar) {
-                console.log('⚠️ Sidebar not found');
-                return;
-            }
-            
-            if (!overlay) {
-                overlay = document.createElement('div');
-                overlay.id = 'sidebarOverlay';
-                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
-                document.body.appendChild(overlay);
-            }
-            
-            function openSidebar() {
-                sidebar.classList.add('open');
-                overlay.style.display = 'block';
-                overlay.classList.add('active');
-                document.body.style.overflow = 'hidden';
-                if (toggleBtn) {
-                    toggleBtn.innerHTML = '<i class="fas fa-times"></i><span class="toggle-label">CLOSE</span>';
-                }
-                console.log('🔓 Sidebar opened');
-            }
-            
-            function closeSidebar() {
-                sidebar.classList.remove('open');
-                overlay.style.display = 'none';
-                overlay.classList.remove('active');
-                document.body.style.overflow = '';
-                if (toggleBtn) {
-                    toggleBtn.innerHTML = '<i class="fas fa-bars"></i><span class="toggle-label">MENU</span>';
-                }
-                console.log('🔒 Sidebar closed');
-            }
-            
-            function toggleSidebar() {
-                if (sidebar.classList.contains('open')) {
-                    closeSidebar();
-                } else {
-                    openSidebar();
-                }
-            }
-            
-            // MAIN TOGGLE - BUTTON CLICK
-            toggleBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                toggleSidebar();
-            });
-            
-            // Overlay click
-            if (overlay) {
-                overlay.addEventListener('click', function(e) {
-                    if (e.target === overlay) {
-                        closeSidebar();
-                    }
-                });
-            }
-            
-            // ESC key
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-                    closeSidebar();
-                }
-            });
-            
-            // Resize auto-close
-            window.addEventListener('resize', function() {
-                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-                    closeSidebar();
-                }
-            });
-            
-            console.log('✅ Laboratory Sidebar toggle initialized');
-        }
-        
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initToggle);
-        } else {
-            initToggle();
-        }
-    })();
-
-    // ================================================================
-    // TOGGLE NOTIFICATION DROPDOWN
-    // ================================================================
-    function toggleNotifications() {
-        var dropdown = document.getElementById('notifDropdown');
-        if (dropdown) {
-            dropdown.classList.toggle('open');
-        }
-    }
-
-    document.addEventListener('click', function(e) {
-        var wrapper = document.querySelector('.notif-bell-wrapper');
-        var dropdown = document.getElementById('notifDropdown');
-        if (wrapper && dropdown) {
-            if (!wrapper.contains(e.target)) {
-                dropdown.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // MARK NOTIFICATION AS READ
-    // ================================================================
-    function markNotificationRead(id, event) {
-        if (event) event.preventDefault();
-        if (!id) return;
-        
-        fetch('../../backend/api/mark_notification_read.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: 'id=' + id
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                location.reload();
-            }
-        })
-        .catch(error => console.error('Error:', error));
-    }
-
-    function markAllRead(event) {
-        if (event) event.preventDefault();
-        
-        fetch('../../backend/api/mark_all_notifications_read.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                location.reload();
-            }
-        })
-        .catch(error => console.error('Error:', error));
-    }
-
-    // ================================================================
-    // SEARCH
+    // SEARCH FUNCTIONALITY
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
@@ -1213,36 +865,70 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
     }
 
     // ================================================================
-    // DATE & TIME - UPDATES EVERY SECOND
+    // DATE & TIME - FIXED: Now updates every second
     // ================================================================
     function updateDateTime() {
         var now = new Date();
         
+        // Format Date: "Aug 15, 2026"
         var dateStr = now.toLocaleDateString('en-US', {
-            month: 'short', day: 'numeric', year: 'numeric'
+            month: 'short', 
+            day: 'numeric', 
+            year: 'numeric'
         });
-        var dateEl = document.getElementById('dateText');
-        if (dateEl) dateEl.textContent = dateStr;
         
+        // Format Time: "08:45:30 PM"
         var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            hour12: true
         });
-        var timeEl = document.getElementById('timeText');
+        
+        var dateEl = document.getElementById('currentDate');
+        var timeEl = document.getElementById('currentTime');
+        
+        if (dateEl) dateEl.textContent = dateStr;
         if (timeEl) timeEl.textContent = timeStr;
     }
+    
+    // Update immediately and every second
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // CONSOLE LOG
+    // SIDEBAR TOGGLE (Mobile)
     // ================================================================
-    console.log('%c🧪 Braick Dispensary - Laboratory Header (FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Sidebar toggle button in header (like Pharmacy)', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Search bar width reduced', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Date/Time card with good CSS', 'font-size:12px; color:#34D399;');
+    document.addEventListener('DOMContentLoaded', function() {
+        var sidebar = document.getElementById('sidebar');
+        var sidebarToggle = document.getElementById('sidebarToggle');
+        
+        if (sidebarToggle && sidebar) {
+            sidebarToggle.addEventListener('click', function() {
+                sidebar.classList.toggle('open');
+            });
+        }
+        
+        document.addEventListener('click', function(e) {
+            if (window.innerWidth <= 1024) {
+                if (sidebar && sidebarToggle) {
+                    if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                        sidebar.classList.remove('open');
+                    }
+                }
+            }
+        });
+    });
+
+    console.log('%c🔬 Braick Dispensary - Laboratory Header', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#DC2626;');
+    console.log('%c🌙 Dark Mode: <?= $dark_mode ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Date & Time now displayed correctly with real-time updates', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Dark mode toggles via page reload (Session based)', 'font-size:12px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
 </script>
 </body>
 </html>

@@ -2,13 +2,15 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/view_test.php
 // VIEW LAB TEST - WITH PDF DOWNLOAD
-// FIXED: Header and sidebar included
-// FIXED: PDF download working
+// USING NEW DATABASE: dispensary_db
 // WITH FULL LOGIN SESSION PROTECTION
+// MODERN DESIGN - PHARMACY STYLE
 // BRAICK DISPENSARY
 // ================================================================
 
-// Start session
+// ================================================================
+// SESSION START
+// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -17,7 +19,6 @@ if (session_status() === PHP_SESSION_NONE) {
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    // User is not logged in - redirect to login
     header('Location: ../login.php');
     exit;
 }
@@ -25,8 +26,8 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // ================================================================
 // CHECK IF USER IS LABORATORY OR ADMIN
 // ================================================================
-if ($_SESSION['role'] !== 'laboratory' && $_SESSION['role'] !== 'admin') {
-    // User is not laboratory - redirect to their dashboard
+$allowed_roles = ['laboratory', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
         case 'reception': header('Location: ../reception/dashboard.php'); break;
@@ -39,33 +40,24 @@ if ($_SESSION['role'] !== 'laboratory' && $_SESSION['role'] !== 'admin') {
 }
 
 // ================================================================
-// GET LAB TECHNICIAN INFO FROM SESSION
+// GET USER DATA FROM SESSION
 // ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Lab Technician';
-$user_role = $_SESSION['role'];
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$user_specialty = $_SESSION['specialty'] ?? 'Laboratory';
 $user_username = $_SESSION['username'] ?? 'lab.technician';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF ADMIN VIEWING LAB PAGE, USE THEIR BRANCH
-// ================================================================
-if ($_SESSION['role'] === 'admin') {
-    $user_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $user_branch_id;
-}
-
-// ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
-    die('Database connection error: ' . $e->getMessage());
+    die("Database connection error: " . $e->getMessage());
 }
 
 // ================================================================
@@ -75,12 +67,12 @@ $test_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $print_mode = isset($_GET['print']) && $_GET['print'] == 1;
 
 if ($test_id <= 0) {
-    header('Location: pending_requests.php');
+    header('Location: pending_tests.php');
     exit;
 }
 
 // ================================================================
-// GET TEST DETAILS
+// GET TEST DETAILS - NEW DATABASE
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -91,39 +83,37 @@ $stmt = $db->prepare("
         p.date_of_birth,
         p.phone,
         p.address,
+        p.emergency_contact,
+        p.blood_group,
+        p.allergies,
         v.visit_number,
         v.visit_date,
+        v.visit_type,
         u.full_name as doctor_name,
         u.specialty as doctor_specialty,
+        u.email as doctor_email,
+        u.phone as doctor_phone,
         t.full_name as technician_name,
-        b.name as branch_name
+        b.name as branch_name,
+        ltc.category as test_category,
+        ltc.price as test_price,
+        ltc.reference_range,
+        ltc.description as test_description
     FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    JOIN patients p ON v.patient_id = p.id
+    LEFT JOIN patients p ON lt.patient_id = p.id
+    LEFT JOIN visits v ON lt.visit_id = v.id
     LEFT JOIN users u ON lt.doctor_id = u.id
     LEFT JOIN users t ON lt.lab_technician_id = t.id
     LEFT JOIN branches b ON lt.branch_id = b.id
-    WHERE lt.id = ?
+    LEFT JOIN lab_tests_catalog ltc ON lt.test_id = ltc.id
+    WHERE lt.id = ? AND lt.branch_id = ?
 ");
-$stmt->execute([$test_id]);
+$stmt->execute([$test_id, $user_branch_id]);
 $test = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$test) {
-    header('Location: pending_requests.php?error=test_not_found');
+    header('Location: pending_tests.php?error=test_not_found');
     exit;
-}
-
-// ================================================================
-// GET RESULT TEMPLATE IF EXISTS
-// ================================================================
-$template_html = null;
-if (!empty($test['result_template_id'])) {
-    $stmt = $db->prepare("SELECT template_html FROM lab_result_templates WHERE id = ? AND is_active = 1");
-    $stmt->execute([$test['result_template_id']]);
-    $template = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($template) {
-        $template_html = $template['template_html'];
-    }
 }
 
 // ================================================================
@@ -161,11 +151,26 @@ function getStatusBadgeClass($status) {
 function getStatusLabel($status) {
     $map = [
         'pending' => '⏳ Pending',
-        'in_progress' => '🔬 In Progress',
+        'in_progress' => '🔄 In Progress',
         'completed' => '✅ Completed',
         'cancelled' => '❌ Cancelled'
     ];
     return $map[$status] ?? $status;
+}
+
+function getStatusIcon($status) {
+    $map = [
+        'pending' => 'fa-clock',
+        'in_progress' => 'fa-spinner fa-spin',
+        'completed' => 'fa-check-circle',
+        'cancelled' => 'fa-times-circle'
+    ];
+    return $map[$status] ?? 'fa-circle';
+}
+
+function formatDate($datetime) {
+    if (empty($datetime)) return 'N/A';
+    return date('d/m/Y h:i A', strtotime($datetime));
 }
 
 // ================================================================
@@ -175,11 +180,10 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// Logo path
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
+// INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/laboratory_header.php';
 include_once __DIR__ . '/../../components/laboratory_sidebar.php';
@@ -192,7 +196,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Test - <?= htmlspecialchars($test['test_name'] ?? 'N/A') ?> - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -206,7 +211,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7 0%, #1A7FE8 100%);
+            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --success: #059669;
             --success-dark: #047857;
             --success-bg: #D1FAE5;
@@ -226,12 +231,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
-            --radius: 12px;
-            --radius-lg: 16px;
-            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --radius: 10px;
+            --radius-lg: 14px;
+            --transition: all 0.3s ease;
             --shadow: 0 1px 3px rgba(0,0,0,0.06);
-            --shadow-md: 0 4px 16px rgba(11,94,215,0.10);
-            --shadow-lg: 0 8px 32px rgba(11,94,215,0.15);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -249,462 +254,233 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --border-color: #334155;
         }
         
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
             background: var(--bg-body);
             color: var(--text-primary);
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            margin: 0;
-            padding: 0;
-            line-height: 1.6;
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .branch-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
-        .role-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--primary-bg);
-            color: var(--primary);
-            text-transform: uppercase;
-        }
-        
-        [data-theme="dark"] .role-badge {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
             padding: 28px 32px;
             min-height: calc(100vh - 68px);
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
         }
         
         /* ================================================================
-           SCROLLBAR
-           ================================================================ */
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: var(--gray-100); border-radius: 10px; }
-        ::-webkit-scrollbar-thumb { background: var(--primary-light); border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--primary); }
-        [data-theme="dark"] ::-webkit-scrollbar-track { background: var(--gray-700); }
-        [data-theme="dark"] ::-webkit-scrollbar-thumb { background: var(--primary-dark); }
-        
-        /* ================================================================
-           PAGE HEADER - BLUE GRADIENT
+           PAGE HEADER
            ================================================================ */
         .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            flex-wrap: wrap;
-            gap: 16px;
-            margin-bottom: 28px;
-            padding: 24px 28px;
             background: var(--primary-gradient);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-lg);
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 28px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
             position: relative;
-            color: white;
+            overflow: hidden;
         }
-        .page-header::after {
+        
+        .page-header::before {
             content: '';
             position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: linear-gradient(90deg, rgba(255,255,255,0.3), rgba(255,255,255,0.6), rgba(255,255,255,0.3));
-            border-radius: 0 0 4px 4px;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
         }
-        .page-header-left { flex: 1; }
-        .page-title {
-            font-size: 1.5rem;
+        
+        .page-header .page-title {
+            color: white;
+            font-size: 1.8rem;
             font-weight: 700;
             display: flex;
             align-items: center;
             gap: 12px;
             flex-wrap: wrap;
-            margin: 0;
-            color: white;
-        }
-        .page-title i { color: rgba(255,255,255,0.8); }
-        
-        .page-badge {
-            font-size: 0.7rem;
-            font-weight: 600;
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 16px;
-            border-radius: 20px;
-            font-family: monospace;
-            border: 1px solid rgba(255,255,255,0.2);
+            position: relative;
+            z-index: 1;
         }
         
-        .page-subtitle {
-            font-size: 0.9rem;
-            opacity: 0.85;
-            margin-top: 6px;
+        .page-header .page-title i {
+            font-size: 2rem;
+            opacity: 0.9;
+        }
+        
+        .page-header .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.95rem;
             display: flex;
-            flex-wrap: wrap;
             align-items: center;
-            gap: 8px;
-            color: rgba(255,255,255,0.9);
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
         }
-        .page-subtitle strong { color: white; font-weight: 700; }
         
-        .status-badge {
-            display: inline-block;
-            font-size: 0.7rem;
+        .page-header .page-subtitle strong {
+            color: white;
             font-weight: 600;
-            padding: 4px 16px;
-            border-radius: 20px;
-            text-transform: capitalize;
         }
-        .badge-warning { background: var(--warning-bg); color: var(--warning); }
-        .badge-info { background: var(--primary-bg); color: var(--primary); }
-        .badge-success { background: var(--success-bg); color: var(--success); }
-        .badge-danger { background: var(--danger-bg); color: var(--danger); }
-        .badge-purple { background: var(--purple-bg); color: var(--purple); }
         
-        .branch-badge-header {
+        .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
-            padding: 2px 12px;
+            padding: 4px 14px;
             border-radius: 20px;
             font-size: 0.65rem;
             font-weight: 600;
-            border: 1px solid rgba(255,255,255,0.2);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            backdrop-filter: blur(4px);
+        }
+        
+        .page-header .branch-tag {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
             display: inline-flex;
             align-items: center;
             gap: 4px;
+            backdrop-filter: blur(4px);
         }
         
-        .page-header-right .btn-outline {
-            background: rgba(255,255,255,0.15);
+        .page-header .btn-outline-light {
+            background: rgba(255,255,255,0.12);
             color: white;
-            border: 1px solid rgba(255,255,255,0.25);
-        }
-        .page-header-right .btn-outline:hover {
-            background: rgba(255,255,255,0.25);
-            border-color: rgba(255,255,255,0.4);
-            color: white;
-            transform: translateY(-2px);
-        }
-        
-        .btn {
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 10px 22px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: var(--transition);
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            font-family: inherit;
-        }
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: #ffffff;
-            box-shadow: 0 2px 12px rgba(11,94,215,0.25);
-        }
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 20px rgba(11,94,215,0.35);
-        }
-        .btn-success {
-            background: linear-gradient(135deg, #059669, #10B981);
-            color: #ffffff;
-            box-shadow: 0 2px 12px rgba(5,150,105,0.25);
-        }
-        .btn-success:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 20px rgba(5,150,105,0.35);
-        }
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            background: var(--primary-bg);
-            border-color: var(--primary);
-            color: var(--primary);
-            transform: translateY(-2px);
-        }
-        .btn-danger {
-            background: linear-gradient(135deg, #DC2626, #EF4444);
-            color: #ffffff;
-        }
-        .btn-danger:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 20px rgba(220,38,38,0.35);
-        }
-        .btn-sm {
-            padding: 6px 16px;
-            font-size: 0.75rem;
-            border-radius: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
         }
         
+        .page-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        .page-header .new-db-tag {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.7);
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.08);
+            letter-spacing: 0.03em;
+        }
+        
+        .status-badge-lg {
+            display: inline-block;
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+        .badge-info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
+        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+        
         /* ================================================================
-           CARDS - BLUE THEME
+           CARDS
            ================================================================ */
-        .detail-card {
+        .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            padding: 20px 24px;
             border: 1px solid var(--border-color);
-            transition: var(--transition);
+            padding: 22px 26px;
             margin-bottom: 20px;
+            box-shadow: var(--shadow);
+            transition: var(--transition);
+        }
+        
+        .card:hover {
+            border-color: var(--primary-light);
             box-shadow: var(--shadow-md);
-            position: relative;
-            overflow: hidden;
-        }
-        .detail-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: var(--primary-gradient);
-            border-radius: 0 0 4px 4px;
-        }
-        .detail-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-lg);
-            transform: translateY(-2px);
-        }
-        [data-theme="dark"] .detail-card {
-            background: var(--gray-800);
-            border-color: var(--gray-700);
-        }
-        [data-theme="dark"] .detail-card::before {
-            background: var(--primary-gradient);
-        }
-        [data-theme="dark"] .detail-card:hover {
-            border-color: var(--primary);
         }
         
         .card-title {
             font-size: 1rem;
-            font-weight: 700;
-            color: var(--primary-dark);
-            border-bottom: 2px solid var(--primary-light);
+            font-weight: 600;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
             padding-bottom: 12px;
             margin-bottom: 16px;
             display: flex;
             align-items: center;
-            flex-wrap: wrap;
             gap: 10px;
+            flex-wrap: wrap;
         }
-        [data-theme="dark"] .card-title {
-            color: var(--primary-light);
-            border-color: var(--primary-dark);
+        
+        .card-title i {
+            color: var(--primary);
+            font-size: 1.1rem;
         }
-        .card-title i { font-size: 1.1rem; }
-        .title-blue { color: var(--primary); }
-        .title-green { color: var(--success); }
-        .title-purple { color: var(--purple); }
-        .title-orange { color: var(--warning); }
-        .title-red { color: var(--danger); }
+        
+        .card-title .badge-count {
+            background: var(--primary);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+        }
         
         .detail-row {
             display: flex;
-            padding: 8px 0;
+            padding: 6px 0;
             border-bottom: 1px solid var(--border-color);
+            font-size: 0.85rem;
         }
-        .detail-row:last-child { border-bottom: none; }
+        
+        .detail-row:last-child {
+            border-bottom: none;
+        }
         
         .detail-label {
             font-weight: 600;
             color: var(--text-secondary);
-            width: 180px;
+            width: 140px;
             flex-shrink: 0;
-            font-size: 0.85rem;
         }
+        
         .detail-value {
             flex: 1;
             color: var(--text-primary);
-            font-size: 0.9rem;
         }
         
-        .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        
         /* ================================================================
-           RESULT DISPLAY
+           RESULT BOX
            ================================================================ */
         .result-box {
             background: var(--primary-bg);
@@ -713,30 +489,109 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border: 2px solid var(--primary-light);
             margin-top: 8px;
         }
-        [data-theme="dark"] .result-box {
-            background: #1E3A5F;
-            border-color: var(--primary-dark);
-        }
-        
-        .result-box .result-value {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--primary-dark);
-        }
-        [data-theme="dark"] .result-box .result-value {
-            color: var(--primary-light);
-        }
         
         .result-box .result-label {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: var(--text-secondary);
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
         
+        .result-box .result-value {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--primary-dark);
+            margin-top: 2px;
+        }
+        
+        .result-box .result-meta {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px solid var(--border-color);
+        }
+        
+        [data-theme="dark"] .result-box {
+            background: #1E3A5F;
+            border-color: var(--primary-dark);
+        }
+        
+        [data-theme="dark"] .result-box .result-value {
+            color: var(--primary-light);
+        }
+        
         /* ================================================================
-           PDF MODAL - BEAUTIFUL DESIGN
+           BUTTONS
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 18px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.82rem;
+            transition: var(--transition);
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+        }
+        
+        .btn-sm {
+            padding: 5px 12px;
+            font-size: 0.7rem;
+            border-radius: 6px;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #991B1B;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        /* ================================================================
+           PDF MODAL
            ================================================================ */
         .pdf-modal-overlay {
             display: none;
@@ -745,43 +600,43 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.7);
+            background: rgba(0,0,0,0.6);
             z-index: 9999;
-            backdrop-filter: blur(8px);
+            backdrop-filter: blur(4px);
+            justify-content: center;
+            align-items: center;
         }
-        .pdf-modal-overlay.active { display: flex; align-items: center; justify-content: center; }
+        
+        .pdf-modal-overlay.active {
+            display: flex;
+        }
         
         .pdf-modal {
-            background: white;
+            background: var(--bg-card);
             border-radius: var(--radius-lg);
             width: 95%;
             max-width: 1100px;
             max-height: 95vh;
             display: flex;
             flex-direction: column;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            animation: slideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: var(--shadow-lg);
+            animation: slideUp 0.3s ease;
         }
-        [data-theme="dark"] .pdf-modal { background: var(--gray-800); }
         
         @keyframes slideUp {
-            from { opacity: 0; transform: translateY(40px) scale(0.95); }
+            from { opacity: 0; transform: translateY(30px) scale(0.98); }
             to { opacity: 1; transform: translateY(0) scale(1); }
         }
         
         .pdf-modal-header {
             padding: 16px 24px;
-            border-bottom: 2px solid var(--gray-200);
+            border-bottom: 2px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-shrink: 0;
             background: var(--primary-gradient);
             border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-        }
-        [data-theme="dark"] .pdf-modal-header { 
-            border-color: var(--gray-700);
-            background: var(--primary-gradient);
         }
         
         .pdf-modal-header .modal-title {
@@ -795,57 +650,53 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .pdf-modal-header .modal-actions {
             display: flex;
-            gap: 10px;
+            gap: 8px;
+            flex-wrap: wrap;
         }
         
         .pdf-modal-header .modal-actions .btn {
             background: rgba(255,255,255,0.15);
             color: white;
-            border: 1px solid rgba(255,255,255,0.25);
+            border: 1px solid rgba(255,255,255,0.2);
         }
+        
         .pdf-modal-header .modal-actions .btn:hover {
             background: rgba(255,255,255,0.3);
             transform: translateY(-2px);
         }
-        .pdf-modal-header .modal-actions .btn-danger {
-            background: rgba(220,38,38,0.4);
-            border-color: rgba(220,38,38,0.3);
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal {
+            background: rgba(220,38,38,0.3);
+            border-color: rgba(220,38,38,0.2);
         }
-        .pdf-modal-header .modal-actions .btn-danger:hover {
-            background: rgba(220,38,38,0.6);
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal:hover {
+            background: rgba(220,38,38,0.5);
         }
         
         .pdf-modal-body {
             flex: 1;
             overflow-y: auto;
             padding: 24px 32px;
-            background: #f8fafc;
-        }
-        [data-theme="dark"] .pdf-modal-body { 
-            background: var(--gray-800);
+            background: var(--bg-body);
         }
         
         .pdf-modal-body .pdf-content {
             max-width: 100%;
             font-size: 0.85rem;
-            color: var(--gray-800);
-            background: white;
+            background: var(--bg-card);
             padding: 32px 40px;
             border-radius: var(--radius);
-            box-shadow: var(--shadow-md);
-        }
-        [data-theme="dark"] .pdf-modal-body .pdf-content { 
-            color: var(--gray-200);
-            background: var(--gray-700);
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
         }
         
-        /* PDF Header with Logo */
+        /* PDF Content Styles */
         .pdf-content .pdf-header {
             text-align: center;
             padding-bottom: 20px;
             border-bottom: 3px solid var(--primary);
             margin-bottom: 24px;
-            position: relative;
         }
         
         .pdf-content .pdf-header .pdf-logo {
@@ -855,24 +706,28 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             gap: 16px;
             margin-bottom: 6px;
         }
+        
         .pdf-content .pdf-header .pdf-logo img {
-            height: 60px;
+            height: 55px;
             width: auto;
             object-fit: contain;
         }
-        .pdf-content .pdf-header .pdf-logo .clinic-name {
-            font-size: 1.8rem;
+        
+        .pdf-content .pdf-header .clinic-name {
+            font-size: 1.6rem;
             font-weight: 800;
             color: var(--primary);
             letter-spacing: -0.5px;
         }
+        
         .pdf-content .pdf-header .clinic-sub {
-            font-size: 0.85rem;
-            color: var(--gray-500);
-            letter-spacing: 1px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
         }
+        
         .pdf-content .pdf-header .test-info {
-            font-size: 1rem;
+            font-size: 0.95rem;
             font-weight: 700;
             color: var(--primary);
             margin-top: 6px;
@@ -881,57 +736,44 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border-radius: 20px;
             display: inline-block;
         }
-        [data-theme="dark"] .pdf-content .pdf-header .test-info {
-            background: #1E3A5F;
-        }
         
         .pdf-content .section-title {
             font-weight: 700;
-            font-size: 1.05rem;
+            font-size: 1rem;
             color: var(--primary);
             border-bottom: 2px solid var(--primary-light);
             padding-bottom: 6px;
-            margin: 20px 0 12px 0;
+            margin: 18px 0 10px 0;
             display: flex;
             align-items: center;
             gap: 8px;
-        }
-        [data-theme="dark"] .pdf-content .section-title {
-            border-color: var(--primary-dark);
         }
         
         .pdf-content .pdf-row {
             display: flex;
             padding: 4px 0;
-            border-bottom: 1px solid var(--gray-100);
+            border-bottom: 1px solid var(--border-color);
         }
-        [data-theme="dark"] .pdf-content .pdf-row {
-            border-color: var(--gray-600);
-        }
+        
         .pdf-content .pdf-row .pdf-label {
             font-weight: 600;
-            color: var(--gray-500);
+            color: var(--text-secondary);
             width: 160px;
             flex-shrink: 0;
         }
+        
         .pdf-content .pdf-row .pdf-value {
             flex: 1;
-            color: var(--gray-800);
-        }
-        [data-theme="dark"] .pdf-content .pdf-row .pdf-value {
-            color: var(--gray-200);
+            color: var(--text-primary);
         }
         
         .pdf-content .pdf-footer {
             text-align: center;
             padding-top: 20px;
-            border-top: 2px solid var(--gray-200);
+            border-top: 2px solid var(--border-color);
             margin-top: 24px;
             font-size: 0.7rem;
-            color: var(--gray-400);
-        }
-        [data-theme="dark"] .pdf-content .pdf-footer {
-            border-color: var(--gray-600);
+            color: var(--text-secondary);
         }
         
         .pdf-content .pdf-footer .footer-brand {
@@ -940,224 +782,295 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 18px;
+            border-radius: 10px;
+            z-index: 999;
+            max-width: 380px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+            font-size: 0.85rem;
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
             padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 20px;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
             text-align: center;
             font-size: 0.7rem;
             color: var(--text-secondary);
         }
+        
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        .footer .new-db-footer {
+            color: var(--success);
+            font-weight: 600;
+            font-size: 0.65rem;
+        }
         
         /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
         }
+        
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .main-content { padding: 12px; }
-            .row-2col { grid-template-columns: 1fr; }
-            .page-header { flex-direction: column; }
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
             .detail-row { flex-direction: column; }
             .detail-label { width: 100%; margin-bottom: 2px; }
-            .pdf-modal { width: 100%; max-height: 100vh; border-radius: 0; }
-            .pdf-modal-header { flex-direction: column; gap: 10px; align-items: stretch; }
-            .pdf-modal-header .modal-actions { justify-content: center; flex-wrap: wrap; }
+            .card { padding: 14px 16px; }
             .pdf-modal-body .pdf-content { padding: 16px; }
             .pdf-content .pdf-row { flex-direction: column; }
             .pdf-content .pdf-row .pdf-label { width: 100%; }
-            .page-title { font-size: 1.1rem; }
-            .detail-card { padding: 14px 16px; }
-            .btn { font-size: 0.75rem; padding: 6px 12px; }
+            .btn { padding: 4px 10px; font-size: 0.7rem; }
+            .pdf-modal-header { flex-direction: column; gap: 10px; align-items: stretch; }
+            .pdf-modal-header .modal-actions { justify-content: center; }
         }
+        
         @media (max-width: 480px) {
-            .main-content { padding: 8px; }
-            .page-title { font-size: 1rem; }
-            .detail-card { padding: 10px 12px; }
-            .btn { font-size: 0.65rem; padding: 4px 10px; }
+            .main-content { padding: 10px; }
+            .page-header .page-title { font-size: 1.1rem; }
+            .page-header .btn-outline-light { padding: 4px 8px; font-size: 0.65rem; }
+            .result-box { padding: 10px 14px; }
+            .result-box .result-value { font-size: 0.95rem; }
+        }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
         }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        <span class="datetime" id="currentDateTime"></span>
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
     <div class="page-header">
-        <div class="page-header-left">
+        <div>
             <h1 class="page-title">
-                <i class="fas fa-flask"></i> Test Details
-                <span class="page-badge">#<?= htmlspecialchars($test['id'] ?? 'N/A') ?></span>
-                <span class="status-badge <?= getStatusBadgeClass($test['status'] ?? 'pending') ?>">
+                <i class="fas fa-flask"></i>
+                Test Details
+                <span class="role-badge-display">LABORATORY</span>
+                <span class="new-db-tag">
+                    <i class="fas fa-database"></i> New DB
+                </span>
+                <span class="status-badge-lg <?= getStatusBadgeClass($test['status'] ?? 'pending') ?>" style="background:rgba(255,255,255,0.2);color:white;border-color:rgba(255,255,255,0.2);">
+                    <i class="fas <?= getStatusIcon($test['status'] ?? 'pending') ?>"></i>
                     <?= getStatusLabel($test['status'] ?? 'pending') ?>
                 </span>
             </h1>
             <p class="page-subtitle">
+                <i class="fas fa-vial"></i>
                 Test: <strong><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></strong>
-                <span class="separator">|</span>
-                Patient: <strong><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></strong>
-                <span class="separator">|</span>
-                Visit: <strong><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></strong>
-                <span class="branch-badge-header"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($test['branch_name'] ?? 'N/A') ?></span>
+                <span class="branch-tag">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($test['branch_name'] ?? $user_branch_name) ?>
+                </span>
+                <span class="branch-tag">
+                    <i class="fas fa-hashtag"></i> ID: <?= $test['id'] ?>
+                </span>
+                <?php if (!empty($test['patient_name'])): ?>
+                    <span class="branch-tag">
+                        <i class="fas fa-user"></i> <?= htmlspecialchars($test['patient_name']) ?>
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
-        <div class="page-header-right" style="display:flex;gap:8px;flex-wrap:wrap;">
-            <a href="pending_requests.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Back
-            </a>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <?php if ($test['status'] !== 'cancelled'): ?>
-                <button onclick="generatePDF()" class="btn btn-primary btn-sm">
+                <button onclick="generatePDF()" class="btn-outline-light">
                     <i class="fas fa-file-pdf"></i> Download PDF
                 </button>
             <?php endif; ?>
-            <button onclick="window.print()" class="btn btn-outline btn-sm">
+            <button onclick="window.print()" class="btn-outline-light">
                 <i class="fas fa-print"></i> Print
             </button>
+            <a href="pending_tests.php" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back
+            </a>
         </div>
     </div>
 
     <!-- ================================================================ -->
     <!-- PATIENT INFORMATION -->
     <!-- ================================================================ -->
-    <div class="detail-card">
-        <h3 class="card-title"><i class="fas fa-user title-blue"></i> Patient Information</h3>
-        <div class="row-2col">
-            <div>
-                <div class="detail-row"><span class="detail-label">Full Name</span><span class="detail-value"><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Patient ID</span><span class="detail-value"><?= htmlspecialchars($test['patient_code'] ?? 'N/A') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Gender</span><span class="detail-value"><?= htmlspecialchars($test['gender'] ?? 'N/A') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Date of Birth</span><span class="detail-value"><?= !empty($test['date_of_birth']) ? date('M d, Y', strtotime($test['date_of_birth'])) : 'N/A' ?> (<?= calculateAge($test['date_of_birth'] ?? '') ?> years)</span></div>
-            </div>
-            <div>
-                <div class="detail-row"><span class="detail-label">Phone</span><span class="detail-value"><?= htmlspecialchars($test['phone'] ?? 'N/A') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Address</span><span class="detail-value"><?= htmlspecialchars($test['address'] ?? 'N/A') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Visit Number</span><span class="detail-value"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Visit Date</span><span class="detail-value"><?= date('M d, Y h:i A', strtotime($test['visit_date'] ?? 'now')) ?></span></div>
-            </div>
+    <div class="card animate-fade-in-up">
+        <h3 class="card-title">
+            <i class="fas fa-user-circle"></i>
+            Patient Information
+            <?php if (!empty($test['gender'])): ?>
+                <span class="badge-count">
+                    <?= $test['gender'] === 'Female' ? '👩' : '👨' ?>
+                    <?= $test['gender'] ?>
+                    <?php if (!empty($test['date_of_birth'])): ?>
+                        • <?= calculateAge($test['date_of_birth']) ?> yrs
+                    <?php endif; ?>
+                </span>
+            <?php endif; ?>
+        </h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 20px;">
+            <div class="detail-row"><span class="detail-label">Full Name</span><span class="detail-value"><strong><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></strong></span></div>
+            <div class="detail-row"><span class="detail-label">Patient ID</span><span class="detail-value"><?= htmlspecialchars($test['patient_code'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Gender</span><span class="detail-value"><?= htmlspecialchars($test['gender'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Date of Birth</span><span class="detail-value"><?= !empty($test['date_of_birth']) ? date('d/m/Y', strtotime($test['date_of_birth'])) : 'N/A' ?></span></div>
+            <div class="detail-row"><span class="detail-label">Phone</span><span class="detail-value"><?= htmlspecialchars($test['phone'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Blood Group</span><span class="detail-value"><?= htmlspecialchars($test['blood_group'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Allergies</span><span class="detail-value"><?= htmlspecialchars($test['allergies'] ?? 'None') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Emergency Contact</span><span class="detail-value"><?= htmlspecialchars($test['emergency_contact'] ?? 'N/A') ?></span></div>
+            <div class="detail-row" style="grid-column: span 2;"><span class="detail-label">Address</span><span class="detail-value"><?= htmlspecialchars($test['address'] ?? 'N/A') ?></span></div>
         </div>
     </div>
 
     <!-- ================================================================ -->
     <!-- TEST INFORMATION -->
     <!-- ================================================================ -->
-    <div class="detail-card">
-        <h3 class="card-title"><i class="fas fa-vial title-purple"></i> Test Information</h3>
-        <div class="row-2col">
-            <div>
-                <div class="detail-row"><span class="detail-label">Test Name</span><span class="detail-value"><strong><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></strong></span></div>
-                <div class="detail-row"><span class="detail-label">Test Price</span><span class="detail-value">TSh <?= number_format($test['test_price'] ?? 0, 0) ?></span></div>
-                <div class="detail-row"><span class="detail-label">Test Type</span><span class="detail-value"><?= htmlspecialchars($test['test_type'] ?? 'N/A') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Sample Type</span><span class="detail-value"><?= htmlspecialchars($test['sample_type'] ?? 'N/A') ?></span></div>
-            </div>
-            <div>
-                <div class="detail-row"><span class="detail-label">Doctor</span><span class="detail-value"><?= htmlspecialchars($test['doctor_name'] ?? 'Not Assigned') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Technician</span><span class="detail-value"><?= htmlspecialchars($test['technician_name'] ?? 'Not Assigned') ?></span></div>
-                <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value"><span class="status-badge <?= getStatusBadgeClass($test['status'] ?? 'pending') ?>"><?= getStatusLabel($test['status'] ?? 'pending') ?></span></span></div>
-                <div class="detail-row"><span class="detail-label">Created</span><span class="detail-value"><?= date('M d, Y h:i A', strtotime($test['created_at'])) ?></span></div>
-                <?php if (!empty($test['completed_at'])): ?>
-                    <div class="detail-row"><span class="detail-label">Completed</span><span class="detail-value"><?= date('M d, Y h:i A', strtotime($test['completed_at'])) ?></span></div>
-                <?php endif; ?>
-            </div>
+    <div class="card animate-fade-in-up">
+        <h3 class="card-title">
+            <i class="fas fa-vial"></i>
+            Test Information
+            <span class="badge-count">
+                <i class="fas fa-tag"></i> <?= htmlspecialchars($test['test_category'] ?? 'N/A') ?>
+            </span>
+            <?php if (!empty($test['test_price']) && $test['test_price'] > 0): ?>
+                <span class="badge-count" style="background:var(--success);">
+                    TSh <?= number_format($test['test_price']) ?>
+                </span>
+            <?php endif; ?>
+        </h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 20px;">
+            <div class="detail-row"><span class="detail-label">Test Name</span><span class="detail-value"><strong><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></strong></span></div>
+            <div class="detail-row"><span class="detail-label">Test Type</span><span class="detail-value"><?= htmlspecialchars($test['test_type'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Sample Type</span><span class="detail-value"><?= htmlspecialchars($test['sample_type'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Reference Range</span><span class="detail-value"><?= htmlspecialchars($test['reference_range'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Doctor</span><span class="detail-value"><?= htmlspecialchars($test['doctor_name'] ?? 'Not Assigned') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Technician</span><span class="detail-value"><?= htmlspecialchars($test['technician_name'] ?? 'Not Assigned') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Visit Number</span><span class="detail-value"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></span></div>
+            <div class="detail-row"><span class="detail-label">Visit Type</span><span class="detail-value"><?= ucfirst(htmlspecialchars($test['visit_type'] ?? 'N/A')) ?></span></div>
+            <div class="detail-row"><span class="detail-label">Created</span><span class="detail-value"><?= formatDate($test['created_at'] ?? '') ?></span></div>
+            <?php if (!empty($test['started_at'])): ?>
+                <div class="detail-row"><span class="detail-label">Started</span><span class="detail-value"><?= formatDate($test['started_at']) ?></span></div>
+            <?php endif; ?>
+            <?php if (!empty($test['completed_at'])): ?>
+                <div class="detail-row"><span class="detail-label">Completed</span><span class="detail-value"><?= formatDate($test['completed_at']) ?></span></div>
+            <?php endif; ?>
         </div>
+        
+        <?php if (!empty($test['test_description'])): ?>
+            <div class="detail-row" style="margin-top:10px;border-top:2px solid var(--border-color);padding-top:10px;">
+                <span class="detail-label">Description</span>
+                <span class="detail-value"><?= htmlspecialchars($test['test_description']) ?></span>
+            </div>
+        <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
     <!-- TEST RESULTS -->
     <!-- ================================================================ -->
-    <div class="detail-card">
-        <h3 class="card-title"><i class="fas fa-file-medical-alt title-green"></i> Test Results</h3>
+    <div class="card animate-fade-in-up" style="border-color:<?= $test['status'] === 'completed' ? 'var(--success)' : 'var(--warning)' ?>;border-left:4px solid <?= $test['status'] === 'completed' ? 'var(--success)' : 'var(--warning)' ?>;">
+        <h3 class="card-title">
+            <i class="fas fa-file-medical-alt" style="color:<?= $test['status'] === 'completed' ? 'var(--success)' : 'var(--warning)' ?>;"></i>
+            Test Results
+            <?php if ($test['status'] === 'completed'): ?>
+                <span class="badge-count" style="background:var(--success);">
+                    <i class="fas fa-check-circle"></i> Completed
+                </span>
+            <?php elseif ($test['status'] === 'in_progress'): ?>
+                <span class="badge-count" style="background:var(--primary);">
+                    <i class="fas fa-spinner fa-spin"></i> In Progress
+                </span>
+            <?php elseif ($test['status'] === 'cancelled'): ?>
+                <span class="badge-count" style="background:var(--danger);">
+                    <i class="fas fa-times-circle"></i> Cancelled
+                </span>
+            <?php else: ?>
+                <span class="badge-count" style="background:var(--warning);">
+                    <i class="fas fa-clock"></i> Pending
+                </span>
+            <?php endif; ?>
+        </h3>
         
         <?php if ($test['status'] === 'completed' && !empty($test['results'])): ?>
-            <?php if ($template_html): ?>
-                <!-- Display formatted result from template -->
-                <div class="result-box">
-                    <div style="overflow-x:auto;">
-                        <?= $test['formatted_result'] ?? $test['results'] ?>
-                    </div>
+            <div class="result-box">
+                <div>
+                    <span class="result-label">Result</span>
+                    <div class="result-value"><?= nl2br(htmlspecialchars($test['results'] ?? 'N/A')) ?></div>
                 </div>
-            <?php else: ?>
-                <div class="result-box">
-                    <div style="margin-bottom:4px;">
-                        <span class="result-label">Result</span>
-                        <div class="result-value"><?= htmlspecialchars($test['results'] ?? 'N/A') ?></div>
+                <?php if (!empty($test['reference_range'])): ?>
+                    <div class="result-meta">
+                        <span class="result-label">Reference Range:</span>
+                        <span style="font-weight:500;"><?= htmlspecialchars($test['reference_range']) ?></span>
                     </div>
-                    <?php if (!empty($test['reference_range'])): ?>
-                        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--gray-200);">
-                            <span class="result-label">Reference Range</span>
-                            <div style="font-size:0.9rem;color:var(--gray-700);"><?= htmlspecialchars($test['reference_range']) ?></div>
-                        </div>
-                    <?php endif; ?>
-                    <?php if (!empty($test['interpretation'])): ?>
-                        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--gray-200);">
-                            <span class="result-label">Interpretation</span>
-                            <div style="font-size:0.9rem;color:var(--gray-700);"><?= htmlspecialchars($test['interpretation']) ?></div>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            <?php endif; ?>
+                <?php endif; ?>
+                <?php if (!empty($test['interpretation'])): ?>
+                    <div class="result-meta">
+                        <span class="result-label">Interpretation:</span>
+                        <span style="font-weight:500;"><?= nl2br(htmlspecialchars($test['interpretation'])) ?></span>
+                    </div>
+                <?php endif; ?>
+            </div>
         <?php elseif ($test['status'] === 'in_progress'): ?>
-            <div style="text-align:center;padding:30px 20px;color:var(--gray-500);">
-                <i class="fas fa-spinner fa-spin text-3xl" style="color:var(--primary);"></i>
-                <p style="margin-top:12px;font-size:1rem;font-weight:600;">Test is In Progress</p>
+            <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
+                <i class="fas fa-spinner fa-spin text-4xl" style="color:var(--primary);"></i>
+                <p style="margin-top:12px;font-size:1rem;font-weight:600;">Test In Progress</p>
                 <p style="font-size:0.85rem;">Results will appear once the test is completed</p>
+                <?php if (!empty($test['started_at'])): ?>
+                    <p style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">Started: <?= formatDate($test['started_at']) ?></p>
+                <?php endif; ?>
             </div>
         <?php elseif ($test['status'] === 'cancelled'): ?>
-            <div style="text-align:center;padding:30px 20px;color:var(--gray-500);">
-                <i class="fas fa-times-circle text-3xl" style="color:var(--danger);"></i>
+            <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
+                <i class="fas fa-times-circle text-4xl" style="color:var(--danger);"></i>
                 <p style="margin-top:12px;font-size:1rem;font-weight:600;">Test Cancelled</p>
                 <p style="font-size:0.85rem;">This test has been cancelled</p>
+                <?php if (!empty($test['notes'])): ?>
+                    <p style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">Reason: <?= htmlspecialchars($test['notes']) ?></p>
+                <?php endif; ?>
             </div>
         <?php else: ?>
-            <div style="text-align:center;padding:30px 20px;color:var(--gray-500);">
-                <i class="fas fa-clock text-3xl" style="color:var(--warning);"></i>
+            <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
+                <i class="fas fa-clock text-4xl" style="color:var(--warning);"></i>
                 <p style="margin-top:12px;font-size:1rem;font-weight:600;">Test Pending</p>
                 <p style="font-size:0.85rem;">Results not yet available</p>
+                <p style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">Created: <?= formatDate($test['created_at'] ?? '') ?></p>
             </div>
         <?php endif; ?>
     </div>
@@ -1165,9 +1078,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- ================================================================ -->
     <!-- NOTES -->
     <!-- ================================================================ -->
-    <?php if (!empty($test['notes'])): ?>
-        <div class="detail-card">
-            <h3 class="card-title"><i class="fas fa-sticky-note title-orange"></i> Notes</h3>
+    <?php if (!empty($test['notes']) && $test['status'] !== 'cancelled'): ?>
+        <div class="card animate-fade-in-up">
+            <h3 class="card-title">
+                <i class="fas fa-sticky-note" style="color:var(--warning);"></i>
+                Notes
+            </h3>
             <div class="detail-row">
                 <span class="detail-label">Notes</span>
                 <span class="detail-value"><?= nl2br(htmlspecialchars($test['notes'] ?? '')) ?></span>
@@ -1175,16 +1091,18 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- Footer -->
+    <!-- ================================================================ -->
+    <!-- FOOTER -->
+    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Test Details
+            View Test
             <span class="text-gray-300 mx-2">|</span>
-            Logged in as: <strong><?= htmlspecialchars($user_full_name) ?></strong>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
-            <?= htmlspecialchars($test['test_name'] ?? 'N/A') ?>
+            <span class="new-db-footer"><i class="fas fa-database"></i> New DB</span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1193,7 +1111,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- PDF MODAL - BEAUTIFUL DESIGN WITH LOGO -->
+<!-- PDF MODAL -->
 <!-- ================================================================ -->
 <div class="pdf-modal-overlay" id="pdfModal">
     <div class="pdf-modal">
@@ -1209,16 +1127,27 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <button onclick="window.print()" class="btn btn-sm">
                     <i class="fas fa-print"></i> Print
                 </button>
-                <button onclick="closePDFModal()" class="btn btn-sm btn-danger">
+                <button onclick="closePDFModal()" class="btn btn-sm btn-danger-modal">
                     <i class="fas fa-times"></i> Cancel
                 </button>
             </div>
         </div>
         <div class="pdf-modal-body" id="pdfModalBody">
             <div class="pdf-content" id="pdfContent">
-                <!-- PDF content will be generated by JavaScript -->
+                <!-- PDF content generated by JavaScript -->
             </div>
         </div>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle"></i>
+    <div>
+        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
@@ -1262,13 +1191,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', function() {
+            if (sidebar) sidebar.classList.toggle('open');
+        });
+    }
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
@@ -1285,7 +1216,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
+        var currentDateTime = document.getElementById('currentDateTime');
+        if (currentDateTime) {
+            currentDateTime.textContent = dateStr + ' • ' + timeStr;
+        }
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -1303,13 +1241,42 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     }
     
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
+    if (searchBtn) {
+        searchBtn.addEventListener('click', performSearch);
+    }
+    if (searchInput) {
+        searchInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+    }
 
     // ================================================================
-    // GENERATE PDF - BEAUTIFUL DESIGN WITH LOGO - FIXED
+    // TOAST
+    // ================================================================
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        if (!toast) return;
+        
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3500);
+    }
+
+    // ================================================================
+    // GENERATE PDF - NEW DB DATA
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -1319,95 +1286,104 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         var statusClass = '<?= $test['status'] ?? 'pending' ?>';
         var statusColor = statusClass === 'completed' ? '#059669' : (statusClass === 'in_progress' ? '#0B5ED7' : (statusClass === 'cancelled' ? '#DC2626' : '#D97706'));
         
-        // Get patient info
-        var patientName = '<?= addslashes($test['patient_name'] ?? 'N/A') ?>';
-        var patientCode = '<?= addslashes($test['patient_code'] ?? 'N/A') ?>';
-        var gender = '<?= addslashes($test['gender'] ?? 'N/A') ?>';
-        var dob = '<?= !empty($test['date_of_birth']) ? date('M d, Y', strtotime($test['date_of_birth'])) : 'N/A' ?>';
-        var age = '<?= calculateAge($test['date_of_birth'] ?? '') ?>';
-        var phone = '<?= addslashes($test['phone'] ?? 'N/A') ?>';
-        var visitNumber = '<?= addslashes($test['visit_number'] ?? 'N/A') ?>';
-        var testName = '<?= addslashes($test['test_name'] ?? 'N/A') ?>';
-        var testPrice = '<?= number_format($test['test_price'] ?? 0, 0) ?>';
-        var testType = '<?= addslashes($test['test_type'] ?? 'N/A') ?>';
-        var sampleType = '<?= addslashes($test['sample_type'] ?? 'N/A') ?>';
-        var doctorName = '<?= addslashes($test['doctor_name'] ?? 'Not Assigned') ?>';
-        var technicianName = '<?= addslashes($test['technician_name'] ?? 'Not Assigned') ?>';
-        var createdDate = '<?= date('M d, Y h:i A', strtotime($test['created_at'])) ?>';
-        var completedDate = '<?= !empty($test['completed_at']) ? date('M d, Y h:i A', strtotime($test['completed_at'])) : '' ?>';
-        var testResults = '<?= addslashes($test['results'] ?? '') ?>';
-        var referenceRange = '<?= addslashes($test['reference_range'] ?? '') ?>';
-        var interpretation = '<?= addslashes($test['interpretation'] ?? '') ?>';
-        var notes = '<?= addslashes($test['notes'] ?? '') ?>';
-        var branchName = '<?= addslashes($test['branch_name'] ?? '') ?>';
-        var testId = '<?= $test['id'] ?>';
+        // Data from PHP
+        var testData = {
+            id: '<?= $test['id'] ?>',
+            testName: '<?= addslashes($test['test_name'] ?? 'N/A') ?>',
+            testCategory: '<?= addslashes($test['test_category'] ?? 'N/A') ?>',
+            testType: '<?= addslashes($test['test_type'] ?? 'N/A') ?>',
+            sampleType: '<?= addslashes($test['sample_type'] ?? 'N/A') ?>',
+            referenceRange: '<?= addslashes($test['reference_range'] ?? 'N/A') ?>',
+            testPrice: '<?= number_format($test['test_price'] ?? 0, 0) ?>',
+            patientName: '<?= addslashes($test['patient_name'] ?? 'N/A') ?>',
+            patientCode: '<?= addslashes($test['patient_code'] ?? 'N/A') ?>',
+            gender: '<?= addslashes($test['gender'] ?? 'N/A') ?>',
+            dob: '<?= !empty($test['date_of_birth']) ? date('M d, Y', strtotime($test['date_of_birth'])) : 'N/A' ?>',
+            age: '<?= calculateAge($test['date_of_birth'] ?? '') ?>',
+            phone: '<?= addslashes($test['phone'] ?? 'N/A') ?>',
+            address: '<?= addslashes($test['address'] ?? 'N/A') ?>',
+            bloodGroup: '<?= addslashes($test['blood_group'] ?? 'N/A') ?>',
+            allergies: '<?= addslashes($test['allergies'] ?? 'None') ?>',
+            emergencyContact: '<?= addslashes($test['emergency_contact'] ?? 'N/A') ?>',
+            visitNumber: '<?= addslashes($test['visit_number'] ?? 'N/A') ?>',
+            visitType: '<?= addslashes($test['visit_type'] ?? 'N/A') ?>',
+            doctorName: '<?= addslashes($test['doctor_name'] ?? 'Not Assigned') ?>',
+            doctorSpecialty: '<?= addslashes($test['doctor_specialty'] ?? 'GP') ?>',
+            technicianName: '<?= addslashes($test['technician_name'] ?? 'Not Assigned') ?>',
+            branchName: '<?= addslashes($test['branch_name'] ?? $user_branch_name) ?>',
+            createdDate: '<?= formatDate($test['created_at'] ?? '') ?>',
+            startedDate: '<?= !empty($test['started_at']) ? formatDate($test['started_at']) : '' ?>',
+            completedDate: '<?= !empty($test['completed_at']) ? formatDate($test['completed_at']) : '' ?>',
+            results: '<?= addslashes($test['results'] ?? '') ?>',
+            interpretation: '<?= addslashes($test['interpretation'] ?? '') ?>',
+            notes: '<?= addslashes($test['notes'] ?? '') ?>',
+            status: statusLabel
+        };
         
-        // Build PDF content
         var html = `
             <div class="pdf-header">
                 <div class="pdf-logo">
                     <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
                     <span class="clinic-name">Braick Dispensary</span>
                 </div>
-                <div class="clinic-sub">Quality Healthcare Services • ${branchName}</div>
-                <div class="test-info">🧪 ${testName}</div>
-                <div style="font-size:0.8rem;color:var(--gray-500);margin-top:4px;">
-                    Status: <span style="color:${statusColor};font-weight:700;">${statusLabel}</span> • 
-                    ID: #${testId} • 
-                    Date: ${createdDate}
+                <div class="clinic-sub">Quality Healthcare Services • ${testData.branchName}</div>
+                <div class="test-info">🧪 ${testData.testName}</div>
+                <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px;">
+                    Status: <span style="color:${statusColor};font-weight:700;">${testData.status}</span> • 
+                    ID: #${testData.id} • 
+                    Date: ${testData.createdDate}
                 </div>
             </div>
             
             <!-- Patient Information -->
             <div class="section-title">👤 Patient Information</div>
-            <div class="pdf-row"><span class="pdf-label">Full Name</span><span class="pdf-value">${patientName}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Patient ID</span><span class="pdf-value">${patientCode}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Gender</span><span class="pdf-value">${gender}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Date of Birth</span><span class="pdf-value">${dob} (${age} years)</span></div>
-            <div class="pdf-row"><span class="pdf-label">Phone</span><span class="pdf-value">${phone}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Visit Number</span><span class="pdf-value">${visitNumber}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Full Name</span><span class="pdf-value">${testData.patientName}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Patient ID</span><span class="pdf-value">${testData.patientCode}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Gender</span><span class="pdf-value">${testData.gender}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Date of Birth</span><span class="pdf-value">${testData.dob} (${testData.age} years)</span></div>
+            <div class="pdf-row"><span class="pdf-label">Phone</span><span class="pdf-value">${testData.phone}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Blood Group</span><span class="pdf-value">${testData.bloodGroup}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Allergies</span><span class="pdf-value">${testData.allergies}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Emergency Contact</span><span class="pdf-value">${testData.emergencyContact}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Address</span><span class="pdf-value">${testData.address}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Visit Number</span><span class="pdf-value">${testData.visitNumber}</span></div>
             
             <!-- Test Information -->
             <div class="section-title">🧪 Test Information</div>
-            <div class="pdf-row"><span class="pdf-label">Test Name</span><span class="pdf-value"><strong>${testName}</strong></span></div>
-            <div class="pdf-row"><span class="pdf-label">Test Price</span><span class="pdf-value">TSh ${testPrice}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Test Type</span><span class="pdf-value">${testType}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Sample Type</span><span class="pdf-value">${sampleType}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Doctor</span><span class="pdf-value">${doctorName}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Technician</span><span class="pdf-value">${technicianName}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Status</span><span class="pdf-value" style="color:${statusColor};font-weight:700;">${statusLabel}</span></div>
-            <div class="pdf-row"><span class="pdf-label">Created</span><span class="pdf-value">${createdDate}</span></div>
-            ${completedDate ? `<div class="pdf-row"><span class="pdf-label">Completed</span><span class="pdf-value">${completedDate}</span></div>` : ''}
+            <div class="pdf-row"><span class="pdf-label">Test Name</span><span class="pdf-value"><strong>${testData.testName}</strong></span></div>
+            <div class="pdf-row"><span class="pdf-label">Category</span><span class="pdf-value">${testData.testCategory}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Test Type</span><span class="pdf-value">${testData.testType}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Sample Type</span><span class="pdf-value">${testData.sampleType}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Reference Range</span><span class="pdf-value">${testData.referenceRange}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Price</span><span class="pdf-value">TSh ${testData.testPrice}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Doctor</span><span class="pdf-value">${testData.doctorName} (${testData.doctorSpecialty})</span></div>
+            <div class="pdf-row"><span class="pdf-label">Technician</span><span class="pdf-value">${testData.technicianName}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Visit Type</span><span class="pdf-value">${testData.visitType}</span></div>
+            <div class="pdf-row"><span class="pdf-label">Created</span><span class="pdf-value">${testData.createdDate}</span></div>
+            ${testData.startedDate ? `<div class="pdf-row"><span class="pdf-label">Started</span><span class="pdf-value">${testData.startedDate}</span></div>` : ''}
+            ${testData.completedDate ? `<div class="pdf-row"><span class="pdf-label">Completed</span><span class="pdf-value">${testData.completedDate}</span></div>` : ''}
             
             <!-- Results -->
             <div class="section-title">📊 Test Results</div>
-            <?php if ($test['status'] === 'completed' && !empty($test['results'])): ?>
-                <?php if ($template_html): ?>
-                    <div style="padding:12px;background:var(--primary-bg);border-radius:8px;border:1px solid var(--primary-light);margin-top:4px;">
-                        <?= addslashes($test['formatted_result'] ?? $test['results']) ?>
-                    </div>
-                <?php else: ?>
-                    <div class="pdf-row"><span class="pdf-label">Result</span><span class="pdf-value" style="font-weight:700;color:#059669;"><?= addslashes($test['results'] ?? 'N/A') ?></span></div>
-                    <?php if (!empty($test['reference_range'])): ?>
-                        <div class="pdf-row"><span class="pdf-label">Reference Range</span><span class="pdf-value"><?= addslashes($test['reference_range']) ?></span></div>
-                    <?php endif; ?>
-                    <?php if (!empty($test['interpretation'])): ?>
-                        <div class="pdf-row"><span class="pdf-label">Interpretation</span><span class="pdf-value"><?= addslashes($test['interpretation']) ?></span></div>
-                    <?php endif; ?>
-                <?php endif; ?>
-            <?php elseif ($test['status'] === 'in_progress'): ?>
-                <div class="pdf-row" style="border:none;padding:12px 0;"><span class="pdf-value" style="color:#0B5ED7;font-weight:600;">⏳ Test is In Progress - Results pending</span></div>
-            <?php elseif ($test['status'] === 'cancelled'): ?>
-                <div class="pdf-row" style="border:none;padding:12px 0;"><span class="pdf-value" style="color:#DC2626;font-weight:600;">❌ Test Cancelled</span></div>
-            <?php else: ?>
-                <div class="pdf-row" style="border:none;padding:12px 0;"><span class="pdf-value" style="color:#D97706;font-weight:600;">⏳ Test Pending - Results not yet available</span></div>
-            <?php endif; ?>
+            ${testData.results ? `
+                <div style="padding:12px 16px;background:var(--primary-bg);border-radius:8px;border:1px solid var(--primary-light);margin-top:4px;">
+                    <div style="font-weight:700;color:var(--primary-dark);font-size:1rem;">${testData.results}</div>
+                    ${testData.interpretation ? `<div style="margin-top:6px;font-size:0.85rem;color:var(--text-secondary);">${testData.interpretation}</div>` : ''}
+                </div>
+            ` : `
+                <div style="padding:12px 16px;color:var(--text-secondary);font-weight:500;">
+                    ${testData.status === 'In Progress' ? '⏳ Test is In Progress - Results pending' : 
+                      testData.status === 'Cancelled' ? '❌ Test Cancelled' : 
+                      '⏳ Test Pending - Results not yet available'}
+                </div>
+            `}
             
-            <!-- Notes -->
-            <?php if (!empty($test['notes'])): ?>
+            ${testData.notes ? `
                 <div class="section-title">📝 Notes</div>
-                <div class="pdf-row"><span class="pdf-label">Notes</span><span class="pdf-value"><?= nl2br(addslashes($test['notes'] ?? '')) ?></span></div>
-            <?php endif; ?>
+                <div style="padding:8px 12px;background:var(--warning-bg);border-radius:6px;border:1px solid var(--warning);">
+                    ${testData.notes}
+                </div>
+            ` : ''}
             
             <!-- Footer -->
             <div class="pdf-footer">
@@ -1416,7 +1392,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     <br>
                     Generated on <?= date('M d, Y h:i A') ?> • All rights reserved
                     <br>
-                    <span style="font-size:0.65rem;color:var(--gray-400);">
+                    <span style="font-size:0.65rem;color:var(--text-muted);">
                         This is a computer generated document. No signature required.
                     </span>
                 </p>
@@ -1434,13 +1410,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     function downloadPDF() {
         var element = document.getElementById('pdfContent');
         var opt = {
-            margin: [8, 8, 8, 8],
+            margin: [10, 10, 10, 10],
             filename: 'Test_<?= htmlspecialchars($test['test_name'] ?? 'test') ?>_<?= $test['id'] ?>.pdf',
             image: { type: 'jpeg', quality: 0.98 },
             html2canvas: { 
                 scale: 2, 
                 useCORS: true,
-                backgroundColor: '#ffffff'
+                backgroundColor: '#ffffff',
+                logging: false
             },
             jsPDF: { 
                 unit: 'mm', 
@@ -1471,9 +1448,11 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
-    console.log('%c🧪 View Test - <?= htmlspecialchars($test['test_name'] ?? 'N/A') ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#64748B;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🧪 Braick - View Test (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Tables: lab_tests, patients, users, visits, lab_tests_catalog', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🆔 Test ID: <?= $test['id'] ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Status: <?= getStatusLabel($test['status'] ?? 'pending') ?>', 'font-size:13px; color:#D97706;');

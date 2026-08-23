@@ -1,13 +1,17 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/dashboard.php
-// LABORATORY DASHBOARD - WITH PHARMACY-STYLE CARDS
-// FIXED: Beautiful cards with fixed height and modern themes
-// FIXED: CSS applied to all cards including top cards
-// BRAICK DISPENSARY
+// LABORATORY DASHBOARD - UPDATED FOR NEW DATABASE
+// USING TABLES: lab_tests, lab_tests_catalog, prescriptions, visits
+// BRAICK DISPENSARY - dispensary_db
 // ================================================================
 
-session_start();
+// ================================================================
+// SESSION START
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
 // CHECK SESSION - REDIRECT TO LOGIN IF NOT LABORATORY
@@ -28,7 +32,7 @@ $user_username = $_SESSION['username'] ?? 'laboratory';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -39,102 +43,131 @@ try {
 }
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS - USING NEW DATABASE TABLES
 // ================================================================
 $today = date('Y-m-d');
 $start_of_month = date('Y-m-01');
 
-// 1. Pending Requests (lab_requests with status 'pending')
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
+// ================================================================
+// 1. Pending Lab Tests (from lab_tests table)
+// ================================================================
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM lab_tests 
+    WHERE branch_id = ? AND status = 'pending'
+");
 $stmt->execute([$user_branch_id]);
 $pending = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 2. In Progress Requests (lab_requests + lab_tests)
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status IN ('accepted', 'in_progress')");
+// ================================================================
+// 2. In Progress Lab Tests
+// ================================================================
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM lab_tests 
+    WHERE branch_id = ? AND status = 'in_progress'
+");
 $stmt->execute([$user_branch_id]);
-$in_progress_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$in_progress = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status = 'in_progress'");
-$stmt->execute([$user_branch_id]);
-$in_progress_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-$in_progress = $in_progress_requests + $in_progress_tests;
-
+// ================================================================
 // 3. Completed Today
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?");
+// ================================================================
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM lab_tests 
+    WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?
+");
 $stmt->execute([$user_branch_id, $today]);
 $completed_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// ================================================================
 // 4. Today's Tests (completed today)
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
-    FROM lab_request_items lri
-    JOIN lab_requests lr ON lri.request_id = lr.id
-    WHERE lr.branch_id = ? AND DATE(lri.completed_at) = ?
+    FROM lab_tests 
+    WHERE branch_id = ? AND DATE(completed_at) = ?
 ");
 $stmt->execute([$user_branch_id, $today]);
 $today_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// ================================================================
 // 5. Total Tests (All Time)
+// ================================================================
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
-    FROM lab_request_items lri
-    JOIN lab_requests lr ON lri.request_id = lr.id
-    WHERE lr.branch_id = ?
+    FROM lab_tests 
+    WHERE branch_id = ?
 ");
 $stmt->execute([$user_branch_id]);
 $total_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 6. Total Requests
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ?");
+// ================================================================
+// 6. Total Lab Tests Catalog Items
+// ================================================================
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM lab_tests_catalog 
+    WHERE branch_id = ? AND is_active = 1
+");
 $stmt->execute([$user_branch_id]);
-$total_requests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_catalog = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// ================================================================
 // 7. Completion Rate
+// ================================================================
 $stmt = $db->prepare("
     SELECT 
         COUNT(*) as total,
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
-    FROM lab_requests 
+    FROM lab_tests 
     WHERE branch_id = ?
 ");
 $stmt->execute([$user_branch_id]);
 $rate_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_requests_all = $rate_data['total'] ?? 0;
-$completed_requests = $rate_data['completed'] ?? 0;
-$completion_rate = $total_requests_all > 0 ? round(($completed_requests / $total_requests_all) * 100, 1) : 0;
+$total_tests_all = $rate_data['total'] ?? 0;
+$completed_tests = $rate_data['completed'] ?? 0;
+$completion_rate = $total_tests_all > 0 ? round(($completed_tests / $total_tests_all) * 100, 1) : 0;
 
-// 8. Most Requested Tests
+// ================================================================
+// 8. Most Requested Tests (from lab_tests)
+// ================================================================
 $stmt = $db->prepare("
-    SELECT lri.test_name, COUNT(*) as count 
-    FROM lab_request_items lri
-    JOIN lab_requests lr ON lri.request_id = lr.id
-    WHERE lr.branch_id = ? AND lri.status = 'completed'
-    GROUP BY lri.test_name
+    SELECT test_name, COUNT(*) as count 
+    FROM lab_tests 
+    WHERE branch_id = ? AND status = 'completed'
+    GROUP BY test_name
     ORDER BY count DESC
     LIMIT 5
 ");
 $stmt->execute([$user_branch_id]);
 $most_requested = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 9. Recent Requests (Last 10)
+// ================================================================
+// 9. Recent Lab Tests (Last 10)
+// ================================================================
 $stmt = $db->prepare("
-    SELECT lr.*, 
-           p.full_name as patient_name, p.patient_id,
-           u.full_name as doctor_name,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as test_count,
-           (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id AND status = 'completed') as completed_count
-    FROM lab_requests lr
-    JOIN patients p ON lr.patient_id = p.id
-    JOIN users u ON lr.doctor_id = u.id
-    WHERE lr.branch_id = ?
-    ORDER BY lr.requested_at DESC
+    SELECT 
+        lt.*,
+        pat.full_name as patient_name,
+        pat.patient_id as patient_code,
+        u.full_name as doctor_name,
+        v.visit_number
+    FROM lab_tests lt
+    LEFT JOIN patients pat ON lt.patient_id = pat.id
+    LEFT JOIN users u ON lt.doctor_id = u.id
+    LEFT JOIN visits v ON lt.visit_id = v.id
+    WHERE lt.branch_id = ?
+    ORDER BY lt.created_at DESC
     LIMIT 10
 ");
 $stmt->execute([$user_branch_id]);
-$recent_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$recent_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// ================================================================
 // 10. Daily Tests Chart (Last 7 days)
+// ================================================================
 $daily_labels = [];
 $daily_tests = [];
 for ($i = 6; $i >= 0; $i--) {
@@ -143,15 +176,16 @@ for ($i = 6; $i >= 0; $i--) {
     
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
-        FROM lab_request_items lri
-        JOIN lab_requests lr ON lri.request_id = lr.id
-        WHERE lr.branch_id = ? AND DATE(lri.completed_at) = ?
+        FROM lab_tests 
+        WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?
     ");
     $stmt->execute([$user_branch_id, $date]);
     $daily_tests[] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
 }
 
+// ================================================================
 // 11. Monthly Tests Chart (Last 6 months)
+// ================================================================
 $monthly_labels = [];
 $monthly_tests = [];
 for ($i = 5; $i >= 0; $i--) {
@@ -163,12 +197,25 @@ for ($i = 5; $i >= 0; $i--) {
     
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
-        FROM lab_request_items lri
-        JOIN lab_requests lr ON lri.request_id = lr.id
-        WHERE lr.branch_id = ? AND DATE(lri.completed_at) BETWEEN ? AND ?
+        FROM lab_tests 
+        WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) BETWEEN ? AND ?
     ");
     $stmt->execute([$user_branch_id, $start, $end]);
     $monthly_tests[] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+}
+
+// ================================================================
+// 12. Tests by Status
+// ================================================================
+$status_counts = [];
+foreach (['pending', 'in_progress', 'completed', 'cancelled'] as $status) {
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests 
+        WHERE branch_id = ? AND status = ?
+    ");
+    $stmt->execute([$user_branch_id, $status]);
+    $status_counts[$status] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
 
 // ================================================================
@@ -231,7 +278,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         border: none;
     }
     
-    /* Animated background circles */
     .stat-card::before {
         content: '';
         position: absolute;
@@ -277,7 +323,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         transform: scale(0.97);
     }
     
-    /* Card shine effect */
     .stat-card .shine {
         position: absolute;
         top: 0;
@@ -364,7 +409,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         color: rgba(255,255,255,0.8);
     }
     
-    /* Decorative dots */
     .stat-card .dot-pattern {
         position: absolute;
         bottom: 8px;
@@ -541,7 +585,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
     
     /* ================================================================
-       RECENT REQUESTS TABLE
+       RECENT TESTS TABLE
        ================================================================ */
     .data-table {
         width: 100%;
@@ -578,18 +622,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         vertical-align: middle;
         color: var(--text-primary);
     }
-    
-    .badge {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.6rem;
-        font-weight: 600;
-    }
-    .badge-yellow { background: #FEF3C7; color: #D97706; }
-    .badge-blue { background: #E8F0FE; color: #0B5ED7; }
-    .badge-green { background: #D1FAE5; color: #059669; }
-    .badge-red { background: #FEE2E2; color: #DC2626; }
     
     /* ================================================================
        QUICK ACTIONS
@@ -924,7 +956,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-flask"></i>
                 Laboratory Dashboard
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">LABORATORY</span>
+                <span class="role-badge-display">LABORATORY</span>
                 <span class="update-badge-light" id="updateBadge">
                     <i class="fas fa-sync-alt fa-spin"></i> Live
                 </span>
@@ -946,7 +978,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <a href="pending_requests.php" class="btn-outline-light">
                 <i class="fas fa-clock"></i> Pending (<span id="statPending"><?= $pending ?></span>)
             </a>
-            <a href="in_progress.php" class="btn-outline-light">
+            <a href="in_progress_tests.php" class="btn-outline-light">
                 <i class="fas fa-spinner"></i> In Progress (<span id="statInProgress"><?= $in_progress ?></span>)
             </a>
             <button onclick="window.location.reload()" class="btn-outline-light">
@@ -960,14 +992,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <!-- ================================================================ -->
     <div class="stats-grid">
         
-        <!-- 1. Pending Requests - Orange -->
+        <!-- 1. Pending Tests - Orange -->
         <a href="pending_requests.php" class="stat-card orange">
             <div class="shine"></div>
             <div class="stat-content">
                 <div>
                     <span class="stat-icon">⏳</span>
                     <div class="stat-number" id="statPendingCard"><?= $pending ?></div>
-                    <div class="stat-label">Pending Requests</div>
+                    <div class="stat-label">Pending Tests</div>
                     <div class="stat-sub">Awaiting processing</div>
                 </div>
                 <div class="stat-update"><span class="live-dot"></span> Live</div>
@@ -979,7 +1011,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </a>
         
         <!-- 2. In Progress - Blue -->
-        <a href="in_progress.php" class="stat-card blue">
+        <a href="in_progress_tests.php" class="stat-card blue">
             <div class="shine"></div>
             <div class="stat-content">
                 <div>
@@ -997,7 +1029,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </a>
         
         <!-- 3. Completed Today - Green -->
-        <a href="completed_requests.php" class="stat-card green">
+        <a href="completed_tests.php" class="stat-card green">
             <div class="shine"></div>
             <div class="stat-content">
                 <div>
@@ -1050,15 +1082,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </div>
         </a>
         
-        <!-- 6. Total Requests - Pink -->
-        <a href="pending_requests.php" class="stat-card pink">
+        <!-- 6. Test Catalog - Pink -->
+        <a href="test_catalog.php" class="stat-card pink">
             <div class="shine"></div>
             <div class="stat-content">
                 <div>
                     <span class="stat-icon">📋</span>
-                    <div class="stat-number" id="statTotalRequests"><?= number_format($total_requests) ?></div>
-                    <div class="stat-label">Total Requests</div>
-                    <div class="stat-sub">All time</div>
+                    <div class="stat-number" id="statTotalCatalog"><?= number_format($total_catalog) ?></div>
+                    <div class="stat-label">Test Catalog</div>
+                    <div class="stat-sub">Available tests</div>
                 </div>
                 <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
@@ -1069,7 +1101,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </a>
         
         <!-- 7. Completion Rate - Indigo -->
-        <a href="completed_requests.php" class="stat-card indigo">
+        <a href="completed_tests.php" class="stat-card indigo">
             <div class="shine"></div>
             <div class="stat-content">
                 <div>
@@ -1086,17 +1118,19 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </div>
         </a>
         
-        <!-- 8. Avg Tests/Request - Rose -->
-        <a href="results_history.php" class="stat-card rose">
+        <!-- 8. Status Breakdown - Rose -->
+        <a href="all_tests.php" class="stat-card rose">
             <div class="shine"></div>
             <div class="stat-content">
                 <div>
                     <span class="stat-icon">📐</span>
-                    <div class="stat-number" id="statAvgTests">
-                        <?= $total_requests > 0 ? number_format($total_tests / $total_requests, 1) : '0.0' ?>
+                    <div class="stat-number" id="statStatusCount">
+                        <?= $status_counts['pending'] + $status_counts['in_progress'] + $status_counts['completed'] ?>
                     </div>
-                    <div class="stat-label">Avg Tests/Request</div>
-                    <div class="stat-sub">Per request</div>
+                    <div class="stat-label">Active Tests</div>
+                    <div class="stat-sub" id="statStatusSub">
+                        P:<?= $status_counts['pending'] ?> | IP:<?= $status_counts['in_progress'] ?> | C:<?= $status_counts['completed'] ?>
+                    </div>
                 </div>
                 <div class="stat-update"><span class="live-dot"></span> Live</div>
             </div>
@@ -1109,7 +1143,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- MOST REQUESTED TESTS & RECENT REQUESTS -->
+    <!-- MOST REQUESTED TESTS & RECENT TESTS -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
         
@@ -1139,56 +1173,51 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </div>
         </div>
         
-        <!-- Recent Requests -->
+        <!-- Recent Tests -->
         <div class="card animate-fade-in-up lg:col-span-2">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-history title-blue mr-2"></i>
-                    Recent Requests
+                    Recent Tests
                     <span class="text-sm font-normal text-gray-400">(Last 10)</span>
                 </h3>
-                <a href="pending_requests.php" class="text-primary text-sm hover:underline">View All →</a>
+                <a href="all_tests.php" class="text-primary text-sm hover:underline">View All →</a>
             </div>
             
             <div class="overflow-x-auto">
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Request #</th>
+                            <th>#</th>
+                            <th>Test Name</th>
                             <th>Patient</th>
                             <th>Doctor</th>
-                            <th>Tests</th>
                             <th>Status</th>
                             <th>Date</th>
                             <th>Action</th>
                         </tr>
                     </thead>
                     <tbody id="recentTableBody">
-                        <?php if (count($recent_requests) > 0): ?>
-                            <?php foreach ($recent_requests as $req): ?>
+                        <?php if (count($recent_tests) > 0): ?>
+                            <?php $counter = 1; foreach ($recent_tests as $test): ?>
                                 <tr>
-                                    <td class="font-mono text-xs font-semibold text-blue-600">
-                                        <?= htmlspecialchars($req['request_number'] ?? 'N/A') ?>
+                                    <td><?= $counter++ ?></td>
+                                    <td>
+                                        <span class="font-medium text-sm"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></span>
                                     </td>
                                     <td>
-                                        <div class="font-medium text-sm"><?= htmlspecialchars($req['patient_name'] ?? 'Unknown') ?></div>
-                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($req['patient_id'] ?? 'N/A') ?></div>
+                                        <div class="font-medium text-sm"><?= htmlspecialchars($test['patient_name'] ?? 'Unknown') ?></div>
+                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($test['patient_code'] ?? 'N/A') ?></div>
                                     </td>
-                                    <td><?= htmlspecialchars($req['doctor_name'] ?? 'N/A') ?></td>
+                                    <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
                                     <td>
-                                        <?= $req['test_count'] ?? 0 ?> tests
-                                        <?php if (($req['completed_count'] ?? 0) > 0 && ($req['status'] ?? '') !== 'completed'): ?>
-                                            <span class="text-xs text-gray-400">(<?= $req['completed_count'] ?> done)</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <span class="status-badge <?= $req['status'] ?? 'pending' ?>">
-                                            <?= ucfirst(str_replace('_', ' ', $req['status'] ?? 'Pending')) ?>
+                                        <span class="status-badge <?= $test['status'] ?? 'pending' ?>">
+                                            <?= ucfirst(str_replace('_', ' ', $test['status'] ?? 'Pending')) ?>
                                         </span>
                                     </td>
-                                    <td class="text-sm"><?= isset($req['requested_at']) ? date('M d, Y', strtotime($req['requested_at'])) : 'N/A' ?></td>
+                                    <td class="text-sm"><?= isset($test['created_at']) ? date('M d, Y', strtotime($test['created_at'])) : 'N/A' ?></td>
                                     <td>
-                                        <a href="view_request.php?id=<?= $req['id'] ?>" class="btn btn-outline btn-sm">
+                                        <a href="view_test.php?id=<?= $test['id'] ?>" class="btn btn-outline btn-sm">
                                             <i class="fas fa-eye"></i> View
                                         </a>
                                     </td>
@@ -1198,7 +1227,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                             <tr>
                                 <td colspan="7" class="text-center py-8 text-gray-400">
                                     <i class="fas fa-flask text-3xl block mb-2"></i>
-                                    <p>No laboratory requests yet</p>
+                                    <p>No laboratory tests yet</p>
                                 </td>
                             </tr>
                         <?php endif; ?>
@@ -1215,22 +1244,22 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
         <a href="pending_requests.php" class="quick-action">
             <span class="icon" style="color:#D97706;">⏳</span>
-            <span class="label">Pending Requests</span>
+            <span class="label">Pending Tests</span>
         </a>
         
-        <a href="in_progress.php" class="quick-action">
+        <a href="in_progress_tests.php" class="quick-action">
             <span class="icon" style="color:#0B5ED7;">🔄</span>
             <span class="label">In Progress</span>
         </a>
         
-        <a href="completed_requests.php" class="quick-action">
+        <a href="completed_tests.php" class="quick-action">
             <span class="icon" style="color:#059669;">✅</span>
             <span class="label">Completed</span>
         </a>
         
-        <a href="results_history.php" class="quick-action">
-            <span class="icon" style="color:#7C3AED;">📊</span>
-            <span class="label">Results History</span>
+        <a href="test_catalog.php" class="quick-action">
+            <span class="icon" style="color:#7C3AED;">📋</span>
+            <span class="label">Test Catalog</span>
         </a>
     </div>
 
@@ -1263,12 +1292,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- LABORATORY GLOBAL STATS AUTO-UPDATE -->
-<!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/laboratory_global_stats.js"></script>
-
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC JAVASCRIPT -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1381,8 +1405,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Pending: <?= $pending ?> | In Progress: <?= $in_progress ?> | Completed Today: <?= $completed_today ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🧪 Today Tests: <?= $today_tests ?> | Total Tests: <?= $total_tests ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📋 Total Requests: <?= $total_requests ?> | Completion Rate: <?= $completion_rate ?>%', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Dashboard styled like Pharmacy dashboard with beautiful cards', 'font-size:13px; color:#34D399;');
+    console.log('%c📋 Test Catalog: <?= $total_catalog ?> | Completion Rate: <?= $completion_rate ?>%', 'font-size:13px; color:#7C3AED;');
     console.log('%c🎨 Cards have fixed height (130px) with gradient backgrounds', 'font-size:13px; color:#D97706;');
     console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
 </script>

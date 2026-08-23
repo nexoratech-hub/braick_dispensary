@@ -1,11 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/profile.php
-// LABORATORY - PROFILE
-// FIXED: Login session - no default user bypass
-// BRAICK DISPENSARY
+// LABORATORY - PROFILE (UPDATED FOR NEW DATABASE)
+// FIXED: Using lab_tests table instead of lab_request_items
+// BRAICK DISPENSARY - dispensary_db
 // ================================================================
 
+// ================================================================
+// START SESSION
+// ================================================================
 session_start();
 
 // ================================================================
@@ -30,97 +33,91 @@ $user_phone = $_SESSION['phone'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE CONFIG
+// DATABASE CONNECTION - NEW DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
 
-// ================================================================
-// DATABASE CONNECTION
-// ================================================================
-$db = getDB();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
-// GET USER STATISTICS
+// GET USER STATISTICS - USING lab_tests TABLE
 // ================================================================
 
 // 1. Total Tests Completed by this technician
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
-    FROM lab_request_items lri
-    JOIN lab_requests lr ON lri.request_id = lr.id
-    WHERE lr.lab_technician_id = ? AND lri.status = 'completed'
+    FROM lab_tests 
+    WHERE performed_by = ? AND status = 'completed'
 ");
 $stmt->execute([$user_id]);
-$total_tests = $stmt->fetch()['count'] ?? 0;
+$total_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 2. Total Requests Completed
+// 2. Total Tests In Progress by this technician
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
-    FROM lab_requests 
-    WHERE lab_technician_id = ? AND status = 'completed'
+    FROM lab_tests 
+    WHERE performed_by = ? AND status = 'in_progress'
 ");
 $stmt->execute([$user_id]);
-$total_requests = $stmt->fetch()['count'] ?? 0;
+$in_progress_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 3. Pending Requests Assigned
+// 3. Total Pending Tests by this technician
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
-    FROM lab_requests 
-    WHERE lab_technician_id = ? AND status = 'in_progress'
+    FROM lab_tests 
+    WHERE performed_by = ? AND (status IS NULL OR status = 'pending')
 ");
 $stmt->execute([$user_id]);
-$pending_requests = $stmt->fetch()['count'] ?? 0;
+$pending_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 4. Today's Tests
+// 4. Today's Tests Completed
 $today = date('Y-m-d');
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
-    FROM lab_request_items lri
-    JOIN lab_requests lr ON lri.request_id = lr.id
-    WHERE lr.lab_technician_id = ? AND DATE(lri.completed_at) = ? AND lri.status = 'completed'
+    FROM lab_tests 
+    WHERE performed_by = ? AND status = 'completed' AND DATE(completed_at) = ?
 ");
 $stmt->execute([$user_id, $today]);
-$today_tests = $stmt->fetch()['count'] ?? 0;
+$today_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // 5. Recent Activity (Last 5 completed tests)
 $stmt = $db->prepare("
-    SELECT lri.*, lr.request_number, p.full_name as patient_name
-    FROM lab_request_items lri
-    JOIN lab_requests lr ON lri.request_id = lr.id
-    JOIN patients p ON lr.patient_id = p.id
-    WHERE lr.lab_technician_id = ? AND lri.status = 'completed'
-    ORDER BY lri.completed_at DESC
+    SELECT 
+        lt.*,
+        v.visit_number,
+        p.full_name as patient_name,
+        p.patient_id as patient_code,
+        u.full_name as doctor_name
+    FROM lab_tests lt
+    JOIN visits v ON lt.visit_id = v.id
+    JOIN patients p ON lt.patient_id = p.id
+    LEFT JOIN users u ON lt.doctor_id = u.id
+    WHERE lt.performed_by = ? AND lt.status = 'completed'
+    ORDER BY lt.completed_at DESC
     LIMIT 5
 ");
 $stmt->execute([$user_id]);
-$recent_activity = $stmt->fetchAll();
-
-// ================================================================
-// GET BRANCHES FOR SELECTOR
-// ================================================================
-$branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $branches[] = $row;
-}
+$recent_activity = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // GET STATISTICS FOR SIDEBAR
 // ================================================================
 $pending_lab_tests = 0;
 try {
-    $stmt = $db->query("SELECT COUNT(*) as count FROM lab_requests WHERE branch_id = ? AND status = 'pending'");
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM lab_tests 
+        WHERE branch_id = ? AND (status IS NULL OR status = 'pending')
+    ");
     $stmt->execute([$user_branch_id]);
-    $pending_lab_tests = $stmt->fetch()['count'] ?? 0;
+    $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } catch (Exception $e) {
     $pending_lab_tests = 0;
 }
-
-$pending_prescriptions = 0;
-$total_employees = 0;
-$total_doctors = 0;
-$total_branches = 0;
 
 // ================================================================
 // PROFILE PICTURE URL
@@ -134,15 +131,19 @@ $profile_pic_url = !empty($profile_pic)
 // ================================================================
 $unread_notifications = 0;
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as total 
+        FROM notifications 
+        WHERE user_id = ? AND is_read = 0
+    ");
     $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
 }
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/laboratory_header.php';
 include_once __DIR__ . '/../../components/laboratory_sidebar.php';
@@ -154,6 +155,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Profile - Laboratory</title>
+    
     <link rel="icon" href="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
@@ -228,165 +230,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         /* ================================================================
-           TOP NAV
+           MAIN CONTENT
            ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .branch-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 20px;
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        
-        [data-theme="dark"] .branch-badge {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -471,6 +316,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             align-items: center;
             gap: 4px;
             backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.1);
         }
         
         .page-header .btn-edit {
@@ -533,6 +379,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             flex-wrap: wrap;
             align-items: center;
             gap: 30px;
+            transition: all 0.3s ease;
+        }
+        
+        .profile-header:hover {
+            border-color: var(--primary);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
         }
         
         .profile-header .profile-avatar {
@@ -585,32 +437,32 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-weight: 600;
         }
         
-        .profile-header .profile-info .profile-badges .badge-blue {
+        .badge-blue {
             background: #E8F0FE;
             color: #0B5ED7;
         }
         
-        .profile-header .profile-info .profile-badges .badge-green {
+        .badge-green {
             background: #D1FAE5;
             color: #059669;
         }
         
-        .profile-header .profile-info .profile-badges .badge-purple {
+        .badge-purple {
             background: #F3E8FF;
             color: #7C3AED;
         }
         
-        [data-theme="dark"] .profile-header .profile-info .profile-badges .badge-blue {
+        [data-theme="dark"] .badge-blue {
             background: #1E3A5F;
             color: #6EA8FE;
         }
         
-        [data-theme="dark"] .profile-header .profile-info .profile-badges .badge-green {
+        [data-theme="dark"] .badge-green {
             background: #1A3A2A;
             color: #34D399;
         }
         
-        [data-theme="dark"] .profile-header .profile-info .profile-badges .badge-purple {
+        [data-theme="dark"] .badge-purple {
             background: #2A1A3A;
             color: #9B4DCA;
         }
@@ -788,6 +640,46 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         /* ================================================================
+           QUICK ACTIONS - 3 BUTTONS
+           ================================================================ */
+        .quick-actions-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .quick-action-item {
+            text-align: center;
+            padding: 16px;
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            background: var(--bg-card);
+        }
+        
+        .quick-action-item:hover {
+            border-color: var(--primary);
+            transform: translateY(-4px);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.1);
+        }
+        
+        .quick-action-item i {
+            font-size: 1.8rem;
+            color: var(--primary);
+            display: block;
+            margin-bottom: 8px;
+        }
+        
+        .quick-action-item .label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
@@ -849,17 +741,142 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         /* ================================================================
+           GRID
+           ================================================================ */
+        .grid {
+            display: grid;
+            gap: 20px;
+        }
+        
+        .grid-cols-1 {
+            grid-template-columns: 1fr;
+        }
+        
+        .grid-cols-2 {
+            grid-template-columns: 1fr 1fr;
+        }
+        
+        .grid-cols-3 {
+            grid-template-columns: 1fr 1fr 1fr;
+        }
+        
+        .grid-cols-4 {
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+        }
+        
+        .lg\:grid-cols-2 {
+            grid-template-columns: 1fr 1fr;
+        }
+        
+        .lg\:grid-cols-4 {
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+        }
+        
+        .gap-4 {
+            gap: 16px;
+        }
+        
+        .gap-5 {
+            gap: 20px;
+        }
+        
+        .mt-4 {
+            margin-top: 16px;
+        }
+        
+        .p-4 {
+            padding: 16px;
+        }
+        
+        .border {
+            border: 2px solid var(--border-color);
+        }
+        
+        .rounded-lg {
+            border-radius: 10px;
+        }
+        
+        .text-center {
+            text-align: center;
+        }
+        
+        .text-sm {
+            font-size: 0.85rem;
+        }
+        
+        .text-xs {
+            font-size: 0.7rem;
+        }
+        
+        .text-2xl {
+            font-size: 1.5rem;
+        }
+        
+        .text-blue-600 {
+            color: var(--primary);
+        }
+        
+        .text-gray-400 {
+            color: var(--gray-400);
+        }
+        
+        .text-gray-700 {
+            color: var(--gray-700);
+        }
+        
+        .font-medium {
+            font-weight: 500;
+        }
+        
+        .block {
+            display: block;
+        }
+        
+        .mb-2 {
+            margin-bottom: 8px;
+        }
+        
+        .mt-1 {
+            margin-top: 4px;
+        }
+        
+        .ml-2 {
+            margin-left: 8px;
+        }
+        
+        .mr-1 {
+            margin-right: 4px;
+        }
+        
+        .mx-2 {
+            margin-left: 8px;
+            margin-right: 8px;
+        }
+        
+        .hover\:bg-primary-bg:hover {
+            background: var(--primary-bg);
+        }
+        
+        .transition {
+            transition: all 0.3s ease;
+        }
+        
+        [data-theme="dark"] .text-blue-600 {
+            color: var(--primary-light);
+        }
+        
+        [data-theme="dark"] .text-gray-700 {
+            color: var(--gray-300);
+        }
+        
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .profile-header {
@@ -887,6 +904,28 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 padding-left: 48px;
             }
             .main-content { padding: 10px; }
+            .quick-actions-grid {
+                grid-template-columns: 1fr 1fr 1fr;
+                max-width: 100%;
+            }
+            .grid-cols-2 {
+                grid-template-columns: 1fr 1fr;
+            }
+            .lg\:grid-cols-2 {
+                grid-template-columns: 1fr;
+            }
+            .lg\:grid-cols-4 {
+                grid-template-columns: 1fr 1fr;
+            }
+            .quick-action-item {
+                padding: 12px;
+            }
+            .quick-action-item i {
+                font-size: 1.4rem;
+            }
+            .quick-action-item .label {
+                font-size: 0.65rem;
+            }
         }
         
         @media (max-width: 480px) {
@@ -904,52 +943,22 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             }
             .page-title { font-size: 1.1rem; }
             .info-card { padding: 14px 16px; }
+            .quick-actions-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .quick-action-item {
+                padding: 10px;
+            }
+            .quick-action-item i {
+                font-size: 1.2rem;
+            }
+            .quick-action-item .label {
+                font-size: 0.6rem;
+            }
         }
     </style>
 </head>
 <body>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
-        </span>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -969,7 +978,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 </span>
             </p>
         </div>
-        <div>
+        <div class="flex gap-2 flex-wrap">
             <a href="edit_profile.php" class="btn-edit">
                 <i class="fas fa-edit"></i> Edit Profile
             </a>
@@ -1021,12 +1030,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         </div>
         <div class="stat-box">
             <div class="stat-icon"><i class="fas fa-file-medical-alt"></i></div>
-            <p class="stat-number"><?= $total_requests ?></p>
-            <p class="stat-label">Requests Completed</p>
+            <p class="stat-number"><?= $pending_tests ?></p>
+            <p class="stat-label">Pending Tests</p>
         </div>
         <div class="stat-box">
-            <div class="stat-icon"><i class="fas fa-clock"></i></div>
-            <p class="stat-number"><?= $pending_requests ?></p>
+            <div class="stat-icon"><i class="fas fa-spinner"></i></div>
+            <p class="stat-number"><?= $in_progress_tests ?></p>
             <p class="stat-label">In Progress</p>
         </div>
         <div class="stat-box">
@@ -1096,14 +1105,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                         </div>
                         <div class="activity-info">
                             <div class="activity-title">
-                                <?= htmlspecialchars($activity['test_name']) ?>
+                                <?= htmlspecialchars($activity['test_name'] ?? 'Test') ?>
                             </div>
                             <div class="activity-desc">
                                 <i class="fas fa-user mr-1"></i>
                                 <?= htmlspecialchars($activity['patient_name'] ?? 'Unknown') ?>
                                 <span class="mx-1">|</span>
                                 <i class="fas fa-receipt mr-1"></i>
-                                <?= htmlspecialchars($activity['request_number'] ?? 'N/A') ?>
+                                <?= htmlspecialchars($activity['visit_number'] ?? 'N/A') ?>
                             </div>
                         </div>
                         <div class="activity-time">
@@ -1123,29 +1132,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- QUICK ACTIONS -->
+    <!-- QUICK ACTIONS - 3 BUTTONS -->
     <!-- ================================================================ -->
     <div class="info-card animate-fade-in-up mt-4">
         <div class="card-title">
             <i class="fas fa-bolt"></i>
             Quick Actions
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <a href="pending_requests.php" class="text-center p-4 border rounded-lg hover:bg-primary-bg transition">
-                <i class="fas fa-clock text-2xl text-blue-600 block mb-2"></i>
-                <span class="text-sm font-medium text-gray-700">Pending Requests</span>
+        <div class="quick-actions-grid">
+            <a href="pending_requests.php" class="quick-action-item">
+                <i class="fas fa-clock"></i>
+                <span class="label">Pending Requests</span>
             </a>
-            <a href="in_progress.php" class="text-center p-4 border rounded-lg hover:bg-primary-bg transition">
-                <i class="fas fa-spinner text-2xl text-blue-600 block mb-2"></i>
-                <span class="text-sm font-medium text-gray-700">In Progress</span>
+            <a href="in_progress.php" class="quick-action-item">
+                <i class="fas fa-spinner"></i>
+                <span class="label">In Progress</span>
             </a>
-            <a href="results_history.php" class="text-center p-4 border rounded-lg hover:bg-primary-bg transition">
-                <i class="fas fa-history text-2xl text-blue-600 block mb-2"></i>
-                <span class="text-sm font-medium text-gray-700">Results History</span>
-            </a>
-            <a href="reports.php" class="text-center p-4 border rounded-lg hover:bg-primary-bg transition">
-                <i class="fas fa-chart-bar text-2xl text-blue-600 block mb-2"></i>
-                <span class="text-sm font-medium text-gray-700">Reports</span>
+            <a href="results_history.php" class="quick-action-item">
+                <i class="fas fa-history"></i>
+                <span class="label">Results History</span>
             </a>
         </div>
     </div>
@@ -1158,6 +1163,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Laboratory Profile
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTime"><?= date('h:i:s A') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1181,83 +1188,50 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE - SYNC WITH HEADER
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
+    document.addEventListener('darkModeChanged', function(e) {
+        var isDark = e.detail && e.detail.isDark;
+        var html = document.documentElement;
+        
         if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
+            html.setAttribute('data-theme', 'dark');
         } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
+            html.removeAttribute('data-theme');
         }
     });
 
     // ================================================================
-    // SIDEBAR TOGGLE
+    // SIDEBAR TOGGLE - SYNC WITH HEADER
     // ================================================================
     var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
+    var sidebarToggle = document.getElementById('sidebarToggleBtn');
     
     if (sidebarToggle) {
         sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
+            if (sidebar) sidebar.classList.toggle('open');
         });
     }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
     
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                sidebar.classList.remove('open');
+            }
         }
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
+    });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - UPDATE LIVE
     // ================================================================
     function updateDateTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) {
+            ftEl.textContent = timeStr;
         }
     }
     updateDateTime();
@@ -1286,11 +1260,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c🧪 Braick - Laboratory Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🔐 Session-based login active - redirects to login if not authenticated', 'font-size:12px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Total Tests: <?= $total_tests ?> | Requests: <?= $total_requests ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📋 Today\'s Tests: <?= $today_tests ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🧪 Braick - Laboratory Profile (FIXED - Using lab_tests)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Using lab_tests table (NOT lab_request_items)', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📊 Total Tests: <?= $total_tests ?> | Pending: <?= $pending_tests ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 In Progress: <?= $in_progress_tests ?> | Today: <?= $today_tests ?>', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

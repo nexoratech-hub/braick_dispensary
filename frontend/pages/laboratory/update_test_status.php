@@ -1,7 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/update_test_status.php
-// LABORATORY - UPDATE TEST STATUS (Complete Version)
+// LABORATORY - UPDATE TEST STATUS
+// ✅ USING NEW DATABASE: dispensary_db
+// ✅ ONLY ONE TABLE: lab_tests (NO lab_requests)
 // WITH FULL LOGIN SESSION PROTECTION
 // BRAICK DISPENSARY
 // ================================================================
@@ -15,7 +17,6 @@ if (session_status() === PHP_SESSION_NONE) {
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    // User is not logged in - redirect to login
     header('Location: ../login.php');
     exit;
 }
@@ -24,7 +25,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // CHECK IF USER IS LABORATORY OR ADMIN
 // ================================================================
 if ($_SESSION['role'] !== 'laboratory' && $_SESSION['role'] !== 'admin') {
-    // User is not laboratory - redirect to their dashboard
     $role = $_SESSION['role'];
     switch ($role) {
         case 'reception': header('Location: ../reception/dashboard.php'); break;
@@ -55,14 +55,13 @@ if ($_SESSION['role'] === 'admin') {
 }
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE - NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
-    // Redirect with error
     header('Location: pending_requests.php?success=0&message=' . urlencode('Database connection error'));
     exit;
 }
@@ -72,7 +71,6 @@ try {
 // ================================================================
 $action = isset($_GET['action']) ? $_GET['action'] : '';
 $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$test_id = isset($_GET['test_id']) ? (int)$_GET['test_id'] : 0;
 
 // POST data
 $result = isset($_POST['result']) ? trim($_POST['result']) : '';
@@ -103,10 +101,20 @@ if ($action === 'confirm_test' && $id > 0) {
         // Update test status to 'in_progress'
         $stmt = $db->prepare("
             UPDATE lab_tests 
-            SET status = 'in_progress', lab_technician_id = ? 
+            SET status = 'in_progress', lab_technician_id = ?, updated_at = NOW()
             WHERE id = ? AND branch_id = ?
         ");
         $stmt->execute([$user_id, $id, $user_branch_id]);
+        
+        // Update visit status to 'lab_test'
+        if ($test['visit_id']) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET status = 'lab_test', updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$test['visit_id']]);
+        }
         
         // Create bill for this test (if price exists)
         createTestBill($db, $id, $user_id, $user_branch_id);
@@ -126,7 +134,7 @@ if ($action === 'confirm_test' && $id > 0) {
             // Silent fail for logging
         }
         
-        header('Location: in_progress.php?success=1&message=' . urlencode('Test confirmed successfully!'));
+        header('Location: in_progress_tests.php?success=1&message=' . urlencode('Test confirmed successfully!'));
         exit;
         
     } catch (Exception $e) {
@@ -148,7 +156,7 @@ if ($action === 'cancel_test' && $id > 0) {
         // Update test status to 'cancelled'
         $stmt = $db->prepare("
             UPDATE lab_tests 
-            SET status = 'cancelled' 
+            SET status = 'cancelled', updated_at = NOW()
             WHERE id = ? AND branch_id = ?
         ");
         $stmt->execute([$id, $user_branch_id]);
@@ -178,223 +186,153 @@ if ($action === 'cancel_test' && $id > 0) {
 }
 
 // ================================================================
-// ACTION: ACCEPT - Accept a full request from lab_requests
+// ACTION: COMPLETE_TEST - Complete a single test
 // ================================================================
-if ($action === 'accept' && $id > 0) {
+if ($action === 'complete_test' && $id > 0) {
     try {
-        // Get request details
-        $stmt = $db->prepare("SELECT * FROM lab_requests WHERE id = ? AND branch_id = ?");
+        // Check if test exists
+        $stmt = $db->prepare("SELECT test_name, visit_id FROM lab_tests WHERE id = ? AND branch_id = ?");
         $stmt->execute([$id, $user_branch_id]);
-        $request = $stmt->fetch(PDO::FETCH_ASSOC);
+        $test = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        if (!$request) {
-            header('Location: pending_requests.php?success=0&message=' . urlencode('Request not found'));
+        if (!$test) {
+            header('Location: in_progress_tests.php?success=0&message=' . urlencode('Test not found'));
             exit;
         }
         
-        // Update request status
+        // Update test status to 'completed'
         $stmt = $db->prepare("
-            UPDATE lab_requests 
-            SET status = 'accepted', accepted_at = NOW(), lab_technician_id = ?
+            UPDATE lab_tests 
+            SET status = 'completed', completed_at = NOW(), updated_at = NOW()
             WHERE id = ? AND branch_id = ?
         ");
-        $stmt->execute([$user_id, $id, $user_branch_id]);
+        $stmt->execute([$id, $user_branch_id]);
         
-        // Update all items to in_progress
-        $stmt = $db->prepare("
-            UPDATE lab_request_items 
-            SET status = 'in_progress'
-            WHERE request_id = ?
-        ");
-        $stmt->execute([$id]);
+        // Update visit status to 'lab_test' so doctor can continue
+        if ($test['visit_id']) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET status = 'lab_test', updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$test['visit_id']]);
+        }
         
         // Log activity
         try {
             $stmt = $db->prepare("
                 INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                VALUES (?, ?, 'request_accepted', ?, NOW())
+                VALUES (?, ?, 'test_completed', ?, NOW())
             ");
             $stmt->execute([
                 $user_id,
                 $user_branch_id,
-                "Request accepted: " . $request['request_number'] . " (ID: " . $id . ")"
+                "Test completed: " . $test['test_name'] . " (ID: " . $id . ")"
             ]);
         } catch (Exception $e) {
             // Silent fail for logging
         }
         
-        header('Location: in_progress.php?success=1&message=' . urlencode('Request accepted successfully!'));
+        header('Location: completed_tests.php?success=1&message=' . urlencode('Test completed successfully!'));
         exit;
         
     } catch (Exception $e) {
-        header('Location: pending_requests.php?success=0&message=' . urlencode($e->getMessage()));
+        header('Location: in_progress_tests.php?success=0&message=' . urlencode($e->getMessage()));
         exit;
     }
 }
 
 // ================================================================
-// ACTION: COMPLETE - Complete entire request
+// ACTION: UPDATE_TEST_STATUS - Update test status and results
 // ================================================================
-if ($action === 'complete' && $id > 0) {
+if ($action === 'update_test_status' && $id > 0) {
     try {
-        // Get request details
-        $stmt = $db->prepare("SELECT request_number FROM lab_requests WHERE id = ? AND branch_id = ?");
-        $stmt->execute([$id, $user_branch_id]);
-        $request = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        // Update all items to completed
-        $stmt = $db->prepare("
-            UPDATE lab_request_items 
-            SET status = 'completed', completed_at = NOW()
-            WHERE request_id = ?
-        ");
-        $stmt->execute([$id]);
-        
-        // Update request
-        $stmt = $db->prepare("
-            UPDATE lab_requests 
-            SET status = 'completed', completed_at = NOW()
-            WHERE id = ? AND branch_id = ?
-        ");
-        $stmt->execute([$id, $user_branch_id]);
-        
-        // Log activity
-        try {
-            $stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                VALUES (?, ?, 'request_completed', ?, NOW())
-            ");
-            $stmt->execute([
-                $user_id,
-                $user_branch_id,
-                "Request completed: " . ($request['request_number'] ?? 'Unknown') . " (ID: " . $id . ")"
-            ]);
-        } catch (Exception $e) {
-            // Silent fail for logging
-        }
-        
-        header('Location: completed_requests.php?success=1&message=' . urlencode('Request completed successfully!'));
-        exit;
-        
-    } catch (Exception $e) {
-        header('Location: in_progress.php?success=0&message=' . urlencode($e->getMessage()));
-        exit;
-    }
-}
-
-// ================================================================
-// ACTION: CANCEL - Cancel request
-// ================================================================
-if ($action === 'cancel' && $id > 0) {
-    try {
-        // Get request details
-        $stmt = $db->prepare("SELECT request_number FROM lab_requests WHERE id = ? AND branch_id = ?");
-        $stmt->execute([$id, $user_branch_id]);
-        $request = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        $stmt = $db->prepare("
-            UPDATE lab_requests 
-            SET status = 'cancelled', cancelled_at = NOW()
-            WHERE id = ? AND branch_id = ?
-        ");
-        $stmt->execute([$id, $user_branch_id]);
-        
-        // Log activity
-        try {
-            $stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                VALUES (?, ?, 'request_cancelled', ?, NOW())
-            ");
-            $stmt->execute([
-                $user_id,
-                $user_branch_id,
-                "Request cancelled: " . ($request['request_number'] ?? 'Unknown') . " (ID: " . $id . ")"
-            ]);
-        } catch (Exception $e) {
-            // Silent fail for logging
-        }
-        
-        header('Location: pending_requests.php?success=1&message=' . urlencode('Request cancelled!'));
-        exit;
-        
-    } catch (Exception $e) {
-        header('Location: pending_requests.php?success=0&message=' . urlencode($e->getMessage()));
-        exit;
-    }
-}
-
-// ================================================================
-// ACTION: UPDATE_TEST - Update individual test item
-// ================================================================
-if ($action === 'update_test' && $id > 0 && $test_id > 0) {
-    try {
-        if (empty($status)) {
-            header('Location: view_request.php?id=' . $id . '&success=0&message=' . urlencode('Status is required'));
-            exit;
-        }
-        
         // Get test details
-        $stmt = $db->prepare("SELECT test_name FROM lab_request_items WHERE id = ? AND request_id = ?");
-        $stmt->execute([$test_id, $id]);
-        $test_item = $stmt->fetch(PDO::FETCH_ASSOC);
+        $stmt = $db->prepare("SELECT test_name, visit_id FROM lab_tests WHERE id = ? AND branch_id = ?");
+        $stmt->execute([$id, $user_branch_id]);
+        $test = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        $stmt = $db->prepare("
-            UPDATE lab_request_items 
-            SET status = ?, result = ?, comments = ?, 
-                completed_at = CASE WHEN ? = 'completed' THEN NOW() ELSE completed_at END
-            WHERE id = ? AND request_id = ?
-        ");
-        $stmt->execute([$status, $result, $notes, $status, $test_id, $id]);
-        
-        // Check if all tests are completed
-        $stmt_check = $db->prepare("
-            SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
-            FROM lab_request_items 
-            WHERE request_id = ?
-        ");
-        $stmt_check->execute([$id]);
-        $check = $stmt_check->fetch(PDO::FETCH_ASSOC);
-        
-        $request_status = 'in_progress';
-        if ($check['total'] == $check['completed'] && $check['total'] > 0) {
-            $request_status = 'completed';
+        if (!$test) {
+            header('Location: in_progress_tests.php?success=0&message=' . urlencode('Test not found'));
+            exit;
         }
         
-        // Update request status
-        $stmt_update = $db->prepare("
-            UPDATE lab_requests 
-            SET status = ?, completed_at = CASE WHEN ? = 'completed' THEN NOW() ELSE completed_at END
-            WHERE id = ?
-        ");
-        $stmt_update->execute([$request_status, $request_status, $id]);
+        // Build update query
+        $update_fields = [];
+        $params = [];
+        
+        if (!empty($status)) {
+            $update_fields[] = "status = ?";
+            $params[] = $status;
+        }
+        
+        if (!empty($result)) {
+            $update_fields[] = "results = ?";
+            $params[] = $result;
+        }
+        
+        if (!empty($notes)) {
+            $update_fields[] = "notes = ?";
+            $params[] = $notes;
+        }
+        
+        if ($status === 'completed') {
+            $update_fields[] = "completed_at = NOW()";
+        }
+        
+        $update_fields[] = "updated_at = NOW()";
+        
+        if (empty($update_fields)) {
+            header('Location: in_progress_tests.php?success=0&message=' . urlencode('No fields to update'));
+            exit;
+        }
+        
+        $params[] = $id;
+        $params[] = $user_branch_id;
+        
+        $query = "UPDATE lab_tests SET " . implode(', ', $update_fields) . " WHERE id = ? AND branch_id = ?";
+        $stmt = $db->prepare($query);
+        $stmt->execute($params);
+        
+        // If completed, update visit status
+        if ($status === 'completed' && $test['visit_id']) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET status = 'lab_test', updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$test['visit_id']]);
+        }
         
         // Log activity
         try {
             $stmt = $db->prepare("
                 INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                VALUES (?, ?, 'test_item_updated', ?, NOW())
+                VALUES (?, ?, 'test_updated', ?, NOW())
             ");
             $stmt->execute([
                 $user_id,
                 $user_branch_id,
-                "Test item updated: " . ($test_item['test_name'] ?? 'Unknown') . " -> " . $status
+                "Test updated: " . $test['test_name'] . " (ID: " . $id . ") -> Status: " . ($status ?? 'unchanged')
             ]);
         } catch (Exception $e) {
             // Silent fail for logging
         }
         
-        header('Location: view_request.php?id=' . $id . '&success=1&message=' . urlencode('Test updated successfully!'));
+        // Redirect based on status
+        if ($status === 'completed') {
+            header('Location: completed_tests.php?success=1&message=' . urlencode('Test updated and completed!'));
+        } else {
+            header('Location: in_progress_tests.php?success=1&message=' . urlencode('Test updated successfully!'));
+        }
         exit;
         
     } catch (Exception $e) {
-        header('Location: view_request.php?id=' . $id . '&success=0&message=' . urlencode($e->getMessage()));
+        header('Location: in_progress_tests.php?success=0&message=' . urlencode($e->getMessage()));
         exit;
     }
 }
 
-// ================================================================
 // ================================================================
 // HELPER FUNCTIONS
 // ================================================================
@@ -416,22 +354,25 @@ function createTestBill($db, $test_id, $user_id, $branch_id) {
         $patient_id = $test['patient_id'];
         $visit_id = $test['visit_id'];
         $test_name = $test['test_name'];
+        $test_price = $test['test_price'] ?? 0;
         
-        // Get test price from catalog
-        $stmt = $db->prepare("
-            SELECT price FROM lab_tests_catalog 
-            WHERE test_name = ? 
-            LIMIT 1
-        ");
-        $stmt->execute([$test_name]);
-        $catalog = $stmt->fetch(PDO::FETCH_ASSOC);
-        $price = $catalog['price'] ?? 0;
+        // If price is 0, try to get from catalog
+        if ($test_price <= 0) {
+            $stmt = $db->prepare("
+                SELECT price FROM lab_tests_catalog 
+                WHERE test_name = ? 
+                LIMIT 1
+            ");
+            $stmt->execute([$test_name]);
+            $catalog = $stmt->fetch(PDO::FETCH_ASSOC);
+            $test_price = $catalog['price'] ?? 0;
+        }
         
-        if ($price <= 0) return null;
+        if ($test_price <= 0) return null;
         
         // Check if bill exists
         $stmt = $db->prepare("
-            SELECT id FROM patient_bills 
+            SELECT id FROM bills 
             WHERE patient_id = ? AND visit_id = ? AND status != 'paid'
         ");
         $stmt->execute([$patient_id, $visit_id]);
@@ -450,40 +391,40 @@ function createTestBill($db, $test_id, $user_id, $branch_id) {
             
             if (!$existing) {
                 $stmt = $db->prepare("
-                    INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price, department)
-                    VALUES (?, 'lab_test', ?, 1, ?, ?, 'Laboratory')
+                    INSERT INTO bill_items (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, created_at)
+                    VALUES (?, ?, ?, 'lab_test', ?, 1, ?, ?, NOW())
                 ");
-                $stmt->execute([$bill_id, $test_name, $price, $price]);
+                $stmt->execute([$bill_id, $patient_id, $branch_id, $test_name, $test_price, $test_price]);
                 
-                // Update patient_bills
+                // Update bills
                 $stmt = $db->prepare("
-                    UPDATE patient_bills 
+                    UPDATE bills 
                     SET subtotal = subtotal + ?,
                         total_amount = total_amount + ?,
                         balance = balance + ?
                     WHERE id = ?
                 ");
-                $stmt->execute([$price, $price, $price, $bill_id]);
+                $stmt->execute([$test_price, $test_price, $test_price, $bill_id]);
             }
         } else {
             // Create new bill
             $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT);
             
             $stmt = $db->prepare("
-                INSERT INTO patient_bills (
-                    bill_number, patient_id, visit_id, subtotal, total_amount, balance,
-                    status, created_by, branch_id
-                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                INSERT INTO bills (
+                    bill_number, patient_id, visit_id, branch_id, created_by,
+                    subtotal, total_amount, balance, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
             ");
-            $stmt->execute([$bill_number, $patient_id, $visit_id, $price, $price, $price, $user_id, $branch_id]);
+            $stmt->execute([$bill_number, $patient_id, $visit_id, $branch_id, $user_id, $test_price, $test_price, $test_price]);
             $bill_id = $db->lastInsertId();
             
             // Add to bill_items
             $stmt = $db->prepare("
-                INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price, department)
-                VALUES (?, 'lab_test', ?, 1, ?, ?, 'Laboratory')
+                INSERT INTO bill_items (bill_id, patient_id, branch_id, item_type, item_name, quantity, unit_price, total_price, created_at)
+                VALUES (?, ?, ?, 'lab_test', ?, 1, ?, ?, NOW())
             ");
-            $stmt->execute([$bill_id, $test_name, $price, $price]);
+            $stmt->execute([$bill_id, $patient_id, $branch_id, $test_name, $test_price, $test_price]);
         }
         
         return $bill_id;

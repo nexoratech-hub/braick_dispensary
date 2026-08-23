@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/laboratory/get_lab_tests_stats.php
 // LABORATORY - GET LAB TESTS STATS (USING lab_tests TABLE)
+// ✅ USING NEW DATABASE: dispensary_db
+// ✅ ONLY ONE TABLE: lab_tests
 // FIXED: Login session - no default user bypass
 // BRAICK DISPENSARY
 // ================================================================
@@ -22,10 +24,20 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'laboratory') {
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - NEW DATABASE
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-$db = Database::getInstance()->getConnection();
+require_once __DIR__ . '/../../../backend/config/database.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'error' => 'Database connection error: ' . $e->getMessage()
+    ]);
+    exit;
+}
 
 // ================================================================
 // GET FILTERS
@@ -38,21 +50,56 @@ $date_filter = isset($_GET['date']) ? $_GET['date'] : '';
 // BUILD QUERY - Using lab_tests table
 // ================================================================
 $query = "
-    SELECT lt.*, 
-           p.full_name as patient_name, p.patient_id, p.phone,
-           u.full_name as doctor_name, u.specialty,
-           TIMESTAMPDIFF(MINUTE, lt.created_at, NOW()) as waiting_time
+    SELECT 
+        lt.id as test_id,
+        lt.visit_id,
+        lt.doctor_id,
+        lt.lab_technician_id,
+        lt.test_name,
+        lt.test_price,
+        lt.test_type,
+        lt.sample_type,
+        lt.test_date,
+        lt.results,
+        lt.reference_range,
+        lt.status,
+        lt.bill_created,
+        lt.notes,
+        lt.technician_id,
+        lt.branch_id,
+        lt.created_at,
+        lt.completed_at,
+        lt.updated_at,
+        lt.formatted_result,
+        lt.printed_at,
+        lt.printed_by,
+        p.full_name as patient_name,
+        p.patient_id as patient_code,
+        p.phone,
+        p.gender,
+        p.date_of_birth,
+        p.blood_group,
+        p.address,
+        p.allergies,
+        u.full_name as doctor_name,
+        u.specialty as doctor_specialty,
+        v.visit_number,
+        v.visit_type,
+        v.diagnosis,
+        v.symptoms,
+        v.status as visit_status,
+        v.is_completed,
+        TIMESTAMPDIFF(MINUTE, lt.created_at, NOW()) as waiting_time
     FROM lab_tests lt
-    JOIN visits v ON lt.visit_id = v.id
-    JOIN patients p ON v.patient_id = p.id
-    JOIN users u ON lt.doctor_id = u.id
+    LEFT JOIN visits v ON lt.visit_id = v.id
+    LEFT JOIN patients p ON v.patient_id = p.id
+    LEFT JOIN users u ON lt.doctor_id = u.id
     WHERE lt.branch_id = ?
 ";
 
 $params = [$user_branch_id];
 
 if (!empty($status_filter)) {
-    // Handle NULL status as 'pending'
     if ($status_filter === 'pending') {
         $query .= " AND (lt.status IS NULL OR lt.status = 'pending')";
     } else {
@@ -132,6 +179,16 @@ $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = 
 $stmt->execute([$user_branch_id]);
 $total_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
+// Status Distribution
+$stmt = $db->prepare("
+    SELECT status, COUNT(*) as count 
+    FROM lab_tests 
+    WHERE branch_id = ?
+    GROUP BY status
+");
+$stmt->execute([$user_branch_id]);
+$status_distribution = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
 // ================================================================
 // CREATE HASH FOR CHANGE DETECTION
 // ================================================================
@@ -159,6 +216,7 @@ echo json_encode([
     'completed_today_count' => $completed_today_count,
     'total_count' => $total_count,
     'total' => count($tests),
+    'status_distribution' => $status_distribution,
     'timestamp' => date('Y-m-d H:i:s')
 ]);
 ?>
