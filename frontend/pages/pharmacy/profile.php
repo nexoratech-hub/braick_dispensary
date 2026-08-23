@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/profile.php
 // PHARMACY - PROFILE (UPDATED FOR NEW DATABASE)
-// USES SHARED HEADER & SIDEBAR
+// USES SHARED HEADER & SIDEBAR - NO DUPLICATE HEADER
 // QUICK ACTIONS: Pending, New OTC, Inventory (3 items)
 // BRAICK DISPENSARY - dispensary_db
 // ================================================================
@@ -78,7 +78,6 @@ if ($user_id <= 0) {
                 $user_phone = $user['phone'];
                 $profile_pic = $user['profile_pic'];
                 
-                // Get branch name
                 $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
                 $stmt->execute([$user_branch_id]);
                 $branch = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -93,7 +92,6 @@ if ($user_id <= 0) {
     }
 }
 
-// If still no user_id, redirect to login
 if ($user_id <= 0) {
     header('Location: ../login.php');
     exit;
@@ -114,7 +112,7 @@ try {
 // GET USER STATISTICS - UPDATED FOR NEW DATABASE
 // ================================================================
 
-// 1. Total Prescriptions Dispensed (from prescriptions table)
+// 1. Total Prescriptions Dispensed
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM prescriptions 
@@ -123,7 +121,7 @@ $stmt = $db->prepare("
 $stmt->execute([$user_id]);
 $total_prescriptions = $stmt->fetch()['count'] ?? 0;
 
-// 2. Total Prescriptions Confirmed (by pharmacy)
+// 2. Total Prescriptions Confirmed
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM prescriptions 
@@ -141,13 +139,12 @@ $stmt = $db->prepare("
 $stmt->execute([$user_id]);
 $total_otc = $stmt->fetch()['count'] ?? 0;
 
-// 4. Total Sales (Dispensed + OTC)
+// 4. Total Sales
 $total_sales = $total_prescriptions + $total_otc;
 
 // 5. Today's Sales
 $today = date('Y-m-d');
 
-// Today's Prescriptions Dispensed
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM prescriptions 
@@ -156,7 +153,6 @@ $stmt = $db->prepare("
 $stmt->execute([$user_id, $today]);
 $today_prescriptions = $stmt->fetch()['count'] ?? 0;
 
-// Today's OTC Sales
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM otc_sales 
@@ -167,7 +163,7 @@ $today_otc = $stmt->fetch()['count'] ?? 0;
 
 $today_sales = $today_prescriptions + $today_otc;
 
-// 6. Total Medication Items Dispensed (from prescription_items)
+// 6. Total Medication Items Dispensed
 $stmt = $db->prepare("
     SELECT SUM(pi.quantity) as total_items
     FROM prescription_items pi
@@ -177,7 +173,7 @@ $stmt = $db->prepare("
 $stmt->execute([$user_id]);
 $total_items_dispensed = $stmt->fetch()['total_items'] ?? 0;
 
-// 7. Recent Activity (Last 5 activities - updated for new database)
+// 7. Recent Activity
 $stmt = $db->prepare("
     (SELECT 
         'prescription' as type,
@@ -235,9 +231,6 @@ try {
     $low_stock_count = 0;
 }
 
-// ================================================================
-// UNREAD NOTIFICATIONS
-// ================================================================
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
@@ -259,630 +252,645 @@ include_once __DIR__ . '/../../components/pharmacy_header.php';
 include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- PAGE-SPECIFIC STYLES (Only what's needed, no conflicts with header) -->
-<!-- ================================================================ -->
-<style>
-    /* Only page-specific styles - no header/sidebar overrides */
-    
-    .profile-header {
-        background: var(--bg-card);
-        border-radius: 16px;
-        padding: 24px 30px;
-        border: 2px solid var(--border-color);
-        margin-bottom: 24px;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: space-between;
-        gap: 20px;
-        transition: all 0.3s ease;
-    }
-    
-    .profile-header:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
-    }
-    
-    .profile-header .profile-header-main {
-        display: flex;
-        align-items: center;
-        gap: 24px;
-        flex-wrap: wrap;
-    }
-    
-    .profile-header .profile-avatar {
-        width: 90px;
-        height: 90px;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 4px solid var(--primary);
-        flex-shrink: 0;
-    }
-    
-    .profile-header .profile-avatar-placeholder {
-        width: 90px;
-        height: 90px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: white;
-        background: var(--primary);
-        flex-shrink: 0;
-        border: 4px solid var(--primary);
-    }
-    
-    .profile-header .profile-info .profile-name {
-        font-size: 1.4rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .profile-header .profile-info .profile-name i {
-        color: var(--primary);
-    }
-    
-    .profile-header .profile-info .profile-role {
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    
-    .profile-header .profile-info .profile-badges {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-top: 6px;
-    }
-    
-    .profile-header .profile-info .profile-badges .badge {
-        font-size: 0.65rem;
-        padding: 3px 12px;
-        border-radius: 20px;
-        font-weight: 600;
-    }
-    
-    .badge-blue {
-        background: #E8F0FE;
-        color: #0B5ED7;
-    }
-    .badge-green {
-        background: #D1FAE5;
-        color: #059669;
-    }
-    .badge-purple {
-        background: #F3E8FF;
-        color: #7C3AED;
-    }
-    .badge-teal {
-        background: #ECFDF5;
-        color: #0D9488;
-    }
-    
-    [data-theme="dark"] .badge-blue {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    [data-theme="dark"] .badge-green {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    [data-theme="dark"] .badge-purple {
-        background: #2A1A3A;
-        color: #9B4DCA;
-    }
-    [data-theme="dark"] .badge-teal {
-        background: #0A2A2A;
-        color: #2DD4BF;
-    }
-    
-    /* Profile Date/Time */
-    .profile-header .profile-header-datetime {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 6px;
-        padding: 12px 20px;
-        background: var(--primary-bg);
-        border-radius: 12px;
-        border: 2px solid var(--border-color);
-        min-width: 210px;
-        transition: all 0.3s ease;
-    }
-    
-    .profile-header .profile-header-datetime:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.1);
-    }
-    
-    [data-theme="dark"] .profile-header .profile-header-datetime {
-        background: #1E3A5F;
-        border-color: #334155;
-    }
-    
-    .profile-header .profile-header-datetime .datetime-display {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 0.82rem;
-        color: var(--text-primary);
-        font-weight: 500;
-    }
-    
-    .profile-header .profile-header-datetime .datetime-display i {
-        color: var(--primary);
-        font-size: 0.9rem;
-        width: 18px;
-        text-align: center;
-    }
-    
-    .profile-header .profile-header-datetime .datetime-display .time-highlight {
-        color: var(--primary);
-        font-weight: 700;
-        font-size: 0.95rem;
-    }
-    
-    .profile-header .profile-header-datetime .datetime-divider {
-        width: 100%;
-        height: 1px;
-        background: var(--border-color);
-        margin: 2px 0;
-    }
-    
-    [data-theme="dark"] .profile-header .profile-header-datetime .datetime-divider {
-        background: #334155;
-    }
-    
-    /* Stats Grid */
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 16px;
-        margin-bottom: 24px;
-    }
-    
-    .stat-box {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 16px 18px;
-        border: 2px solid var(--border-color);
-        text-align: center;
-        transition: all 0.3s ease;
-    }
-    
-    .stat-box:hover {
-        border-color: var(--primary);
-        transform: translateY(-3px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
-    }
-    
-    .stat-box .stat-number {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--primary);
-    }
-    
-    .stat-box .stat-label {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        margin-top: 2px;
-    }
-    
-    .stat-box .stat-icon {
-        font-size: 1.2rem;
-        margin-bottom: 4px;
-        color: var(--primary);
-    }
-    
-    /* Info Cards */
-    .info-card {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 20px 24px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-        margin-bottom: 20px;
-    }
-    
-    .info-card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
-    }
-    
-    .info-card .card-title {
-        font-size: 1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        border-bottom: 2px solid var(--border-color);
-        padding-bottom: 10px;
-        margin-bottom: 14px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .info-card .card-title i {
-        color: var(--primary);
-    }
-    
-    .info-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 6px 0;
-        border-bottom: 1px solid var(--border-color);
-    }
-    
-    .info-row:last-child {
-        border-bottom: none;
-    }
-    
-    .info-row .info-label {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    
-    .info-row .info-value {
-        font-size: 0.85rem;
-        color: var(--text-primary);
-        font-weight: 500;
-    }
-    
-    /* Activity Items */
-    .activity-item {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border-color);
-        transition: background 0.2s ease;
-    }
-    
-    .activity-item:hover {
-        background: var(--primary-bg);
-        border-radius: 8px;
-    }
-    
-    .activity-item:last-child {
-        border-bottom: none;
-    }
-    
-    .activity-item .activity-icon {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: var(--primary-bg);
-        color: var(--primary);
-        flex-shrink: 0;
-    }
-    
-    .activity-item .activity-icon.prescription {
-        background: #E8F0FE;
-        color: #0B5ED7;
-    }
-    
-    .activity-item .activity-icon.otc {
-        background: #D1FAE5;
-        color: #059669;
-    }
-    
-    [data-theme="dark"] .activity-item .activity-icon.prescription {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    
-    [data-theme="dark"] .activity-item .activity-icon.otc {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    
-    .activity-item .activity-info .activity-title {
-        font-size: 0.85rem;
-        font-weight: 500;
-        color: var(--text-primary);
-    }
-    
-    .activity-item .activity-info .activity-desc {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    
-    .activity-item .activity-time {
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        margin-left: auto;
-        white-space: nowrap;
-    }
-    
-    .activity-item .activity-type-badge {
-        font-size: 0.6rem;
-        font-weight: 600;
-        padding: 1px 8px;
-        border-radius: 10px;
-    }
-    
-    .activity-item .activity-type-badge.prescription {
-        background: #E8F0FE;
-        color: #0B5ED7;
-    }
-    
-    .activity-item .activity-type-badge.otc {
-        background: #D1FAE5;
-        color: #059669;
-    }
-    
-    [data-theme="dark"] .activity-item .activity-type-badge.prescription {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    
-    [data-theme="dark"] .activity-item .activity-type-badge.otc {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    
-    /* Buttons */
-    .btn-edit {
-        background: var(--primary);
-        color: white;
-        padding: 8px 20px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .btn-edit:hover {
-        background: var(--primary-dark);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-edit-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-        padding: 6px 18px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .btn-edit-outline:hover {
-        border-color: var(--primary);
-        color: var(--primary);
-        transform: translateY(-2px);
-    }
-    
-    .btn-outline-light {
-        background: rgba(255,255,255,0.12);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.2);
-        padding: 8px 18px;
-        border-radius: 10px;
-        font-weight: 500;
-        font-size: 0.82rem;
-        transition: all 0.3s;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        backdrop-filter: blur(4px);
-    }
-    
-    .btn-outline-light:hover {
-        background: rgba(255,255,255,0.25);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    }
-    
-    /* Quick Actions Grid - 3 items */
-    .quick-actions-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 16px;
-        max-width: 600px;
-        margin: 0 auto;
-    }
-    
-    .quick-action-item {
-        text-align: center;
-        padding: 16px;
-        border: 2px solid var(--border-color);
-        border-radius: 12px;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        background: var(--bg-card);
-    }
-    
-    .quick-action-item:hover {
-        border-color: var(--primary);
-        transform: translateY(-4px);
-        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.1);
-    }
-    
-    .quick-action-item i {
-        font-size: 1.8rem;
-        color: var(--primary);
-        display: block;
-        margin-bottom: 8px;
-    }
-    
-    .quick-action-item .label {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-    
-    /* Empty State */
-    .empty-state {
-        text-align: center;
-        padding: 30px 20px;
-        color: var(--text-secondary);
-    }
-    
-    .empty-state i {
-        font-size: 2rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 10px;
-    }
-    
-    /* Responsive */
-    @media (max-width: 992px) {
-        .quick-actions-grid {
-            grid-template-columns: repeat(3, 1fr);
-            max-width: 500px;
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Profile - Braick Dispensary</title>
+    
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A3D8A;
+            --primary-light: #E8F0FE;
+            --success: #059669;
+            --success-dark: #047857;
+            --success-light: #D1FAE5;
+            --warning: #D97706;
+            --warning-light: #FEF3C7;
+            --danger: #DC2626;
+            --danger-light: #FEE2E2;
+            --purple: #7C3AED;
+            --purple-light: #EDE9FE;
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --border-color: #E2E8F0;
+            --text-primary: #0F172A;
+            --text-secondary: #475569;
+            --text-muted: #94A3B8;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
         }
-    }
-    
-    @media (max-width: 768px) {
+        
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --border-color: #334155;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+            --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+        
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+        
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 28px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            position: relative;
+            overflow: hidden;
+            color: white;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .page-header .page-title {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .page-title i {
+            font-size: 2rem;
+            opacity: 0.9;
+        }
+        
+        .page-header .page-title .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .page-header .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+            margin-top: 4px;
+        }
+        
+        .page-header .branch-tag {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .page-header .btn-outline-light {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 18px;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        .btn-edit {
+            background: var(--success);
+            color: white;
+            padding: 10px 24px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .btn-edit:hover {
+            background: var(--success-dark);
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
+        }
+        
+        /* ================================================================
+           PROFILE HEADER
+           ================================================================ */
         .profile-header {
-            flex-direction: column;
-            align-items: stretch;
-            text-align: center;
-            padding: 18px;
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px 30px;
+            border: 2px solid var(--border-color);
+            margin-bottom: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .profile-header:hover {
+            border-color: var(--primary);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
         }
         
         .profile-header .profile-header-main {
-            flex-direction: column;
-            justify-content: center;
-        }
-        
-        .profile-header .profile-info .profile-badges {
-            justify-content: center;
-        }
-        
-        .profile-header .profile-info .profile-name {
-            justify-content: center;
-        }
-        
-        .profile-header .profile-header-datetime {
+            display: flex;
             align-items: center;
-            min-width: unset;
-            padding: 10px 16px;
-            width: 100%;
-        }
-        
-        .profile-header .profile-header-datetime .datetime-display {
-            font-size: 0.75rem;
-        }
-        
-        .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
-        }
-        
-        .info-row {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 2px;
-        }
-        
-        .activity-item {
+            gap: 24px;
             flex-wrap: wrap;
         }
         
-        .activity-item .activity-time {
-            margin-left: 0;
-            width: 100%;
-            padding-left: 48px;
+        .profile-header .profile-avatar {
+            width: 90px;
+            height: 90px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 4px solid var(--primary);
+            flex-shrink: 0;
         }
         
-        .quick-actions-grid {
-            grid-template-columns: 1fr 1fr 1fr;
-            max-width: 100%;
-            gap: 10px;
-        }
-        
-        .quick-action-item {
-            padding: 12px;
-        }
-        
-        .quick-action-item i {
-            font-size: 1.4rem;
-        }
-        
-        .quick-action-item .label {
-            font-size: 0.65rem;
-        }
-    }
-    
-    @media (max-width: 480px) {
-        .stats-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        
-        .profile-header .profile-avatar,
         .profile-header .profile-avatar-placeholder {
-            width: 70px;
-            height: 70px;
-            font-size: 2rem;
+            width: 90px;
+            height: 90px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: white;
+            background: var(--primary);
+            flex-shrink: 0;
+            border: 4px solid var(--primary);
         }
         
         .profile-header .profile-info .profile-name {
-            font-size: 1.1rem;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
         
-        .profile-header .profile-header-datetime .datetime-display {
+        .profile-header .profile-info .profile-name i {
+            color: var(--primary);
+        }
+        
+        .profile-header .profile-info .profile-role {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .profile-header .profile-info .profile-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        
+        .badge-blue { background: #E8F0FE; color: #0B5ED7; }
+        .badge-green { background: #D1FAE5; color: #059669; }
+        .badge-purple { background: #F3E8FF; color: #7C3AED; }
+        .badge-teal { background: #ECFDF5; color: #0D9488; }
+        
+        [data-theme="dark"] .badge-blue { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .badge-green { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .badge-purple { background: #2A1A3A; color: #9B4DCA; }
+        [data-theme="dark"] .badge-teal { background: #0A2A2A; color: #2DD4BF; }
+        
+        /* ================================================================
+           STATS GRID
+           ================================================================ */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-box {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 16px 18px;
+            border: 2px solid var(--border-color);
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .stat-box:hover {
+            border-color: var(--primary);
+            transform: translateY(-3px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+        }
+        
+        .stat-box .stat-number {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        .stat-box .stat-label {
             font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-top: 2px;
         }
         
+        .stat-box .stat-icon {
+            font-size: 1.2rem;
+            margin-bottom: 4px;
+            color: var(--primary);
+        }
+        
+        /* ================================================================
+           INFO CARD
+           ================================================================ */
+        .info-card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 20px 24px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+        }
+        
+        .info-card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.08);
+        }
+        
+        .info-card .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .info-card .card-title i {
+            color: var(--primary);
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        
+        .info-row .info-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .info-row .info-value {
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        
+        /* ================================================================
+           ACTIVITY
+           ================================================================ */
+        .activity-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.2s ease;
+        }
+        
+        .activity-item:hover {
+            background: var(--primary-light);
+            border-radius: 8px;
+        }
+        
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+        
+        .activity-item .activity-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        
+        .activity-item .activity-icon.prescription {
+            background: #E8F0FE;
+            color: #0B5ED7;
+        }
+        
+        .activity-item .activity-icon.otc {
+            background: #D1FAE5;
+            color: #059669;
+        }
+        
+        [data-theme="dark"] .activity-item .activity-icon.prescription {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+        
+        [data-theme="dark"] .activity-item .activity-icon.otc {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        .activity-item .activity-info .activity-title {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+        
+        .activity-item .activity-info .activity-desc {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .activity-item .activity-time {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        
+        .activity-item .activity-type-badge {
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 1px 8px;
+            border-radius: 10px;
+        }
+        
+        .activity-item .activity-type-badge.prescription {
+            background: #E8F0FE;
+            color: #0B5ED7;
+        }
+        
+        .activity-item .activity-type-badge.otc {
+            background: #D1FAE5;
+            color: #059669;
+        }
+        
+        [data-theme="dark"] .activity-item .activity-type-badge.prescription {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+        
+        [data-theme="dark"] .activity-item .activity-type-badge.otc {
+            background: #1A3A2A;
+            color: #34D399;
+        }
+        
+        /* ================================================================
+           QUICK ACTIONS
+           ================================================================ */
         .quick-actions-grid {
-            grid-template-columns: 1fr 1fr;
-            max-width: 100%;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            max-width: 600px;
+            margin: 0 auto;
         }
         
         .quick-action-item {
-            padding: 10px;
+            text-align: center;
+            padding: 16px;
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            background: var(--bg-card);
+        }
+        
+        .quick-action-item:hover {
+            border-color: var(--primary);
+            transform: translateY(-4px);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.1);
         }
         
         .quick-action-item i {
-            font-size: 1.2rem;
+            font-size: 1.8rem;
+            color: var(--primary);
+            display: block;
+            margin-bottom: 8px;
         }
         
         .quick-action-item .label {
-            font-size: 0.6rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-primary);
         }
-    }
-    
-    /* Animations */
-    .animate-fade-in-up {
-        animation: fadeInUp 0.5s ease forwards;
-        opacity: 0;
-    }
-    
-    @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    
-    .animate-fade-in-up:nth-child(1) { animation-delay: 0.05s; }
-    .animate-fade-in-up:nth-child(2) { animation-delay: 0.1s; }
-    .animate-fade-in-up:nth-child(3) { animation-delay: 0.15s; }
-    .animate-fade-in-up:nth-child(4) { animation-delay: 0.2s; }
-</style>
+        
+        /* ================================================================
+           EMPTY STATE
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 30px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 2rem;
+            color: var(--border-color);
+            display: block;
+            margin-bottom: 10px;
+        }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .main-content { margin-left: 0; padding: 16px; }
+        }
+        
+        @media (max-width: 768px) {
+            .profile-header {
+                flex-direction: column;
+                align-items: stretch;
+                text-align: center;
+                padding: 18px;
+            }
+            .profile-header .profile-header-main {
+                flex-direction: column;
+                justify-content: center;
+            }
+            .profile-header .profile-info .profile-badges {
+                justify-content: center;
+            }
+            .profile-header .profile-info .profile-name {
+                justify-content: center;
+            }
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .info-row {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 2px;
+            }
+            .activity-item {
+                flex-wrap: wrap;
+            }
+            .activity-item .activity-time {
+                margin-left: 0;
+                width: 100%;
+                padding-left: 48px;
+            }
+            .quick-actions-grid {
+                grid-template-columns: 1fr 1fr 1fr;
+                max-width: 100%;
+                gap: 10px;
+            }
+            .quick-action-item { padding: 12px; }
+            .quick-action-item i { font-size: 1.4rem; }
+            .quick-action-item .label { font-size: 0.65rem; }
+            .page-header .page-title { font-size: 1.3rem; }
+        }
+        
+        @media (max-width: 480px) {
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+            .profile-header .profile-avatar,
+            .profile-header .profile-avatar-placeholder {
+                width: 70px;
+                height: 70px;
+                font-size: 2rem;
+            }
+            .profile-header .profile-info .profile-name { font-size: 1.1rem; }
+            .quick-actions-grid { grid-template-columns: 1fr 1fr; }
+            .quick-action-item { padding: 10px; }
+            .quick-action-item i { font-size: 1.2rem; }
+            .quick-action-item .label { font-size: 0.6rem; }
+            .page-header .page-title { font-size: 1.1rem; }
+            .page-header { padding: 16px 18px; }
+        }
+        
+        /* Animations */
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up:nth-child(1) { animation-delay: 0.05s; }
+        .animate-fade-in-up:nth-child(2) { animation-delay: 0.1s; }
+        .animate-fade-in-up:nth-child(3) { animation-delay: 0.15s; }
+        .animate-fade-in-up:nth-child(4) { animation-delay: 0.2s; }
+    </style>
+</head>
+<body>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -904,7 +912,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
+        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
             <a href="edit_profile.php" class="btn-edit">
                 <i class="fas fa-edit"></i> Edit Profile
             </a>
@@ -915,7 +923,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PROFILE HEADER WITH DATE & TIME -->
+    <!-- PROFILE HEADER -->
     <!-- ================================================================ -->
     <div class="profile-header animate-fade-in-up">
         <div class="profile-header-main">
@@ -934,21 +942,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
                 <div class="profile-role">
                     <i class="fas fa-prescription mr-1"></i> Pharmacist
-                    <span class="badge badge-blue" style="font-size:0.6rem;padding:1px 10px;margin-left:6px;">
+                    <span class="badge-blue" style="font-size:0.6rem;padding:1px 10px;margin-left:6px;border-radius:20px;">
                         <?= ucfirst($user_role) ?>
                     </span>
                 </div>
                 <div class="profile-badges">
-                    <span class="badge badge-blue">
+                    <span class="badge-blue" style="padding:2px 12px;border-radius:20px;font-size:0.65rem;font-weight:600;">
                         <i class="fas fa-user mr-1"></i> <?= ucfirst($user_role) ?>
                     </span>
-                    <span class="badge badge-green">
+                    <span class="badge-green" style="padding:2px 12px;border-radius:20px;font-size:0.65rem;font-weight:600;">
                         <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
                     </span>
-                    <span class="badge badge-purple">
+                    <span class="badge-purple" style="padding:2px 12px;border-radius:20px;font-size:0.65rem;font-weight:600;">
                         <i class="fas fa-prescription mr-1"></i> <?= $total_sales ?> sales
                     </span>
-                    <span class="badge badge-teal">
+                    <span class="badge-teal" style="padding:2px 12px;border-radius:20px;font-size:0.65rem;font-weight:600;">
                         <i class="fas fa-calendar-check mr-1"></i> Member
                     </span>
                 </div>
@@ -956,26 +964,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         </div>
         
         <!-- Date & Time -->
-        <div class="profile-header-datetime">
-            <div class="datetime-display">
-                <i class="fas fa-calendar-day"></i>
+        <div style="display:flex;flex-direction:column;gap:4px;padding:10px 18px;background:var(--primary-light);border-radius:12px;border:2px solid var(--border-color);min-width:200px;transition:all 0.3s ease;">
+            <div style="display:flex;align-items:center;gap:8px;font-size:0.8rem;color:var(--text-primary);font-weight:500;">
+                <i class="fas fa-calendar-day" style="color:var(--primary);"></i>
                 <span id="profileDate"><?= date('l, F d, Y') ?></span>
             </div>
-            <div class="datetime-divider"></div>
-            <div class="datetime-display">
-                <i class="fas fa-clock"></i>
-                <span class="time-highlight" id="profileTime"><?= date('h:i:s A') ?></span>
+            <div style="width:100%;height:1px;background:var(--border-color);"></div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:0.8rem;color:var(--text-primary);font-weight:500;">
+                <i class="fas fa-clock" style="color:var(--primary);"></i>
+                <span id="profileTime" style="color:var(--primary);font-weight:700;font-size:0.95rem;"><?= date('h:i:s A') ?></span>
             </div>
-            <div class="datetime-divider"></div>
-            <div class="datetime-display">
-                <i class="fas fa-store-alt"></i>
+            <div style="width:100%;height:1px;background:var(--border-color);"></div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:0.75rem;color:var(--text-secondary);font-weight:500;">
+                <i class="fas fa-store-alt" style="color:var(--primary);"></i>
                 <span><?= htmlspecialchars($user_branch_name) ?></span>
             </div>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS - UPDATED FOR NEW DATABASE -->
+    <!-- STATISTICS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <div class="stat-box">
@@ -1040,7 +1048,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <div class="info-row">
                 <span class="info-label">Role</span>
                 <span class="info-value">
-                    <span class="badge badge-blue" style="font-size:0.7rem;">
+                    <span class="badge-blue" style="padding:1px 12px;border-radius:20px;font-size:0.7rem;font-weight:600;">
                         <?= ucfirst($user_role) ?>
                     </span>
                 </span>
@@ -1148,7 +1156,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - DATE & TIME UPDATE -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1192,39 +1200,42 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     setInterval(updateProfileDateTime, 1000);
 
     // ================================================================
-    // TOAST
+    // SIDEBAR TOGGLE - Inashughulikiwa na shared sidebar
     // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        if (!toast) return;
-        
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        if (toastTitle) toastTitle.textContent = title;
-        if (toastMessage) toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
+    var sidebar = document.getElementById('sidebar');
+    var sidebarToggle = document.getElementById('sidebarToggle');
+    
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('open');
+        });
+    }
+    
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            if (sidebar && sidebarToggle) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
+        }
+    });
+
+    // ================================================================
+    // DARK MODE - Inashughulikiwa na shared header
+    // ================================================================
+    var htmlElement = document.documentElement;
+    var savedDarkMode = localStorage.getItem('darkMode');
+    if (savedDarkMode === 'true') {
+        htmlElement.setAttribute('data-theme', 'dark');
     }
 
-    console.log('%c💊 Braick - Pharmacy Profile (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - Pharmacy Profile (NEW DATABASE - FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c✅ Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Uses shared header & sidebar', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Uses shared header & sidebar (NO DUPLICATES)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ QUICK ACTIONS: 3 items (Pending, New OTC, Inventory)', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📊 Prescriptions Dispensed: <?= $total_prescriptions ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🛒 OTC Sales: <?= $total_otc ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c📦 Items Dispensed: <?= number_format($total_items_dispensed) ?>', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>
